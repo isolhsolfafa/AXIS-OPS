@@ -1,0 +1,44 @@
+[
+  {
+    "alert_type": "PROCESS_READY",
+    "message": "[GBWS-6408] PI 공정 대기 중 - MM 공정 미완료",
+    "serial_number": "GBWS-6408",
+    "qr_doc_id": "DOC_GBWS-6408",
+    "target_role": "MM"
+  },
+  {
+    "alert_type": "PROCESS_READY",
+    "message": "[GBWS-6408] QI 공정 대기 중 - EE 공정 미완료",
+    "serial_number": "GBWS-6408",
+    "qr_doc_id": "DOC_GBWS-6408",
+    "target_role": "EE"
+  },
+  {
+    "alert_type": "DURATION_EXCEEDED",
+    "message": "[GBWS-6409] MM - CABINET ASSY: 작업 시간 900분 (14시간 초과)",
+    "serial_number": "GBWS-6409",
+    "qr_doc_id": "DOC_GBWS-6409",
+    "target_role": "MM"
+  },
+  {
+    "alert_type": "REVERSE_COMPLETION",
+    "message": "[GBWS-6410] EE - WIRING: 완료 시간이 시작 시간보다 이릅니다.",
+    "serial_number": "GBWS-6410",
+    "qr_doc_id": "DOC_GBWS-6410",
+    "target_role": "EE"
+  },
+  {
+    "alert_type": "UNFINISHED_AT_CLOSING",
+    "message": "[GBWS-6411] PI - PRESSURE TEST: 작업 시작 후 15.2시간 경과, 미완료 상태",
+    "serial_number": "GBWS-6411",
+    "qr_doc_id": "DOC_GBWS-6411",
+    "target_role": "PI"
+  },
+  {
+    "alert_type": "LOCATION_QR_FAILED",
+    "message": "[GBWS-6412] 검사 위치 등록 필요 - Location QR을 먼저 촬영하세요",
+    "serial_number": "GBWS-6412",
+    "qr_doc_id": "DOC_GBWS-6412",
+    "target_role": "QI"
+  }
+]
