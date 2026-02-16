@@ -241,45 +241,72 @@ tests/fixtures/sample_completion_status.json
 
 ---
 
-## Sprint 4: 관리자 + 퇴근시간 자동감지 (예정)
+## Sprint 4: 관리자 + 퇴근시간 자동감지 (완료)
 
-### BE 작업 목록
-1. **관리자 승인 API** — `POST /api/admin/approve/{worker_id}` 구현 (현재 stub)
-   - `jwt_required` + `admin_required` 적용
-   - workers.approval_status 업데이트 (approved/rejected)
-   - WebSocket으로 승인 결과 알림
+### BE 완료 내역
+- `admin.py` — 9개 엔드포인트 (승인/거절, 대기목록, 작업자목록, 대시보드 3종, 보정목록, 강제완료, 미완료체크)
+- `sync.py` — 2개 엔드포인트 (오프라인 배치 동기화, 동기화 상태)
+- `scheduler_service.py` — APScheduler cron (매일 18:00 미완료 체크)
+- `__init__.py` — admin_bp, sync_bp 등록 + 스케줄러 초기화 (테스트 환경 비활성화)
 
-2. **승인 대기 작업자 목록** — `GET /api/admin/pending-workers` 구현
-   - approval_status='pending' 작업자 조회
-   - 페이지네이션 지원
+### 버그 수정 (4건)
+| 파일 | 수정 내용 |
+|------|----------|
+| `admin.py` | `request.get_json()` → `get_json(silent=True)` (415 에러 방지) |
+| `admin.py` | `datetime.now()` → `datetime.now(timezone.utc)` (naive/aware 불일치) |
+| `sync.py` | `request.get_json()` → `get_json(silent=True)` (빈 body 처리) |
+| `sync.py` | `str(task_data)` → `json.dumps(task_data)` (JSONB 호환) |
 
-3. **관리자 대시보드 API** — `GET /api/admin/dashboard` 구현
-   - 공정별 완료 현황 집계
-   - 미완료 작업 수, 알림 현황
+### 테스트: 31/31 PASSED
 
-4. **미완료 Task 수동 보정** — `PUT /api/admin/task/close` 구현
-   - 관리자가 completed_at 직접 입력
-   - 감사 로그 기록
+#### test_admin_api.py (18 tests)
+| 테스트 | 설명 |
+|--------|------|
+| `test_approve_worker_success` | 작업자 승인 성공 |
+| `test_reject_worker_success` | 작업자 거절 성공 |
+| `test_approve_nonexistent_worker` | 존재하지 않는 작업자 → 404 |
+| `test_approve_without_admin` | 비관리자 접근 → 403 |
+| `test_approve_without_jwt` | JWT 없이 → 401 |
+| `test_get_pending_workers` | 대기 작업자 목록 |
+| `test_get_pending_workers_empty` | 대기 작업자 없음 |
+| `test_get_pending_workers_pagination` | 페이지네이션 |
+| `test_get_workers_with_filter` | 필터링 조회 |
+| `test_get_process_summary` | 공정 요약 |
+| `test_get_active_tasks` | 활성 작업 목록 |
+| `test_get_alerts_summary` | 알림 통계 |
+| `test_dashboard_without_admin` | 비관리자 대시보드 → 403 |
+| `test_get_task_corrections` | 보정 필요 작업 목록 |
+| `test_force_complete_task_success` | 강제 완료 성공 |
+| `test_force_complete_nonexistent_task` | 존재하지 않는 작업 → 404 |
+| `test_manual_unfinished_check` | 수동 미완료 체크 |
+| `test_unfinished_check_without_admin` | 비관리자 → 403 |
 
-5. **퇴근시간 자동감지 cron** — `check_unfinished_tasks()` 연동
-   - APScheduler 또는 cron으로 매일 20:00(평일)/17:00(주말) 실행
-   - 14시간 초과 미완료 작업 → UNFINISHED_AT_CLOSING 알림
+#### test_sync_api.py (13 tests)
+| 테스트 | 설명 |
+|--------|------|
+| `test_sync_tasks_success` | 작업 동기화 성공 |
+| `test_sync_locations_success` | 위치 동기화 성공 |
+| `test_sync_alerts_read` | 알림 읽음 동기화 |
+| `test_sync_batch_combined` | 배치 복합 동기화 |
+| `test_sync_partial_failure` | 부분 실패 처리 |
+| `test_sync_empty_data` | 빈 데이터 동기화 |
+| `test_sync_without_jwt` | JWT 없이 → 401 |
+| `test_sync_invalid_request_body` | 잘못된 요청 → 400 |
+| `test_get_sync_status` | 동기화 상태 조회 |
+| `test_sync_status_no_records` | 기록 없을 때 |
+| `test_sync_status_without_jwt` | JWT 없이 → 401 |
+| `test_sync_creates_queue_records` | DB 큐 레코드 생성 확인 |
+| `test_sync_creates_location_records` | DB 위치 레코드 생성 확인 |
 
-6. **오프라인 동기화 API** — `POST /api/app/sync/offline-data` 구현
-   - offline_sync_queue 테이블 활용
-   - 배치 INSERT/UPDATE 처리
+---
 
-7. **admin_bp, sync_bp Blueprint 등록** — `__init__.py`에서 활성화
+## 전체 테스트 결과: 81/81 PASSED
 
-### FE 작업 목록
-1. 관리자 대시보드 UI 구현 (admin_dashboard.dart)
-2. 작업자 승인 화면 완성 (worker_approval_screen.dart)
-3. 오프라인 동기화 로직 (local_db_service.dart + sync queue)
-4. 미완료 Task 알림 처리 UI
-
-### TEST 작업 목록
-1. BE 코드 리뷰 (Sprint 4 BE 코드 검증)
-2. 관리자 승인 API 테스트
-3. 퇴근시간 자동감지 테스트
-4. 오프라인 동기화 테스트
-5. 관리자 대시보드 테스트
+```
+Sprint 1 (Auth):               8/8   PASSED
+Sprint 2 (Work):              21/21  PASSED
+Sprint 3 (Alert/Validation):  21/21  PASSED
+Sprint 4 (Admin/Sync):        31/31  PASSED
+─────────────────────────────────────────────
+Total:                        81/81  PASSED
+```
