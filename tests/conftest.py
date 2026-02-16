@@ -71,7 +71,9 @@ def db_schema():
         conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
         cursor = conn.cursor()
 
-        # 기존 스키마 정리 (재실행 대비) - Sprint 3 테이블 추가
+        # 기존 스키마 정리 (재실행 대비) - Sprint 4 테이블 추가
+        cursor.execute("DROP TABLE IF EXISTS location_history CASCADE;")
+        cursor.execute("DROP TABLE IF EXISTS offline_sync_queue CASCADE;")
         cursor.execute("DROP TABLE IF EXISTS app_alert_logs CASCADE;")
         cursor.execute("DROP TABLE IF EXISTS work_completion_log CASCADE;")
         cursor.execute("DROP TABLE IF EXISTS work_start_log CASCADE;")
@@ -92,7 +94,8 @@ def db_schema():
             '001_create_workers.sql',
             '002_create_product_info.sql',
             '003_create_task_tables.sql',
-            '004_create_alert_tables.sql'
+            '004_create_alert_tables.sql',
+            '005_create_sync_tables.sql'
         ]
 
         for filename in migration_files:
@@ -757,3 +760,204 @@ def create_test_alert(db_conn):
             cursor.close()
         except Exception as e:
             print(f"Warning: Alert cleanup failed: {e}")
+
+
+# ==================== Sprint 4 픽스처 ====================
+
+
+# 관리자 워커 생성 헬퍼 (is_admin=True)
+@pytest.fixture
+def create_test_admin(create_test_worker) -> Dict[str, Any]:
+    """
+    시스템 관리자 워커 생성 (is_admin=True)
+    Sprint 4 admin API 테스트용
+    """
+    admin_data = {
+        'email': 'admin_sprint4@test.axisos.com',
+        'password': 'AdminPass123!',
+        'name': 'Sprint4 Admin',
+        'role': 'QI',
+        'approval_status': 'approved',
+        'email_verified': True,
+        'is_admin': True
+    }
+
+    worker_id = create_test_worker(**admin_data)
+    admin_data['id'] = worker_id
+
+    return admin_data
+
+
+# 승인 대기 워커 생성 헬퍼
+@pytest.fixture
+def create_pending_worker(create_test_worker) -> Dict[str, Any]:
+    """
+    승인 대기 워커 생성 (approval_status='pending')
+    관리자 승인 API 테스트용
+    """
+    pending_data = {
+        'email': 'pending_worker@test.axisos.com',
+        'password': 'PendingPass123!',
+        'name': 'Pending Worker',
+        'role': 'MM',
+        'approval_status': 'pending',
+        'email_verified': True
+    }
+
+    worker_id = create_test_worker(**pending_data)
+    pending_data['id'] = worker_id
+
+    return pending_data
+
+
+# 관리자 JWT 토큰 생성 헬퍼
+@pytest.fixture
+def get_admin_auth_token(get_auth_token):
+    """
+    관리자 JWT 토큰 생성 헬퍼 (is_admin 플래그 포함)
+
+    Returns:
+        Function(worker_id, email, role, is_admin, expires_in_hours) -> JWT token string
+    """
+    def _generate_admin_token(
+        worker_id: int,
+        email: str = '',
+        role: str = 'QI',
+        is_admin: bool = True,
+        expires_in_hours: int = 1
+    ) -> str:
+        if not email:
+            email = f'admin{worker_id}@test.axisos.com'
+
+        payload = {
+            'sub': str(worker_id),
+            'email': email,
+            'role': role,
+            'is_admin': is_admin,
+            'exp': datetime.utcnow() + timedelta(hours=expires_in_hours),
+            'iat': datetime.utcnow()
+        }
+
+        return jwt.encode(
+            payload,
+            TestConfig.JWT_SECRET_KEY,
+            algorithm='HS256'
+        )
+
+    return _generate_admin_token
+
+
+# 테스트 동기화 레코드 생성 헬퍼
+@pytest.fixture
+def create_test_sync_record(db_conn):
+    """
+    테스트 동기화 레코드 생성 헬퍼 함수 (commit + teardown 정리)
+
+    Returns:
+        Function(worker_id, operation, table_name, record_id, data, synced) -> sync_id
+    """
+    created_sync_ids = []
+
+    def _create_sync_record(
+        worker_id: int,
+        operation: str,
+        table_name: str,
+        record_id: Optional[str] = None,
+        data: Optional[Dict[str, Any]] = None,
+        synced: bool = False
+    ) -> int:
+        if db_conn is None:
+            return 999
+
+        cursor = db_conn.cursor()
+
+        import json
+        data_json = json.dumps(data) if data else None
+
+        cursor.execute("""
+            INSERT INTO offline_sync_queue (
+                worker_id, operation, table_name, record_id, data, synced
+            )
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (worker_id, operation, table_name, record_id, data_json, synced))
+
+        sync_id = cursor.fetchone()[0]
+        created_sync_ids.append(sync_id)
+        db_conn.commit()
+        cursor.close()
+
+        return sync_id
+
+    yield _create_sync_record
+
+    # Cleanup: 테스트 동기화 레코드 삭제
+    if db_conn and not db_conn.closed:
+        try:
+            cursor = db_conn.cursor()
+            for sync_id in created_sync_ids:
+                cursor.execute(
+                    "DELETE FROM offline_sync_queue WHERE id = %s",
+                    (sync_id,)
+                )
+            db_conn.commit()
+            cursor.close()
+        except Exception as e:
+            print(f"Warning: Sync record cleanup failed: {e}")
+
+
+# 테스트 위치 기록 생성 헬퍼
+@pytest.fixture
+def create_test_location_history(db_conn):
+    """
+    테스트 위치 기록 생성 헬퍼 함수 (commit + teardown 정리)
+
+    Returns:
+        Function(worker_id, latitude, longitude, recorded_at) -> location_id
+    """
+    created_location_ids = []
+
+    def _create_location_history(
+        worker_id: int,
+        latitude: float,
+        longitude: float,
+        recorded_at: Optional[datetime] = None
+    ) -> int:
+        if db_conn is None:
+            return 999
+
+        if recorded_at is None:
+            recorded_at = datetime.now(timezone.utc)
+
+        cursor = db_conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO location_history (
+                worker_id, latitude, longitude, recorded_at
+            )
+            VALUES (%s, %s, %s, %s)
+            RETURNING id
+        """, (worker_id, latitude, longitude, recorded_at))
+
+        location_id = cursor.fetchone()[0]
+        created_location_ids.append(location_id)
+        db_conn.commit()
+        cursor.close()
+
+        return location_id
+
+    yield _create_location_history
+
+    # Cleanup: 테스트 위치 기록 삭제
+    if db_conn and not db_conn.closed:
+        try:
+            cursor = db_conn.cursor()
+            for location_id in created_location_ids:
+                cursor.execute(
+                    "DELETE FROM location_history WHERE id = %s",
+                    (location_id,)
+                )
+            db_conn.commit()
+            cursor.close()
+        except Exception as e:
+            print(f"Warning: Location history cleanup failed: {e}")

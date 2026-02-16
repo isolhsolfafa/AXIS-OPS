@@ -48,21 +48,28 @@ def create_app(config_class: type = Config) -> Flask:
     register_events(socketio)
     logger.info("WebSocket events registered")
 
+    # 스케줄러 초기화 및 시작 (Sprint 4) — 테스트 환경에서는 비활성화
+    if not app.config.get('TESTING', False):
+        from app.services.scheduler_service import init_scheduler, start_scheduler
+        init_scheduler()
+        start_scheduler()
+        logger.info("Scheduler initialized and started")
+
     # 블루프린트 등록
     from app.routes.auth import auth_bp
     from app.routes.work import work_bp
     from app.routes.product import product_bp
     from app.routes.alert import alert_bp  # Sprint 3
+    from app.routes.admin import admin_bp  # Sprint 4
+    from app.routes.sync import sync_bp    # Sprint 4
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(work_bp)
     app.register_blueprint(product_bp)
     app.register_blueprint(alert_bp)
-    logger.info("Blueprints registered: auth, work, product, alert")
-
-    # Sprint 4+에서 추가 예정:
-    # from app.routes.admin import admin_bp
-    # from app.routes.sync import sync_bp
+    app.register_blueprint(admin_bp)
+    app.register_blueprint(sync_bp)
+    logger.info("Blueprints registered: auth, work, product, alert, admin, sync")
 
     # 헬스 체크 엔드포인트
     @app.route("/health", methods=["GET"])
