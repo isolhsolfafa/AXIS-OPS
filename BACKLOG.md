@@ -1,17 +1,17 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-02-27 (Sprint 12 준비 중)
+> 마지막 업데이트: 2026-02-28 (Sprint 12 완료, 배포 완료)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
 ---
 
-## 🔴 지금 진행 중
+## 🔴 지금 진행 중 / 미해결
 
 | ID | 항목 | 상태 | 비고 |
 |----|------|------|------|
-| S12 | Sprint 12: PIN 간편 로그인 + 협력사 출퇴근 + QR 카메라 | ✅ 완료 | 22/22 테스트 PASS |
-| S12-HF | Sprint 12 핫픽스: PIN 자동로그인 분기 로직 | ✅ 완료 | 4개 파일 수동 수정 (main.dart, auth_service.dart, pin_login_screen.dart, pin_settings_screen.dart) |
+| BUG-1 | QR 카메라 권한 팝업 가려짐 | 🔧 수정 중 | DOM 오버레이(z-index:9999)가 브라우저 권한 팝업을 가림. getUserMedia 선행 호출 방식으로 수정 진행 |
+| BUG-2 | WebSocket 프로토콜 불일치 | ⏸️ 보류 | FE: raw WebSocket(`/ws`) → BE: Flask-SocketIO(`/socket.io/`). 프로토콜 불일치로 연결 불가. 임시 조치: reconnect 2회/10초로 축소. 정식 수정 시 FE에 SocketIO 클라이언트 도입 또는 BE에 raw WebSocket 엔드포인트 추가 필요 |
 
 ---
 
@@ -37,6 +37,11 @@
 - **확인 대상**: 모든 DateTime 표시 화면에서 `.toLocal()` 호출 여부
 - **우선순위**: 낮음 (현재 수정된 4개 화면이 주요 사용 화면)
 
+### RV-3: 앱 아이콘 최적화
+- **배경**: G 다이아몬드 심볼로 favicon + PWA 아이콘 생성 완료, 모바일 홈화면 아이콘 크기 미세 조정 필요
+- **현재**: 72% fill ratio로 생성, 사용자 피드백 대기
+- **우선순위**: 낮음
+
 ---
 
 ## 🟠 배포 준비
@@ -44,24 +49,17 @@
 | ID | 항목 | 설명 | 상태 |
 |----|------|------|------|
 | DP-1 | Railway Flask API 설정 | `axis-ops-api.up.railway.app` | ✅ 완료 |
-| DP-2 | GitHub commit/push | Sprint 5~11 + 배포설정 push 완료 | ✅ 완료 |
-| DP-3 | FE apiBaseUrl 변경 | 아래 상세 참조 | 대기 (Sprint 12 후) |
-| DP-4 | PWA 배포 | `flutter build web` → Netlify에 `build/web` 드래그&드롭 배포 | 대기 |
-| DP-5 | 베타 테스트 | 현장 작업자 실사용 테스트 | DP-3, DP-4 |
+| DP-2 | GitHub commit/push | Sprint 5~12 + 배포설정 push 완료 | ✅ 완료 |
+| DP-3 | FE apiBaseUrl 변경 | `constants.dart` → Railway 도메인으로 변경 | ✅ 완료 |
+| DP-4 | PWA 배포 | `flutter build web` → Netlify `gaxis-ops.netlify.app` 배포 | ✅ 완료 |
+| DP-5 | 베타 테스트 | 현장 작업자 실사용 테스트 | 대기 (BUG-1 해결 후) |
 | DP-6 | CI/CD 구축 | GitHub Actions (CLAUDE.md에 추후로 기록됨) | 추후 |
 
-**DP-3 상세: FE API 주소 변경 (Sprint 12 완료 후 배포 직전)**
-```
-파일: frontend/lib/utils/constants.dart
+**현재 배포 URL**:
+- FE (PWA): `https://gaxis-ops.netlify.app`
+- BE (API): `https://axis-ops-api.up.railway.app`
 
-변경 전:
-  const String apiBaseUrl = 'http://localhost:5001/api';
-  const String webSocketUrl = 'ws://localhost:5001/ws';
-
-변경 후:
-  const String apiBaseUrl = 'https://axis-ops-api.up.railway.app/api';
-  const String webSocketUrl = 'wss://axis-ops-api.up.railway.app/ws';
-```
+**로컬 테스트**: `constants.dart`에서 apiBaseUrl을 `http://localhost:5001/api`로 변경 후 `flutter run -d chrome`
 
 ---
 
@@ -72,7 +70,7 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 ### Phase A 잔여: 생체인증
 - **내용**: 지문/FaceID — WebAuthn API (HTTPS + Flutter Web JS interop)
 - **현재**: Sprint 12에서 메뉴 UI만 생성 + "추후 오픈 예정" 안내
-- **의존성**: PWA 배포(HTTPS) 완료 후
+- **의존성**: PWA 배포(HTTPS) 완료 ✅
 
 ### Phase B 잔여: Admin 출퇴근 대시보드
 - **내용**: 협력사 출퇴근 현황 조회 (당일 + 월간 집계)
@@ -89,6 +87,43 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 - **내용**: product_bom 테이블 + bom_checklist_log
 - **관련**: RV-1 (checklist 스키마 재검토)과 연결될 수 있음
 - **시기**: checklist 스키마 확정 후
+
+### WebSocket 실시간 통신 정식 구현
+- **내용**: 현재 FE raw WebSocket과 BE Flask-SocketIO 간 프로토콜 불일치 → 정식 연동
+- **방안 A**: FE에 `socket_io_client` 패키지 도입 (Flutter Web 호환)
+- **방안 B**: BE에 raw WebSocket 엔드포인트 추가 (`/ws` → pure WebSocket)
+- **현재 임시 조치**: reconnect 최대 2회, 간격 10초로 축소 (에러 로그 최소화)
+- **시기**: 실시간 알림/푸시 기능 필요 시
+
+### QR ETL 자동화 파이프라인 + QR 라벨 관리 페이지
+- **내용**: ETL 파이프라인을 Git 기반 Cron으로 자동 실행 → DB 적재 → QR 이미지 자동 생성 → QR 라벨 다운로드 페이지 상시 최신화
+- **목적**: 생성된 QR 이미지를 설비에 스티커로 부착 (현장 운영용)
+- **현재 상태**:
+  - ETL 모듈: `/Users/kdkyu311/dev/my_app/test_server/etl_pipeline/` (수동 실행)
+  - QR 라벨 관리 페이지: `/Users/kdkyu311/dev/my_app/test_server/static/qr_download.html` (로컬 Flask 서버)
+  - API: `/api/qr/list`, `/api/qr/image/{filename}`, `/api/qr/download/{filename}`, `/api/qr/batch-download`
+- **필요 작업**:
+  1. GitHub Actions 또는 서버 Cron으로 ETL 자동 실행 스케줄 구성
+  2. QR 라벨 다운로드 페이지를 Railway 또는 별도 서버에 배포 (상시 접근 가능)
+  3. 신규 제품 등록 시 QR 이미지 자동 생성 + DB 반영
+  4. QR 이미지 출력/인쇄 기능 (스티커 규격 맞춤)
+- **참고**: ETL_MODULE_GUIDE.md 참조
+- **시기**: 미정
+
+### Geolocation 기반 접속 보안 (2차 보안)
+- **내용**: 사용자 위치정보(GPS)를 확인하여 허용 범위 내에서만 앱 사용 가능
+- **배경**: 1차 보안으로 IP 화이트리스트(내부망 제한) 예정, 2차 보안으로 위치정보 검증 추가
+- **구현 방안**:
+  1. FE: `navigator.geolocation.getCurrentPosition()` → 출근/QR스캔/Task 시작 시 위치 좌표 전송
+  2. BE: 허용 좌표 기준점 + 반경(m) 비교 → 범위 밖이면 차단
+  3. Admin 설정 화면: 허용 위치 기준점(위도/경도) + 허용 반경(m) 설정 가능
+- **필요 작업**:
+  - `admin.app_settings` 또는 별도 테이블에 `allowed_lat`, `allowed_lng`, `allowed_radius_m` 컬럼
+  - Admin Settings UI에 지도 기반 위치 선택 or 좌표 직접 입력
+  - FE 미들웨어: 위치 권한 요청 + 주기적 위치 확인
+  - BE API: 위치 검증 엔드포인트 or 기존 API에 위치 파라미터 추가
+- **참고**: 공장 GPS 좌표 사전 확인 필요, 실내 GPS 정확도 한계 고려 (Wi-Fi 기반 보완 가능)
+- **시기**: IP 화이트리스트 구축 후
 
 ### defect 스키마
 - **내용**: 불량 분석, 추적, 리포트 (QMS 연동)
@@ -123,3 +158,4 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 | 11 핫픽스 | 타입 불일치, 필터링, 협력사 정보, UTC→KST | 수동 수정 4건 |
 | 12 | PIN + 출퇴근 + QR 카메라 | 22 PASSED |
 | 12 핫픽스 | PIN 자동로그인 분기 로직 | 수동 수정 4건 |
+| 12 배포 | Netlify PWA + Railway API 배포 | 전체 API 동작 확인 |

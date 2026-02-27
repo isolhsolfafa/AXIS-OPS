@@ -1,9 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-// ignore: avoid_web_libraries_in_flutter
-import 'dart:ui_web' as ui_web;
-// ignore: avoid_web_libraries_in_flutter
-import 'dart:html' as html;
 import '../../providers/task_provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/qr_scanner_service.dart';
@@ -36,11 +32,11 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
   bool _cameraFailed = false;
 
   static const String _scannerDivId = 'qr-scanner-div';
+  final GlobalKey _cameraContainerKey = GlobalKey();
 
   @override
   void initState() {
     super.initState();
-    _registerScannerView();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _startCamera();
     });
@@ -51,25 +47,6 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
     _qrCodeController.dispose();
     _qrScannerService.stop();
     super.dispose();
-  }
-
-  void _registerScannerView() {
-    // HtmlElementView용 플랫폼 뷰 등록 (한 번만 등록)
-    try {
-      ui_web.platformViewRegistry.registerViewFactory(
-        _scannerDivId,
-        (int viewId) {
-          final div = html.DivElement()
-            ..id = _scannerDivId
-            ..style.width = '100%'
-            ..style.height = '100%'
-            ..style.backgroundColor = '#000000';
-          return div;
-        },
-      );
-    } catch (_) {
-      // 이미 등록됐으면 무시
-    }
   }
 
   Future<void> _startCamera() async {
@@ -641,10 +618,10 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
       );
     }
 
-    // 카메라 활성 시 HtmlElementView로 QR 스캐너 div 렌더링
+    // 카메라 활성 시 DOM div가 이 영역 위에 오버레이됨
     return Stack(
       children: [
-        const HtmlElementView(viewType: _scannerDivId),
+        Container(key: _cameraContainerKey, color: Colors.black),
         // 스캔 영역 오버레이
         Center(
           child: Container(

@@ -12,6 +12,13 @@ class ProductInfo {
   final String? mechPartner;
   final String? elecPartner;
   final String? moduleOutsourcing;
+  final String? salesOrder;
+  final String? customer;
+  final String? titleNumber;
+  final String? mechStart;
+  final String? mechEnd;
+  final String? elecStart;
+  final String? elecEnd;
   final DateTime createdAt;
   final DateTime? updatedAt;
 
@@ -25,6 +32,13 @@ class ProductInfo {
     this.mechPartner,
     this.elecPartner,
     this.moduleOutsourcing,
+    this.salesOrder,
+    this.customer,
+    this.titleNumber,
+    this.mechStart,
+    this.mechEnd,
+    this.elecStart,
+    this.elecEnd,
     required this.createdAt,
     this.updatedAt,
   });
@@ -57,6 +71,13 @@ class ProductInfo {
       mechPartner: json['mech_partner'] as String?,
       elecPartner: json['elec_partner'] as String?,
       moduleOutsourcing: json['module_outsourcing'] as String?,
+      salesOrder: json['sales_order'] as String?,
+      customer: json['customer'] as String?,
+      titleNumber: json['title_number'] as String?,
+      mechStart: json['mech_start'] as String?,
+      mechEnd: json['mech_end'] as String?,
+      elecStart: json['elec_start'] as String?,
+      elecEnd: json['elec_end'] as String?,
       createdAt: json['created_at'] != null
           ? DateTime.parse(json['created_at'] as String)
           : DateTime.now(),
@@ -78,6 +99,13 @@ class ProductInfo {
       'mech_partner': mechPartner,
       'elec_partner': elecPartner,
       'module_outsourcing': moduleOutsourcing,
+      'sales_order': salesOrder,
+      'customer': customer,
+      'title_number': titleNumber,
+      'mech_start': mechStart,
+      'mech_end': mechEnd,
+      'elec_start': elecStart,
+      'elec_end': elecEnd,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt?.toIso8601String(),
     };
@@ -94,6 +122,13 @@ class ProductInfo {
     String? mechPartner,
     String? elecPartner,
     String? moduleOutsourcing,
+    String? salesOrder,
+    String? customer,
+    String? titleNumber,
+    String? mechStart,
+    String? mechEnd,
+    String? elecStart,
+    String? elecEnd,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) {
@@ -107,6 +142,13 @@ class ProductInfo {
       mechPartner: mechPartner ?? this.mechPartner,
       elecPartner: elecPartner ?? this.elecPartner,
       moduleOutsourcing: moduleOutsourcing ?? this.moduleOutsourcing,
+      salesOrder: salesOrder ?? this.salesOrder,
+      customer: customer ?? this.customer,
+      titleNumber: titleNumber ?? this.titleNumber,
+      mechStart: mechStart ?? this.mechStart,
+      mechEnd: mechEnd ?? this.mechEnd,
+      elecStart: elecStart ?? this.elecStart,
+      elecEnd: elecEnd ?? this.elecEnd,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );

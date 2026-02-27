@@ -112,7 +112,7 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            '모델: ${currentProduct.model} | QR: ${currentProduct.qrDocId}',
+                            '${currentProduct.model}${currentProduct.salesOrder != null ? ' | ${currentProduct.salesOrder}' : ''}',
                             style: const TextStyle(fontSize: 13, color: GxColors.slate),
                           ),
                           if (currentProduct.locationQrId != null) ...[

@@ -405,6 +405,13 @@ def update_location_compat() -> Tuple[Dict[str, Any], int]:
         'mech_partner': updated_product.mech_partner,
         'elec_partner': updated_product.elec_partner,
         'module_outsourcing': updated_product.module_outsourcing,
+        'sales_order': updated_product.sales_order,
+        'customer': updated_product.customer,
+        'title_number': updated_product.title_number,
+        'mech_start': updated_product.mech_start.isoformat() if updated_product.mech_start else None,
+        'mech_end': updated_product.mech_end.isoformat() if updated_product.mech_end else None,
+        'elec_start': updated_product.elec_start.isoformat() if updated_product.elec_start else None,
+        'elec_end': updated_product.elec_end.isoformat() if updated_product.elec_end else None,
         'created_at': updated_product.created_at.isoformat(),
         'updated_at': updated_product.updated_at.isoformat(),
     }), 200

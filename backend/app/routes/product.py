@@ -83,6 +83,13 @@ def get_product(qr_doc_id: str) -> Tuple[Dict[str, Any], int]:
         'mech_partner': product.mech_partner,
         'elec_partner': product.elec_partner,
         'module_outsourcing': product.module_outsourcing,
+        'sales_order': product.sales_order,
+        'customer': product.customer,
+        'title_number': product.title_number,
+        'mech_start': product.mech_start.isoformat() if product.mech_start else None,
+        'mech_end': product.mech_end.isoformat() if product.mech_end else None,
+        'elec_start': product.elec_start.isoformat() if product.elec_start else None,
+        'elec_end': product.elec_end.isoformat() if product.elec_end else None,
         'created_at': product.created_at.isoformat() if product.created_at else None,
         'updated_at': product.updated_at.isoformat() if product.updated_at else None,
         'is_tms': is_tms

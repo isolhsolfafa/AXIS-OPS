@@ -209,9 +209,15 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                     children: [
                       _buildInfoRow('시리얼 번호', currentProduct.serialNumber),
                       const Divider(height: 20, color: GxColors.mist),
-                      _buildInfoRow('QR 문서 ID', currentProduct.qrDocId),
-                      const Divider(height: 20, color: GxColors.mist),
                       _buildInfoRow('모델', currentProduct.model),
+                      if (currentProduct.salesOrder != null) ...[
+                        const Divider(height: 20, color: GxColors.mist),
+                        _buildInfoRow('수주번호', currentProduct.salesOrder!),
+                      ],
+                      if (currentProduct.customer != null) ...[
+                        const Divider(height: 20, color: GxColors.mist),
+                        _buildInfoRow('고객사', currentProduct.customer!),
+                      ],
                       if (currentProduct.locationQrId != null) ...[
                         const Divider(height: 20, color: GxColors.mist),
                         _buildInfoRow('위치', currentProduct.locationQrId!),
@@ -220,10 +226,24 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                         const Divider(height: 20, color: GxColors.mist),
                         _buildInfoRow('기구 협력사', currentProduct.mechPartner!),
                       ],
+                      if (currentProduct.elecPartner != null) ...[
+                        const Divider(height: 20, color: GxColors.mist),
+                        _buildInfoRow('전장 협력사', currentProduct.elecPartner!),
+                      ],
+                      if (currentProduct.mechStart != null || currentProduct.mechEnd != null) ...[
+                        const Divider(height: 20, color: GxColors.mist),
+                        _buildInfoRow('기구 일정', '${currentProduct.mechStart ?? '-'} ~ ${currentProduct.mechEnd ?? '-'}'),
+                      ],
+                      if (currentProduct.elecStart != null || currentProduct.elecEnd != null) ...[
+                        const Divider(height: 20, color: GxColors.mist),
+                        _buildInfoRow('전장 일정', '${currentProduct.elecStart ?? '-'} ~ ${currentProduct.elecEnd ?? '-'}'),
+                      ],
                       if (currentProduct.moduleOutsourcing != null) ...[
                         const Divider(height: 20, color: GxColors.mist),
                         _buildInfoRow('모듈 외주', currentProduct.moduleOutsourcing!),
                       ],
+                      const Divider(height: 20, color: GxColors.mist),
+                      _buildInfoRow('QR Doc ID', currentProduct.qrDocId),
                     ],
                   ),
                 ),
