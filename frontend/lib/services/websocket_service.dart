@@ -22,8 +22,8 @@ class WebSocketService {
   bool _shouldReconnect = true;
   String? _authToken;
   int _reconnectAttempts = 0;
-  static const int maxReconnectAttempts = 5;
-  static const Duration reconnectDelay = Duration(seconds: 3);
+  static const int maxReconnectAttempts = 2;
+  static const Duration reconnectDelay = Duration(seconds: 10);
   static const Duration heartbeatInterval = Duration(seconds: 30);
 
   /// 연결 상태 스트림

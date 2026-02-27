@@ -6,6 +6,11 @@ import 'package:flutter/foundation.dart';
 dynamic _scanner;
 
 /// QR 스캐너 시작 (웹 구현 — dart:js_util 기반)
+///
+/// 카메라 우선순위:
+/// 1. facingMode: environment (모바일 후면 카메라)
+/// 2. facingMode: user (데스크톱/전면 카메라)
+/// 3. 첫 번째 사용 가능한 카메라 ID
 Future<bool> startQrScanner({
   required String elementId,
   required void Function(String qrCode) onResult,
@@ -21,6 +26,9 @@ Future<bool> startQrScanner({
       onError?.call('html5-qrcode 라이브러리가 로드되지 않았습니다.');
       return false;
     }
+
+    // DOM 요소 렌더링 대기 (HtmlElementView 타이밍 이슈 방지)
+    await Future.delayed(const Duration(milliseconds: 800));
 
     _scanner = js_util.callConstructor(html5QrcodeClass, [elementId]);
 
@@ -38,16 +46,57 @@ Future<bool> startQrScanner({
       // QR 미인식은 정상 상태
     });
 
-    final constraints = js_util.jsify({'facingMode': 'environment'});
+    // 1차 시도: 후면 카메라 (모바일)
+    try {
+      final envConstraints = js_util.jsify({'facingMode': 'environment'});
+      final promise = js_util.callMethod(
+        _scanner!,
+        'start',
+        [envConstraints, config, successCallback, errorCallback],
+      );
+      await js_util.promiseToFuture(promise);
+      return true;
+    } catch (e) {
+      debugPrint('[QrScannerWeb] environment camera failed: $e');
+    }
 
-    final promise = js_util.callMethod(
-      _scanner!,
-      'start',
-      [constraints, config, successCallback, errorCallback],
-    );
+    // 2차 시도: 전면 카메라 (데스크톱/MacBook)
+    try {
+      _scanner = js_util.callConstructor(html5QrcodeClass, [elementId]);
+      final userConstraints = js_util.jsify({'facingMode': 'user'});
+      final promise = js_util.callMethod(
+        _scanner!,
+        'start',
+        [userConstraints, config, successCallback, errorCallback],
+      );
+      await js_util.promiseToFuture(promise);
+      return true;
+    } catch (e) {
+      debugPrint('[QrScannerWeb] user camera failed: $e');
+    }
 
-    await js_util.promiseToFuture(promise);
-    return true;
+    // 3차 시도: 사용 가능한 첫 번째 카메라 ID로 직접 시도
+    try {
+      final camerasPromise = js_util.callMethod(html5QrcodeClass, 'getCameras', []);
+      final cameras = await js_util.promiseToFuture(camerasPromise) as List<dynamic>;
+      if (cameras.isNotEmpty) {
+        final cameraId = js_util.getProperty(cameras[0] as Object, 'id') as String;
+        _scanner = js_util.callConstructor(html5QrcodeClass, [elementId]);
+        final promise = js_util.callMethod(
+          _scanner!,
+          'start',
+          [cameraId, config, successCallback, errorCallback],
+        );
+        await js_util.promiseToFuture(promise);
+        return true;
+      }
+    } catch (e) {
+      debugPrint('[QrScannerWeb] camera ID fallback failed: $e');
+    }
+
+    onError?.call('사용 가능한 카메라를 찾을 수 없습니다.');
+    _scanner = null;
+    return false;
   } catch (e) {
     debugPrint('[QrScannerWeb] start failed: $e');
     _scanner = null;
