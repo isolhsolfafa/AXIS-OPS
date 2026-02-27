@@ -1,6 +1,8 @@
 """
 작업자 모델 및 CRUD 함수
 테이블: workers, email_verification
+Sprint 5: EmailVerification dataclass 추가
+Sprint 11: active_role 컬럼 추가 (GST 작업자 역할 전환)
 """
 
 import random
@@ -29,11 +31,12 @@ class Worker:
         name: 작업자 이름
         email: 이메일
         password_hash: 비밀번호 해시
-        role: 역할 (MM, EE, TM, PI, QI, SI)
+        role: 역할 (MECH, ELEC, TM, PI, QI, SI, ADMIN)
         approval_status: 승인 상태 (pending, approved, rejected)
         email_verified: 이메일 인증 완료 여부
         is_manager: 협력사 관리자 여부
         is_admin: 시스템 관리자 여부
+        company: 소속 회사 (FNI, BAT, TMS(M), TMS(E), P&S, C&A, GST)
         created_at: 생성 시간
         updated_at: 수정 시간
     """
@@ -49,6 +52,8 @@ class Worker:
     is_admin: bool
     created_at: datetime
     updated_at: datetime
+    company: Optional[str] = None
+    active_role: Optional[str] = None  # Sprint 11: GST 작업자 역할 전환용
 
     @staticmethod
     def from_db_row(row: Dict[str, Any]) -> "Worker":
@@ -72,7 +77,51 @@ class Worker:
             is_manager=row['is_manager'],
             is_admin=row['is_admin'],
             created_at=row['created_at'],
-            updated_at=row['updated_at']
+            updated_at=row['updated_at'],
+            company=row.get('company'),
+            active_role=row.get('active_role')  # Sprint 11
+        )
+
+
+@dataclass
+class EmailVerification:
+    """
+    이메일 인증 모델
+
+    Attributes:
+        id: 인증 레코드 ID
+        worker_id: 작업자 ID (FK → workers.id)
+        verification_code: 6자리 인증 코드 (UNIQUE)
+        expires_at: 만료 시각
+        verified_at: 인증 완료 시각 (NULL이면 미완료)
+        created_at: 생성 시각
+    """
+
+    id: int
+    worker_id: int
+    verification_code: str
+    expires_at: datetime
+    verified_at: Optional[datetime]
+    created_at: datetime
+
+    @staticmethod
+    def from_db_row(row: Dict[str, Any]) -> "EmailVerification":
+        """
+        데이터베이스 행에서 EmailVerification 객체 생성
+
+        Args:
+            row: RealDictCursor로 조회한 dict 형태의 행
+
+        Returns:
+            EmailVerification 객체
+        """
+        return EmailVerification(
+            id=row['id'],
+            worker_id=row['worker_id'],
+            verification_code=row['verification_code'],
+            expires_at=row['expires_at'],
+            verified_at=row.get('verified_at'),
+            created_at=row['created_at']
         )
 
 
@@ -89,7 +138,8 @@ def get_db_connection() -> psycopg2.extensions.connection:
     try:
         conn = psycopg2.connect(
             Config.DATABASE_URL,
-            cursor_factory=psycopg2.extras.RealDictCursor
+            cursor_factory=psycopg2.extras.RealDictCursor,
+            options="-c timezone=Asia/Seoul"
         )
         return conn
     except PsycopgError as e:
@@ -103,7 +153,8 @@ def create_worker(
     password_hash: str,
     role: str,
     is_manager: bool = False,
-    is_admin: bool = False
+    is_admin: bool = False,
+    company: Optional[str] = None
 ) -> Optional[int]:
     """
     새 작업자 생성
@@ -112,9 +163,10 @@ def create_worker(
         name: 작업자 이름
         email: 이메일 (unique)
         password_hash: 암호화된 비밀번호
-        role: 역할 (MM, EE, TM, PI, QI, SI)
+        role: 역할 (MECH, ELEC, TM, PI, QI, SI, ADMIN)
         is_manager: 협력사 관리자 여부
         is_admin: 시스템 관리자 여부
+        company: 소속 회사 (FNI, BAT, TMS(M), TMS(E), P&S, C&A, GST)
 
     Returns:
         생성된 작업자 ID, 실패 시 None
@@ -126,11 +178,11 @@ def create_worker(
 
         cur.execute(
             """
-            INSERT INTO workers (name, email, password_hash, role, is_manager, is_admin)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO workers (name, email, password_hash, role, is_manager, is_admin, company)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (name, email, password_hash, role, is_manager, is_admin)
+            (name, email, password_hash, role, is_manager, is_admin, company)
         )
 
         worker_id = cur.fetchone()['id']
@@ -319,8 +371,8 @@ def create_verification_code(worker_id: int) -> Optional[str]:
             conn = get_db_connection()
             cur = conn.cursor()
 
-            # 만료 시간: 현재 시각 + 10분
-            expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+            # 만료 시간: 현재 시각(KST) + 10분
+            expires_at = datetime.now(Config.KST) + timedelta(minutes=10)
 
             cur.execute(
                 """
@@ -385,8 +437,8 @@ def get_verification_code(code: str) -> Optional[Dict[str, Any]]:
         if not row:
             return None
 
-        # 만료 확인 (DB는 timezone-aware이므로 aware datetime 사용)
-        if row['expires_at'] < datetime.now(timezone.utc):
+        # 만료 확인 (KST 기준)
+        if row['expires_at'] < datetime.now(Config.KST):
             logger.warning(f"Verification code expired: code={code}")
             return None
 
@@ -395,6 +447,140 @@ def get_verification_code(code: str) -> Optional[Dict[str, Any]]:
     except PsycopgError as e:
         logger.error(f"Failed to get verification code: {e}")
         return None
+    finally:
+        if conn:
+            conn.close()
+
+
+def create_password_reset_code(worker_id: int) -> Optional[str]:
+    """
+    비밀번호 재설정 인증 코드 생성 (6자리 숫자, 30분 만료)
+
+    Args:
+        worker_id: 작업자 ID
+
+    Returns:
+        생성된 인증 코드 (6자리 숫자), 실패 시 None
+    """
+    conn = None
+
+    # 중복 코드 발생 시 최대 3회 재시도
+    for attempt in range(3):
+        code = str(random.randint(100000, 999999))
+
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+
+            # 만료 시간: 현재 시각(KST) + 30분
+            expires_at = datetime.now(Config.KST) + timedelta(minutes=30)
+
+            cur.execute(
+                """
+                INSERT INTO email_verification (worker_id, verification_code, expires_at)
+                VALUES (%s, %s, %s)
+                RETURNING verification_code
+                """,
+                (worker_id, code, expires_at)
+            )
+
+            result = cur.fetchone()
+            conn.commit()
+
+            logger.info(f"Password reset code created: worker_id={worker_id}")
+            return result['verification_code']
+
+        except psycopg2.IntegrityError:
+            # 중복 코드 발생 (UNIQUE 제약 위반)
+            if conn:
+                conn.rollback()
+                conn.close()
+            logger.warning(f"Duplicate reset code, retrying... (attempt {attempt + 1}/3)")
+            continue
+        except PsycopgError as e:
+            if conn:
+                conn.rollback()
+            logger.error(f"Failed to create password reset code: {e}")
+            return None
+        finally:
+            if conn and not conn.closed:
+                conn.close()
+
+    logger.error("Failed to create password reset code after 3 attempts")
+    return None
+
+
+def update_password_hash(worker_id: int, password_hash: str) -> bool:
+    """
+    작업자 비밀번호 해시 업데이트
+
+    Args:
+        worker_id: 작업자 ID
+        password_hash: 새 bcrypt 해시
+
+    Returns:
+        성공 시 True, 실패 시 False
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            "UPDATE workers SET password_hash = %s WHERE id = %s",
+            (password_hash, worker_id)
+        )
+
+        updated = cur.rowcount > 0
+        conn.commit()
+
+        if updated:
+            logger.info(f"Password hash updated: worker_id={worker_id}")
+        return updated
+
+    except PsycopgError as e:
+        if conn:
+            conn.rollback()
+        logger.error(f"Failed to update password hash: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+
+def update_active_role(worker_id: int, active_role: str) -> bool:
+    """
+    Sprint 11: GST 작업자의 활성 역할 업데이트
+
+    Args:
+        worker_id: 작업자 ID
+        active_role: 변경할 역할 (PI, QI, SI)
+
+    Returns:
+        성공 시 True, 실패 시 False
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            "UPDATE workers SET active_role = %s, updated_at = NOW() WHERE id = %s",
+            (active_role, worker_id)
+        )
+
+        updated = cur.rowcount > 0
+        conn.commit()
+
+        if updated:
+            logger.info(f"Worker active_role updated: id={worker_id}, active_role={active_role}")
+        return updated
+
+    except PsycopgError as e:
+        if conn:
+            conn.rollback()
+        logger.error(f"Failed to update active_role: {e}")
+        return False
     finally:
         if conn:
             conn.close()

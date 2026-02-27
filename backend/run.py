@@ -11,10 +11,10 @@ if __name__ == "__main__":
 
     # 환경변수에서 읽기 (fallback: 기본값)
     host = os.getenv("FLASK_HOST", "0.0.0.0")
-    port = int(os.getenv("FLASK_PORT", "5001"))
+    port = int(os.getenv("PORT", os.getenv("FLASK_PORT", "5001")))
     debug = os.getenv("FLASK_DEBUG", "True").lower() == "true"
 
     print(f"Starting Flask server on {host}:{port} (debug={debug})")
 
     # SocketIO 개발 서버 실행
-    socketio.run(app, host=host, port=port, debug=debug)
+    socketio.run(app, host=host, port=port, debug=debug, allow_unsafe_werkzeug=True)

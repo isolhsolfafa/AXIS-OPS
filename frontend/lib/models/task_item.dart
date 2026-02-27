@@ -11,7 +11,7 @@ class TaskItem {
   final int workerId;
   final String serialNumber;
   final String qrDocId;
-  final String taskCategory; // 기구, 전장, TMS반제품, 가압검사, 공정검사, 출하검사 (MM, EE, TM, PI, QI, SI)
+  final String taskCategory; // 기구, 전장, TMS반제품, 가압검사, 공정검사, 출하검사 (MECH, ELEC, TM, PI, QI, SI)
   final String taskId; // Task 식별자 (예: CABINET_ASSY)
   final String taskName; // Task 이름 (예: 캐비넷 조립)
   final DateTime? startedAt;
@@ -19,6 +19,8 @@ class TaskItem {
   final int? durationMinutes; // 소요시간 (분 단위, completed_at - started_at)
   final bool isApplicable; // Task 적용 여부 (관리자/사내직원이 비활성화 가능)
   final bool locationQrVerified;
+  final bool isPaused; // 일시정지 여부
+  final int totalPauseMinutes; // 누적 일시정지 시간 (분)
   final DateTime createdAt;
   final DateTime? updatedAt;
 
@@ -35,6 +37,8 @@ class TaskItem {
     this.durationMinutes,
     this.isApplicable = true,
     this.locationQrVerified = false,
+    this.isPaused = false,
+    this.totalPauseMinutes = 0,
     required this.createdAt,
     this.updatedAt,
   });
@@ -48,7 +52,7 @@ class TaskItem {
   ///   "worker_id": 5,
   ///   "serial_number": "GBWS-6408",
   ///   "qr_doc_id": "DOC_GBWS-6408",
-  ///   "task_category": "MM",
+  ///   "task_category": "MECH",
   ///   "task_id": "CABINET_ASSY",
   ///   "task_name": "캐비넷 조립",
   ///   "started_at": "2026-02-16T10:00:00Z",
@@ -63,7 +67,7 @@ class TaskItem {
   factory TaskItem.fromJson(Map<String, dynamic> json) {
     return TaskItem(
       id: json['id'] as int,
-      workerId: json['worker_id'] as int,
+      workerId: json['worker_id'] as int? ?? 0,  // Task Seed 초기 상태: worker_id=NULL
       serialNumber: json['serial_number'] as String,
       qrDocId: json['qr_doc_id'] as String,
       taskCategory: json['task_category'] as String,
@@ -78,7 +82,11 @@ class TaskItem {
       durationMinutes: json['duration_minutes'] as int?,
       isApplicable: json['is_applicable'] as bool? ?? true,
       locationQrVerified: json['location_qr_verified'] as bool? ?? false,
-      createdAt: DateTime.parse(json['created_at'] as String),
+      isPaused: json['is_paused'] as bool? ?? false,
+      totalPauseMinutes: json['total_pause_minutes'] as int? ?? 0,
+      createdAt: json['created_at'] != null
+          ? DateTime.parse(json['created_at'] as String)
+          : DateTime.now(),
       updatedAt: json['updated_at'] != null
           ? DateTime.parse(json['updated_at'] as String)
           : null,
@@ -100,6 +108,8 @@ class TaskItem {
       'duration_minutes': durationMinutes,
       'is_applicable': isApplicable,
       'location_qr_verified': locationQrVerified,
+      'is_paused': isPaused,
+      'total_pause_minutes': totalPauseMinutes,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt?.toIso8601String(),
     };
@@ -119,6 +129,8 @@ class TaskItem {
     int? durationMinutes,
     bool? isApplicable,
     bool? locationQrVerified,
+    bool? isPaused,
+    int? totalPauseMinutes,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) {
@@ -135,6 +147,8 @@ class TaskItem {
       durationMinutes: durationMinutes ?? this.durationMinutes,
       isApplicable: isApplicable ?? this.isApplicable,
       locationQrVerified: locationQrVerified ?? this.locationQrVerified,
+      isPaused: isPaused ?? this.isPaused,
+      totalPauseMinutes: totalPauseMinutes ?? this.totalPauseMinutes,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
@@ -192,6 +206,8 @@ class TaskItem {
         other.durationMinutes == durationMinutes &&
         other.isApplicable == isApplicable &&
         other.locationQrVerified == locationQrVerified &&
+        other.isPaused == isPaused &&
+        other.totalPauseMinutes == totalPauseMinutes &&
         other.createdAt == createdAt &&
         other.updatedAt == updatedAt;
   }
@@ -211,6 +227,8 @@ class TaskItem {
       durationMinutes,
       isApplicable,
       locationQrVerified,
+      isPaused,
+      totalPauseMinutes,
       createdAt,
       updatedAt,
     );

@@ -2,10 +2,25 @@
 공정 검증 API 테스트
 엔드포인트: POST /api/app/validation/check-process
 Sprint 3: 공정 누락 검증 + 알림 생성
+Sprint 6: mech_completed/elec_completed 컬럼 (Sprint 6 마이그레이션 필요)
 """
 
 import pytest
 from datetime import datetime, timezone
+
+
+@pytest.fixture(autouse=True)
+def skip_if_no_sprint6(has_sprint6_schema, request):
+    """Sprint 6 스키마 없으면 해당 클래스 테스트 스킵"""
+    # TestProcessValidationNoProduct, TestProcessValidationNonInspection은 스킵 안 함
+    skip_classes = [
+        'TestProcessValidationMMIncomplete',
+        'TestProcessValidationEEIncomplete',
+        'TestProcessValidationBothComplete',
+        'TestLocationQRCheck'
+    ]
+    if request.cls and request.cls.__name__ in skip_classes and not has_sprint6_schema:
+        pytest.skip("Sprint 6 DB 마이그레이션 필요 (mech_completed 컬럼 없음)")
 
 
 @pytest.fixture(autouse=True)
@@ -25,30 +40,30 @@ def cleanup_process_alerts(db_conn):
 
 
 class TestProcessValidationMMIncomplete:
-    """MM 미완료 시 PI 공정 검증"""
+    """MECH 미완료 시 PI 공정 검증"""
 
     def test_pi_mm_incomplete(
         self, client, create_test_worker, create_test_product,
         create_test_completion_status, get_auth_token
     ):
         """
-        PI 작업자가 MM 미완료 제품을 검증
-        → can_proceed=false, MM in missing_processes, 알림 생성
+        PI 작업자가 MECH 미완료 제품을 검증
+        → can_proceed=false, MECH in missing_processes, 알림 생성
 
         Expected:
         - Status 200
         - valid == false
-        - missing_processes에 'MM' 포함
-        - alerts_created >= 1 (MM 관리자가 있을 때)
+        - missing_processes에 'MECH' 포함
+        - alerts_created >= 1 (MECH 관리자가 있을 때)
         """
         pi_worker_id = create_test_worker(
             email='pi_proc@test.com', password='Test123!',
             name='PI Proc Worker', role='PI'
         )
-        # MM 관리자 생성 (알림 대상)
+        # MECH 관리자 생성 (알림 대상)
         create_test_worker(
-            email='mm_mgr_proc@test.com', password='Test123!',
-            name='MM Manager Proc', role='MM', is_manager=True
+            email='mech_mgr_proc@test.com', password='Test123!',
+            name='MECH Manager Proc', role='MECH', is_manager=True
         )
 
         create_test_product(
@@ -60,8 +75,8 @@ class TestProcessValidationMMIncomplete:
 
         create_test_completion_status(
             serial_number='SN-PROC-001',
-            mm_completed=False,
-            ee_completed=True
+            mech_completed=False,
+            elec_completed=True
         )
 
         token = get_auth_token(pi_worker_id, role='PI')
@@ -77,33 +92,33 @@ class TestProcessValidationMMIncomplete:
         assert response.status_code == 200
         data = response.get_json()
         assert data['valid'] is False
-        assert 'MM' in data['missing_processes']
+        assert 'MECH' in data['missing_processes']
         assert data['alerts_created'] >= 1
 
 
 class TestProcessValidationEEIncomplete:
-    """EE 미완료 시 QI 공정 검증"""
+    """ELEC 미완료 시 QI 공정 검증"""
 
     def test_qi_ee_incomplete(
         self, client, create_test_worker, create_test_product,
         create_test_completion_status, get_auth_token
     ):
         """
-        QI 작업자가 EE 미완료 제품을 검증
-        → can_proceed=false, EE in missing_processes
+        QI 작업자가 ELEC 미완료 제품을 검증
+        → can_proceed=false, ELEC in missing_processes
 
         Expected:
         - Status 200
         - valid == false
-        - missing_processes에 'EE' 포함
+        - missing_processes에 'ELEC' 포함
         """
         qi_worker_id = create_test_worker(
             email='qi_proc@test.com', password='Test123!',
             name='QI Proc Worker', role='QI'
         )
         create_test_worker(
-            email='ee_mgr_proc@test.com', password='Test123!',
-            name='EE Manager Proc', role='EE', is_manager=True
+            email='elec_mgr_proc@test.com', password='Test123!',
+            name='ELEC Manager Proc', role='ELEC', is_manager=True
         )
 
         create_test_product(
@@ -115,8 +130,8 @@ class TestProcessValidationEEIncomplete:
 
         create_test_completion_status(
             serial_number='SN-PROC-002',
-            mm_completed=True,
-            ee_completed=False
+            mech_completed=True,
+            elec_completed=False
         )
 
         token = get_auth_token(qi_worker_id, role='QI')
@@ -132,18 +147,18 @@ class TestProcessValidationEEIncomplete:
         assert response.status_code == 200
         data = response.get_json()
         assert data['valid'] is False
-        assert 'EE' in data['missing_processes']
+        assert 'ELEC' in data['missing_processes']
 
 
 class TestProcessValidationBothComplete:
-    """MM + EE 모두 완료 → 공정 진행 가능"""
+    """MECH + ELEC 모두 완료 → 공정 진행 가능"""
 
     def test_pi_both_complete(
         self, client, create_test_worker, create_test_product,
         create_test_completion_status, get_auth_token
     ):
         """
-        MM + EE 완료 → can_proceed=true, 알림 없음
+        MECH + ELEC 완료 → can_proceed=true, 알림 없음
 
         Expected:
         - Status 200
@@ -165,8 +180,8 @@ class TestProcessValidationBothComplete:
 
         create_test_completion_status(
             serial_number='SN-PROC-003',
-            mm_completed=True,
-            ee_completed=True
+            mech_completed=True,
+            elec_completed=True
         )
 
         token = get_auth_token(pi_worker_id, role='PI')
@@ -187,22 +202,22 @@ class TestProcessValidationBothComplete:
 
 
 class TestProcessValidationNonInspection:
-    """비검사 공정 (MM, EE, TM) 검증 불필요"""
+    """비검사 공정 (MECH, ELEC, TM) 검증 불필요"""
 
     def test_mm_skips_validation(
         self, client, create_test_worker, create_test_product,
         create_test_completion_status, get_auth_token
     ):
         """
-        MM 공정 타입 → 검증 건너뜀, valid=true
+        MECH 공정 타입 → 검증 건너뜀, valid=true
 
         Expected:
         - Status 200
         - valid == true (검사 공정이 아니므로)
         """
         mm_worker_id = create_test_worker(
-            email='mm_skip@test.com', password='Test123!',
-            name='MM Skip Worker', role='MM'
+            email='mech_skip@test.com', password='Test123!',
+            name='MM Skip Worker', role='MECH'
         )
 
         create_test_product(
@@ -213,12 +228,12 @@ class TestProcessValidationNonInspection:
 
         create_test_completion_status(serial_number='SN-PROC-004')
 
-        token = get_auth_token(mm_worker_id, role='MM')
+        token = get_auth_token(mm_worker_id, role='MECH')
         response = client.post(
             '/api/app/validation/check-process',
             json={
                 'serial_number': 'SN-PROC-004',
-                'process_type': 'MM'
+                'process_type': 'MECH'
             },
             headers={'Authorization': f'Bearer {token}'}
         )
@@ -289,8 +304,8 @@ class TestLocationQRCheck:
 
         create_test_completion_status(
             serial_number='SN-PROC-005',
-            mm_completed=True,
-            ee_completed=True
+            mech_completed=True,
+            elec_completed=True
         )
 
         token = get_auth_token(worker_id, role='PI')

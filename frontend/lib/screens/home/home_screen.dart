@@ -3,14 +3,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/alert_provider.dart';
 import '../../services/websocket_service.dart';
+import '../../utils/design_system.dart';
+import '../../widgets/break_time_popup.dart';
+import '../../widgets/break_time_end_popup.dart';
 
 /// 홈 화면 (메인 화면)
 ///
-/// Sprint 1: 기본 레이아웃 및 사용자 정보 표시
-/// Sprint 2: 작업 목록, QR 스캔, 관리자 기능 추가
-/// Sprint 3: 알림 배지, WebSocket 실시간 알림
+/// G-AXIS Design System 적용: cloud 배경, 인디고 액센트, 카드 스타일
 class HomeScreen extends ConsumerStatefulWidget {
-  const HomeScreen({Key? key}) : super(key: key);
+  const HomeScreen({super.key});
 
   @override
   ConsumerState<HomeScreen> createState() => _HomeScreenState();
@@ -23,7 +24,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    // WebSocket 연결 및 알림 초기화
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initializeAlerts();
     });
@@ -37,51 +37,211 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Future<void> _initializeAlerts() async {
-    final authState = ref.read(authProvider);
-    final token = authState.token;
+    final authService = ref.read(authServiceProvider);
+    final token = await authService.getToken();
 
     if (token != null && !_websocketInitialized) {
       try {
-        // WebSocket 연결
         await _websocketService.connect(token);
-
-        // 알림 구독
         ref.read(alertProvider.notifier).subscribeToAlerts(_websocketService);
-
-        // 초기 알림 로드
+        _subscribeToBreakTimeEvents();
         await ref.read(alertProvider.notifier).fetchAlerts();
         await ref.read(alertProvider.notifier).refreshUnreadCount();
-
         _websocketInitialized = true;
       } catch (e) {
-        print('[HomeScreen] Failed to initialize alerts: $e');
+        debugPrint('[HomeScreen] Failed to initialize alerts: $e');
       }
     }
   }
 
+  /// 휴게시간 WebSocket 이벤트 구독
+  void _subscribeToBreakTimeEvents() {
+    // BREAK_TIME_PAUSE: 휴게시간 시작 → 자동 일시정지 팝업
+    _websocketService.on('BREAK_TIME_PAUSE', (data) {
+      if (!mounted) return;
+      final breakType = data['break_type'] as String? ?? 'morning';
+      final breakTypeName = _breakTypeLabel(breakType);
+      final endTime = data['end_time'] as String? ?? '';
+      BreakTimePopup.show(
+        context,
+        breakType: breakType,
+        breakTypeName: breakTypeName,
+        endTime: endTime,
+      );
+    });
+
+    // BREAK_TIME_END: 휴게시간 종료 → 작업 재개 팝업
+    _websocketService.on('BREAK_TIME_END', (data) {
+      if (!mounted) return;
+      final breakType = data['break_type'] as String? ?? 'morning';
+      final breakTypeName = _breakTypeLabel(breakType);
+      BreakTimeEndPopup.show(
+        context,
+        breakTypeName: breakTypeName,
+      );
+    });
+  }
+
+  /// 휴게시간 유형 → 한국어 레이블
+  String _breakTypeLabel(String breakType) {
+    switch (breakType) {
+      case 'morning': return '오전 휴게';
+      case 'lunch': return '점심시간';
+      case 'afternoon': return '오후 휴게';
+      case 'dinner': return '저녁시간';
+      default: return '휴게시간';
+    }
+  }
+
+  /// 역할별 컬러 반환
+  Color _getRoleColor(String? role) {
+    switch (role) {
+      case 'MECH': return const Color(0xFFEA580C);
+      case 'ELEC': return GxColors.info;
+      case 'TM': return const Color(0xFF0D9488);
+      case 'PI': return GxColors.success;
+      case 'QI': return const Color(0xFF7C3AED);
+      case 'SI': return GxColors.accent;
+      case 'ADMIN': return GxColors.accent;
+      default: return GxColors.accent;
+    }
+  }
+
+  /// 활성 역할 한국어 레이블
+  String _getActiveRoleLabel(String? role) {
+    switch (role) {
+      case 'PI': return 'PI 가압검사';
+      case 'QI': return 'QI 공정검사';
+      case 'SI': return 'SI 마무리공정';
+      default: return role ?? '';
+    }
+  }
+
+  /// 역할별 아이콘 반환
+  IconData _getRoleIcon(String? role) {
+    switch (role) {
+      case 'MECH': return Icons.build;
+      case 'ELEC': return Icons.electrical_services;
+      case 'TM': return Icons.inventory;
+      case 'PI': return Icons.compress;
+      case 'QI': return Icons.verified;
+      case 'SI': return Icons.local_shipping;
+      case 'ADMIN': return Icons.admin_panel_settings;
+      default: return Icons.person;
+    }
+  }
+
+  /// GST 작업자 active_role 변경 다이얼로그
+  Future<void> _showActiveRoleDialog(BuildContext context, WidgetRef ref, String? currentRole) async {
+    final roles = [
+      {'code': 'PI', 'label': 'PI 가압검사', 'icon': Icons.compress, 'color': GxColors.success},
+      {'code': 'QI', 'label': 'QI 공정검사', 'icon': Icons.verified, 'color': const Color(0xFF7C3AED)},
+      {'code': 'SI', 'label': 'SI 마무리공정', 'icon': Icons.local_shipping, 'color': GxColors.accent},
+    ];
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.lg)),
+        title: const Text(
+          '활성 역할 선택',
+          style: TextStyle(color: GxColors.charcoal, fontWeight: FontWeight.w600, fontSize: 15),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: roles.map((r) {
+            final isSelected = currentRole == r['code'];
+            final color = r['color'] as Color;
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: InkWell(
+                onTap: () async {
+                  Navigator.of(ctx).pop();
+                  await ref.read(authProvider.notifier).changeActiveRole(r['code'] as String);
+                },
+                borderRadius: BorderRadius.circular(GxRadius.md),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: isSelected ? color.withValues(alpha: 0.1) : GxColors.cloud,
+                    borderRadius: BorderRadius.circular(GxRadius.md),
+                    border: Border.all(
+                      color: isSelected ? color : GxColors.mist,
+                      width: isSelected ? 1.5 : 1,
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(r['icon'] as IconData, size: 18, color: color),
+                      const SizedBox(width: 10),
+                      Text(
+                        r['label'] as String,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                          color: isSelected ? color : GxColors.graphite,
+                        ),
+                      ),
+                      if (isSelected) ...[
+                        const Spacer(),
+                        Icon(Icons.check_circle, size: 16, color: color),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('취소', style: TextStyle(color: GxColors.steel)),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _handleLogout(BuildContext context, WidgetRef ref) async {
-    // 로그아웃 확인 다이얼로그
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('로그아웃'),
-        content: const Text('로그아웃 하시겠습니까?'),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.lg)),
+        title: const Text('로그아웃', style: TextStyle(color: GxColors.charcoal, fontWeight: FontWeight.w600)),
+        content: const Text('로그아웃 하시겠습니까?', style: TextStyle(color: GxColors.slate)),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('취소'),
+            child: const Text('취소', style: TextStyle(color: GxColors.steel)),
           ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('로그아웃'),
+          Container(
+            height: 36,
+            decoration: BoxDecoration(
+              color: GxColors.danger,
+              borderRadius: BorderRadius.circular(GxRadius.sm),
+              boxShadow: [BoxShadow(color: GxColors.danger.withValues(alpha: 0.3), blurRadius: 8, offset: const Offset(0, 2))],
+            ),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: () => Navigator.of(context).pop(true),
+                borderRadius: BorderRadius.circular(GxRadius.sm),
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16),
+                  child: Center(
+                    child: Text('로그아웃', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                  ),
+                ),
+              ),
+            ),
           ),
         ],
       ),
     );
 
     if (confirmed == true) {
-      final authNotifier = ref.read(authProvider.notifier);
-      await authNotifier.logout();
+      await ref.read(authProvider.notifier).logout();
     }
   }
 
@@ -91,261 +251,384 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final alertState = ref.watch(alertProvider);
     final worker = authState.currentWorker;
     final unreadCount = alertState.unreadCount;
+    final roleColor = _getRoleColor(worker?.role);
 
     return Scaffold(
+      backgroundColor: GxColors.cloud,
       appBar: AppBar(
-        title: const Text('G-AXIS'),
-        centerTitle: true,
+        backgroundColor: GxColors.white,
+        elevation: 0,
+        title: Row(
+          children: [
+            Container(
+              width: 4,
+              height: 20,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [GxColors.accent, GxColors.accentHover],
+                ),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(width: 12),
+            const Text(
+              'AXIS-OPS',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+                color: GxColors.charcoal,
+              ),
+            ),
+          ],
+        ),
         actions: [
-          // 알림 버튼 (배지 포함)
+          // 알림 버튼
           Stack(
             children: [
               IconButton(
-                icon: const Icon(Icons.notifications_outlined),
-                onPressed: () {
-                  Navigator.pushNamed(context, '/alerts');
-                },
-                tooltip: '알림',
+                icon: const Icon(Icons.notifications_outlined, color: GxColors.slate, size: 22),
+                onPressed: () => Navigator.pushNamed(context, '/alerts'),
               ),
               if (unreadCount > 0)
                 Positioned(
                   right: 8,
                   top: 8,
                   child: Container(
-                    padding: const EdgeInsets.all(4),
+                    padding: const EdgeInsets.all(3),
                     decoration: const BoxDecoration(
-                      color: Colors.red,
+                      color: GxColors.danger,
                       shape: BoxShape.circle,
                     ),
-                    constraints: const BoxConstraints(
-                      minWidth: 16,
-                      minHeight: 16,
-                    ),
+                    constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
                     child: Text(
                       unreadCount > 99 ? '99+' : '$unreadCount',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                      ),
+                      style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold),
                       textAlign: TextAlign.center,
                     ),
                   ),
                 ),
             ],
           ),
-          // 로그아웃 버튼
           IconButton(
-            icon: const Icon(Icons.logout),
+            icon: const Icon(Icons.logout, color: GxColors.slate, size: 20),
             onPressed: () => _handleLogout(context, ref),
-            tooltip: '로그아웃',
           ),
         ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1),
+          child: Container(height: 1, color: GxColors.mist),
+        ),
       ),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // 사용자 정보 카드
-              Card(
-                elevation: 2,
-                child: Padding(
-                  padding: const EdgeInsets.all(20.0),
-                  child: Column(
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Worker 정보 카드
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: GxGlass.cardSm(radius: GxRadius.lg),
+              child: Column(
+                children: [
+                  Row(
                     children: [
-                      const CircleAvatar(
-                        radius: 40,
-                        backgroundColor: Colors.blue,
-                        child: Icon(
-                          Icons.person,
-                          size: 50,
-                          color: Colors.white,
+                      // 역할 아이콘
+                      Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: roleColor.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(GxRadius.md),
+                        ),
+                        child: Icon(_getRoleIcon(worker?.role), size: 20, color: roleColor),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              worker?.name ?? '사용자',
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                                color: GxColors.charcoal,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              worker?.email ?? '',
+                              style: const TextStyle(fontSize: 12, color: GxColors.steel),
+                            ),
+                          ],
                         ),
                       ),
-                      const SizedBox(height: 16),
-                      Text(
-                        worker?.name ?? '사용자',
-                        style: const TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
+                      // Worker 배지
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: roleColor.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(20),
                         ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        worker?.roleDisplayName ?? '',
-                        style: TextStyle(
-                          fontSize: 16,
-                          color: Colors.grey[600],
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        worker?.email ?? '',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: Colors.grey[500],
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 5,
+                              height: 5,
+                              decoration: BoxDecoration(
+                                color: roleColor,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              worker?.roleDisplayName ?? '',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: roleColor,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
                   ),
-                ),
-              ),
-              const SizedBox(height: 24),
-
-              // 기능 버튼들 (Sprint 2에서 활성화)
-              const Text(
-                '주요 기능',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 16),
-
-              _buildFeatureButton(
-                context,
-                icon: Icons.qr_code_scanner,
-                title: 'QR 스캔',
-                subtitle: 'Worksheet QR 또는 Location QR 스캔',
-                onTap: () {
-                  Navigator.pushNamed(context, '/qr-scan');
-                },
-              ),
-              const SizedBox(height: 12),
-
-              _buildFeatureButton(
-                context,
-                icon: Icons.task_alt,
-                title: '작업 관리',
-                subtitle: '진행 중인 작업 확인 및 관리',
-                onTap: () {
-                  Navigator.pushNamed(context, '/task-management');
-                },
-              ),
-              const SizedBox(height: 12),
-
-              if (worker?.isAdmin == true || worker?.isManager == true)
-                _buildFeatureButton(
-                  context,
-                  icon: Icons.admin_panel_settings,
-                  title: '관리자 대시보드',
-                  subtitle: '작업자 승인, 작업 현황 관리',
-                  color: Colors.orange,
-                  onTap: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('관리자 기능은 Sprint 4에서 구현됩니다.')),
-                    );
-                  },
-                ),
-              const SizedBox(height: 32),
-
-              // Sprint 2 완료 안내
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.green.shade50,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.green.shade200),
-                ),
-                child: Column(
-                  children: [
-                    Row(
-                      children: [
-                        Icon(Icons.check_circle, color: Colors.green.shade700),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'Sprint 2 완료',
-                            style: TextStyle(
-                              color: Colors.green.shade700,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
+                  // GST 작업자 active_role 표시
+                  if (worker?.company == 'GST' || worker?.isAdmin == true) ...[
+                    const SizedBox(height: 10),
+                    const Divider(color: GxColors.mist, height: 1),
+                    const SizedBox(height: 10),
+                    InkWell(
+                      onTap: () => _showActiveRoleDialog(context, ref, worker?.activeRole),
+                      borderRadius: BorderRadius.circular(GxRadius.sm),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 2),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.swap_horiz, size: 14, color: GxColors.steel),
+                            const SizedBox(width: 6),
+                            const Text(
+                              '활성 역할:',
+                              style: TextStyle(fontSize: 12, color: GxColors.steel),
                             ),
-                          ),
+                            const SizedBox(width: 6),
+                            if (worker?.activeRole != null)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: _getRoleColor(worker?.activeRole).withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Text(
+                                  _getActiveRoleLabel(worker?.activeRole),
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: _getRoleColor(worker?.activeRole),
+                                  ),
+                                ),
+                              )
+                            else
+                              const Text(
+                                '미설정 (탭하여 선택)',
+                                style: TextStyle(fontSize: 11, color: GxColors.silver),
+                              ),
+                            const Spacer(),
+                            const Icon(Icons.edit_outlined, size: 14, color: GxColors.silver),
+                          ],
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'QR 스캔 및 Task 관리 기능이\n'
-                      '구현되었습니다.\n'
-                      '공정 검증 및 알림 기능은\n'
-                      'Sprint 3에서 추가됩니다.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Colors.green.shade700,
-                        fontSize: 14,
                       ),
                     ),
                   ],
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // 주요 기능
+            _buildFeatureCard(
+              icon: Icons.qr_code_scanner,
+              iconBg: GxColors.accentSoft,
+              iconColor: GxColors.accent,
+              title: 'QR Scan',
+              subtitle: 'Worksheet / Location QR 스캔',
+              onTap: () => Navigator.pushNamed(context, '/qr-scan'),
+            ),
+            const SizedBox(height: 8),
+
+            _buildFeatureCard(
+              icon: Icons.task_alt,
+              iconBg: GxColors.successBg,
+              iconColor: GxColors.success,
+              title: '작업 관리',
+              subtitle: '진행 중인 작업 확인 및 관리',
+              onTap: () => Navigator.pushNamed(context, '/task-management'),
+            ),
+            const SizedBox(height: 8),
+
+            // 관리자 전용: 관리자 옵션
+            if (worker?.isAdmin == true) ...[
+              _buildFeatureCard(
+                icon: Icons.admin_panel_settings,
+                iconBg: GxColors.warningBg,
+                iconColor: GxColors.warning,
+                title: '관리자 옵션',
+                subtitle: '설정, 협력사 관리자, 미종료 작업 처리',
+                onTap: () => Navigator.pushNamed(context, '/admin-options'),
+              ),
+              const SizedBox(height: 8),
+            ],
+
+            // 협력사 관리자 전용: 미종료 작업 (admin이 아닌 manager만)
+            if (worker?.isManager == true && worker?.isAdmin != true) ...[
+              _buildFeatureCard(
+                icon: Icons.warning_amber,
+                iconBg: GxColors.warningBg,
+                iconColor: GxColors.warning,
+                title: '미종료 작업',
+                subtitle: '${worker?.company ?? ''} 미종료 작업 확인 및 강제 종료',
+                onTap: () => Navigator.pushNamed(context, '/manager-pending-tasks'),
+              ),
+              const SizedBox(height: 8),
+            ],
+
+            _buildFeatureCard(
+              icon: Icons.notifications_active_outlined,
+              iconBg: GxColors.infoBg,
+              iconColor: GxColors.info,
+              title: '알림',
+              subtitle: '공정 누락 및 이상 알림 확인',
+              badge: unreadCount > 0 ? unreadCount : null,
+              onTap: () => Navigator.pushNamed(context, '/alerts'),
+            ),
+            const SizedBox(height: 8),
+
+            // GST 작업자 / Admin 전용: PI/QI/SI 메뉴
+            if (worker?.company == 'GST' || worker?.isAdmin == true) ...[
+              _buildFeatureCard(
+                icon: Icons.compress,
+                iconBg: GxColors.successBg,
+                iconColor: GxColors.success,
+                title: 'PI 가압검사',
+                subtitle: 'PI 가압검사 진행 제품 현황',
+                onTap: () => Navigator.pushNamed(
+                  context,
+                  '/gst-products',
+                  arguments: {'category': 'PI'},
                 ),
               ),
+              const SizedBox(height: 8),
+              _buildFeatureCard(
+                icon: Icons.verified,
+                iconBg: const Color(0xFFF3E8FF),
+                iconColor: const Color(0xFF7C3AED),
+                title: 'QI 공정검사',
+                subtitle: 'QI 공정검사 진행 제품 현황',
+                onTap: () => Navigator.pushNamed(
+                  context,
+                  '/gst-products',
+                  arguments: {'category': 'QI'},
+                ),
+              ),
+              const SizedBox(height: 8),
+              _buildFeatureCard(
+                icon: Icons.local_shipping,
+                iconBg: GxColors.accentSoft,
+                iconColor: GxColors.accent,
+                title: 'SI 마무리공정',
+                subtitle: 'SI 마무리공정 진행 제품 현황',
+                onTap: () => Navigator.pushNamed(
+                  context,
+                  '/gst-products',
+                  arguments: {'category': 'SI'},
+                ),
+              ),
+              const SizedBox(height: 8),
             ],
-          ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildFeatureButton(
-    BuildContext context, {
+  Widget _buildFeatureCard({
     required IconData icon,
+    required Color iconBg,
+    required Color iconColor,
     required String title,
     required String subtitle,
     required VoidCallback onTap,
-    Color? color,
+    int? badge,
   }) {
-    return Card(
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: (color ?? Colors.blue).withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
+    return Container(
+      decoration: GxGlass.cardSm(radius: GxRadius.md),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(GxRadius.md),
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(
+              children: [
+                Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    color: iconBg,
+                    borderRadius: BorderRadius.circular(GxRadius.md),
+                  ),
+                  child: Icon(icon, size: 16, color: iconColor),
                 ),
-                child: Icon(
-                  icon,
-                  size: 32,
-                  color: color ?? Colors.blue,
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            title,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                              color: GxColors.graphite,
+                            ),
+                          ),
+                          if (badge != null) ...[
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: GxColors.danger,
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Text(
+                                '$badge',
+                                style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      subtitle,
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.grey[600],
+                      const SizedBox(height: 1),
+                      Text(
+                        subtitle,
+                        style: const TextStyle(fontSize: 11, color: GxColors.steel),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              const Icon(Icons.chevron_right, color: Colors.grey),
-            ],
+                const Icon(Icons.chevron_right, color: GxColors.silver, size: 20),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
 }
-

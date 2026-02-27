@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/auth_provider.dart';
+import '../../utils/design_system.dart';
 import 'login_screen.dart';
 
 /// 이메일 인증 화면
@@ -83,15 +84,12 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
   }
 
   Future<void> _handleVerify() async {
-    // 폼 유효성 검사
     if (!_formKey.currentState!.validate()) {
       return;
     }
 
-    // 키보드 닫기
     FocusScope.of(context).unfocus();
 
-    // 이메일 인증 시도
     final authNotifier = ref.read(authProvider.notifier);
     final success = await authNotifier.verifyEmail(
       email: widget.email,
@@ -101,11 +99,12 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
     if (!mounted) return;
 
     if (success) {
-      // 인증 성공 - 로그인 화면으로 이동
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('이메일 인증 완료! 로그인해주세요.'),
-          backgroundColor: Colors.green,
+        SnackBar(
+          content: const Text('이메일 인증 완료! 로그인해주세요.'),
+          backgroundColor: GxColors.success,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.sm)),
         ),
       );
 
@@ -121,14 +120,12 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
   Future<void> _handleResend() async {
     if (!_canResend) return;
 
-    // TODO: Sprint 2에서 재전송 API 구현 시 활성화
-    // final authService = ref.read(authServiceProvider);
-    // await authService.resendVerificationCode(widget.email);
-
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('인증 코드를 재전송했습니다.'),
-        backgroundColor: Colors.blue,
+      SnackBar(
+        content: const Text('인증 코드를 재전송했습니다.'),
+        backgroundColor: GxColors.accent,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.sm)),
       ),
     );
 
@@ -140,148 +137,174 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
     final authState = ref.watch(authProvider);
 
     return Scaffold(
+      backgroundColor: GxColors.cloud,
       appBar: AppBar(
-        title: const Text('이메일 인증'),
-        centerTitle: true,
+        backgroundColor: GxColors.white,
+        elevation: 0,
+        foregroundColor: GxColors.charcoal,
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 4,
+              height: 20,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [GxColors.accent, GxColors.accentHover],
+                ),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(width: 12),
+            const Text(
+              '이메일 인증',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: GxColors.charcoal),
+            ),
+          ],
+        ),
+        centerTitle: false,
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1),
+          child: Container(height: 1, color: GxColors.mist),
+        ),
       ),
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
+          padding: const EdgeInsets.all(20.0),
           child: Form(
             key: _formKey,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const SizedBox(height: 40),
+                const SizedBox(height: 24),
 
                 // 이메일 아이콘
-                const Icon(
-                  Icons.email_outlined,
-                  size: 80,
-                  color: Colors.blue,
+                Container(
+                  width: 64,
+                  height: 64,
+                  decoration: BoxDecoration(
+                    color: GxColors.accentSoft,
+                    borderRadius: BorderRadius.circular(GxRadius.lg),
+                  ),
+                  child: const Icon(Icons.email_outlined, size: 32, color: GxColors.accent),
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 20),
 
                 // 안내 문구
                 const Text(
                   '이메일 인증',
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: GxColors.charcoal),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 8),
                 Text(
                   widget.email,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    color: Colors.blue,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: const TextStyle(fontSize: 14, color: GxColors.accent, fontWeight: FontWeight.w600),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 6),
                 const Text(
                   '위 이메일로 전송된 6자리 인증 코드를\n입력해주세요.',
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 16,
-                    color: Colors.grey,
-                  ),
+                  style: TextStyle(fontSize: 13, color: GxColors.slate),
                 ),
-                const SizedBox(height: 40),
+                const SizedBox(height: 24),
 
-                // 인증 코드 입력 필드 (큰 입력 필드)
-                TextFormField(
-                  controller: _codeController,
-                  decoration: const InputDecoration(
-                    labelText: '인증 코드',
-                    hintText: '6자리 숫자',
-                    prefixIcon: Icon(Icons.verified_user),
-                    border: OutlineInputBorder(),
-                    counterText: '',
-                  ),
-                  style: const TextStyle(
-                    fontSize: 24,
-                    letterSpacing: 4,
-                    fontWeight: FontWeight.bold,
-                  ),
-                  textAlign: TextAlign.center,
-                  keyboardType: TextInputType.number,
-                  maxLength: 6,
-                  textInputAction: TextInputAction.done,
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                  ],
-                  validator: _validateCode,
-                  enabled: !authState.isLoading,
-                  onFieldSubmitted: (_) => _handleVerify(),
-                ),
-                const SizedBox(height: 16),
-
-                // 타이머 표시
+                // 카드 컨테이너
                 Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: _remainingSeconds > 0
-                        ? Colors.blue.shade50
-                        : Colors.red.shade50,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                      color: _remainingSeconds > 0
-                          ? Colors.blue.shade200
-                          : Colors.red.shade200,
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                  padding: const EdgeInsets.all(20),
+                  decoration: GxGlass.cardSm(radius: GxRadius.lg),
+                  child: Column(
                     children: [
-                      Icon(
-                        Icons.timer,
-                        color: _remainingSeconds > 0
-                            ? Colors.blue.shade700
-                            : Colors.red.shade700,
-                        size: 20,
+                      // 인증 코드 입력 필드
+                      TextFormField(
+                        controller: _codeController,
+                        decoration: InputDecoration(
+                          labelText: '인증 코드',
+                          labelStyle: const TextStyle(color: GxColors.steel, fontSize: 13),
+                          hintText: '6자리 숫자',
+                          hintStyle: const TextStyle(color: GxColors.silver),
+                          prefixIcon: const Icon(Icons.verified_user, color: GxColors.accent),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(GxRadius.sm),
+                            borderSide: const BorderSide(color: GxColors.mist),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(GxRadius.sm),
+                            borderSide: const BorderSide(color: GxColors.mist, width: 1.5),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(GxRadius.sm),
+                            borderSide: const BorderSide(color: GxColors.accent, width: 1.5),
+                          ),
+                          counterText: '',
+                          filled: true,
+                          fillColor: GxColors.white,
+                        ),
+                        style: const TextStyle(fontSize: 22, letterSpacing: 4, fontWeight: FontWeight.w600, color: GxColors.charcoal),
+                        textAlign: TextAlign.center,
+                        keyboardType: TextInputType.number,
+                        maxLength: 6,
+                        textInputAction: TextInputAction.done,
+                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                        validator: _validateCode,
+                        enabled: !authState.isLoading,
+                        onFieldSubmitted: (_) => _handleVerify(),
                       ),
-                      const SizedBox(width: 8),
-                      Text(
-                        _remainingSeconds > 0
-                            ? '남은 시간: ${_formatTime(_remainingSeconds)}'
-                            : '인증 코드가 만료되었습니다.',
-                        style: TextStyle(
-                          color: _remainingSeconds > 0
-                              ? Colors.blue.shade700
-                              : Colors.red.shade700,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
+                      const SizedBox(height: 16),
+
+                      // 타이머 표시
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: _remainingSeconds > 0 ? GxColors.accentSoft : GxColors.dangerBg,
+                          borderRadius: BorderRadius.circular(GxRadius.sm),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.timer,
+                              color: _remainingSeconds > 0 ? GxColors.accent : GxColors.danger,
+                              size: 18,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              _remainingSeconds > 0
+                                  ? '남은 시간: ${_formatTime(_remainingSeconds)}'
+                                  : '인증 코드가 만료되었습니다.',
+                              style: TextStyle(
+                                color: _remainingSeconds > 0 ? GxColors.accent : GxColors.danger,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 16),
 
                 // 에러 메시지 표시
                 if (authState.errorMessage != null)
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.red.shade50,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.red.shade200),
+                      color: GxColors.dangerBg,
+                      borderRadius: BorderRadius.circular(GxRadius.sm),
                     ),
                     child: Row(
                       children: [
-                        Icon(Icons.error, color: Colors.red.shade700, size: 20),
+                        const Icon(Icons.error, color: GxColors.danger, size: 18),
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
                             authState.errorMessage!,
-                            style: TextStyle(
-                              color: Colors.red.shade700,
-                              fontSize: 14,
-                            ),
+                            style: const TextStyle(color: GxColors.danger, fontSize: 13),
                           ),
                         ),
                       ],
@@ -291,48 +314,86 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
 
                 // 인증 확인 버튼
                 SizedBox(
-                  height: 56,
-                  child: ElevatedButton(
-                    onPressed: authState.isLoading ? null : _handleVerify,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blue,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
+                  height: 44,
+                  child: Opacity(
+                    opacity: authState.isLoading ? 0.6 : 1.0,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        gradient: GxGradients.accentButton,
+                        borderRadius: BorderRadius.circular(GxRadius.sm),
+                        boxShadow: [
+                          BoxShadow(
+                            color: GxColors.accent.withValues(alpha: 0.35),
+                            blurRadius: 16,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: authState.isLoading ? null : _handleVerify,
+                          borderRadius: BorderRadius.circular(GxRadius.sm),
+                          child: Center(
+                            child: authState.isLoading
+                                ? const SizedBox(
+                                    height: 20,
+                                    width: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                    ),
+                                  )
+                                : const Text(
+                                    '인증 완료',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                          ),
+                        ),
                       ),
                     ),
-                    child: authState.isLoading
-                        ? const SizedBox(
-                            height: 24,
-                            width: 24,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              valueColor:
-                                  AlwaysStoppedAnimation<Color>(Colors.white),
-                            ),
-                          )
-                        : const Text(
-                            '인증 완료',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 12),
 
                 // 코드 재전송 버튼
-                TextButton.icon(
-                  onPressed: (_canResend && !authState.isLoading)
-                      ? _handleResend
-                      : null,
-                  icon: const Icon(Icons.refresh),
-                  label: Text(
-                    _canResend ? '인증 코드 재전송' : '재전송 대기 중...',
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
+                Container(
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.5),
+                    borderRadius: BorderRadius.circular(GxRadius.sm),
+                    border: Border.all(color: GxGlass.borderColor, width: 1.5),
+                  ),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: (_canResend && !authState.isLoading) ? _handleResend : null,
+                      borderRadius: BorderRadius.circular(GxRadius.sm),
+                      child: Center(
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.refresh,
+                              size: 16,
+                              color: _canResend ? GxColors.slate : GxColors.silver,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              _canResend ? '인증 코드 재전송' : '재전송 대기 중...',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                                color: _canResend ? GxColors.slate : GxColors.silver,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                 ),

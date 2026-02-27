@@ -52,6 +52,7 @@ def create_and_broadcast_alert(alert_data: Dict[str, Any]) -> Optional[int]:
         # WebSocket broadcast (Sprint 3)
         from app.websocket.events import emit_new_alert, emit_process_alert
         from datetime import datetime
+        from app.config import Config
 
         ws_alert_data = {
             "alert_id": alert_id,
@@ -59,7 +60,7 @@ def create_and_broadcast_alert(alert_data: Dict[str, Any]) -> Optional[int]:
             "serial_number": alert_data.get('serial_number'),
             "qr_doc_id": alert_data.get('qr_doc_id'),
             "message": alert_data['message'],
-            "created_at": datetime.now().isoformat()
+            "created_at": datetime.now(Config.KST).isoformat()
         }
 
         # 특정 작업자에게 전송

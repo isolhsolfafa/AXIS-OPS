@@ -207,6 +207,48 @@ class TaskService {
     }
   }
 
+  /// 작업 일시정지
+  ///
+  /// [taskDetailId]: app_task_details의 ID
+  ///
+  /// Returns: 업데이트된 TaskItem 객체
+  ///
+  /// API: POST /api/app/work/pause
+  /// Request: {"task_detail_id": int}
+  /// Response: {"id": int, "is_paused": true, ...}
+  Future<TaskItem> pauseTask({required int taskDetailId}) async {
+    try {
+      final response = await _apiService.post(
+        '/app/work/pause',
+        data: {'task_detail_id': taskDetailId},
+      );
+      return TaskItem.fromJson(response);
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  /// 작업 재개
+  ///
+  /// [taskDetailId]: app_task_details의 ID
+  ///
+  /// Returns: 업데이트된 TaskItem 객체
+  ///
+  /// API: POST /api/app/work/resume
+  /// Request: {"task_detail_id": int}
+  /// Response: {"id": int, "is_paused": false, ...}
+  Future<TaskItem> resumeTask({required int taskDetailId}) async {
+    try {
+      final response = await _apiService.post(
+        '/app/work/resume',
+        data: {'task_detail_id': taskDetailId},
+      );
+      return TaskItem.fromJson(response);
+    } catch (e) {
+      rethrow;
+    }
+  }
+
   /// Task 비활성화 (관리자/사내직원 전용)
   ///
   /// [taskId]: app_task_details의 ID

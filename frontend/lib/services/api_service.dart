@@ -7,6 +7,13 @@ class ApiService {
   late Dio _dio;
   String? _token;
 
+  // 401 응답 시 무한 재시도 방지 플래그
+  bool _isRefreshing = false;
+
+  // 로그인/로그아웃 콜백 (AuthService에서 주입)
+  Future<bool> Function()? onRefreshToken;
+  void Function()? onRefreshFailed;
+
   /// ApiService 생성자
   /// [baseUrl]을 지정하지 않으면 constants.dart의 apiBaseUrl 사용
   ApiService({String? baseUrl}) {
@@ -33,16 +40,41 @@ class ApiService {
           return handler.next(options);
         },
         onResponse: (response, handler) {
-          // 정상 응답 처리
           return handler.next(response);
         },
         onError: (error, handler) async {
-          // 401 Unauthorized 에러 처리
-          if (error.response?.statusCode == 401) {
-            // 토큰 만료 또는 인증 실패 시 토큰 클리어
-            clearToken();
-            // TODO: Sprint 2에서 refresh token 구현 시 갱신 로직 추가
-            // 현재는 로그아웃 처리만 수행 (AuthProvider에서 처리)
+          // 401 Unauthorized 에러 처리 — refresh token으로 재시도
+          if (error.response?.statusCode == 401 && !_isRefreshing) {
+            // /auth/refresh 경로 자체는 재시도하지 않음 (무한루프 방지)
+            final requestPath = error.requestOptions.path;
+            if (requestPath.contains('/auth/refresh') ||
+                requestPath.contains('/auth/login')) {
+              return handler.next(error);
+            }
+
+            _isRefreshing = true;
+            try {
+              // refresh token으로 새 access token 발급 시도
+              final refreshSuccess = await onRefreshToken?.call() ?? false;
+              if (refreshSuccess && _token != null) {
+                // 원래 요청을 새 토큰으로 재시도
+                final retryOptions = error.requestOptions;
+                retryOptions.headers['Authorization'] = 'Bearer $_token';
+                final retryResponse = await _dio.fetch(retryOptions);
+                return handler.resolve(retryResponse);
+              } else {
+                // refresh 실패 → 로그아웃 처리
+                clearToken();
+                onRefreshFailed?.call();
+                return handler.next(error);
+              }
+            } catch (e) {
+              clearToken();
+              onRefreshFailed?.call();
+              return handler.next(error);
+            } finally {
+              _isRefreshing = false;
+            }
           }
           return handler.next(error);
         },
@@ -166,7 +198,9 @@ class ApiService {
         if (statusCode == 401) {
           return Exception('인증 실패: 다시 로그인해주세요.');
         } else if (statusCode == 403) {
-          return Exception('권한 없음: 접근 권한이 없습니다.');
+          // 서버 에러 코드 보존 (APPROVAL_PENDING, APPROVAL_REJECTED 등 분기 필요)
+          final errorCode = error.response?.data?['error'] ?? '';
+          return Exception('[$errorCode] $message');
         } else if (statusCode == 404) {
           return Exception('찾을 수 없음: 요청한 리소스가 없습니다.');
         } else if (statusCode == 500) {

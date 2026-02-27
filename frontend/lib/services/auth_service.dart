@@ -1,10 +1,11 @@
 import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'api_service.dart';
 import '../utils/constants.dart';
 
 /// 인증 서비스
-/// 로그인, 회원가입, 이메일 인증, 토큰 관리 등을 담당
+/// 로그인, 회원가입, 이메일 인증, 토큰 관리, 자동 로그인 등을 담당
 class AuthService {
   final ApiService _apiService;
   final _secureStorage = const FlutterSecureStorage();
@@ -15,8 +16,20 @@ class AuthService {
   static const String _workerRoleKey = 'worker_role';
   static const String _workerDataKey = 'worker_data';
 
+  /// SharedPreferences 키 — 마지막 방문 경로 복원용
+  static const String _lastRouteKey = 'last_route';
+  static const String _lastRouteArgsKey = 'last_route_args';
+
   AuthService({ApiService? apiService})
-      : _apiService = apiService ?? ApiService();
+      : _apiService = apiService ?? ApiService() {
+    // ApiService에 refresh 콜백 주입
+    _apiService.onRefreshToken = refreshToken;
+  }
+
+  /// refresh 실패 시 호출될 콜백 설정 (AuthNotifier에서 로그아웃 트리거)
+  set onRefreshFailed(void Function() callback) {
+    _apiService.onRefreshFailed = callback;
+  }
 
   /// 로그인
   ///
@@ -25,7 +38,7 @@ class AuthService {
   ///
   /// Returns: 로그인 성공 시 worker 데이터 포함한 Map, 실패 시 Exception
   ///
-  /// Response: {"access_token": str, "worker_id": int, "role": str, "name": str}
+  /// Response: {"access_token": str, "refresh_token": str, "worker": {...}}
   Future<Map<String, dynamic>> login(String email, String password) async {
     try {
       final response = await _apiService.post(
@@ -36,7 +49,7 @@ class AuthService {
         },
       );
 
-      // 토큰 저장
+      // access_token 저장
       if (response['access_token'] != null) {
         await _secureStorage.write(
           key: _tokenKey,
@@ -45,25 +58,36 @@ class AuthService {
         _apiService.setToken(response['access_token']);
       }
 
-      // Worker ID와 Role 저장
-      if (response['worker_id'] != null) {
+      // refresh_token 저장
+      if (response['refresh_token'] != null) {
         await _secureStorage.write(
-          key: _workerIdKey,
-          value: response['worker_id'].toString(),
+          key: _refreshTokenKey,
+          value: response['refresh_token'],
         );
       }
 
-      if (response['role'] != null) {
+      // Worker 데이터 추출 (응답: {"access_token": ..., "worker": {...}})
+      final workerData = response['worker'] as Map<String, dynamic>? ?? response;
+
+      // Worker ID와 Role 저장
+      if (workerData['id'] != null) {
+        await _secureStorage.write(
+          key: _workerIdKey,
+          value: workerData['id'].toString(),
+        );
+      }
+
+      if (workerData['role'] != null) {
         await _secureStorage.write(
           key: _workerRoleKey,
-          value: response['role'],
+          value: workerData['role'],
         );
       }
 
       // Worker 전체 데이터 저장
       await _secureStorage.write(
         key: _workerDataKey,
-        value: jsonEncode(response),
+        value: jsonEncode(workerData),
       );
 
       return response;
@@ -77,7 +101,8 @@ class AuthService {
   /// [name]: 사용자 이름
   /// [email]: 이메일
   /// [password]: 비밀번호
-  /// [role]: 역할 (MM, EE, TM, PI, QI, SI)
+  /// [role]: 역할 (MECH, ELEC, TM, PI, QI, SI)
+  /// [company]: 협력사 (FNI, BAT, TMS(M), TMS(E), P&S, C&A, GST)
   ///
   /// Returns: 회원가입 성공 시 worker_id, 실패 시 Exception
   ///
@@ -87,6 +112,7 @@ class AuthService {
     required String email,
     required String password,
     required String role,
+    required String company,
   }) async {
     try {
       final response = await _apiService.post(
@@ -96,6 +122,7 @@ class AuthService {
           'email': email,
           'password': password,
           'role': role,
+          'company': company,
         },
       );
 
@@ -137,21 +164,19 @@ class AuthService {
   /// 로컬 저장된 토큰 및 사용자 데이터 삭제
   Future<void> logout() async {
     try {
-      // API 호출 (서버 측 토큰 무효화)
-      // TODO: BE에서 logout 엔드포인트 구현 시 활성화
-      // await _apiService.post(authLogoutEndpoint);
-
-      // ApiService 토큰 제거
       _apiService.clearToken();
 
-      // 로컬 저장소 데이터 삭제
       await _secureStorage.delete(key: _tokenKey);
       await _secureStorage.delete(key: _refreshTokenKey);
       await _secureStorage.delete(key: _workerIdKey);
       await _secureStorage.delete(key: _workerRoleKey);
       await _secureStorage.delete(key: _workerDataKey);
+
+      // 마지막 경로도 삭제
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_lastRouteKey);
+      await prefs.remove(_lastRouteArgsKey);
     } catch (e) {
-      // 로그아웃은 실패해도 로컬 데이터 삭제
       await _secureStorage.deleteAll();
       rethrow;
     }
@@ -205,29 +230,142 @@ class AuthService {
 
   /// 토큰 갱신
   ///
-  /// TODO: Sprint 2에서 구현 예정
-  /// BE의 /auth/refresh-token 엔드포인트 구현 후 활성화
+  /// 저장된 refresh_token으로 새 access_token 발급
+  /// 성공 시 새 토큰을 저장하고 true 반환, 실패 시 false 반환
   Future<bool> refreshToken() async {
     try {
-      final refreshToken = await _secureStorage.read(key: _refreshTokenKey);
-      if (refreshToken == null) {
+      final storedRefreshToken = await _secureStorage.read(key: _refreshTokenKey);
+      if (storedRefreshToken == null || storedRefreshToken.isEmpty) {
         return false;
       }
 
-      // TODO: Sprint 2에서 구현
-      // final response = await _apiService.post(
-      //   '/auth/refresh-token',
-      //   data: {'refresh_token': refreshToken},
-      // );
-      //
-      // if (response['access_token'] != null) {
-      //   await saveToken(response['access_token']);
-      //   return true;
-      // }
+      final response = await _apiService.post(
+        authRefreshEndpoint,
+        data: {'refresh_token': storedRefreshToken},
+      );
 
+      if (response['access_token'] != null) {
+        await saveToken(response['access_token']);
+        // 새 refresh_token이 응답에 포함되면 함께 저장
+        if (response['refresh_token'] != null) {
+          await saveRefreshToken(response['refresh_token']);
+        }
+        return true;
+      }
       return false;
     } catch (e) {
       return false;
     }
+  }
+
+  /// 앱 시작 시 자동 로그인 시도
+  ///
+  /// 저장된 refresh_token으로 새 access_token을 발급받아 자동 로그인
+  /// 성공 시 true, 실패(토큰 없음 또는 만료) 시 false 반환
+  Future<bool> tryAutoLogin() async {
+    try {
+      final refreshTokenValue = await _secureStorage.read(key: _refreshTokenKey);
+      if (refreshTokenValue == null || refreshTokenValue.isEmpty) {
+        return false;
+      }
+
+      final success = await refreshToken();
+      if (!success) {
+        // refresh 실패 → 저장된 데이터 클리어
+        await logout();
+        return false;
+      }
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // ── 현재 사용자 정보 조회 ──────────────────────────────────────────────
+
+  /// 현재 로그인 사용자 정보 조회 (서버에서 fresh data 가져오기)
+  ///
+  /// Response: {"worker": {...}}
+  Future<Map<String, dynamic>> getMe() async {
+    try {
+      final response = await _apiService.get('/auth/me');
+      final workerData = response['worker'] as Map<String, dynamic>? ?? response;
+      // 최신 worker 데이터 저장
+      await _secureStorage.write(
+        key: _workerDataKey,
+        value: jsonEncode(workerData),
+      );
+      return workerData;
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  /// GST 작업자 활성 역할 변경
+  ///
+  /// [role]: 변경할 역할 (PI, QI, SI)
+  ///
+  /// Response: {"message": "...", "worker": {...}}
+  Future<Map<String, dynamic>> changeActiveRole(String role) async {
+    try {
+      final response = await _apiService.put(
+        '/auth/active-role',
+        data: {'active_role': role},
+      );
+      final workerData = response['worker'] as Map<String, dynamic>?;
+      if (workerData != null) {
+        // 업데이트된 worker 데이터 저장
+        await _secureStorage.write(
+          key: _workerDataKey,
+          value: jsonEncode(workerData),
+        );
+      }
+      return response;
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  // ── 마지막 경로 저장/복원 ──────────────────────────────────────────────
+
+  /// 마지막 방문 경로 저장
+  ///
+  /// 로그인 필요 화면(/login, /register 등)은 저장하지 않음
+  Future<void> saveLastRoute(String routeName, [Map<String, dynamic>? args]) async {
+    // 저장 제외 경로
+    const excludedRoutes = {
+      '/login',
+      '/register',
+      '/verify-email',
+      '/splash',
+      '/forgot-password',
+      '/reset-password',
+    };
+    if (excludedRoutes.contains(routeName)) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_lastRouteKey, routeName);
+    if (args != null) {
+      await prefs.setString(_lastRouteArgsKey, jsonEncode(args));
+    } else {
+      await prefs.remove(_lastRouteArgsKey);
+    }
+  }
+
+  /// 마지막 방문 경로 가져오기
+  ///
+  /// Returns: {route: String, args: Map?} 또는 null
+  Future<Map<String, dynamic>?> getLastRoute() async {
+    final prefs = await SharedPreferences.getInstance();
+    final route = prefs.getString(_lastRouteKey);
+    if (route == null) return null;
+
+    final argsJson = prefs.getString(_lastRouteArgsKey);
+    Map<String, dynamic>? args;
+    if (argsJson != null) {
+      args = jsonDecode(argsJson) as Map<String, dynamic>;
+    }
+
+    return {'route': route, 'args': args};
   }
 }

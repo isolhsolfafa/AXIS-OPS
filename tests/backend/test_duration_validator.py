@@ -41,7 +41,7 @@ class TestNormalDuration:
         """
         worker_id = create_test_worker(
             email='dur_normal@test.com', password='Test123!',
-            name='Normal Duration Worker', role='MM'
+            name='Normal Duration Worker', role='MECH'
         )
 
         create_test_product(
@@ -57,13 +57,13 @@ class TestNormalDuration:
             worker_id=worker_id,
             serial_number='SN-DUR-001',
             qr_doc_id='DOC-DUR-001',
-            task_category='MM',
+            task_category='MECH',
             task_id='CABINET_ASSY',
             task_name='캐비넷 조립',
             started_at=started_at
         )
 
-        token = get_auth_token(worker_id, role='MM')
+        token = get_auth_token(worker_id, role='MECH')
         response = client.post(
             '/api/app/work/complete',
             json={'task_id': task_id},
@@ -92,13 +92,13 @@ class TestExceededDuration:
         """
         worker_id = create_test_worker(
             email='dur_exceeded@test.com', password='Test123!',
-            name='Exceeded Duration Worker', role='MM'
+            name='Exceeded Duration Worker', role='MECH'
         )
 
-        # MM 관리자 생성 (알림 대상)
+        # MECH 관리자 생성 (알림 대상)
         create_test_worker(
-            email='dur_mm_mgr@test.com', password='Test123!',
-            name='MM Duration Manager', role='MM', is_manager=True
+            email='dur_mech_mgr@test.com', password='Test123!',
+            name='MECH Duration Manager', role='MECH', is_manager=True
         )
 
         create_test_product(
@@ -115,13 +115,13 @@ class TestExceededDuration:
             worker_id=worker_id,
             serial_number='SN-DUR-002',
             qr_doc_id='DOC-DUR-002',
-            task_category='MM',
+            task_category='MECH',
             task_id='CABINET_ASSY',
             task_name='캐비넷 조립',
             started_at=started_at
         )
 
-        token = get_auth_token(worker_id, role='MM')
+        token = get_auth_token(worker_id, role='MECH')
         response = client.post(
             '/api/app/work/complete',
             json={'task_id': task_id},
@@ -151,7 +151,7 @@ class TestShortDuration:
         """
         worker_id = create_test_worker(
             email='dur_short@test.com', password='Test123!',
-            name='Short Duration Worker', role='EE'
+            name='Short Duration Worker', role='ELEC'
         )
 
         create_test_product(
@@ -168,13 +168,13 @@ class TestShortDuration:
             worker_id=worker_id,
             serial_number='SN-DUR-003',
             qr_doc_id='DOC-DUR-003',
-            task_category='EE',
+            task_category='ELEC',
             task_id='WIRING',
             task_name='배선 작업',
             started_at=started_at
         )
 
-        token = get_auth_token(worker_id, role='EE')
+        token = get_auth_token(worker_id, role='ELEC')
         response = client.post(
             '/api/app/work/complete',
             json={'task_id': task_id},
@@ -204,13 +204,13 @@ class TestReverseDuration:
         """
         worker_id = create_test_worker(
             email='dur_reverse@test.com', password='Test123!',
-            name='Reverse Duration Worker', role='MM'
+            name='Reverse Duration Worker', role='MECH'
         )
 
-        # MM 관리자 생성 (알림 대상)
+        # MECH 관리자 생성 (알림 대상)
         create_test_worker(
-            email='dur_rev_mgr@test.com', password='Test123!',
-            name='Reverse Manager', role='MM', is_manager=True
+            email='dur_mech_rev_mgr@test.com', password='Test123!',
+            name='MECH Reverse Manager', role='MECH', is_manager=True
         )
 
         create_test_product(
@@ -227,13 +227,13 @@ class TestReverseDuration:
             worker_id=worker_id,
             serial_number='SN-DUR-004',
             qr_doc_id='DOC-DUR-004',
-            task_category='MM',
+            task_category='MECH',
             task_id='CABINET_ASSY',
             task_name='캐비넷 조립',
             started_at=started_at
         )
 
-        token = get_auth_token(worker_id, role='MM')
+        token = get_auth_token(worker_id, role='MECH')
         response = client.post(
             '/api/app/work/complete',
             json={'task_id': task_id},

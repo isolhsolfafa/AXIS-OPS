@@ -47,7 +47,7 @@ class TestOfflineSync:
             email='sync_test_worker@test.com',
             password='Test123!',
             name='Sync Test Worker',
-            role='MM'
+            role='MECH'
         )
 
         create_test_product(
@@ -60,14 +60,14 @@ class TestOfflineSync:
             worker_id=worker_id,
             serial_number='SN-SYNC-001',
             qr_doc_id='DOC-SYNC-001',
-            task_category='MM',
-            task_id='MM-SYNC-001',
+            task_category='MECH',
+            task_id='MECH-SYNC-001',
             task_name='Sync Task 1',
             started_at=None,
             completed_at=None
         )
 
-        token = get_auth_token(worker_id, role='MM')
+        token = get_auth_token(worker_id, role='MECH')
 
         # 동기화 요청 (모바일에서 오프라인 작업 동기화)
         payload = {
@@ -115,10 +115,10 @@ class TestOfflineSync:
             email='sync_test_loc@test.com',
             password='Test123!',
             name='Sync Location Worker',
-            role='EE'
+            role='ELEC'
         )
 
-        token = get_auth_token(worker_id, role='EE')
+        token = get_auth_token(worker_id, role='ELEC')
 
         payload = {
             'tasks': [],
@@ -382,10 +382,10 @@ class TestOfflineSync:
             email='sync_test_invalid@test.com',
             password='Test123!',
             name='Sync Invalid Worker',
-            role='MM'
+            role='MECH'
         )
 
-        token = get_auth_token(worker_id, role='MM')
+        token = get_auth_token(worker_id, role='MECH')
 
         response = client.post(
             '/api/app/sync/offline-batch',
@@ -415,7 +415,7 @@ class TestSyncStatus:
             email='sync_status_test@test.com',
             password='Test123!',
             name='Sync Status Worker',
-            role='EE'
+            role='ELEC'
         )
 
         # 동기화 레코드 생성
@@ -437,7 +437,7 @@ class TestSyncStatus:
             synced=False
         )
 
-        token = get_auth_token(worker_id, role='EE')
+        token = get_auth_token(worker_id, role='ELEC')
 
         response = client.get(
             '/api/app/sync/status',

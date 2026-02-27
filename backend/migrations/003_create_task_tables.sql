@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS app_task_details (
     id SERIAL PRIMARY KEY,
     worker_id INTEGER NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
     serial_number VARCHAR(255) NOT NULL,
-    qr_doc_id VARCHAR(255) NOT NULL REFERENCES product_info(qr_doc_id) ON DELETE CASCADE,
+    qr_doc_id VARCHAR(255) NOT NULL REFERENCES qr_registry(qr_doc_id) ON DELETE CASCADE,
     task_category VARCHAR(50) NOT NULL,  -- MM, EE, TM, PI, QI, SI
     task_id VARCHAR(100) NOT NULL,  -- Task 식별자 (예: CABINET_ASSY)
     task_name VARCHAR(255) NOT NULL,  -- Task 이름 (예: 캐비넷 조립)
@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS app_task_details (
 
 -- 완료 상태 테이블
 CREATE TABLE IF NOT EXISTS completion_status (
-    serial_number VARCHAR(255) PRIMARY KEY REFERENCES product_info(serial_number) ON DELETE CASCADE,
+    serial_number VARCHAR(255) PRIMARY KEY REFERENCES qr_registry(serial_number) ON DELETE CASCADE,
     mm_completed BOOLEAN DEFAULT FALSE,
     ee_completed BOOLEAN DEFAULT FALSE,
     tm_completed BOOLEAN DEFAULT FALSE,

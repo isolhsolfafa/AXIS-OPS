@@ -24,16 +24,16 @@ class TestGetAlerts:
         """
         worker_id = create_test_worker(
             email='alert_get@test.com', password='Test123!',
-            name='Alert Get Worker', role='MM'
+            name='Alert Get Worker', role='MECH'
         )
 
         create_test_alert(
             alert_type='PROCESS_READY',
-            message='[SN-ALERT-001] MM 공정 미완료',
+            message='[SN-ALERT-001] MECH 공정 미완료',
             serial_number='SN-ALERT-001',
             qr_doc_id='DOC-ALERT-001',
             target_worker_id=worker_id,
-            target_role='MM'
+            target_role='MECH'
         )
         create_test_alert(
             alert_type='DURATION_EXCEEDED',
@@ -41,10 +41,10 @@ class TestGetAlerts:
             serial_number='SN-ALERT-001',
             qr_doc_id='DOC-ALERT-001',
             target_worker_id=worker_id,
-            target_role='MM'
+            target_role='MECH'
         )
 
-        token = get_auth_token(worker_id, role='MM')
+        token = get_auth_token(worker_id, role='MECH')
         response = client.get(
             '/api/app/alerts',
             headers={'Authorization': f'Bearer {token}'}
@@ -71,10 +71,10 @@ class TestGetAlerts:
         """
         worker_id = create_test_worker(
             email='alert_empty@test.com', password='Test123!',
-            name='Alert Empty Worker', role='EE'
+            name='Alert Empty Worker', role='ELEC'
         )
 
-        token = get_auth_token(worker_id, role='EE')
+        token = get_auth_token(worker_id, role='ELEC')
         response = client.get(
             '/api/app/alerts',
             headers={'Authorization': f'Bearer {token}'}
@@ -97,7 +97,7 @@ class TestGetAlerts:
         """
         worker_id = create_test_worker(
             email='alert_unread@test.com', password='Test123!',
-            name='Alert Unread Worker', role='MM'
+            name='Alert Unread Worker', role='MECH'
         )
 
         alert1 = create_test_alert(
@@ -122,7 +122,7 @@ class TestGetAlerts:
         db_conn.commit()
         cursor.close()
 
-        token = get_auth_token(worker_id, role='MM')
+        token = get_auth_token(worker_id, role='MECH')
         response = client.get(
             '/api/app/alerts?unread_only=true',
             headers={'Authorization': f'Bearer {token}'}
@@ -159,7 +159,7 @@ class TestMarkAlertRead:
         """
         worker_id = create_test_worker(
             email='mark_read@test.com', password='Test123!',
-            name='Mark Read Worker', role='MM'
+            name='Mark Read Worker', role='MECH'
         )
 
         alert_id = create_test_alert(
@@ -169,7 +169,7 @@ class TestMarkAlertRead:
             target_worker_id=worker_id
         )
 
-        token = get_auth_token(worker_id, role='MM')
+        token = get_auth_token(worker_id, role='MECH')
         response = client.put(
             f'/api/app/alerts/{alert_id}/read',
             headers={'Authorization': f'Bearer {token}'}
@@ -190,11 +190,11 @@ class TestMarkAlertRead:
         """
         owner_id = create_test_worker(
             email='alert_owner@test.com', password='Test123!',
-            name='Alert Owner', role='MM'
+            name='Alert Owner', role='MECH'
         )
         other_id = create_test_worker(
             email='alert_other@test.com', password='Test123!',
-            name='Alert Other', role='EE'
+            name='Alert Other', role='ELEC'
         )
 
         alert_id = create_test_alert(
@@ -204,7 +204,7 @@ class TestMarkAlertRead:
             target_worker_id=owner_id
         )
 
-        token = get_auth_token(other_id, role='EE')
+        token = get_auth_token(other_id, role='ELEC')
         response = client.put(
             f'/api/app/alerts/{alert_id}/read',
             headers={'Authorization': f'Bearer {token}'}
@@ -223,10 +223,10 @@ class TestMarkAlertRead:
         """
         worker_id = create_test_worker(
             email='alert_nf@test.com', password='Test123!',
-            name='Alert NF Worker', role='MM'
+            name='Alert NF Worker', role='MECH'
         )
 
-        token = get_auth_token(worker_id, role='MM')
+        token = get_auth_token(worker_id, role='MECH')
         response = client.put(
             '/api/app/alerts/999999/read',
             headers={'Authorization': f'Bearer {token}'}
@@ -312,7 +312,7 @@ class TestGetUnreadCount:
         """
         worker_id = create_test_worker(
             email='unreadcount@test.com', password='Test123!',
-            name='UnreadCount Worker', role='MM'
+            name='UnreadCount Worker', role='MECH'
         )
 
         create_test_alert(
@@ -328,7 +328,7 @@ class TestGetUnreadCount:
             target_worker_id=worker_id
         )
 
-        token = get_auth_token(worker_id, role='MM')
+        token = get_auth_token(worker_id, role='MECH')
         response = client.get(
             '/api/app/alerts/unread-count',
             headers={'Authorization': f'Bearer {token}'}

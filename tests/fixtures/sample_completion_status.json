@@ -2,8 +2,8 @@
   {
     "comment": "신규 제품 - 모든 공정 미완료",
     "serial_number": "GBWS-6408",
-    "mm_completed": false,
-    "ee_completed": false,
+    "mech_completed": false,
+    "elec_completed": false,
     "tm_completed": false,
     "pi_completed": false,
     "qi_completed": false,
@@ -14,10 +14,10 @@
     "updated_at": "2025-02-15T08:00:00+09:00"
   },
   {
-    "comment": "진행 중 제품 - MM 완료, EE 진행중",
+    "comment": "진행 중 제품 - MECH 완료, ELEC 진행중",
     "serial_number": "GBWS-PROGRESS-001",
-    "mm_completed": true,
-    "ee_completed": false,
+    "mech_completed": true,
+    "elec_completed": false,
     "tm_completed": false,
     "pi_completed": false,
     "qi_completed": false,
@@ -30,8 +30,8 @@
   {
     "comment": "TMS 제품 - TM 완료",
     "serial_number": "GBWS-TMS-001",
-    "mm_completed": false,
-    "ee_completed": false,
+    "mech_completed": false,
+    "elec_completed": false,
     "tm_completed": true,
     "pi_completed": false,
     "qi_completed": false,
@@ -44,8 +44,8 @@
   {
     "comment": "완료된 제품 - 모든 공정 완료",
     "serial_number": "GBWS-COMPLETED-001",
-    "mm_completed": true,
-    "ee_completed": true,
+    "mech_completed": true,
+    "elec_completed": true,
     "tm_completed": true,
     "pi_completed": true,
     "qi_completed": true,
@@ -56,10 +56,10 @@
     "updated_at": "2025-02-14T18:00:00+09:00"
   },
   {
-    "comment": "검사 단계 제품 - MM/EE 완료, PI/QI/SI 진행중",
+    "comment": "검사 단계 제품 - MECH/ELEC 완료, PI/QI/SI 진행중",
     "serial_number": "GBWS-INSPECTION-001",
-    "mm_completed": true,
-    "ee_completed": true,
+    "mech_completed": true,
+    "elec_completed": true,
     "tm_completed": false,
     "pi_completed": false,
     "qi_completed": false,

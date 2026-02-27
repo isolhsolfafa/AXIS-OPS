@@ -59,9 +59,11 @@ def create_app(config_class: type = Config) -> Flask:
     from app.routes.auth import auth_bp
     from app.routes.work import work_bp
     from app.routes.product import product_bp
-    from app.routes.alert import alert_bp  # Sprint 3
-    from app.routes.admin import admin_bp  # Sprint 4
-    from app.routes.sync import sync_bp    # Sprint 4
+    from app.routes.alert import alert_bp      # Sprint 3
+    from app.routes.admin import admin_bp      # Sprint 4
+    from app.routes.sync import sync_bp        # Sprint 4
+    from app.routes.gst import gst_bp          # Sprint 11: GST 검사 공정
+    from app.routes.checklist import checklist_bp  # Sprint 11: 체크리스트
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(work_bp)
@@ -69,7 +71,9 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(alert_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(sync_bp)
-    logger.info("Blueprints registered: auth, work, product, alert, admin, sync")
+    app.register_blueprint(gst_bp)
+    app.register_blueprint(checklist_bp)
+    logger.info("Blueprints registered: auth, work, product, alert, admin, sync, gst, checklist")
 
     # 헬스 체크 엔드포인트
     @app.route("/health", methods=["GET"])

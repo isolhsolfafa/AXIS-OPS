@@ -8,8 +8,16 @@ const String authLoginEndpoint = '/auth/login';
 const String authRegisterEndpoint = '/auth/register';
 const String authVerifyEmailEndpoint = '/auth/verify-email';
 const String authLogoutEndpoint = '/auth/logout';
+const String authRefreshEndpoint = '/auth/refresh';
+const String authForgotPasswordEndpoint = '/auth/forgot-password';
+const String authResetPasswordEndpoint = '/auth/reset-password';
 
 const String tasksEndpoint = '/tasks';
 const String workersEndpoint = '/workers';
 const String alertsEndpoint = '/alerts';
 const String productsEndpoint = '/products';
+
+// Pause/Resume 엔드포인트
+const String workPauseEndpoint = '/app/work/pause';
+const String workResumeEndpoint = '/app/work/resume';
+const String workPauseHistoryEndpoint = '/app/work/pause-history';

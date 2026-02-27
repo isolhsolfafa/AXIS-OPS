@@ -196,6 +196,52 @@ ELSE:
 
 ## 3. DB 스키마 (Staging → Production)
 
+### 3.0 3-Tier 스키마 아키텍처
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  PostgreSQL 15  (Timezone: Asia/Seoul)                   │
+│                                                         │
+│  ┌─── plan 스키마 ──────────────────────────────────┐   │
+│  │  product_info  — 생산 메타데이터 (ETL 적재)       │   │
+│  │    S/N, model, 일정(MM/EE/TM/PI/QI/SI), 협력사   │   │
+│  └──────────────────────────────────────────────────┘   │
+│                                                         │
+│  ┌─── public 스키마 ────────────────────────────────┐   │
+│  │  qr_registry        — QR ↔ 제품 매핑 (브릿지)    │   │
+│  │  workers             — 작업자/관리자 계정         │   │
+│  │  email_verification  — 이메일 인증 코드           │   │
+│  │  app_task_details    — 작업 상세 (FK→qr_registry) │   │
+│  │  completion_status   — 공정 완료 상태             │   │
+│  │  app_alert_logs      — 알림 로그                  │   │
+│  │  work_start_log      — 작업 시작 이력             │   │
+│  │  work_completion_log — 작업 완료 이력             │   │
+│  │  location_history    — 위치 이력                  │   │
+│  │  offline_sync_queue  — 오프라인 동기화 큐         │   │
+│  │  documents           — PDA 기준 참조 (유지)       │   │
+│  └──────────────────────────────────────────────────┘   │
+│                                                         │
+│  ┌─── defect 스키마 ───────────────────────────────┐    │
+│  │  (추후 추가 예정 — 불량 분석, 추적, 리포트)       │    │
+│  └──────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────┘
+```
+
+**FK 체인:**
+```
+app_task_details.qr_doc_id      → qr_registry.qr_doc_id
+completion_status.serial_number → qr_registry.serial_number
+qr_registry.serial_number      → plan.product_info.serial_number
+```
+
+**조회 흐름:**
+```
+QR 스캔 → qr_registry(qr_doc_id)
+  → serial_number 획득
+  → plan.product_info JOIN (제품 상세)
+  → app_task_details 조회 (Task 목록)
+```
+
 ### 3.1 핵심 테이블 (App MVP)
 
 ```sql
@@ -207,16 +253,28 @@ ELSE:
 -- 2. email_verification (이메일 인증)
 -- 6자리 인증번호, 10분 만료
 
--- 3. product_info (제품 정보) — info 테이블 대체
--- qr_doc_id 기반 (DOC_{SN})
--- location_qr_id 포함
+-- 3. plan.product_info (생산 메타데이터) — plan 스키마
+-- serial_number, model, title_number, product_code, sales_order
+-- customer, line, quantity
+-- mech_partner, elec_partner, module_outsourcing
+-- prod_date, mech_start, mech_end, elec_start, elec_end
+-- module_start, pi_start, qi_start, si_start, ship_plan_date
+-- location_qr_id, created_at, updated_at
 
--- 4. app_task_details (Task 추적) — worksheet 대체
+-- 4. qr_registry (QR ↔ 제품 매핑) — public 스키마
+-- qr_doc_id (UNIQUE, DOC_{SN})
+-- serial_number (UNIQUE → plan.product_info FK)
+-- status: active / revoked / reissued
+-- issued_at, revoked_at, created_at, updated_at
+
+-- 5. app_task_details (Task 추적) — worksheet 대체
+-- qr_doc_id FK → qr_registry
 -- started_at/completed_at = NOW() (App push)
 -- is_applicable: Task 비활성화 (관리자/사내직원 전용)
 -- UNIQUE (serial_number, task_category, task_id)
 
--- 5. completion_status (공정별 완료 상태)
+-- 6. completion_status (공정별 완료 상태)
+-- serial_number FK → qr_registry
 -- mm/tm/ee/pi/qi/si_completed (boolean)
 -- all_completed + all_completed_at
 ```
@@ -224,27 +282,30 @@ ELSE:
 ### 3.2 알림/동기화 테이블
 
 ```sql
--- 6. app_alert_logs (알림/경고)
+-- 7. app_alert_logs (알림/경고)
 -- alert_type: missing_task, approval_complete, system
 -- target_worker_id + is_read + read_at
 
--- 7. location_history (QR 위치 추적)
+-- 8. location_history (QR 위치 추적)
 -- qr_location_id + location_name
 -- GPS 보조 (latitude/longitude)
 
--- 8. offline_sync_queue (오프라인 동기화)
+-- 9. offline_sync_queue (오프라인 동기화)
 -- sync_status: pending → synced / failed
 
--- 9. work_start_log (작업 시작 이벤트)
--- 10. work_completion_log (작업 완료 + 소요시간)
+-- 10. work_start_log (작업 시작 이벤트)
+-- 11. work_completion_log (작업 완료 + 소요시간)
 -- duration_minutes: completed_at - started_at (자동계산)
 ```
 
 ### 3.3 추후 테이블
 
 ```sql
--- 11. product_bom (BOM 목록, SI용) — Phase 2
--- 12. bom_checklist_log (BOM 검증 + AI) — Phase 2
+-- defect 스키마 (불량 관리)
+-- 불량 분석, 추적, 리포트 — Phase 2 이후
+
+-- product_bom (BOM 목록, SI용) — Phase 2
+-- bom_checklist_log (BOM 검증 + AI) — Phase 2
 ```
 
 ### 3.4 PDA 테이블과의 대체 관계
@@ -252,8 +313,9 @@ ELSE:
 ```
 PDA (Sheets 기반)              →  App (실시간 Push)
 ────────────────────────────────────────────────────
-info                           →  product_info
-  google_doc_id                →  qr_doc_id (DOC_{SN})
+info                           →  plan.product_info (plan 스키마)
+  google_doc_id                →  qr_registry.qr_doc_id (DOC_{SN})
+  (product_info에 포함)        →  qr_registry (별도 매핑 테이블)
 worksheet (시트 추출)           →  app_task_details (앱 직접 기록)
 task_summary (배치 계산)        →  work_completion_log (실시간)
   working_hours (float, 200줄) →  duration_minutes (int, 자동)
@@ -403,7 +465,7 @@ UI_화면: TestInputScreen, WorksheetDetailScreen, TaskManagementScreen
 - [ ] Historical 데이터 마이그레이션 검증
 - [ ] 전환일 공지 (협력사 포함)
 - [ ] 새 QR 스티커 발행 (qr_doc_id 기반)
-- [ ] SCR-Schedule 데이터 소스 변경 (planning 스키마)
+- [ ] SCR-Schedule 데이터 소스 변경 (plan 스키마)
 
 ---
 
@@ -493,7 +555,7 @@ postgresql://postgres:qBOUbdBJtpgoIGQuhmLhgUWyuddQjciX@shinkansen.proxy.rlwy.net
 ### 9.2 로컬 테스트 서버
 
 ```bash
-# 실행 방법
+# 실행 방법 (구 경로 — 테스트 UI 시뮬레이터)
 cd /Users/kdkyu311/dev/my_app/test_server
 python app.py
 
@@ -508,17 +570,122 @@ http://localhost:5001
 | **UI** | G-AXIS 디자인 시스템 적용, 폰 시뮬레이터 형태 |
 | **테스트 플로우** | 6스텝: Main → Login → QR Scan → Location QR → MM/EE Check → Task |
 | **DB 연결** | Staging DB (위 접속 정보 사용) |
-| **HTML 경로** | `test_server/static/index.html` |
+| **HTML 경로** | `/Users/kdkyu311/dev/my_app/test_server/static/index.html` |
 
-### 9.3 참고 문서
+### 9.3 ETL 파이프라인 (Teams Excel → Staging DB)
+
+> Teams 생산관리 시트에서 메타데이터를 추출하여 Staging DB에 적재하고, `qr_doc_id`를 부여한 뒤 QR 이미지를 발행하는 파이프라인
+
+```bash
+# 실행 방법
+cd /Users/kdkyu311/dev/my_app/test_server/etl_pipeline
+python etl_main.py --all                              # 전체 적재
+python etl_main.py --date 2025-12-01                   # 특정 날짜
+python etl_main.py --start 2025-12-01 --end 2025-12-31 # 범위
+```
+
+**파이프라인 3단계:**
+
+| Step | 파일 | 역할 |
+|------|------|------|
+| **Step 1** | `step1_extract.py` | SCR-Schedule의 `ExcelDataLoader` 재사용 → Teams Excel에서 17개 컬럼 + 추가 컬럼(모듈외주, 반제품시작) 추출 |
+| **Step 2** | `step2_load.py` | `plan.product_info` INSERT (21개 컬럼) → `public.qr_registry` INSERT (qr_doc_id 매핑) → Staging DB 적재 |
+| **Step 3** | `step3_qr_generate.py` | `qr_doc_id` 기반 QR 이미지 생성 (S/N + 모델명 라벨) → `output/qr_labels/` 저장 |
+
+**핵심 로직:**
+
+```
+[Teams Excel (SCR 생산현황)]
+  │  SCR-Schedule/ExcelDataLoader 재사용
+  │  config.py 수정 금지 (Production 대시보드 사용 중)
+  │  추가 컬럼은 raw DataFrame iloc 직접 접근
+  ▼
+[Step 1: Extract] → 17개 컬럼 매핑 + module_outsourcing(AO열) + semi_product_start(AP열)
+  ▼
+[Step 2: Load] (세션 timezone = Asia/Seoul)
+  ├─ 중복 체크: qr_registry.serial_number 기준 (이미 존재 → skip)
+  ├─ plan.product_info INSERT (21개 컬럼: S/N, model, 일정, 협력사...)
+  │    prod_date = mech_start (기구 시작일 = 생산일)
+  │    일정: mech_start/end, elec_start/end, module_start
+  │          pi_start, qi_start, si_start, ship_plan_date
+  ├─ public.qr_registry INSERT (qr_doc_id, serial_number, status='active')
+  └─ qr_doc_id 생성: DOC_{serial_number} (예: DOC_GBWS-6408)
+  ▼
+[Step 3: QR Generate] → PNG 이미지 (QR코드 + S/N 라벨 + 모델명)
+  └─ 저장: output/qr_labels/{S/N}_{DOC_ID}.png
+```
+
+**ETL 일정 컬럼 매핑 (Step 1 → Step 2):**
+```
+ETL 추출 필드        → DB 컬럼 (plan.product_info)
+─────────────────────────────────────────────────
+mech_start          → mech_start, prod_date (MM 시작 = 생산일)
+mech_end            → mech_end (MM 종료)
+elec_start          → elec_start (EE 시작)
+elec_end            → elec_end (EE 종료)
+semi_product_start  → module_start (TM 반제품)
+pressure_test       → pi_start (PI 가압검사)
+process_inspect     → qi_start (QI 공정검사)
+finishing_start     → si_start (SI 마무리검사)
+planned_finish      → ship_plan_date (출하계획일)
+```
+
+**의존성:**
+- SCR-Schedule 프로젝트: `/Users/kdkyu311/Desktop/GST/SCR-Schedule`
+- `ExcelDataLoader`, `parse_sn`, `load_env_teams` 재사용
+- SCR config.py는 수정 금지 (Production 대시보드 운영 중)
+
+**출력:**
+- DB: Staging DB `plan.product_info` + `public.qr_registry` 테이블
+- 파일: `output/qr_labels/` QR 이미지
+- 로그: `output/etl_result.json` 실행 결과 요약
+
+**현재 적재 데이터 (2026-02-19 기준):**
+- 6건: DOC_GBWS-6408 ~ DOC_GBWS-6413 (GAIA-I DUAL, MICRON)
+- 생산일: 2025-12-01
+- PI/QI/SI 일정 포함
+
+### 9.4 디렉토리 구조 (개발 경로)
+
+```
+[구 경로 — 테스트 UI + ETL 파이프라인]
+/Users/kdkyu311/dev/my_app/
+├── test_server/
+│   ├── app.py                    ← Flask 테스트 서버 (localhost:5001)
+│   ├── static/index.html         ← G-AXIS 디자인 테스트 UI
+│   ├── static/img/g-axis-2.png   ← 공식 로고
+│   ├── etl_pipeline/
+│   │   ├── etl_main.py           ← ETL 통합 실행
+│   │   ├── step1_extract.py      ← Teams Excel 추출
+│   │   ├── step2_load.py         ← Staging DB 적재 + qr_doc_id
+│   │   └── step3_qr_generate.py  ← QR 이미지 생성
+│   └── output/
+│       ├── qr_labels/            ← QR 이미지 출력
+│       └── etl_result.json       ← ETL 실행 로그
+├── APP_FULL_SEQUENCE_AND_PHASES.md
+└── PROJECT_COMPREHENSIVE_ANALYSIS_2026.md
+
+[신규 경로 — App 개발 메인]
+/Users/kdkyu311/Desktop/GST/AXIS-OPS/
+├── backend/                      ← Flask API 서버
+├── frontend/                     ← Flutter App
+├── tests/                        ← 테스트 코드
+├── APP_PLAN_v4(26.02.16).md      ← 이 문서
+├── PROJECT_COMPREHENSIVE_ANALYSIS_2026(02.16).md
+├── CLAUDE.md                     ← Claude Code 컨텍스트
+├── PROGRESS.md                   ← 개발 진행 상황
+└── AGENT_TEAM_LAUNCH.md
+```
+
+### 9.5 참고 문서
 
 | 문서 | 경로 | 내용 |
 |------|------|------|
-| **종합 분석 (스키마 참조)** | `PROJECT_COMPREHENSIVE_ANALYSIS_2026.md` | Production DB 스키마 (PDA 27개 테이블), App DB 스키마 (12개 테이블), 테이블 전환 매핑 |
-| **App 스키마 설계** | `test_server/APP_SCHEMA_DESIGN_20260206.md` | App 테이블 DDL, QR 플로우, Task 카테고리 상세 |
-| **전체 시퀀스 & Phase** | `APP_FULL_SEQUENCE_AND_PHASES.md` | 로그인→공정종료 전체 시퀀스, PDA 계산 로직 참조, 4단계 Phase 계획 |
-| **브랜드 & 로고** | `PROJECT_COMPREHENSIVE_ANALYSIS_2026.md` Section 14 | 공식 로고 (G-AXIS-2.png), CSS 적용 규칙, 브랜드 체계 |
-| **G-AXIS 디자인 시스템** | `~/Desktop/Brand indentity/G-AXIS_DESIGN_SYSTEM.md` | 컬러 토큰, 타이포그래피, 컴포넌트 스펙 |
+| **종합 분석 (스키마 참조)** | `PROJECT_COMPREHENSIVE_ANALYSIS_2026(02.16).md` | Production DB 스키마 (PDA 27개 테이블), App DB 스키마 (12개 테이블), 테이블 전환 매핑 |
+| **App 스키마 설계** | `/Users/kdkyu311/dev/my_app/test_server/APP_SCHEMA_DESIGN_20260206.md` | App 테이블 DDL, QR 플로우, Task 카테고리 상세 |
+| **전체 시퀀스 & Phase** | `/Users/kdkyu311/dev/my_app/APP_FULL_SEQUENCE_AND_PHASES.md` | 로그인→공정종료 전체 시퀀스, PDA 계산 로직 참조, 4단계 Phase 계획 |
+| **브랜드 & 로고** | `PROJECT_COMPREHENSIVE_ANALYSIS_2026(02.16).md` Section 14 | 공식 로고 (G-AXIS-2.png), CSS 적용 규칙, 브랜드 체계 |
+| **G-AXIS 디자인 시스템** | `/Users/kdkyu311/Desktop/Brand indentity/G-AXIS_DESIGN_SYSTEM.md` | 컬러 토큰, 타이포그래피, 컴포넌트 스펙 |
 
 ---
 
@@ -532,3 +699,6 @@ http://localhost:5001
 | 2026-02-15 | 3.0 | 서버 보안 요청서 v3.0, 데이터 전수 조사 |
 | 2026-02-16 | 4.0 | **Clean Cut 전략 확정** — 하이브리드 폐기, 워킹타임 계산 생략, 신규 React, QR 호환 불필요, 미완료 자동감지 정책, 관리자 알림 시스템 |
 | 2026-02-16 | 4.1 | Section 9 추가: Staging/Production DB 접속 정보, localhost:5001 테스트 서버, 참고 문서 목록 |
+| 2026-02-19 | 4.2 | Section 9.3 ETL 파이프라인 상세 추가 (Teams Excel→Staging DB 3단계), 9.4 디렉토리 구조 (구경로/신규경로), 참고 문서 경로 업데이트 |
+| 2026-02-19 | 4.3 | **DB 3-Tier 스키마 아키텍처 적용** — (1) `product_info` → `plan.product_info`로 이동 (plan 스키마), (2) `qr_registry` 분리 (QR↔제품 매핑 브릿지 테이블, status: active/revoked/reissued), (3) `defect` 스키마 예약, (4) FK 체인 정립: app_task_details→qr_registry→plan.product_info, (5) PI/QI/SI 일정 컬럼 추가 (pi_start, qi_start, si_start, ship_plan_date), (6) 컬럼명 간소화 (manufacturing_start→mech_start 등), (7) DB 타임존 Asia/Seoul 설정, (8) ETL step2_load.py 2-table insert 패턴으로 변경, (9) QR 스캔 인증 버그 수정 (ApiService 싱글턴 공유) |
+| 2026-02-20 | 4.4 | **KST 타임존 글로벌 적용 + SMTP/인증 수정** — (1) SMTP 포트 587→465 변경 (KT BizOffice SMTP_SSL 전용), auth_service.py 포트별 SSL/STARTTLS 분기 추가, (2) Admin 계정 DB Seed (계정명: ops, role: ADMIN), role_enum에 ADMIN 값 추가, (3) 로그인 화면 EMAIL/ID 겸용 입력 지원 (validateLoginId 추가), (4) QR 스캔 Null 에러 수정 (product API에 id/created_at/updated_at 필드 추가, ProductInfo.fromJson null-safe 처리), (5) **KST 타임존 전체 적용**: config.py KST 상수, task_service.py 작업 시작/완료, admin.py 대시보드/강제완료, alert_service.py WebSocket 알림, worker.py 인증코드 만료 — 모두 KST 전환 (JWT exp/iat는 UTC 유지), (6) 고도화 로드맵 문서화: login_id+생체인증, partner 스키마(협력사 출퇴근), 4-Tier 스키마 아키텍처 (plan/public/partner/defect) |

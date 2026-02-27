@@ -2,10 +2,11 @@
 알림 로그 모델 및 CRUD 함수
 테이블: app_alert_logs
 Sprint 3: 공정 검증 + 알림 시스템
+Sprint 5: read_at 필드 추가
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
@@ -32,6 +33,7 @@ class AlertLog:
         target_role: 알림 대상 역할 (MM, EE, PI, QI, SI)
         message: 알림 메시지
         is_read: 읽음 여부
+        read_at: 읽은 시각
         created_at: 생성 시간
         updated_at: 수정 시간
     """
@@ -47,6 +49,7 @@ class AlertLog:
     is_read: bool
     created_at: datetime
     updated_at: datetime
+    read_at: Optional[datetime] = None
 
     @staticmethod
     def from_db_row(row: Dict[str, Any]) -> "AlertLog":
@@ -70,7 +73,8 @@ class AlertLog:
             message=row['message'],
             is_read=row['is_read'],
             created_at=row['created_at'],
-            updated_at=row['updated_at']
+            updated_at=row['updated_at'],
+            read_at=row.get('read_at')
         )
 
 
@@ -236,7 +240,7 @@ def mark_alert_read(alert_id: int) -> bool:
         cur.execute(
             """
             UPDATE app_alert_logs
-            SET is_read = TRUE, updated_at = CURRENT_TIMESTAMP
+            SET is_read = TRUE, read_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
             WHERE id = %s
             """,
             (alert_id,)

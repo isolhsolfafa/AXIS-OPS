@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../../providers/alert_provider.dart';
 import '../../models/alert_log.dart';
+import '../../utils/design_system.dart';
 
 /// 알림 목록 화면
 ///
@@ -53,16 +54,17 @@ class _AlertListScreenState extends ConsumerState<AlertListScreen>
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('전체 읽음 처리'),
-        content: const Text('모든 알림을 읽음 처리하시겠습니까?'),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.lg)),
+        title: const Text('전체 읽음 처리', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: GxColors.charcoal)),
+        content: const Text('모든 알림을 읽음 처리하시겠습니까?', style: TextStyle(fontSize: 14, color: GxColors.slate)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('취소'),
+            child: const Text('취소', style: TextStyle(color: GxColors.steel)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('확인'),
+            child: const Text('확인', style: TextStyle(color: GxColors.accent, fontWeight: FontWeight.w600)),
           ),
         ],
       ),
@@ -72,7 +74,12 @@ class _AlertListScreenState extends ConsumerState<AlertListScreen>
       final success = await ref.read(alertProvider.notifier).markAllAsRead();
       if (success && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('모든 알림을 읽음 처리했습니다.')),
+          SnackBar(
+            content: const Text('모든 알림을 읽음 처리했습니다.'),
+            backgroundColor: GxColors.accent,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.sm)),
+          ),
         );
       }
     }
@@ -103,78 +110,111 @@ class _AlertListScreenState extends ConsumerState<AlertListScreen>
         : alerts;
 
     return Scaffold(
+      backgroundColor: GxColors.cloud,
       appBar: AppBar(
-        title: const Text('알림'),
-        centerTitle: true,
-        bottom: TabBar(
-          controller: _tabController,
-          onTap: (_) => _loadAlerts(),
-          tabs: [
-            Tab(
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Text('전체'),
-                  const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade300,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      '${alerts.length}',
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                  ),
-                ],
+        backgroundColor: GxColors.white,
+        elevation: 0,
+        foregroundColor: GxColors.charcoal,
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 4,
+              height: 20,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [GxColors.accent, GxColors.accentHover],
+                ),
+                borderRadius: BorderRadius.circular(2),
               ),
             ),
-            Tab(
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Text('안읽음'),
-                  const SizedBox(width: 8),
-                  if (alertState.unreadCount > 0)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: Colors.red,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        '${alertState.unreadCount}',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
+            const SizedBox(width: 12),
+            const Text('알림', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: GxColors.charcoal)),
           ],
         ),
+        centerTitle: false,
         actions: [
           if (alertState.unreadCount > 0)
             IconButton(
-              icon: const Icon(Icons.done_all),
+              icon: const Icon(Icons.done_all, color: GxColors.accent, size: 22),
               onPressed: _handleMarkAllAsRead,
               tooltip: '전체 읽음',
             ),
         ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(49),
+          child: Column(
+            children: [
+              Container(height: 1, color: GxColors.mist),
+              TabBar(
+                controller: _tabController,
+                onTap: (_) => _loadAlerts(),
+                labelColor: GxColors.accent,
+                unselectedLabelColor: GxColors.steel,
+                indicatorColor: GxColors.accent,
+                indicatorWeight: 2,
+                labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                unselectedLabelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                tabs: [
+                  Tab(
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Text('전체'),
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: GxColors.mist,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            '${alerts.length}',
+                            style: const TextStyle(fontSize: 11, color: GxColors.slate),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Tab(
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Text('안읽음'),
+                        const SizedBox(width: 8),
+                        if (alertState.unreadCount > 0)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: GxColors.danger,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              '${alertState.unreadCount}',
+                              style: const TextStyle(fontSize: 11, color: Colors.white),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
       ),
       body: RefreshIndicator(
+        color: GxColors.accent,
         onRefresh: _handleRefresh,
         child: alertState.isLoading && !_isRefreshing
-            ? const Center(child: CircularProgressIndicator())
+            ? Center(child: CircularProgressIndicator(color: GxColors.accent))
             : filteredAlerts.isEmpty
                 ? _buildEmptyState()
-                : ListView.separated(
-                    padding: const EdgeInsets.all(8),
+                : ListView.builder(
+                    padding: const EdgeInsets.all(16),
                     itemCount: filteredAlerts.length,
-                    separatorBuilder: (context, index) => const Divider(height: 1),
                     itemBuilder: (context, index) {
                       final alert = filteredAlerts[index];
                       return _buildAlertTile(alert);
@@ -185,67 +225,90 @@ class _AlertListScreenState extends ConsumerState<AlertListScreen>
   }
 
   Widget _buildAlertTile(AlertLog alert) {
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      leading: Container(
-        width: 48,
-        height: 48,
-        decoration: BoxDecoration(
-          color: _getAlertColor(alert.alertType).withOpacity(0.1),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Icon(
-          _getAlertIcon(alert.iconName),
-          color: _getAlertColor(alert.alertType),
-        ),
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: GxGlass.cardSm(radius: GxRadius.md).copyWith(
+        color: alert.isRead ? GxGlass.cardBgLight : GxColors.accentSoft,
       ),
-      title: Row(
-        children: [
-          Expanded(
-            child: Text(
-              alert.message,
-              style: TextStyle(
-                fontWeight: alert.isRead ? FontWeight.normal : FontWeight.bold,
-                fontSize: 14,
-              ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(GxRadius.md),
+        child: InkWell(
+          onTap: () => _handleAlertTap(alert),
+          borderRadius: BorderRadius.circular(GxRadius.md),
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: _getAlertColor(alert.alertType).withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(GxRadius.md),
+                  ),
+                  child: Icon(
+                    _getAlertIcon(alert.iconName),
+                    color: _getAlertColor(alert.alertType),
+                    size: 20,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              alert.message,
+                              style: TextStyle(
+                                fontWeight: alert.isRead ? FontWeight.w400 : FontWeight.w600,
+                                fontSize: 13,
+                                color: GxColors.charcoal,
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (!alert.isRead)
+                            Container(
+                              width: 8,
+                              height: 8,
+                              margin: const EdgeInsets.only(left: 8),
+                              decoration: const BoxDecoration(
+                                color: GxColors.accent,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          if (alert.serialNumber != null) ...[
+                            Text(
+                              alert.serialNumber!,
+                              style: const TextStyle(fontSize: 11, color: GxColors.accent, fontWeight: FontWeight.w500),
+                            ),
+                            const SizedBox(width: 8),
+                          ],
+                          Text(
+                            _formatDateTime(alert.createdAt),
+                            style: const TextStyle(fontSize: 11, color: GxColors.steel),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.chevron_right, color: GxColors.silver, size: 20),
+              ],
             ),
           ),
-          if (!alert.isRead)
-            Container(
-              width: 8,
-              height: 8,
-              decoration: const BoxDecoration(
-                color: Colors.red,
-                shape: BoxShape.circle,
-              ),
-            ),
-        ],
+        ),
       ),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SizedBox(height: 4),
-          if (alert.serialNumber != null)
-            Text(
-              '시리얼: ${alert.serialNumber}',
-              style: const TextStyle(fontSize: 12),
-            ),
-          Text(
-            _formatDateTime(alert.createdAt),
-            style: TextStyle(
-              fontSize: 12,
-              color: Colors.grey[600],
-            ),
-          ),
-        ],
-      ),
-      trailing: Icon(
-        Icons.chevron_right,
-        color: Colors.grey[400],
-      ),
-      onTap: () => _handleAlertTap(alert),
     );
   }
 
@@ -254,18 +317,19 @@ class _AlertListScreenState extends ConsumerState<AlertListScreen>
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
-            Icons.notifications_none,
-            size: 80,
-            color: Colors.grey[300],
+          Container(
+            width: 64,
+            height: 64,
+            decoration: BoxDecoration(
+              color: GxColors.mist,
+              borderRadius: BorderRadius.circular(GxRadius.lg),
+            ),
+            child: const Icon(Icons.notifications_none, size: 32, color: GxColors.silver),
           ),
           const SizedBox(height: 16),
           Text(
             _tabController.index == 1 ? '안읽은 알림이 없습니다' : '알림이 없습니다',
-            style: TextStyle(
-              fontSize: 16,
-              color: Colors.grey[600],
-            ),
+            style: const TextStyle(fontSize: 14, color: GxColors.steel),
           ),
         ],
       ),
@@ -276,16 +340,16 @@ class _AlertListScreenState extends ConsumerState<AlertListScreen>
     switch (alertType) {
       case 'DURATION_EXCEEDED':
       case 'REVERSE_COMPLETION':
-        return Colors.red;
+        return GxColors.danger;
       case 'PROCESS_READY':
       case 'UNFINISHED_AT_CLOSING':
-        return Colors.orange;
+        return GxColors.warning;
       case 'WORKER_APPROVED':
-        return Colors.green;
+        return GxColors.success;
       case 'WORKER_REJECTED':
-        return Colors.red;
+        return GxColors.danger;
       default:
-        return Colors.blue;
+        return GxColors.info;
     }
   }
 
@@ -311,8 +375,9 @@ class _AlertListScreenState extends ConsumerState<AlertListScreen>
   }
 
   String _formatDateTime(DateTime dateTime) {
+    final local = dateTime.toLocal();
     final now = DateTime.now();
-    final difference = now.difference(dateTime);
+    final difference = now.difference(local);
 
     if (difference.inMinutes < 1) {
       return '방금 전';
@@ -323,7 +388,7 @@ class _AlertListScreenState extends ConsumerState<AlertListScreen>
     } else if (difference.inDays < 7) {
       return '${difference.inDays}일 전';
     } else {
-      return DateFormat('yyyy-MM-dd HH:mm').format(dateTime);
+      return DateFormat('yyyy-MM-dd HH:mm').format(local);
     }
   }
 }
@@ -337,20 +402,27 @@ class _AlertDetailDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.lg)),
       title: Row(
         children: [
-          Icon(
-            _getAlertIcon(alert.iconName),
-            color: _getAlertColor(alert.alertType),
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: _getAlertColor(alert.alertType).withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(GxRadius.md),
+            ),
+            child: Icon(
+              _getAlertIcon(alert.iconName),
+              color: _getAlertColor(alert.alertType),
+              size: 20,
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
             child: Text(
               _getAlertTitle(alert.alertType),
-              style: const TextStyle(fontSize: 18),
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: GxColors.charcoal),
             ),
           ),
         ],
@@ -362,10 +434,10 @@ class _AlertDetailDialog extends StatelessWidget {
           children: [
             Text(
               alert.message,
-              style: const TextStyle(fontSize: 16, height: 1.5),
+              style: const TextStyle(fontSize: 14, height: 1.5, color: GxColors.graphite),
             ),
             const SizedBox(height: 16),
-            const Divider(),
+            const Divider(color: GxColors.mist),
             const SizedBox(height: 8),
             _buildInfoRow('시간', _formatFullDateTime(alert.createdAt)),
             if (alert.serialNumber != null)
@@ -382,7 +454,7 @@ class _AlertDetailDialog extends StatelessWidget {
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('닫기'),
+          child: const Text('닫기', style: TextStyle(color: GxColors.accent, fontWeight: FontWeight.w600)),
         ),
       ],
     );
@@ -396,19 +468,10 @@ class _AlertDetailDialog extends StatelessWidget {
         children: [
           SizedBox(
             width: 80,
-            child: Text(
-              label,
-              style: const TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 14,
-              ),
-            ),
+            child: Text(label, style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 13, color: GxColors.slate)),
           ),
           Expanded(
-            child: Text(
-              value,
-              style: const TextStyle(fontSize: 14),
-            ),
+            child: Text(value, style: const TextStyle(fontSize: 13, color: GxColors.charcoal)),
           ),
         ],
       ),
@@ -442,16 +505,16 @@ class _AlertDetailDialog extends StatelessWidget {
     switch (alertType) {
       case 'DURATION_EXCEEDED':
       case 'REVERSE_COMPLETION':
-        return Colors.red;
+        return GxColors.danger;
       case 'PROCESS_READY':
       case 'UNFINISHED_AT_CLOSING':
-        return Colors.orange;
+        return GxColors.warning;
       case 'WORKER_APPROVED':
-        return Colors.green;
+        return GxColors.success;
       case 'WORKER_REJECTED':
-        return Colors.red;
+        return GxColors.danger;
       default:
-        return Colors.blue;
+        return GxColors.info;
     }
   }
 
@@ -477,6 +540,6 @@ class _AlertDetailDialog extends StatelessWidget {
   }
 
   String _formatFullDateTime(DateTime dateTime) {
-    return DateFormat('yyyy-MM-dd HH:mm:ss').format(dateTime);
+    return DateFormat('yyyy-MM-dd HH:mm:ss').format(dateTime.toLocal());
   }
 }

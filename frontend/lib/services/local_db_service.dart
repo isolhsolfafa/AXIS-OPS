@@ -1,136 +1,122 @@
-import 'package:sqflite/sqflite.dart';
-import 'package:path/path.dart';
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 
-// TODO: SQLite 로컬 DB 서비스 구현
-
+/// 웹 호환 로컬 저장소 서비스 (shared_preferences 기반)
+///
+/// CLAUDE.md PWA 전략에 따라 sqflite 대신 shared_preferences 사용
+/// 오프라인 동기화 큐 및 로컬 캐시 역할
 class LocalDbService {
-  static Database? _database;
-  static const String dbName = 'gaxis_app.db';
-  static const int dbVersion = 1;
+  static SharedPreferences? _prefs;
 
-  // 테이블명
-  static const String tasksTable = 'tasks';
-  static const String workersTable = 'workers';
-  static const String alertsTable = 'alerts';
-  static const String productsTable = 'products';
+  // 저장소 키 프리픽스
+  static const String _tasksKey = 'local_tasks';
+  static const String _workersKey = 'local_workers';
+  static const String _alertsKey = 'local_alerts';
+  static const String _productsKey = 'local_products';
+  static const String _syncQueueKey = 'offline_sync_queue';
 
-  /// DB 초기화
-  Future<Database> initDb() async {
-    if (_database != null) return _database!;
+  /// 초기화
+  Future<void> init() async {
+    _prefs ??= await SharedPreferences.getInstance();
+  }
 
-    try {
-      // TODO: DB 경로 설정 및 생성
-      final dbPath = await getDatabasesPath();
-      final path = join(dbPath, dbName);
+  Future<SharedPreferences> get _storage async {
+    if (_prefs == null) await init();
+    return _prefs!;
+  }
 
-      _database = await openDatabase(
-        path,
-        version: dbVersion,
-        onCreate: _createTables,
-        onUpgrade: _onUpgrade,
-      );
+  // --- 범용 CRUD ---
 
-      return _database!;
-    } catch (e) {
-      rethrow;
+  /// 테이블(키)에 아이템 목록 저장
+  Future<void> _saveList(String key, List<Map<String, dynamic>> items) async {
+    final prefs = await _storage;
+    await prefs.setString(key, jsonEncode(items));
+  }
+
+  /// 테이블(키)에서 아이템 목록 조회
+  Future<List<Map<String, dynamic>>> _getList(String key) async {
+    final prefs = await _storage;
+    final data = prefs.getString(key);
+    if (data == null) return [];
+    final list = jsonDecode(data) as List;
+    return list.cast<Map<String, dynamic>>();
+  }
+
+  // --- Tasks ---
+
+  Future<void> saveTasks(List<Map<String, dynamic>> tasks) async {
+    await _saveList(_tasksKey, tasks);
+  }
+
+  Future<List<Map<String, dynamic>>> getTasks() async {
+    return _getList(_tasksKey);
+  }
+
+  Future<void> addTask(Map<String, dynamic> task) async {
+    final tasks = await getTasks();
+    tasks.add(task);
+    await saveTasks(tasks);
+  }
+
+  Future<void> updateTask(String id, Map<String, dynamic> updated) async {
+    final tasks = await getTasks();
+    final index = tasks.indexWhere((t) => t['id']?.toString() == id);
+    if (index != -1) {
+      tasks[index] = {...tasks[index], ...updated};
+      await saveTasks(tasks);
     }
   }
 
-  /// 테이블 생성
-  Future<void> _createTables(Database db, int version) async {
-    try {
-      // TODO: 테이블 스키마 구현
-      await db.execute('''
-        CREATE TABLE IF NOT EXISTS $tasksTable (
-          id TEXT PRIMARY KEY,
-          taskId TEXT,
-          qrDocId TEXT,
-          processType TEXT,
-          startedAt TEXT,
-          completedAt TEXT,
-          duration INTEGER,
-          status TEXT,
-          createdAt TEXT
-        )
-      ''');
+  // --- Alerts ---
 
-      await db.execute('''
-        CREATE TABLE IF NOT EXISTS $workersTable (
-          id TEXT PRIMARY KEY,
-          name TEXT,
-          email TEXT,
-          role TEXT,
-          isApproved INTEGER,
-          isAdmin INTEGER,
-          createdAt TEXT
-        )
-      ''');
-
-      await db.execute('''
-        CREATE TABLE IF NOT EXISTS $alertsTable (
-          id TEXT PRIMARY KEY,
-          alertType TEXT,
-          message TEXT,
-          workerName TEXT,
-          timestamp TEXT,
-          isRead INTEGER
-        )
-      ''');
-
-      await db.execute('''
-        CREATE TABLE IF NOT EXISTS $productsTable (
-          qrDocId TEXT PRIMARY KEY,
-          serialNumber TEXT,
-          model TEXT,
-          productionDate TEXT,
-          description TEXT
-        )
-      ''');
-    } catch (e) {
-      rethrow;
-    }
+  Future<void> saveAlerts(List<Map<String, dynamic>> alerts) async {
+    await _saveList(_alertsKey, alerts);
   }
 
-  /// DB 업그레이드
-  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
-    // TODO: DB 마이그레이션 로직 구현
+  Future<List<Map<String, dynamic>>> getAlerts() async {
+    return _getList(_alertsKey);
   }
 
-  /// DB 인스턴스
-  Future<Database> get database async {
-    if (_database != null) return _database!;
-    return await initDb();
+  // --- Products ---
+
+  Future<void> saveProducts(List<Map<String, dynamic>> products) async {
+    await _saveList(_productsKey, products);
   }
 
-  /// 삽입
-  Future<int> insert(String table, Map<String, dynamic> data) async {
-    final db = await database;
-    return await db.insert(table, data);
+  Future<List<Map<String, dynamic>>> getProducts() async {
+    return _getList(_productsKey);
   }
 
-  /// 조회
-  Future<List<Map<String, dynamic>>> query(String table, {String? where, List<dynamic>? whereArgs}) async {
-    final db = await database;
-    return await db.query(table, where: where, whereArgs: whereArgs);
+  // --- 오프라인 동기화 큐 ---
+
+  /// 오프라인 작업을 동기화 큐에 추가
+  Future<void> addToSyncQueue(Map<String, dynamic> action) async {
+    final queue = await getSyncQueue();
+    action['queued_at'] = DateTime.now().toIso8601String();
+    queue.add(action);
+    await _saveList(_syncQueueKey, queue);
   }
 
-  /// 업데이트
-  Future<int> update(String table, Map<String, dynamic> data, {required String where, List<dynamic>? whereArgs}) async {
-    final db = await database;
-    return await db.update(table, data, where: where, whereArgs: whereArgs);
+  /// 동기화 큐 조회
+  Future<List<Map<String, dynamic>>> getSyncQueue() async {
+    return _getList(_syncQueueKey);
   }
 
-  /// 삭제
-  Future<int> delete(String table, {required String where, List<dynamic>? whereArgs}) async {
-    final db = await database;
-    return await db.delete(table, where: where, whereArgs: whereArgs);
+  /// 동기화 큐 비우기
+  Future<void> clearSyncQueue() async {
+    final prefs = await _storage;
+    await prefs.remove(_syncQueueKey);
   }
 
-  /// DB 종료
-  Future<void> closeDb() async {
-    if (_database != null) {
-      await _database!.close();
-      _database = null;
-    }
+  // --- 전체 초기화 ---
+
+  /// 모든 로컬 데이터 삭제
+  Future<void> clearAll() async {
+    final prefs = await _storage;
+    await prefs.remove(_tasksKey);
+    await prefs.remove(_workersKey);
+    await prefs.remove(_alertsKey);
+    await prefs.remove(_productsKey);
+    await prefs.remove(_syncQueueKey);
   }
 }

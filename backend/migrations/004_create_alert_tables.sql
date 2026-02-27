@@ -25,9 +25,26 @@ CREATE TABLE IF NOT EXISTS app_alert_logs (
     target_role VARCHAR(50),
     message TEXT NOT NULL,
     is_read BOOLEAN DEFAULT FALSE,
+    read_at TIMESTAMP WITH TIME ZONE,  -- 읽은 시각
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+-- updated_at 자동 갱신 트리거 함수
+CREATE OR REPLACE FUNCTION update_app_alert_logs_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 트리거 등록
+DROP TRIGGER IF EXISTS trigger_update_app_alert_logs_updated_at ON app_alert_logs;
+CREATE TRIGGER trigger_update_app_alert_logs_updated_at
+    BEFORE UPDATE ON app_alert_logs
+    FOR EACH ROW
+    EXECUTE FUNCTION update_app_alert_logs_updated_at();
 
 -- 인덱스
 CREATE INDEX IF NOT EXISTS idx_app_alert_logs_target_worker_id ON app_alert_logs(target_worker_id);

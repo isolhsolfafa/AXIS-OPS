@@ -2,17 +2,22 @@
 작업 라우트
 엔드포인트: /api/app/work/*
 Sprint 2: 작업 시작/완료 처리 + Task 목록/완료상태/검증/토글
+Sprint 9: 일시정지/재개 엔드포인트 추가
 """
 
 import logging
+from datetime import datetime
 from flask import Blueprint, request, jsonify, g
 from typing import Tuple, Dict, Any
 
+from app.config import Config
 from app.middleware.jwt_auth import jwt_required, get_current_worker_id
 from app.services.task_service import TaskService
 from app.models.task_detail import get_task_by_id, get_tasks_by_serial_number
 from app.models.completion_status import get_or_create_completion_status
 from app.models.product_info import get_product_by_serial_number
+from app.models.work_pause_log import create_pause, resume_pause, get_active_pause, get_pauses_by_task
+from app.models.task_detail import set_paused
 
 
 logger = logging.getLogger(__name__)
@@ -25,7 +30,7 @@ def _task_to_dict(task) -> Dict[str, Any]:
     """TaskDetail 객체를 API 응답용 dict로 변환"""
     return {
         'id': task.id,
-        'worker_id': task.worker_id,
+        'worker_id': task.worker_id or 0,  # Task Seed 초기 상태: NULL → 0
         'serial_number': task.serial_number,
         'qr_doc_id': task.qr_doc_id,
         'task_category': task.task_category,
@@ -40,6 +45,9 @@ def _task_to_dict(task) -> Dict[str, Any]:
         'location_qr_verified': task.location_qr_verified,
         'created_at': task.created_at.isoformat() if task.created_at else None,
         'updated_at': task.updated_at.isoformat() if task.updated_at else None,
+        # Sprint 9: 일시정지 상태
+        'is_paused': task.is_paused,
+        'total_pause_minutes': task.total_pause_minutes,
     }
 
 
@@ -156,21 +164,42 @@ def complete_work() -> Tuple[Dict[str, Any], int]:
 @jwt_required
 def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
     """
-    시리얼 번호로 Task 목록 조회
+    시리얼 번호로 Task 목록 조회 (company 기반 자동 필터링)
 
     Path Parameters:
         serial_number: 제품 시리얼 번호
 
     Query Parameters:
-        worker_id: 작업자 ID (선택, 현재는 미사용)
-        process_type: 공정 유형 필터 (MM, EE, TM, PI, QI, SI)
+        process_type: 공정 유형 강제 필터 (MECH, ELEC, TM, PI, QI, SI) — 미지정 시 company 기반 자동 필터
+        all: 'true'이면 필터 없이 전체 조회 (관리자용)
 
     Response:
         200: Task 목록 (리스트 형태)
     """
+    from app.models.worker import get_worker_by_id
+    from app.middleware.jwt_auth import get_current_worker_id
+    from app.services.task_seed import filter_tasks_for_worker
+
     task_category = request.args.get('process_type')
+    fetch_all = request.args.get('all', '').lower() == 'true'
 
     tasks = get_tasks_by_serial_number(serial_number, task_category)
+
+    # all=true이면 필터 없이 반환 (관리자 전체 조회)
+    if not fetch_all and task_category is None:
+        # company 기반 자동 필터링: JWT에서 worker 정보 조회
+        try:
+            current_worker_id = get_current_worker_id()
+            worker = get_worker_by_id(current_worker_id)
+            product = get_product_by_serial_number(serial_number)
+            if worker:
+                tasks = filter_tasks_for_worker(
+                    tasks, worker.company, worker.role, product,
+                    worker_active_role=worker.active_role  # Sprint 11
+                )
+        except Exception as e:
+            logger.warning(f"Company-based task filter failed, returning all: {e}")
+
     task_list = [_task_to_dict(task) for task in tasks]
 
     return jsonify(task_list), 200
@@ -201,8 +230,8 @@ def get_completion_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
     return jsonify({
         'qr_doc_id': product.qr_doc_id if product else None,
         'serial_number': serial_number,
-        'mm_completed': status.mm_completed,
-        'ee_completed': status.ee_completed,
+        'mech_completed': status.mech_completed,
+        'elec_completed': status.elec_completed,
         'tm_completed': status.tm_completed,
         'pi_completed': status.pi_completed,
         'qi_completed': status.qi_completed,
@@ -258,14 +287,14 @@ def validate_process() -> Tuple[Dict[str, Any], int]:
         triggered_by_worker_id=worker_id
     )
 
-    # FE 호환 응답 형식으로 변환
+    # FE 호환 응답 형식으로 변환 (Sprint 6: MM→MECH, EE→ELEC)
     warnings = validation_result.get('warnings', [])
     missing_processes = []
     for warning in warnings:
-        if 'MM' in warning:
-            missing_processes.append('MM')
-        if 'EE' in warning:
-            missing_processes.append('EE')
+        if 'MECH' in warning:
+            missing_processes.append('MECH')
+        if 'ELEC' in warning:
+            missing_processes.append('ELEC')
 
     return jsonify({
         'valid': validation_result.get('can_proceed', True),
@@ -371,10 +400,249 @@ def update_location_compat() -> Tuple[Dict[str, Any], int]:
         'qr_doc_id': updated_product.qr_doc_id,
         'serial_number': updated_product.serial_number,
         'model': updated_product.model,
-        'production_date': updated_product.production_date.isoformat(),
+        'prod_date': updated_product.prod_date.isoformat() if updated_product.prod_date else None,
         'location_qr_id': updated_product.location_qr_id,
         'mech_partner': updated_product.mech_partner,
+        'elec_partner': updated_product.elec_partner,
         'module_outsourcing': updated_product.module_outsourcing,
         'created_at': updated_product.created_at.isoformat(),
         'updated_at': updated_product.updated_at.isoformat(),
+    }), 200
+
+
+# ============================================================
+# Sprint 9: 일시정지/재개 엔드포인트
+# ============================================================
+
+
+@work_bp.route("/work/pause", methods=["POST"])
+@jwt_required
+def pause_work() -> Tuple[Dict[str, Any], int]:
+    """
+    작업 일시정지
+
+    Request Body:
+        {
+            "task_detail_id": int
+        }
+
+    Headers:
+        Authorization: Bearer {token}
+
+    Response:
+        200: {"message": str, "paused_at": ISO8601}
+        400: {"error": "INVALID_REQUEST|TASK_NOT_STARTED|TASK_ALREADY_COMPLETED|TASK_ALREADY_PAUSED", "message": str}
+        403: {"error": "FORBIDDEN", "message": str}
+        404: {"error": "TASK_NOT_FOUND", "message": str}
+    """
+    data = request.get_json(silent=True) or {}
+    task_detail_id = data.get('task_detail_id')
+
+    if not task_detail_id:
+        return jsonify({
+            'error': 'INVALID_REQUEST',
+            'message': 'task_detail_id가 필요합니다.'
+        }), 400
+
+    worker_id = get_current_worker_id()
+
+    # 작업 조회
+    task = get_task_by_id(task_detail_id)
+    if not task:
+        return jsonify({
+            'error': 'TASK_NOT_FOUND',
+            'message': '작업을 찾을 수 없습니다.'
+        }), 404
+
+    # 시작되지 않은 작업
+    if not task.started_at:
+        return jsonify({
+            'error': 'TASK_NOT_STARTED',
+            'message': '아직 시작되지 않은 작업입니다.'
+        }), 400
+
+    # 이미 완료된 작업
+    if task.completed_at:
+        return jsonify({
+            'error': 'TASK_ALREADY_COMPLETED',
+            'message': '이미 완료된 작업입니다.'
+        }), 400
+
+    # 이미 일시정지 중
+    if task.is_paused:
+        return jsonify({
+            'error': 'TASK_ALREADY_PAUSED',
+            'message': '이미 일시정지된 작업입니다.'
+        }), 400
+
+    # 이 작업자가 작업을 시작했는지 확인 (work_start_log 기준)
+    from app.services.task_service import _worker_has_started_task
+    from app.models.worker import get_worker_by_id
+    if not _worker_has_started_task(task_detail_id, worker_id):
+        # Sprint 11: GST 작업자 간 cross-worker 제어 허용
+        current_worker = get_worker_by_id(worker_id)
+        gst_cross_allowed = False
+        if current_worker and current_worker.company == 'GST':
+            task_worker = get_worker_by_id(task.worker_id) if task.worker_id else None
+            if task_worker and task_worker.company == 'GST':
+                gst_cross_allowed = True
+        if not gst_cross_allowed:
+            return jsonify({
+                'error': 'FORBIDDEN',
+                'message': '이 작업을 시작하지 않은 작업자입니다.'
+            }), 403
+
+    # 일시정지 로그 생성
+    pause_log = create_pause(task_detail_id, worker_id, pause_type='manual')
+    if not pause_log:
+        return jsonify({
+            'error': 'PAUSE_FAILED',
+            'message': '일시정지 처리에 실패했습니다.'
+        }), 500
+
+    # 작업 상태 업데이트
+    set_paused(task_detail_id, is_paused=True)
+
+    logger.info(f"Task paused: task_id={task_detail_id}, worker_id={worker_id}")
+
+    # 업데이트된 전체 TaskDetail 반환 (FE TaskItem.fromJson 호환)
+    updated_task = get_task_by_id(task_detail_id)
+    if updated_task:
+        return jsonify(_task_to_dict(updated_task)), 200
+
+    return jsonify({
+        'message': '작업이 일시정지되었습니다.',
+        'paused_at': pause_log.paused_at.isoformat(),
+    }), 200
+
+
+@work_bp.route("/work/resume", methods=["POST"])
+@jwt_required
+def resume_work() -> Tuple[Dict[str, Any], int]:
+    """
+    작업 재개
+
+    Request Body:
+        {
+            "task_detail_id": int
+        }
+
+    Headers:
+        Authorization: Bearer {token}
+
+    Response:
+        200: {"message": str, "resumed_at": ISO8601, "pause_duration_minutes": int}
+        400: {"error": "INVALID_REQUEST|TASK_NOT_PAUSED", "message": str}
+        403: {"error": "FORBIDDEN", "message": str}
+        404: {"error": "TASK_NOT_FOUND|PAUSE_NOT_FOUND", "message": str}
+    """
+    data = request.get_json(silent=True) or {}
+    task_detail_id = data.get('task_detail_id')
+
+    if not task_detail_id:
+        return jsonify({
+            'error': 'INVALID_REQUEST',
+            'message': 'task_detail_id가 필요합니다.'
+        }), 400
+
+    worker_id = get_current_worker_id()
+
+    # 작업 조회
+    task = get_task_by_id(task_detail_id)
+    if not task:
+        return jsonify({
+            'error': 'TASK_NOT_FOUND',
+            'message': '작업을 찾을 수 없습니다.'
+        }), 404
+
+    # 일시정지 상태가 아닌 경우
+    if not task.is_paused:
+        return jsonify({
+            'error': 'TASK_NOT_PAUSED',
+            'message': '일시정지 중인 작업이 아닙니다.'
+        }), 400
+
+    # 활성 일시정지 로그 조회
+    active_pause = get_active_pause(task_detail_id)
+    if not active_pause:
+        return jsonify({
+            'error': 'PAUSE_NOT_FOUND',
+            'message': '활성 일시정지 로그를 찾을 수 없습니다.'
+        }), 404
+
+    # 권한 확인: 일시정지한 작업자 본인 또는 관리자 또는 GST 동료
+    from app.models.worker import get_worker_by_id
+    current_worker = get_worker_by_id(worker_id)
+    is_admin = current_worker and (current_worker.is_admin or current_worker.is_manager)
+    # Sprint 11: GST 작업자 간 cross-worker 재개 허용
+    gst_cross_allowed = False
+    if current_worker and current_worker.company == 'GST':
+        pause_worker = get_worker_by_id(active_pause.worker_id) if active_pause.worker_id else None
+        if pause_worker and pause_worker.company == 'GST':
+            gst_cross_allowed = True
+    if active_pause.worker_id != worker_id and not is_admin and not gst_cross_allowed:
+        return jsonify({
+            'error': 'FORBIDDEN',
+            'message': '일시정지를 해제할 권한이 없습니다.'
+        }), 403
+
+    # 재개 처리
+    resumed_at = datetime.now(Config.KST)
+    updated_pause = resume_pause(active_pause.id, resumed_at)
+    if not updated_pause:
+        return jsonify({
+            'error': 'RESUME_FAILED',
+            'message': '재개 처리에 실패했습니다.'
+        }), 500
+
+    # 누적 일시정지 시간 업데이트
+    pause_duration = updated_pause.pause_duration_minutes or 0
+    new_total_pause_minutes = task.total_pause_minutes + pause_duration
+    set_paused(task_detail_id, is_paused=False, total_pause_minutes=new_total_pause_minutes)
+
+    logger.info(
+        f"Task resumed: task_id={task_detail_id}, worker_id={worker_id}, "
+        f"pause_duration={pause_duration}m, total_pause={new_total_pause_minutes}m"
+    )
+
+    # 업데이트된 전체 TaskDetail 반환 (FE TaskItem.fromJson 호환)
+    updated_task = get_task_by_id(task_detail_id)
+    if updated_task:
+        return jsonify(_task_to_dict(updated_task)), 200
+
+    return jsonify({
+        'message': '작업이 재개되었습니다.',
+        'resumed_at': resumed_at.isoformat(),
+        'pause_duration_minutes': pause_duration,
+    }), 200
+
+
+@work_bp.route("/work/pause-history/<int:task_detail_id>", methods=["GET"])
+@jwt_required
+def get_pause_history(task_detail_id: int) -> Tuple[Dict[str, Any], int]:
+    """
+    작업 일시정지 이력 조회
+
+    Path Parameters:
+        task_detail_id: 작업 ID
+
+    Headers:
+        Authorization: Bearer {token}
+
+    Response:
+        200: {"pauses": [...]}
+        404: {"error": "TASK_NOT_FOUND", "message": str}
+    """
+    # 작업 존재 확인
+    task = get_task_by_id(task_detail_id)
+    if not task:
+        return jsonify({
+            'error': 'TASK_NOT_FOUND',
+            'message': '작업을 찾을 수 없습니다.'
+        }), 404
+
+    pauses = get_pauses_by_task(task_detail_id)
+
+    return jsonify({
+        'pauses': [p.to_dict() for p in pauses]
     }), 200

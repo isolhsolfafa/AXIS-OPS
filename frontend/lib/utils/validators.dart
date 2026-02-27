@@ -5,15 +5,26 @@ String? validateEmail(String? value) {
   if (value == null || value.isEmpty) {
     return '이메일을 입력해주세요.';
   }
-  
+
   final emailRegex = RegExp(
     r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$',
   );
-  
+
   if (!emailRegex.hasMatch(value)) {
     return '유효한 이메일 형식을 입력해주세요.';
   }
-  
+
+  return null;
+}
+
+/// 로그인 ID 유효성 검사 (이메일 또는 일반 계정명 허용)
+String? validateLoginId(String? value) {
+  if (value == null || value.isEmpty) {
+    return '이메일 또는 계정명을 입력해주세요.';
+  }
+  if (value.length < 2) {
+    return '2자 이상 입력해주세요.';
+  }
   return null;
 }
 

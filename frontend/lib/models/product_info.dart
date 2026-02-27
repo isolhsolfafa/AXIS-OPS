@@ -7,9 +7,10 @@ class ProductInfo {
   final String qrDocId;
   final String serialNumber;
   final String model;
-  final DateTime productionDate;
+  final DateTime prodDate;
   final String? locationQrId;
   final String? mechPartner;
+  final String? elecPartner;
   final String? moduleOutsourcing;
   final DateTime createdAt;
   final DateTime? updatedAt;
@@ -19,9 +20,10 @@ class ProductInfo {
     required this.qrDocId,
     required this.serialNumber,
     required this.model,
-    required this.productionDate,
+    required this.prodDate,
     this.locationQrId,
     this.mechPartner,
+    this.elecPartner,
     this.moduleOutsourcing,
     required this.createdAt,
     this.updatedAt,
@@ -36,7 +38,7 @@ class ProductInfo {
   ///   "qr_doc_id": "DOC_GBWS-6408",
   ///   "serial_number": "GBWS-6408",
   ///   "model": "GBWS",
-  ///   "production_date": "2026-02-16",
+  ///   "prod_date": "2026-02-16",
   ///   "location_qr_id": "LOC_ASSY_01",
   ///   "mech_partner": "협력사A",
   ///   "module_outsourcing": "TMS",
@@ -46,15 +48,18 @@ class ProductInfo {
   /// ```
   factory ProductInfo.fromJson(Map<String, dynamic> json) {
     return ProductInfo(
-      id: json['id'] as int,
+      id: (json['id'] as num?)?.toInt() ?? 0,
       qrDocId: json['qr_doc_id'] as String,
       serialNumber: json['serial_number'] as String,
       model: json['model'] as String,
-      productionDate: DateTime.parse(json['production_date'] as String),
+      prodDate: DateTime.parse(json['prod_date'] as String),
       locationQrId: json['location_qr_id'] as String?,
       mechPartner: json['mech_partner'] as String?,
+      elecPartner: json['elec_partner'] as String?,
       moduleOutsourcing: json['module_outsourcing'] as String?,
-      createdAt: DateTime.parse(json['created_at'] as String),
+      createdAt: json['created_at'] != null
+          ? DateTime.parse(json['created_at'] as String)
+          : DateTime.now(),
       updatedAt: json['updated_at'] != null
           ? DateTime.parse(json['updated_at'] as String)
           : null,
@@ -68,9 +73,10 @@ class ProductInfo {
       'qr_doc_id': qrDocId,
       'serial_number': serialNumber,
       'model': model,
-      'production_date': productionDate.toIso8601String().split('T')[0], // YYYY-MM-DD
+      'prod_date': prodDate.toIso8601String().split('T')[0], // YYYY-MM-DD
       'location_qr_id': locationQrId,
       'mech_partner': mechPartner,
+      'elec_partner': elecPartner,
       'module_outsourcing': moduleOutsourcing,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt?.toIso8601String(),
@@ -83,9 +89,10 @@ class ProductInfo {
     String? qrDocId,
     String? serialNumber,
     String? model,
-    DateTime? productionDate,
+    DateTime? prodDate,
     String? locationQrId,
     String? mechPartner,
+    String? elecPartner,
     String? moduleOutsourcing,
     DateTime? createdAt,
     DateTime? updatedAt,
@@ -95,9 +102,10 @@ class ProductInfo {
       qrDocId: qrDocId ?? this.qrDocId,
       serialNumber: serialNumber ?? this.serialNumber,
       model: model ?? this.model,
-      productionDate: productionDate ?? this.productionDate,
+      prodDate: prodDate ?? this.prodDate,
       locationQrId: locationQrId ?? this.locationQrId,
       mechPartner: mechPartner ?? this.mechPartner,
+      elecPartner: elecPartner ?? this.elecPartner,
       moduleOutsourcing: moduleOutsourcing ?? this.moduleOutsourcing,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
@@ -130,9 +138,10 @@ class ProductInfo {
         other.qrDocId == qrDocId &&
         other.serialNumber == serialNumber &&
         other.model == model &&
-        other.productionDate == productionDate &&
+        other.prodDate == prodDate &&
         other.locationQrId == locationQrId &&
         other.mechPartner == mechPartner &&
+        other.elecPartner == elecPartner &&
         other.moduleOutsourcing == moduleOutsourcing &&
         other.createdAt == createdAt &&
         other.updatedAt == updatedAt;
@@ -145,9 +154,10 @@ class ProductInfo {
       qrDocId,
       serialNumber,
       model,
-      productionDate,
+      prodDate,
       locationQrId,
       mechPartner,
+      elecPartner,
       moduleOutsourcing,
       createdAt,
       updatedAt,

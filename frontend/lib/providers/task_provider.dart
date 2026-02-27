@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/product_info.dart';
 import '../models/task_item.dart';
 import '../services/task_service.dart';
+import 'auth_provider.dart';
 
 /// Task 상태 클래스
 ///
@@ -324,6 +325,64 @@ class TaskNotifier extends StateNotifier<TaskState> {
     );
   }
 
+  /// 작업 일시정지
+  ///
+  /// [taskDetailId]: app_task_details의 ID
+  ///
+  /// Returns: 성공 여부
+  Future<bool> pauseTask({required int taskDetailId}) async {
+    state = state.copyWith(isLoading: true, clearError: true);
+    try {
+      final updatedTask = await _taskService.pauseTask(taskDetailId: taskDetailId);
+
+      final updatedTasks = state.tasks.map((task) {
+        return task.id == taskDetailId ? updatedTask : task;
+      }).toList();
+
+      state = state.copyWith(
+        isLoading: false,
+        tasks: updatedTasks,
+        selectedTask: updatedTask,
+      );
+      return true;
+    } catch (e) {
+      state = state.copyWith(
+        isLoading: false,
+        errorMessage: e.toString(),
+      );
+      return false;
+    }
+  }
+
+  /// 작업 재개
+  ///
+  /// [taskDetailId]: app_task_details의 ID
+  ///
+  /// Returns: 성공 여부
+  Future<bool> resumeTask({required int taskDetailId}) async {
+    state = state.copyWith(isLoading: true, clearError: true);
+    try {
+      final updatedTask = await _taskService.resumeTask(taskDetailId: taskDetailId);
+
+      final updatedTasks = state.tasks.map((task) {
+        return task.id == taskDetailId ? updatedTask : task;
+      }).toList();
+
+      state = state.copyWith(
+        isLoading: false,
+        tasks: updatedTasks,
+        selectedTask: updatedTask,
+      );
+      return true;
+    } catch (e) {
+      state = state.copyWith(
+        isLoading: false,
+        errorMessage: e.toString(),
+      );
+      return false;
+    }
+  }
+
   /// Task 비활성화 (관리자/사내직원 전용)
   Future<bool> toggleTaskApplicable({
     required int taskId,
@@ -356,9 +415,10 @@ class TaskNotifier extends StateNotifier<TaskState> {
   }
 }
 
-/// TaskService Provider
+/// TaskService Provider — 공유 ApiService 사용 (JWT 토큰 공유)
 final taskServiceProvider = Provider<TaskService>((ref) {
-  return TaskService();
+  final apiService = ref.watch(apiServiceProvider);
+  return TaskService(apiService: apiService);
 });
 
 /// TaskNotifier Provider

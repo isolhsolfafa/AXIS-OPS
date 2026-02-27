@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/alert_log.dart';
 import '../services/alert_service.dart';
 import '../services/websocket_service.dart';
+import 'auth_provider.dart';
 
 /// Alert 상태 클래스
 ///
@@ -258,9 +259,10 @@ class AlertNotifier extends StateNotifier<AlertState> {
   }
 }
 
-/// AlertService Provider
+/// AlertService Provider — 공유 ApiService 사용 (JWT 토큰 공유)
 final alertServiceProvider = Provider<AlertService>((ref) {
-  return AlertService();
+  final apiService = ref.watch(apiServiceProvider);
+  return AlertService(apiService: apiService);
 });
 
 /// AlertNotifier Provider

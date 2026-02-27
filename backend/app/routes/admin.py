@@ -2,15 +2,19 @@
 관리자 라우트
 엔드포인트: /api/admin/*
 Sprint 4: 관리자 전용 API (승인, 대시보드, 작업 수정)
+Sprint 6 Phase C: PUT /api/admin/tasks/{task_id}/force-close 추가
 """
 
 import logging
+import re
 from flask import Blueprint, request, jsonify, g
 from typing import Tuple, Dict, Any, List
-from datetime import datetime, timezone
+from datetime import datetime
 
-from app.middleware.jwt_auth import jwt_required, admin_required
+from app.config import Config
+from app.middleware.jwt_auth import jwt_required, admin_required, manager_or_admin_required
 from app.models.worker import get_db_connection, update_approval_status, get_worker_by_id
+from app.models.admin_settings import get_all_settings, update_setting
 from app.services.alert_service import create_and_broadcast_alert
 from app.services.scheduler_service import trigger_unfinished_task_check_manually
 from psycopg2 import Error as PsycopgError
@@ -133,7 +137,7 @@ def get_pending_workers() -> Tuple[Dict[str, Any], int]:
 
         cur.execute(
             """
-            SELECT id, name, email, role, is_manager, created_at
+            SELECT id, name, email, role, company, is_manager, created_at
             FROM workers
             WHERE approval_status = 'pending'
             ORDER BY created_at DESC
@@ -150,6 +154,7 @@ def get_pending_workers() -> Tuple[Dict[str, Any], int]:
                 'name': row['name'],
                 'email': row['email'],
                 'role': row['role'],
+                'company': row['company'],
                 'is_manager': row['is_manager'],
                 'created_at': row['created_at'].isoformat() if row['created_at'] else None
             }
@@ -286,7 +291,7 @@ def get_process_summary() -> Tuple[Dict[str, Any], int]:
     Returns:
         200: {
             "summary": [{
-                "process_type": str,  // MM, EE, TM, PI, QI, SI
+                "process_type": str,  // MECH, ELEC, TM, PI, QI, SI
                 "total_tasks": int,
                 "completed_tasks": int,
                 "in_progress_tasks": int,
@@ -313,7 +318,7 @@ def get_process_summary() -> Tuple[Dict[str, Any], int]:
                     'message': '날짜 형식이 올바르지 않습니다. (YYYY-MM-DD)'
                 }), 400
         else:
-            date_filter = datetime.now().date()
+            date_filter = datetime.now(Config.KST).date()
 
         cur.execute(
             """
@@ -784,7 +789,7 @@ def force_complete_task(task_id: int) -> Tuple[Dict[str, Any], int]:
                     'message': 'completed_at 형식이 올바르지 않습니다. (ISO 8601)'
                 }), 400
         else:
-            completed_at = datetime.now(timezone.utc)
+            completed_at = datetime.now(Config.KST)
 
         # duration 계산 (started_at이 있을 경우)
         started_at = row['started_at']
@@ -827,6 +832,262 @@ def force_complete_task(task_id: int) -> Tuple[Dict[str, Any], int]:
             conn.close()
 
 
+@admin_bp.route("/products/initialize-tasks", methods=["POST"])
+@jwt_required
+@admin_required
+def initialize_product_tasks() -> Tuple[Dict[str, Any], int]:
+    """
+    제품 Task 초기화 (Task Seed)
+    Sprint 6 Phase B: MECH 7 + ELEC 6 + TMS 2 = 최대 15개 자동 생성
+
+    Request Body:
+        {
+            "serial_number": str,
+            "qr_doc_id": str,
+            "model_name": str   # plan.product_info.model 값 (예: 'GAIA-1234')
+        }
+
+    Headers:
+        Authorization: Bearer {token}  (admin_required)
+
+    Returns:
+        200: {
+            "message": str,
+            "serial_number": str,
+            "created": int,
+            "skipped": int,
+            "categories": {"MECH": int, "ELEC": int, "TMS": int}
+        }
+        400: {"error": "INVALID_REQUEST", "message": "..."}
+        500: {"error": "SEED_FAILED", "message": "..."}
+    """
+    data = request.get_json()
+    if not data or not all(k in data for k in ['serial_number', 'qr_doc_id', 'model_name']):
+        return jsonify({
+            'error': 'INVALID_REQUEST',
+            'message': 'serial_number, qr_doc_id, model_name 필드가 필요합니다.'
+        }), 400
+
+    serial_number = data['serial_number']
+    qr_doc_id = data['qr_doc_id']
+    model_name = data['model_name']
+
+    from app.services.task_seed import initialize_product_tasks as _seed
+    result = _seed(
+        serial_number=serial_number,
+        qr_doc_id=qr_doc_id,
+        model_name=model_name
+    )
+
+    if result.get('error'):
+        logger.error(
+            f"Task seed failed: serial_number={serial_number}, error={result['error']}"
+        )
+        return jsonify({
+            'error': 'SEED_FAILED',
+            'message': f"Task 초기화 실패: {result['error']}"
+        }), 500
+
+    logger.info(
+        f"Task seed completed by admin: serial_number={serial_number}, "
+        f"created={result['created']}, admin_id={g.worker_id}"
+    )
+
+    return jsonify({
+        'message': f"Task 초기화 완료 ({result['created']}개 생성, {result['skipped']}개 건너뜀)",
+        'serial_number': serial_number,
+        'created': result['created'],
+        'skipped': result['skipped'],
+        'categories': result['categories']
+    }), 200
+
+
+@admin_bp.route("/tasks/<int:task_id>/force-close", methods=["PUT"])
+@jwt_required
+@manager_or_admin_required
+def force_close_task(task_id: int) -> Tuple[Dict[str, Any], int]:
+    """
+    작업 강제 종료 (관리자 또는 매니저)
+    Sprint 6 Phase C: close_reason 필수, 이미 완료된 Task 거부
+
+    Path Parameters:
+        task_id: int (작업 ID)
+
+    Request Body:
+        {
+            "completed_at": str (optional, ISO 8601, 미지정 시 현재 시각),
+            "close_reason": str (필수, 강제 종료 사유)
+        }
+
+    Headers:
+        Authorization: Bearer {token}  (is_manager 또는 is_admin)
+
+    Returns:
+        200: {
+            "message": str,
+            "task_id": int,
+            "completed_at": str,
+            "duration_minutes": int,
+            "elapsed_minutes": int,
+            "close_reason": str
+        }
+        400: {"error": "INVALID_REQUEST", "message": "..."}
+        400: {"error": "TASK_ALREADY_COMPLETED", "message": "..."}
+        404: {"error": "TASK_NOT_FOUND", "message": "..."}
+        500: {"error": "INTERNAL_SERVER_ERROR", "message": "..."}
+    """
+    data = request.get_json(silent=True) or {}
+
+    # close_reason 필수
+    close_reason = data.get('close_reason', '').strip()
+    if not close_reason:
+        return jsonify({
+            'error': 'INVALID_REQUEST',
+            'message': 'close_reason(강제 종료 사유)은 필수입니다.'
+        }), 400
+
+    completed_at_param = data.get('completed_at')
+
+    # 협력사 관리자는 본인 company의 작업만 강제 종료 가능
+    current_worker = get_worker_by_id(g.worker_id)
+    manager_company = None
+    if current_worker and current_worker.is_manager and not current_worker.is_admin:
+        manager_company = current_worker.company
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # 작업 존재 확인 (worker company 포함)
+        cur.execute(
+            """
+            SELECT t.id, t.started_at, t.completed_at, t.force_closed, w.company AS worker_company
+            FROM app_task_details t
+            LEFT JOIN workers w ON t.worker_id = w.id
+            WHERE t.id = %s
+            """,
+            (task_id,)
+        )
+        row = cur.fetchone()
+
+        if not row:
+            return jsonify({
+                'error': 'TASK_NOT_FOUND',
+                'message': '작업을 찾을 수 없습니다.'
+            }), 404
+
+        # 협력사 관리자 company 일치 여부 확인
+        if manager_company and row['worker_company'] != manager_company:
+            return jsonify({
+                'error': 'FORBIDDEN',
+                'message': '본인 소속 협력사의 작업만 강제 종료할 수 있습니다.'
+            }), 403
+
+        # 이미 완료된 Task → 거부
+        if row['completed_at'] is not None:
+            return jsonify({
+                'error': 'TASK_ALREADY_COMPLETED',
+                'message': '이미 완료된 작업은 강제 종료할 수 없습니다.'
+            }), 400
+
+        # completed_at 설정
+        if completed_at_param:
+            try:
+                completed_at = datetime.fromisoformat(completed_at_param)
+            except ValueError:
+                return jsonify({
+                    'error': 'INVALID_REQUEST',
+                    'message': 'completed_at 형식이 올바르지 않습니다. (ISO 8601)'
+                }), 400
+        else:
+            completed_at = datetime.now(Config.KST)
+
+        # duration / elapsed 계산
+        started_at = row['started_at']
+        if started_at:
+            elapsed_minutes = int((completed_at - started_at).total_seconds() / 60)
+        else:
+            elapsed_minutes = 0
+
+        # duration_minutes = man-hour (work_completion_log 합계 + 현재 작업자)
+        cur.execute(
+            """
+            SELECT COALESCE(SUM(duration_minutes), 0) AS duration_sum
+            FROM work_completion_log
+            WHERE task_id = %s
+            """,
+            (task_id,)
+        )
+        existing_duration = int(cur.fetchone()['duration_sum'])
+        # 아직 미완료인 작업자의 duration도 합산 (현재 시각 기준)
+        cur.execute(
+            """
+            SELECT wsl.worker_id, wsl.started_at
+            FROM work_start_log wsl
+            LEFT JOIN work_completion_log wcl
+                   ON wsl.task_id = wcl.task_id AND wsl.worker_id = wcl.worker_id
+            WHERE wsl.task_id = %s AND wcl.id IS NULL
+            """,
+            (task_id,)
+        )
+        pending_workers = cur.fetchall()
+        pending_duration = 0
+        for pw in pending_workers:
+            if pw['started_at']:
+                pending_duration += int(
+                    (completed_at - pw['started_at']).total_seconds() / 60
+                )
+        duration_minutes = existing_duration + pending_duration
+        if duration_minutes == 0 and elapsed_minutes > 0:
+            duration_minutes = elapsed_minutes  # fallback
+
+        # app_task_details 강제 종료 업데이트
+        cur.execute(
+            """
+            UPDATE app_task_details
+            SET completed_at    = %s,
+                duration_minutes = %s,
+                elapsed_minutes  = %s,
+                force_closed     = TRUE,
+                closed_by        = %s,
+                close_reason     = %s,
+                updated_at       = CURRENT_TIMESTAMP
+            WHERE id = %s
+            """,
+            (completed_at, duration_minutes, elapsed_minutes,
+             g.worker_id, close_reason, task_id)
+        )
+
+        conn.commit()
+
+        logger.info(
+            f"Task force-closed: task_id={task_id}, by={g.worker_id}, "
+            f"reason='{close_reason}', completed_at={completed_at}"
+        )
+
+        return jsonify({
+            'message': '작업이 강제 종료되었습니다.',
+            'task_id': task_id,
+            'completed_at': completed_at.isoformat(),
+            'duration_minutes': duration_minutes,
+            'elapsed_minutes': elapsed_minutes,
+            'close_reason': close_reason
+        }), 200
+
+    except PsycopgError as e:
+        if conn:
+            conn.rollback()
+        logger.error(f"Failed to force-close task: {e}")
+        return jsonify({
+            'error': 'INTERNAL_SERVER_ERROR',
+            'message': '작업 강제 종료에 실패했습니다.'
+        }), 500
+    finally:
+        if conn:
+            conn.close()
+
+
 @admin_bp.route("/cron/check-unfinished-tasks", methods=["POST"])
 @jwt_required
 @admin_required
@@ -855,3 +1116,440 @@ def manual_check_unfinished_tasks() -> Tuple[Dict[str, Any], int]:
     logger.info(f"Manual unfinished task check triggered by admin: admin_id={g.worker_id}")
 
     return jsonify(result), 200
+
+
+# ============================================================
+# Sprint 7: 누락 엔드포인트 5개 구현
+# ============================================================
+
+@admin_bp.route("/managers", methods=["GET"])
+@jwt_required
+@admin_required
+def get_managers() -> Tuple[Dict[str, Any], int]:
+    """
+    승인된 작업자 목록 조회 (협력사 관리자 지정/해제용)
+
+    Query Parameters:
+        company: str (optional, 협력사 필터: FNI, BAT, TMS(M), TMS(E), P&S, C&A, GST)
+
+    Headers:
+        Authorization: Bearer {token}
+
+    Returns:
+        200: {
+            "workers": [{
+                "id": int,
+                "name": str,
+                "email": str,
+                "role": str,
+                "company": str|null,
+                "is_manager": bool,
+                "is_admin": bool,
+                "created_at": str
+            }],
+            "total": int
+        }
+    """
+    company = request.args.get('company')
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        where_clauses = ["approval_status = 'approved'"]
+        params: List[Any] = []
+
+        if company:
+            where_clauses.append("company = %s")
+            params.append(company)
+
+        where_sql = " AND ".join(where_clauses)
+
+        cur.execute(
+            f"""
+            SELECT id, name, email, role, company, is_manager, is_admin, created_at
+            FROM workers
+            WHERE {where_sql}
+            ORDER BY company NULLS LAST, name
+            """,
+            tuple(params)
+        )
+
+        rows = cur.fetchall()
+        workers = [
+            {
+                'id': row['id'],
+                'name': row['name'],
+                'email': row['email'],
+                'role': row['role'],
+                'company': row.get('company'),
+                'is_manager': row['is_manager'],
+                'is_admin': row['is_admin'],
+                'created_at': row['created_at'].isoformat() if row['created_at'] else None,
+            }
+            for row in rows
+        ]
+
+        return jsonify({'workers': workers, 'total': len(workers)}), 200
+
+    except PsycopgError as e:
+        logger.error(f"Failed to get managers list: {e}")
+        return jsonify({
+            'error': 'INTERNAL_SERVER_ERROR',
+            'message': '작업자 목록 조회에 실패했습니다.'
+        }), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@admin_bp.route("/workers/<int:worker_id>/manager", methods=["PUT"])
+@jwt_required
+@admin_required
+def toggle_manager(worker_id: int) -> Tuple[Dict[str, Any], int]:
+    """
+    작업자의 is_manager 토글
+
+    Path Parameters:
+        worker_id: int
+
+    Request Body:
+        {"is_manager": bool}
+
+    Headers:
+        Authorization: Bearer {token}
+
+    Returns:
+        200: {"message": str, "worker_id": int, "is_manager": bool}
+        400: {"error": "INVALID_REQUEST", "message": "..."}
+        404: {"error": "WORKER_NOT_FOUND", "message": "..."}
+        500: {"error": "INTERNAL_SERVER_ERROR", "message": "..."}
+    """
+    data = request.get_json(silent=True) or {}
+    is_manager = data.get('is_manager')
+
+    if is_manager is None or not isinstance(is_manager, bool):
+        return jsonify({
+            'error': 'INVALID_REQUEST',
+            'message': 'is_manager 필드(bool)가 필요합니다.'
+        }), 400
+
+    worker = get_worker_by_id(worker_id)
+    if not worker:
+        return jsonify({
+            'error': 'WORKER_NOT_FOUND',
+            'message': '작업자를 찾을 수 없습니다.'
+        }), 404
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            UPDATE workers
+            SET is_manager = %s, updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+            """,
+            (is_manager, worker_id)
+        )
+        conn.commit()
+
+        action = '관리자 지정' if is_manager else '관리자 해제'
+        logger.info(f"Worker manager toggled: worker_id={worker_id}, is_manager={is_manager}, by_admin={g.worker_id}")
+
+        return jsonify({
+            'message': f'{action} 완료',
+            'worker_id': worker_id,
+            'is_manager': is_manager
+        }), 200
+
+    except PsycopgError as e:
+        if conn:
+            conn.rollback()
+        logger.error(f"Failed to toggle manager: worker_id={worker_id}, error={e}")
+        return jsonify({
+            'error': 'INTERNAL_SERVER_ERROR',
+            'message': '관리자 설정 변경에 실패했습니다.'
+        }), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@admin_bp.route("/settings", methods=["GET"])
+@jwt_required
+@admin_required
+def get_settings() -> Tuple[Dict[str, Any], int]:
+    """
+    admin_settings 전체 조회
+
+    Headers:
+        Authorization: Bearer {token}
+
+    Returns:
+        200: {
+            "heating_jacket_enabled": bool,
+            "phase_block_enabled": bool,
+            ...  # admin_settings 테이블의 모든 키를 flat dict으로 반환
+        }
+    """
+    settings_list = get_all_settings()
+
+    # key-value flat dict으로 변환 (FE 기대 형식)
+    result: Dict[str, Any] = {}
+    for s in settings_list:
+        result[s.setting_key] = s.setting_value
+
+    # 기본값 보장 (테이블에 없을 경우)
+    result.setdefault('heating_jacket_enabled', False)
+    result.setdefault('phase_block_enabled', False)
+    result.setdefault('location_qr_required', True)
+    # Sprint 9: 휴게시간 기본값
+    result.setdefault('break_morning_start', '10:00')
+    result.setdefault('break_morning_end', '10:20')
+    result.setdefault('break_afternoon_start', '15:00')
+    result.setdefault('break_afternoon_end', '15:20')
+    result.setdefault('lunch_start', '11:20')
+    result.setdefault('lunch_end', '12:20')
+    result.setdefault('dinner_start', '17:00')
+    result.setdefault('dinner_end', '18:00')
+    result.setdefault('auto_pause_enabled', True)
+
+    return jsonify(result), 200
+
+
+@admin_bp.route("/settings", methods=["PUT"])
+@jwt_required
+@manager_or_admin_required
+def update_settings() -> Tuple[Dict[str, Any], int]:
+    """
+    admin_settings UPSERT (여러 키 동시 업데이트 가능)
+
+    Request Body:
+        {
+            "heating_jacket_enabled": bool,   # (optional)
+            "phase_block_enabled": bool        # (optional)
+        }
+
+    Headers:
+        Authorization: Bearer {token}
+
+    Returns:
+        200: {"message": str, "updated_keys": [str]}
+        400: {"error": "INVALID_REQUEST", "message": "..."}
+        500: {"error": "INTERNAL_SERVER_ERROR", "message": "..."}
+    """
+    data = request.get_json(silent=True) or {}
+
+    # 허용된 설정 키 목록 (Sprint 9: 휴게시간 설정 추가)
+    ALLOWED_KEYS = {
+        'heating_jacket_enabled',
+        'phase_block_enabled',
+        'location_qr_required',
+        # Sprint 9: 휴게시간 설정
+        'break_morning_start',
+        'break_morning_end',
+        'break_afternoon_start',
+        'break_afternoon_end',
+        'lunch_start',
+        'lunch_end',
+        'dinner_start',
+        'dinner_end',
+        'auto_pause_enabled',
+    }
+
+    # Sprint 9: HH:MM 형식 검증이 필요한 시간 설정 키
+    TIME_KEYS = {
+        'break_morning_start', 'break_morning_end',
+        'break_afternoon_start', 'break_afternoon_end',
+        'lunch_start', 'lunch_end',
+        'dinner_start', 'dinner_end',
+    }
+
+    # Sprint 9: 쌍으로 검증할 시작/종료 시간 (start_key, end_key)
+    TIME_PAIRS = [
+        ('break_morning_start', 'break_morning_end'),
+        ('break_afternoon_start', 'break_afternoon_end'),
+        ('lunch_start', 'lunch_end'),
+        ('dinner_start', 'dinner_end'),
+    ]
+
+    TIME_PATTERN = re.compile(r'^([01]\d|2[0-3]):[0-5]\d$')
+
+    update_pairs = {k: v for k, v in data.items() if k in ALLOWED_KEYS}
+
+    if not update_pairs:
+        return jsonify({
+            'error': 'INVALID_REQUEST',
+            'message': f'업데이트할 유효한 설정 키가 없습니다. 허용된 키: {", ".join(sorted(ALLOWED_KEYS))}'
+        }), 400
+
+    # Sprint 9: HH:MM 형식 검증
+    for key in TIME_KEYS:
+        if key in update_pairs:
+            value = update_pairs[key]
+            if not isinstance(value, str) or not TIME_PATTERN.match(value):
+                return jsonify({
+                    'error': 'INVALID_TIME_FORMAT',
+                    'message': f'{key} 값은 HH:MM 형식이어야 합니다. (예: "10:00")'
+                }), 400
+
+    # Sprint 9: 시작 < 종료 검증 (양쪽 모두 업데이트 대상일 때만)
+    from app.models.admin_settings import get_setting as _get_setting
+    for start_key, end_key in TIME_PAIRS:
+        start_val = update_pairs.get(start_key) or _get_setting(start_key)
+        end_val = update_pairs.get(end_key) or _get_setting(end_key)
+        if start_key in update_pairs or end_key in update_pairs:
+            if start_val and end_val and start_val >= end_val:
+                return jsonify({
+                    'error': 'INVALID_TIME_RANGE',
+                    'message': f'{start_key}({start_val})는 {end_key}({end_val})보다 이전이어야 합니다.'
+                }), 400
+
+    failed_keys = []
+    for key, value in update_pairs.items():
+        success = update_setting(key, value, updated_by=g.worker_id)
+        if not success:
+            failed_keys.append(key)
+
+    if failed_keys:
+        logger.error(f"Admin settings update failed for keys: {failed_keys}, by_admin={g.worker_id}")
+        return jsonify({
+            'error': 'INTERNAL_SERVER_ERROR',
+            'message': f'설정 저장 실패: {", ".join(failed_keys)}'
+        }), 500
+
+    updated_keys = list(update_pairs.keys())
+    logger.info(f"Admin settings updated: keys={updated_keys}, by_admin={g.worker_id}")
+
+    # heating_jacket_enabled 변경 시 → 기존 HEATING_JACKET task의 is_applicable 동기화
+    if 'heating_jacket_enabled' in update_pairs:
+        new_val = bool(update_pairs['heating_jacket_enabled'])
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE app_task_details
+                SET is_applicable = %s, updated_at = NOW()
+                WHERE task_category = 'MECH'
+                  AND task_id = 'HEATING_JACKET'
+                  AND completed_at IS NULL
+                """,
+                (new_val,)
+            )
+            affected = cur.rowcount
+            conn.commit()
+            logger.info(f"HEATING_JACKET is_applicable → {new_val}, affected={affected} tasks")
+        except Exception as e:
+            logger.error(f"Failed to sync HEATING_JACKET tasks: {e}")
+            if conn:
+                conn.rollback()
+        finally:
+            if conn:
+                conn.close()
+
+    return jsonify({
+        'message': '설정이 저장되었습니다.',
+        'updated_keys': updated_keys
+    }), 200
+
+
+@admin_bp.route("/tasks/pending", methods=["GET"])
+@jwt_required
+@manager_or_admin_required
+def get_pending_tasks() -> Tuple[Dict[str, Any], int]:
+    """
+    미종료 작업 목록 조회
+    (started_at IS NOT NULL AND completed_at IS NULL)
+
+    Query Parameters:
+        limit: int (default: 50)
+
+    Headers:
+        Authorization: Bearer {token}
+
+    Returns:
+        200: {
+            "tasks": [{
+                "id": int,
+                "worker_id": int,
+                "worker_name": str,
+                "serial_number": str,
+                "qr_doc_id": str,
+                "task_category": str,
+                "task_name": str,
+                "started_at": str,
+                "elapsed_minutes": int
+            }],
+            "total": int
+        }
+    """
+    limit = request.args.get('limit', 50, type=int)
+    company = request.args.get('company', None, type=str)
+
+    # 협력사 관리자는 본인 company로 강제 제한 (admin은 모든 company 조회 가능)
+    current_worker = get_worker_by_id(g.worker_id)
+    if current_worker and current_worker.is_manager and not current_worker.is_admin:
+        company = current_worker.company
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT
+                t.id,
+                t.worker_id,
+                w.name AS worker_name,
+                t.serial_number,
+                t.qr_doc_id,
+                t.task_category,
+                t.task_name,
+                t.started_at,
+                EXTRACT(EPOCH FROM (NOW() - t.started_at)) / 60 AS elapsed_minutes
+            FROM app_task_details t
+            JOIN workers w ON t.worker_id = w.id
+            WHERE t.started_at IS NOT NULL
+              AND t.completed_at IS NULL
+              AND t.is_applicable = TRUE
+            
+              AND (w.company = %s OR %s IS NULL)
+            ORDER BY t.started_at ASC
+            LIMIT %s
+            """,
+            (company, company, limit)
+        )
+
+        rows = cur.fetchall()
+        tasks = [
+            {
+                'id': row['id'],
+                'worker_id': row['worker_id'],
+                'worker_name': row['worker_name'],
+                'serial_number': row['serial_number'],
+                'qr_doc_id': row['qr_doc_id'],
+                'task_category': row['task_category'],
+                'task_name': row['task_name'],
+                'started_at': row['started_at'].isoformat() if row['started_at'] else None,
+                'elapsed_minutes': int(row['elapsed_minutes']) if row['elapsed_minutes'] else 0,
+            }
+            for row in rows
+        ]
+
+        return jsonify({'tasks': tasks, 'total': len(tasks)}), 200
+
+    except PsycopgError as e:
+        logger.error(f"Failed to get pending tasks: {e}")
+        return jsonify({
+            'error': 'INTERNAL_SERVER_ERROR',
+            'message': '미종료 작업 목록 조회에 실패했습니다.'
+        }), 500
+    finally:
+        if conn:
+            conn.close()

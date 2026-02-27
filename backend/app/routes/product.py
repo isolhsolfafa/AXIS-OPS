@@ -15,6 +15,7 @@ from app.models.product_info import (
     is_tms_product,
 )
 from app.services.task_service import TaskService
+from app.services.task_seed import initialize_product_tasks
 
 
 logger = logging.getLogger(__name__)
@@ -40,7 +41,7 @@ def get_product(qr_doc_id: str) -> Tuple[Dict[str, Any], int]:
             "qr_doc_id": str,
             "serial_number": str,
             "model": str,
-            "production_date": str,
+            "prod_date": str,
             "location_qr_id": str|null,
             "is_tms": bool
         }
@@ -54,17 +55,36 @@ def get_product(qr_doc_id: str) -> Tuple[Dict[str, Any], int]:
             'message': '제품을 찾을 수 없습니다.'
         }), 404
 
+    # Task Seed 자동 초기화 (ON CONFLICT DO NOTHING — 이미 있으면 무시)
+    try:
+        seed_result = initialize_product_tasks(
+            serial_number=product.serial_number,
+            qr_doc_id=product.qr_doc_id,
+            model_name=product.model
+        )
+        if seed_result.get('created', 0) > 0:
+            logger.info(
+                f"Task seed auto-initialized: serial={product.serial_number}, "
+                f"created={seed_result['created']}, skipped={seed_result['skipped']}"
+            )
+    except Exception as e:
+        logger.warning(f"Task seed failed (non-blocking): {e}")
+
     # TMS 제품 여부 확인
     is_tms = is_tms_product(product)
 
     return jsonify({
+        'id': product.id,
         'qr_doc_id': product.qr_doc_id,
         'serial_number': product.serial_number,
         'model': product.model,
-        'production_date': product.production_date.isoformat(),
+        'prod_date': product.prod_date.isoformat() if product.prod_date else None,
         'location_qr_id': product.location_qr_id,
         'mech_partner': product.mech_partner,
+        'elec_partner': product.elec_partner,
         'module_outsourcing': product.module_outsourcing,
+        'created_at': product.created_at.isoformat() if product.created_at else None,
+        'updated_at': product.updated_at.isoformat() if product.updated_at else None,
         'is_tms': is_tms
     }), 200
 
@@ -175,8 +195,8 @@ def get_completion_status(qr_doc_id: str) -> Tuple[Dict[str, Any], int]:
         200: {
             "qr_doc_id": str,
             "serial_number": str,
-            "mm_completed": bool,
-            "ee_completed": bool,
+            "mech_completed": bool,
+            "elec_completed": bool,
             ...
         }
         404: {"error": "PRODUCT_NOT_FOUND", "message": "..."}

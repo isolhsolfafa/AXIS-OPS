@@ -1,31 +1,31 @@
 [
   {
     "alert_type": "PROCESS_READY",
-    "message": "[GBWS-6408] PI 공정 대기 중 - MM 공정 미완료",
+    "message": "[GBWS-6408] PI 공정 대기 중 - MECH 공정 미완료",
     "serial_number": "GBWS-6408",
     "qr_doc_id": "DOC_GBWS-6408",
-    "target_role": "MM"
+    "target_role": "MECH"
   },
   {
     "alert_type": "PROCESS_READY",
-    "message": "[GBWS-6408] QI 공정 대기 중 - EE 공정 미완료",
+    "message": "[GBWS-6408] QI 공정 대기 중 - ELEC 공정 미완료",
     "serial_number": "GBWS-6408",
     "qr_doc_id": "DOC_GBWS-6408",
-    "target_role": "EE"
+    "target_role": "ELEC"
   },
   {
     "alert_type": "DURATION_EXCEEDED",
-    "message": "[GBWS-6409] MM - CABINET ASSY: 작업 시간 900분 (14시간 초과)",
+    "message": "[GBWS-6409] MECH - WASTE_GAS_LINE_1: 작업 시간 900분 (14시간 초과)",
     "serial_number": "GBWS-6409",
     "qr_doc_id": "DOC_GBWS-6409",
-    "target_role": "MM"
+    "target_role": "MECH"
   },
   {
     "alert_type": "REVERSE_COMPLETION",
-    "message": "[GBWS-6410] EE - WIRING: 완료 시간이 시작 시간보다 이릅니다.",
+    "message": "[GBWS-6410] ELEC - WIRING: 완료 시간이 시작 시간보다 이릅니다.",
     "serial_number": "GBWS-6410",
     "qr_doc_id": "DOC_GBWS-6410",
-    "target_role": "EE"
+    "target_role": "ELEC"
   },
   {
     "alert_type": "UNFINISHED_AT_CLOSING",
@@ -40,5 +40,19 @@
     "serial_number": "GBWS-6412",
     "qr_doc_id": "DOC_GBWS-6412",
     "target_role": "QI"
+  },
+  {
+    "alert_type": "TASK_REMINDER",
+    "message": "[GBWS-6413] MECH - Waste Gas LINE 1: 1시간째 진행 중입니다. 완료 시 종료 버튼을 눌러주세요.",
+    "serial_number": "GBWS-6413",
+    "qr_doc_id": "DOC_GBWS-6413",
+    "target_role": "MECH"
+  },
+  {
+    "alert_type": "TASK_ESCALATION",
+    "message": "[GBWS-6414] 작업자 기구 작업자의 자주검사 작업이 전일 미종료 상태입니다.",
+    "serial_number": "GBWS-6414",
+    "qr_doc_id": "DOC_GBWS-6414",
+    "target_role": "MECH"
   }
 ]

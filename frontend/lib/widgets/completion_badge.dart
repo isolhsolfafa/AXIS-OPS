@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-
-// TODO: 완료 배지 위젯 구현
+import '../utils/design_system.dart';
 
 class CompletionBadge extends StatelessWidget {
   final String label;
@@ -18,28 +17,32 @@ class CompletionBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // TODO: 완료 상태에 따른 색상 변경
-    // TODO: 완료 시간 표시 (선택사항)
-    // TODO: 소요 시간 표시 (선택사항)
-
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: isCompleted ? Colors.green : Colors.grey,
-        borderRadius: BorderRadius.circular(20),
+        color: isCompleted ? GxColors.success.withValues(alpha: 0.08) : GxColors.steel.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(GxRadius.sm),
+        border: Border.all(
+          color: isCompleted ? GxColors.success.withValues(alpha: 0.2) : GxColors.steel.withValues(alpha: 0.2),
+          width: 1,
+        ),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(
             isCompleted ? Icons.check_circle : Icons.schedule,
-            color: Colors.white,
-            size: 16,
+            color: isCompleted ? GxColors.success : GxColors.steel,
+            size: 14,
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 5),
           Text(
             label,
-            style: const TextStyle(color: Colors.white, fontSize: 12),
+            style: TextStyle(
+              color: isCompleted ? GxColors.success : GxColors.steel,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ],
       ),

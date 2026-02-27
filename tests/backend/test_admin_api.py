@@ -49,7 +49,7 @@ class TestWorkerApproval:
             email='admin_test_pending1@test.com',
             password='Test123!',
             name='Pending Worker 1',
-            role='MM',
+            role='MECH',
             approval_status='pending'
         )
 
@@ -83,7 +83,7 @@ class TestWorkerApproval:
             email='admin_test_pending2@test.com',
             password='Test123!',
             name='Pending Worker 2',
-            role='EE',
+            role='ELEC',
             approval_status='pending'
         )
 
@@ -139,11 +139,11 @@ class TestWorkerApproval:
             email='admin_test_nonadmin@test.com',
             password='Test123!',
             name='Non Admin',
-            role='MM',
+            role='MECH',
             is_admin=False
         )
 
-        token = get_auth_token(worker_id, role='MM')
+        token = get_auth_token(worker_id, role='MECH')
 
         response = client.post(
             '/api/admin/workers/approve',
@@ -282,12 +282,12 @@ class TestWorkersList:
         - Status 200
         - approval_status, role 필터 적용
         """
-        # 승인된 MM 작업자 생성
+        # 승인된 MECH 작업자 생성
         create_test_worker(
-            email='admin_test_mm_approved@test.com',
+            email='admin_test_mech_approved@test.com',
             password='Test123!',
-            name='MM Approved Worker',
-            role='MM',
+            name='MECH Approved Worker',
+            role='MECH',
             approval_status='approved'
         )
 
@@ -295,7 +295,7 @@ class TestWorkersList:
         token = get_admin_auth_token(admin_data['id'])
 
         response = client.get(
-            '/api/admin/workers?approval_status=approved&role=MM',
+            '/api/admin/workers?approval_status=approved&role=MECH',
             headers={'Authorization': f'Bearer {token}'}
         )
 
@@ -325,7 +325,7 @@ class TestAdminDashboard:
             email='admin_test_dashboard@test.com',
             password='Test123!',
             name='Dashboard Worker',
-            role='MM'
+            role='MECH'
         )
 
         create_test_product(
@@ -337,7 +337,7 @@ class TestAdminDashboard:
             worker_id=worker_id,
             serial_number='SN-ADMIN-001',
             qr_doc_id='DOC-ADMIN-001',
-            task_category='MM',
+            task_category='MECH',
             task_id='MM-001',
             task_name='Test Task',
             started_at=datetime.now(timezone.utc),
@@ -373,7 +373,7 @@ class TestAdminDashboard:
             email='admin_test_active@test.com',
             password='Test123!',
             name='Active Worker',
-            role='EE'
+            role='ELEC'
         )
 
         create_test_product(
@@ -386,7 +386,7 @@ class TestAdminDashboard:
             worker_id=worker_id,
             serial_number='SN-ADMIN-002',
             qr_doc_id='DOC-ADMIN-002',
-            task_category='EE',
+            task_category='ELEC',
             task_id='EE-001',
             task_name='Active Task',
             started_at=datetime.now(timezone.utc),

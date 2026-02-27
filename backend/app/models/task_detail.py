@@ -2,6 +2,8 @@
 작업 상세 모델 및 CRUD 함수
 테이블: app_task_details
 Sprint 2: 작업 시작/완료 + duration 자동 계산
+Sprint 6 Phase C: elapsed_minutes, worker_count, force_closed, closed_by, close_reason 필드 추가
+Sprint 9: is_paused, total_pause_minutes 필드 추가 + set_paused 함수
 """
 
 import logging
@@ -24,15 +26,20 @@ class TaskDetail:
 
     Attributes:
         id: 작업 ID
-        worker_id: 작업자 ID
+        worker_id: 작업자 ID (Seed 시점엔 NULL, 작업 시작 시 설정)
         serial_number: 시리얼 번호
         qr_doc_id: QR 문서 ID
-        task_category: Task 카테고리 (MM, EE, TM, PI, QI, SI)
+        task_category: Task 카테고리 (MECH, ELEC, TM, PI, QI, SI)
         task_id: Task 식별자 (예: CABINET_ASSY)
         task_name: Task 이름 (예: 캐비넷 조립)
-        started_at: 시작 시간
-        completed_at: 완료 시간
-        duration_minutes: 작업 소요 시간 (분 단위, completed_at - started_at)
+        started_at: 시작 시간 (멀티 작업자 시 최초 시작 시간)
+        completed_at: 완료 시간 (마지막 작업자 완료 시간)
+        duration_minutes: man-hour 합계 (작업자별 duration 합산)
+        elapsed_minutes: 실경과시간 (최초 started_at ~ 마지막 completed_at)
+        worker_count: 투입된 작업자 수
+        force_closed: 강제 종료 여부
+        closed_by: 강제 종료한 관리자 ID
+        close_reason: 강제 종료 사유
         is_applicable: Task 적용 여부
         location_qr_verified: 위치 QR 검증 여부
         created_at: 생성 시간
@@ -40,7 +47,7 @@ class TaskDetail:
     """
 
     id: int
-    worker_id: int
+    worker_id: Optional[int]  # Seed 시점엔 NULL 가능, 작업 시작 시 설정
     serial_number: str
     qr_doc_id: str
     task_category: str
@@ -48,11 +55,20 @@ class TaskDetail:
     task_name: str
     started_at: Optional[datetime]
     completed_at: Optional[datetime]
-    duration_minutes: Optional[int]  # minutes
+    duration_minutes: Optional[int]  # man-hour 합계 (분)
     is_applicable: bool
     location_qr_verified: bool
     created_at: datetime
     updated_at: datetime
+    # Sprint 6 Phase C: 멀티 작업자 + 강제 종료 필드
+    elapsed_minutes: Optional[int] = None    # 실경과시간 (분)
+    worker_count: int = 1                    # 투입 인원 수
+    force_closed: bool = False               # 강제 종료 여부
+    closed_by: Optional[int] = None         # 강제 종료한 관리자 ID
+    close_reason: Optional[str] = None      # 강제 종료 사유
+    # Sprint 9: 일시정지 필드
+    is_paused: bool = False                  # 현재 일시정지 여부
+    total_pause_minutes: int = 0             # 누적 일시정지 시간 (분)
 
     @staticmethod
     def from_db_row(row: Dict[str, Any]) -> "TaskDetail":
@@ -79,7 +95,14 @@ class TaskDetail:
             is_applicable=row['is_applicable'],
             location_qr_verified=row['location_qr_verified'],
             created_at=row['created_at'],
-            updated_at=row['updated_at']
+            updated_at=row['updated_at'],
+            elapsed_minutes=row.get('elapsed_minutes'),
+            worker_count=row.get('worker_count') or 1,
+            force_closed=row.get('force_closed') or False,
+            closed_by=row.get('closed_by'),
+            close_reason=row.get('close_reason'),
+            is_paused=row.get('is_paused') or False,
+            total_pause_minutes=row.get('total_pause_minutes') or 0,
         )
 
 
@@ -99,7 +122,7 @@ def create_task(
         worker_id: 작업자 ID
         serial_number: 시리얼 번호
         qr_doc_id: QR 문서 ID
-        task_category: Task 카테고리 (MM, EE, TM, PI, QI, SI)
+        task_category: Task 카테고리 (MECH, ELEC, TM, PI, QI, SI)
         task_id: Task 식별자
         task_name: Task 이름
         is_applicable: Task 적용 여부
@@ -174,6 +197,38 @@ def get_task_by_id(task_detail_id: int) -> Optional[TaskDetail]:
             conn.close()
 
 
+def get_task_by_serial_and_id(serial_number: str, task_category: str, task_id: str) -> Optional[TaskDetail]:
+    """
+    serial_number + task_category + task_id로 단일 task 조회
+
+    Args:
+        serial_number: 시리얼 번호
+        task_category: Task 카테고리
+        task_id: Task 식별자
+
+    Returns:
+        TaskDetail 객체, 없으면 None
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT * FROM app_task_details WHERE serial_number = %s AND task_category = %s AND task_id = %s",
+            (serial_number, task_category, task_id)
+        )
+        row = cur.fetchone()
+        if row:
+            return TaskDetail.from_db_row(row)
+        return None
+    except PsycopgError as e:
+        logger.error(f"Failed to get task by serial_and_id: {e}")
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
 def get_tasks_by_serial_number(
     serial_number: str,
     task_category: Optional[str] = None
@@ -183,7 +238,7 @@ def get_tasks_by_serial_number(
 
     Args:
         serial_number: 시리얼 번호
-        task_category: Task 카테고리 (MM, EE, TM, PI, QI, SI), None이면 전체 조회
+        task_category: Task 카테고리 (MECH, ELEC, TM, PI, QI, SI), None이면 전체 조회
 
     Returns:
         TaskDetail 리스트
@@ -376,6 +431,70 @@ def toggle_task_applicable(task_detail_id: int, is_applicable: bool) -> bool:
         if conn:
             conn.rollback()
         logger.error(f"Failed to toggle task applicable: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+
+def set_paused(
+    task_detail_id: int,
+    is_paused: bool,
+    total_pause_minutes: Optional[int] = None
+) -> bool:
+    """
+    작업 일시정지 상태 업데이트
+    Sprint 9: 일시정지/재개 처리
+
+    Args:
+        task_detail_id: 작업 ID
+        is_paused: 일시정지 여부
+        total_pause_minutes: 누적 일시정지 시간 (None이면 변경하지 않음)
+
+    Returns:
+        성공 시 True, 실패 시 False
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        if total_pause_minutes is not None:
+            cur.execute(
+                """
+                UPDATE app_task_details
+                SET is_paused = %s,
+                    total_pause_minutes = %s,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+                """,
+                (is_paused, total_pause_minutes, task_detail_id)
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE app_task_details
+                SET is_paused = %s,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+                """,
+                (is_paused, task_detail_id)
+            )
+
+        updated = cur.rowcount > 0
+        conn.commit()
+
+        if updated:
+            logger.info(
+                f"Task pause state updated: id={task_detail_id}, "
+                f"is_paused={is_paused}, total_pause_minutes={total_pause_minutes}"
+            )
+        return updated
+
+    except PsycopgError as e:
+        if conn:
+            conn.rollback()
+        logger.error(f"Failed to set task paused state: {e}")
         return False
     finally:
         if conn:

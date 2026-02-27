@@ -2,6 +2,7 @@
 작업 완료 상태 모델 및 CRUD 함수
 테이블: completion_status
 Sprint 2: 공정별 완료 상태 업데이트 + 전체 완료 추적
+Sprint 6: mm_completed → mech_completed, ee_completed → elec_completed 컬럼명 변경
 """
 
 import logging
@@ -24,8 +25,8 @@ class CompletionStatus:
 
     Attributes:
         serial_number: 시리얼 번호 (PRIMARY KEY)
-        mm_completed: MM 공정 완료 여부
-        ee_completed: EE 공정 완료 여부
+        mech_completed: MECH(기구) 공정 완료 여부
+        elec_completed: ELEC(전장) 공정 완료 여부
         tm_completed: TM 공정 완료 여부
         pi_completed: PI 공정 완료 여부
         qi_completed: QI 공정 완료 여부
@@ -37,8 +38,8 @@ class CompletionStatus:
     """
 
     serial_number: str
-    mm_completed: bool
-    ee_completed: bool
+    mech_completed: bool
+    elec_completed: bool
     tm_completed: bool
     pi_completed: bool
     qi_completed: bool
@@ -61,8 +62,8 @@ class CompletionStatus:
         """
         return CompletionStatus(
             serial_number=row['serial_number'],
-            mm_completed=row['mm_completed'],
-            ee_completed=row['ee_completed'],
+            mech_completed=row['mech_completed'],
+            elec_completed=row['elec_completed'],
             tm_completed=row['tm_completed'],
             pi_completed=row['pi_completed'],
             qi_completed=row['qi_completed'],
@@ -131,15 +132,16 @@ def update_process_completion(serial_number: str, process_type: str, completed: 
 
     Args:
         serial_number: 시리얼 번호
-        process_type: 공정 유형 (MM, EE, TM, PI, QI, SI)
+        process_type: 공정 유형 (MECH, ELEC, TM, PI, QI, SI)
         completed: 완료 여부
 
     Returns:
         성공 시 True, 실패 시 False
     """
+    # Sprint 6: MM→MECH, EE→ELEC 네이밍 변경
     process_map = {
-        'MM': 'mm_completed',
-        'EE': 'ee_completed',
+        'MECH': 'mech_completed',
+        'ELEC': 'elec_completed',
         'TM': 'tm_completed',
         'PI': 'pi_completed',
         'QI': 'qi_completed',
@@ -251,7 +253,7 @@ def check_all_processes_completed(serial_number: str) -> bool:
 
         cur.execute(
             """
-            SELECT mm_completed, ee_completed, tm_completed,
+            SELECT mech_completed, elec_completed, tm_completed,
                    pi_completed, qi_completed, si_completed
             FROM completion_status
             WHERE serial_number = %s
@@ -265,8 +267,8 @@ def check_all_processes_completed(serial_number: str) -> bool:
 
         # 모든 공정이 완료되었는지 확인
         return all([
-            row['mm_completed'],
-            row['ee_completed'],
+            row['mech_completed'],
+            row['elec_completed'],
             row['tm_completed'],
             row['pi_completed'],
             row['qi_completed'],

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-
-// TODO: 작업 카드 위젯 구현
+import '../utils/design_system.dart';
 
 class TaskCard extends StatelessWidget {
   final String taskId;
@@ -24,19 +23,71 @@ class TaskCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // TODO: 카드 배치 및 스타일링
-    // TODO: 작업 ID, 프로세스 타입 표시
-    // TODO: 상태 배지 표시 (대기, 진행 중, 완료)
-    // TODO: 진행 시간 표시
+    Color statusColor;
+    Color statusBg;
+    String statusLabel;
 
-    return Card(
-      child: ListTile(
-        title: Text('작업: $taskId'),
-        subtitle: Text('프로세스: $processType'),
-        trailing: Chip(
-          label: Text(status),
+    switch (status) {
+      case 'completed':
+        statusColor = GxColors.success;
+        statusBg = GxColors.successBg;
+        statusLabel = '완료';
+        break;
+      case 'in_progress':
+        statusColor = GxColors.warning;
+        statusBg = GxColors.warningBg;
+        statusLabel = '진행 중';
+        break;
+      default:
+        statusColor = GxColors.steel;
+        statusBg = GxColors.mist;
+        statusLabel = '대기';
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: GxGlass.cardSm(radius: GxRadius.md),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(GxRadius.md),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(GxRadius.md),
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '작업: $taskId',
+                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: GxColors.charcoal),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '프로세스: $processType',
+                        style: const TextStyle(fontSize: 12, color: GxColors.slate),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: statusBg,
+                    borderRadius: BorderRadius.circular(GxRadius.sm),
+                  ),
+                  child: Text(
+                    statusLabel,
+                    style: TextStyle(fontSize: 11, color: statusColor, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
-        onTap: onTap,
       ),
     );
   }

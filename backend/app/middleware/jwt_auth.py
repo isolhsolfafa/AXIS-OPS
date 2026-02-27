@@ -154,3 +154,43 @@ def admin_required(f: Callable) -> Callable:
         return f(*args, **kwargs)
 
     return decorated_function
+
+
+def manager_or_admin_required(f: Callable) -> Callable:
+    """
+    관리자(is_admin) 또는 매니저(is_manager) 권한 검증 데코레이터.
+    Sprint 6 Phase C: 강제 종료 API 권한 (관리자 또는 매니저)
+
+    jwt_required와 함께 사용되어야 합니다.
+
+    Usage:
+        @app.route('/api/admin/tasks/<int:task_id>/force-close', methods=['PUT'])
+        @jwt_required
+        @manager_or_admin_required
+        def force_close_task(task_id: int):
+            ...
+    """
+    @wraps(f)
+    def decorated_function(*args: Any, **kwargs: Any) -> Any:
+        """관리자 또는 매니저 권한 검증 로직"""
+        if not hasattr(g, 'worker_id'):
+            return jsonify({
+                'error': 'UNAUTHORIZED',
+                'message': '인증이 필요합니다.'
+            }), 401
+
+        worker = get_worker_by_id(g.worker_id)
+
+        if not worker or (not worker.is_admin and not worker.is_manager):
+            logger.warning(
+                f"Forbidden: worker_id={g.worker_id} attempted manager/admin access"
+            )
+            return jsonify({
+                'error': 'FORBIDDEN',
+                'message': '관리자 또는 매니저 권한이 필요합니다.'
+            }), 403
+
+        logger.debug(f"Manager/admin access granted: worker_id={g.worker_id}")
+        return f(*args, **kwargs)
+
+    return decorated_function

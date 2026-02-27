@@ -22,7 +22,7 @@ class TestWorkerRegistration:
     워커 등록 기능 테스트 모음
     """
 
-    def test_register_worker_success(self, client, db_conn):
+    def test_register_worker_success(self, client, db_conn, db_existing_roles):
         """
         TEST 1: 회원가입 성공
 
@@ -32,11 +32,24 @@ class TestWorkerRegistration:
         - Worker stored in DB with approval_status='pending' (관리자 승인 대기)
         - 이메일 인증 필요 (email_verification 테이블에 레코드 생성)
         """
+        # Sprint 6 MECH 역할이 role_enum에 없으면 스킵 (DB 마이그레이션 필요)
+        if 'MECH' not in db_existing_roles:
+            pytest.skip("Sprint 6 DB 마이그레이션 필요 (role_enum에 MECH 없음)")
+
+        # company 컬럼 존재 여부 확인
+        if db_conn:
+            cursor = db_conn.cursor()
+            cursor.execute("SELECT column_name FROM information_schema.columns WHERE table_name='workers' AND column_name='company'")
+            has_company = cursor.fetchone() is not None
+            cursor.close()
+            if not has_company:
+                pytest.skip("Sprint 6 DB 마이그레이션 필요 (workers.company 컬럼 없음)")
+
         payload = {
             'name': '신규 작업자',
             'email': 'newworker@axisos.test',
             'password': 'SecurePassword123!',
-            'role': 'MM'
+            'role': 'MECH'  # Sprint 6 역할명
         }
 
         response = client.post('/api/auth/register', json=payload)
@@ -65,7 +78,7 @@ class TestWorkerRegistration:
             assert worker[1] == payload['email']
             assert worker[2] == 'pending', "New worker should have pending approval status"
 
-    def test_register_duplicate_email(self, client, approved_worker):
+    def test_register_duplicate_email(self, client, approved_worker, db_existing_roles):
         """
         TEST 2: 중복 이메일 가입 실패
 
@@ -74,11 +87,12 @@ class TestWorkerRegistration:
         - Error message: "이메일이 이미 등록되어 있습니다"
         - No new worker created
         """
+        role_name = 'ELEC' if 'ELEC' in db_existing_roles else 'EE'
         payload = {
             'name': '중복 작업자',
             'email': approved_worker['email'],  # 기존 워커 이메일 사용
             'password': 'AnotherPassword123!',
-            'role': 'EE'
+            'role': role_name
         }
 
         response = client.post('/api/auth/register', json=payload)
@@ -110,7 +124,7 @@ class TestEmailVerification:
             email='unverified@axisos.test',
             password='TestPassword123!',
             name='미인증 워커',
-            role='MM',
+            role='MECH',
             approval_status='pending',
             email_verified=False
         )
@@ -233,7 +247,12 @@ class TestWorkerLogin:
             assert 'sub' in decoded
             assert 'role' in decoded
             assert 'exp' in decoded
-            assert decoded['role'] == approved_worker['role']
+            # Sprint 6 전/후 role_enum 호환: MECH==MM, ELEC==EE
+            role_aliases = {'MECH': 'MM', 'ELEC': 'EE', 'TMS': 'TM', 'MM': 'MECH', 'EE': 'ELEC'}
+            expected_role = approved_worker['role']
+            actual_role = decoded['role']
+            assert actual_role == expected_role or role_aliases.get(actual_role) == expected_role, \
+                f"JWT role '{actual_role}' != expected '{expected_role}'"
 
         except jwt.InvalidTokenError as e:
             pytest.fail(f"JWT token is invalid: {e}")
