@@ -10,7 +10,8 @@
 
 | ID | 항목 | 상태 | 비고 |
 |----|------|------|------|
-| S12 | Sprint 12: PIN 간편 로그인 + 협력사 출퇴근 + QR 카메라 | 팀 에이전트 실행 대기 | 프롬프트 확정 완료 (AGENT_TEAM_LAUNCH.md) |
+| S12 | Sprint 12: PIN 간편 로그인 + 협력사 출퇴근 + QR 카메라 | ✅ 완료 | 22/22 테스트 PASS |
+| S12-HF | Sprint 12 핫픽스: PIN 자동로그인 분기 로직 | ✅ 완료 | 4개 파일 수동 수정 (main.dart, auth_service.dart, pin_login_screen.dart, pin_settings_screen.dart) |
 
 ---
 
@@ -38,15 +39,29 @@
 
 ---
 
-## 🟠 배포 준비 (Sprint 12 완료 후)
+## 🟠 배포 준비
 
-| ID | 항목 | 설명 | 의존성 |
-|----|------|------|--------|
-| DP-1 | Railway Flask API 설정 | 현재 DB만 Railway, API는 로컬 실행 중 | Sprint 12 완료 |
-| DP-2 | GitHub commit/push | 전체 코드 정리 후 push | DP-1 |
-| DP-3 | PWA 배포 | Flutter Web 빌드 → Railway 또는 별도 호스팅 | DP-1, DP-2 |
-| DP-4 | 베타 테스트 | 현장 작업자 실사용 테스트 | DP-3 |
-| DP-5 | CI/CD 구축 | GitHub Actions (CLAUDE.md에 추후로 기록됨) | DP-2 |
+| ID | 항목 | 설명 | 상태 |
+|----|------|------|------|
+| DP-1 | Railway Flask API 설정 | `axis-ops-api.up.railway.app` | ✅ 완료 |
+| DP-2 | GitHub commit/push | Sprint 5~11 + 배포설정 push 완료 | ✅ 완료 |
+| DP-3 | FE apiBaseUrl 변경 | 아래 상세 참조 | 대기 (Sprint 12 후) |
+| DP-4 | PWA 배포 | `flutter build web` → Netlify에 `build/web` 드래그&드롭 배포 | 대기 |
+| DP-5 | 베타 테스트 | 현장 작업자 실사용 테스트 | DP-3, DP-4 |
+| DP-6 | CI/CD 구축 | GitHub Actions (CLAUDE.md에 추후로 기록됨) | 추후 |
+
+**DP-3 상세: FE API 주소 변경 (Sprint 12 완료 후 배포 직전)**
+```
+파일: frontend/lib/utils/constants.dart
+
+변경 전:
+  const String apiBaseUrl = 'http://localhost:5001/api';
+  const String webSocketUrl = 'ws://localhost:5001/ws';
+
+변경 후:
+  const String apiBaseUrl = 'https://axis-ops-api.up.railway.app/api';
+  const String webSocketUrl = 'wss://axis-ops-api.up.railway.app/ws';
+```
 
 ---
 
@@ -106,4 +121,5 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 | 10 | 수동 검증 + 버그 수정 | 456+ PASSED, 19 SKIP |
 | 11 | GST Task + 대시보드 + Checklist | 44 PASSED, 1 SKIP |
 | 11 핫픽스 | 타입 불일치, 필터링, 협력사 정보, UTC→KST | 수동 수정 4건 |
-| **12** | **PIN + 출퇴근 + QR 카메라** | **진행 예정** |
+| 12 | PIN + 출퇴근 + QR 카메라 | 22 PASSED |
+| 12 핫픽스 | PIN 자동로그인 분기 로직 | 수동 수정 4건 |

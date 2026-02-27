@@ -17,15 +17,24 @@ class HomeScreen extends ConsumerStatefulWidget {
   ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
 
+/// 출퇴근 상태
+enum AttendanceStatus { notCheckedIn, checkedIn, checkedOut }
+
 class _HomeScreenState extends ConsumerState<HomeScreen> {
   final WebSocketService _websocketService = WebSocketService();
   bool _websocketInitialized = false;
+
+  // 출퇴근 상태
+  AttendanceStatus _attendanceStatus = AttendanceStatus.notCheckedIn;
+  String? _checkInTime;
+  bool _attendanceLoading = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initializeAlerts();
+      _fetchAttendanceStatus();
     });
   }
 
@@ -90,6 +99,198 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       case 'afternoon': return '오후 휴게';
       case 'dinner': return '저녁시간';
       default: return '휴게시간';
+    }
+  }
+
+  /// 출퇴근 상태 조회
+  Future<void> _fetchAttendanceStatus() async {
+    final authState = ref.read(authProvider);
+    final worker = authState.currentWorker;
+    // 파트너사(협력사)만 출퇴근 기능 표시
+    if (worker?.company == 'GST' || worker?.isAdmin == true) return;
+
+    try {
+      final apiService = ref.read(apiServiceProvider);
+      final response = await apiService.get('/hr/attendance/today');
+      if (!mounted) return;
+      final status = response['status'] as String? ?? 'not_checked_in';
+      final checkInAt = response['check_in_time'] as String?;
+      setState(() {
+        if (status == 'checked_in') {
+          _attendanceStatus = AttendanceStatus.checkedIn;
+          _checkInTime = checkInAt;
+        } else if (status == 'checked_out') {
+          _attendanceStatus = AttendanceStatus.checkedOut;
+          _checkInTime = checkInAt;
+        } else {
+          _attendanceStatus = AttendanceStatus.notCheckedIn;
+          _checkInTime = null;
+        }
+      });
+    } catch (e) {
+      debugPrint('[HomeScreen] fetchAttendanceStatus error: $e');
+    }
+  }
+
+  /// 출근/퇴근 처리
+  Future<void> _handleAttendance() async {
+    setState(() => _attendanceLoading = true);
+    try {
+      final apiService = ref.read(apiServiceProvider);
+      final checkType = _attendanceStatus == AttendanceStatus.notCheckedIn ? 'in' : 'out';
+      await apiService.post('/hr/attendance/check', data: {'check_type': checkType});
+      await _fetchAttendanceStatus();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('처리 실패: ${e.toString().replaceFirst('Exception: ', '')}'),
+            backgroundColor: GxColors.danger,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.sm)),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _attendanceLoading = false);
+    }
+  }
+
+  /// 출퇴근 카드 빌드
+  Widget _buildAttendanceCard() {
+    String statusLabel;
+    Color statusColor;
+    String buttonLabel;
+    bool buttonDisabled = false;
+
+    switch (_attendanceStatus) {
+      case AttendanceStatus.notCheckedIn:
+        statusLabel = '미출근';
+        statusColor = GxColors.silver;
+        buttonLabel = '출근하기';
+        break;
+      case AttendanceStatus.checkedIn:
+        statusLabel = '출근 중';
+        statusColor = GxColors.success;
+        buttonLabel = '퇴근하기';
+        break;
+      case AttendanceStatus.checkedOut:
+        statusLabel = '퇴근 완료';
+        statusColor = GxColors.info;
+        buttonLabel = '퇴근 완료';
+        buttonDisabled = true;
+        break;
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: GxGlass.cardSm(radius: GxRadius.lg),
+      child: Row(
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: statusColor.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(GxRadius.md),
+            ),
+            child: Icon(
+              _attendanceStatus == AttendanceStatus.notCheckedIn
+                  ? Icons.login
+                  : _attendanceStatus == AttendanceStatus.checkedIn
+                      ? Icons.access_time
+                      : Icons.logout,
+              size: 16,
+              color: statusColor,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      '근태',
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: GxColors.graphite),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: statusColor.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        statusLabel,
+                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: statusColor),
+                      ),
+                    ),
+                  ],
+                ),
+                if (_checkInTime != null) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    '출근: ${_formatTime(_checkInTime!)}',
+                    style: const TextStyle(fontSize: 11, color: GxColors.steel),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (!buttonDisabled)
+            GestureDetector(
+              onTap: _attendanceLoading ? null : _handleAttendance,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  gradient: buttonDisabled ? null : GxGradients.accentButton,
+                  color: buttonDisabled ? GxColors.mist : null,
+                  borderRadius: BorderRadius.circular(GxRadius.sm),
+                ),
+                child: _attendanceLoading
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      )
+                    : Text(
+                        buttonLabel,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: buttonDisabled ? GxColors.silver : Colors.white,
+                        ),
+                      ),
+              ),
+            )
+          else
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: GxColors.mist,
+                borderRadius: BorderRadius.circular(GxRadius.sm),
+              ),
+              child: Text(
+                buttonLabel,
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: GxColors.silver),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 시간 포맷 (ISO string → 한국 로컬 시간 HH:mm)
+  String _formatTime(String isoString) {
+    try {
+      final dt = DateTime.parse(isoString).toLocal();
+      final h = dt.hour.toString().padLeft(2, '0');
+      final m = dt.minute.toString().padLeft(2, '0');
+      return '$h:$m';
+    } catch (_) {
+      return isoString;
     }
   }
 
@@ -284,6 +485,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ],
         ),
         actions: [
+          // 설정 버튼
+          IconButton(
+            icon: const Icon(Icons.settings_outlined, color: GxColors.slate, size: 22),
+            onPressed: () => Navigator.pushNamed(context, '/profile'),
+          ),
           // 알림 버튼
           Stack(
             children: [
@@ -448,6 +654,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               ),
             ),
             const SizedBox(height: 16),
+
+            // 협력사 작업자 출퇴근 카드 (GST/Admin 제외)
+            if (worker?.company != 'GST' && worker?.isAdmin != true) ...[
+              _buildAttendanceCard(),
+              const SizedBox(height: 12),
+            ],
 
             // 주요 기능
             _buildFeatureCard(

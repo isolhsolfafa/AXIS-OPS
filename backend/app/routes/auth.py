@@ -3,16 +3,21 @@
 엔드포인트: /api/auth/*
 Sprint 1: register, verify-email, login, approve
 Sprint 5: refresh 엔드포인트 구현
+Sprint 12: PIN 설정/변경/로그인/상태 엔드포인트 추가
 """
 
 import logging
+import re
+from datetime import datetime, timezone, timedelta
 from flask import Blueprint, request, jsonify
 from typing import Tuple, Dict, Any
+from werkzeug.security import generate_password_hash, check_password_hash
 
 from app.services.auth_service import AuthService
 from app.middleware.jwt_auth import jwt_required, admin_required
 from app.models.worker import update_approval_status, update_active_role, get_worker_by_id
 from app.middleware.jwt_auth import get_current_worker_id
+from app.models.worker import get_db_connection
 
 
 logger = logging.getLogger(__name__)
@@ -365,3 +370,371 @@ def refresh() -> Tuple[Dict[str, Any], int]:
         refresh_token=data['refresh_token']
     )
     return jsonify(response), status_code
+
+
+# ──────────────────────────────────────────────────────────────────
+# Sprint 12: PIN 인증 엔드포인트
+# ──────────────────────────────────────────────────────────────────
+
+_PIN_REGEX = re.compile(r'^\d{4}$')
+_PIN_LOCK_DURATION_SECONDS = 300   # 5분
+_PIN_MAX_FAIL_COUNT = 3
+
+
+@auth_bp.route("/set-pin", methods=["POST"])
+@jwt_required
+def set_pin() -> Tuple[Dict[str, Any], int]:
+    """
+    PIN 최초 등록 (또는 덮어쓰기)
+
+    Headers:
+        Authorization: Bearer {token}
+
+    Request Body:
+        {
+            "pin": str  # 4자리 숫자
+        }
+
+    Response:
+        200: {"message": "PIN이 등록되었습니다."}
+        400: {"error": "INVALID_PIN", "message": "..."}
+    """
+    data = request.get_json()
+
+    if not data or 'pin' not in data:
+        return jsonify({
+            'error': 'INVALID_REQUEST',
+            'message': 'pin 필드가 필요합니다.'
+        }), 400
+
+    pin: str = str(data['pin'])
+
+    # 4자리 숫자 유효성 검사
+    if not _PIN_REGEX.match(pin):
+        return jsonify({
+            'error': 'INVALID_PIN',
+            'message': 'PIN은 4자리 숫자여야 합니다.'
+        }), 400
+
+    worker_id = get_current_worker_id()
+    pin_hash = generate_password_hash(pin)
+
+    try:
+        conn = get_db_connection()
+        with conn:
+            with conn.cursor() as cur:
+                # UPSERT — 이미 존재하면 업데이트, 없으면 삽입
+                cur.execute("""
+                    INSERT INTO hr.worker_auth_settings
+                        (worker_id, pin_hash, pin_fail_count, pin_locked_until, updated_at)
+                    VALUES (%s, %s, 0, NULL, NOW())
+                    ON CONFLICT (worker_id) DO UPDATE
+                        SET pin_hash       = EXCLUDED.pin_hash,
+                            pin_fail_count = 0,
+                            pin_locked_until = NULL,
+                            updated_at     = NOW()
+                """, (worker_id, pin_hash))
+        conn.close()
+    except Exception as e:
+        logger.error(f"set_pin DB error: worker_id={worker_id}, error={e}")
+        return jsonify({
+            'error': 'INTERNAL_ERROR',
+            'message': 'PIN 등록 중 오류가 발생했습니다.'
+        }), 500
+
+    logger.info(f"PIN set: worker_id={worker_id}")
+    return jsonify({'message': 'PIN이 등록되었습니다.'}), 200
+
+
+@auth_bp.route("/change-pin", methods=["PUT"])
+@jwt_required
+def change_pin() -> Tuple[Dict[str, Any], int]:
+    """
+    PIN 변경 (현재 PIN 검증 후 새 PIN 설정)
+
+    Headers:
+        Authorization: Bearer {token}
+
+    Request Body:
+        {
+            "current_pin": str,  # 현재 4자리 PIN
+            "new_pin": str       # 새 4자리 PIN
+        }
+
+    Response:
+        200: {"message": "PIN이 변경되었습니다."}
+        400: {"error": "INVALID_PIN|INVALID_REQUEST", "message": "..."}
+        401: {"error": "WRONG_PIN", "message": "..."}
+        404: {"error": "PIN_NOT_SET", "message": "..."}
+    """
+    data = request.get_json()
+
+    if not data or not all(k in data for k in ['current_pin', 'new_pin']):
+        return jsonify({
+            'error': 'INVALID_REQUEST',
+            'message': 'current_pin과 new_pin 필드가 필요합니다.'
+        }), 400
+
+    current_pin = str(data['current_pin'])
+    new_pin = str(data['new_pin'])
+
+    # 새 PIN 형식 검증
+    if not _PIN_REGEX.match(new_pin):
+        return jsonify({
+            'error': 'INVALID_PIN',
+            'message': 'new_pin은 4자리 숫자여야 합니다.'
+        }), 400
+
+    worker_id = get_current_worker_id()
+
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pin_hash FROM hr.worker_auth_settings WHERE worker_id = %s",
+                (worker_id,)
+            )
+            row = cur.fetchone()
+
+        if not row or not row['pin_hash']:
+            conn.close()
+            return jsonify({
+                'error': 'PIN_NOT_SET',
+                'message': 'PIN이 등록되어 있지 않습니다. 먼저 PIN을 등록하세요.'
+            }), 404
+
+        # 현재 PIN 검증
+        if not check_password_hash(row['pin_hash'], current_pin):
+            conn.close()
+            return jsonify({
+                'error': 'WRONG_PIN',
+                'message': '현재 PIN이 올바르지 않습니다.'
+            }), 401
+
+        # 새 PIN으로 업데이트
+        new_hash = generate_password_hash(new_pin)
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE hr.worker_auth_settings
+                    SET pin_hash = %s, pin_fail_count = 0,
+                        pin_locked_until = NULL, updated_at = NOW()
+                    WHERE worker_id = %s
+                """, (new_hash, worker_id))
+        conn.close()
+    except Exception as e:
+        logger.error(f"change_pin DB error: worker_id={worker_id}, error={e}")
+        return jsonify({
+            'error': 'INTERNAL_ERROR',
+            'message': 'PIN 변경 중 오류가 발생했습니다.'
+        }), 500
+
+    logger.info(f"PIN changed: worker_id={worker_id}")
+    return jsonify({'message': 'PIN이 변경되었습니다.'}), 200
+
+
+@auth_bp.route("/pin-login", methods=["POST"])
+def pin_login() -> Tuple[Dict[str, Any], int]:
+    """
+    PIN으로 로그인 — JWT (access + refresh) 발급
+
+    인증 토큰 없이 사용 가능 (JWT 불필요).
+    3회 실패 시 5분간 PIN 잠금 (pin_locked_until).
+
+    Request Body:
+        {
+            "worker_id": int,
+            "pin": str  # 4자리 숫자
+        }
+
+    Response:
+        200: {"access_token": str, "refresh_token": str, "worker": {...}}
+        400: {"error": "INVALID_REQUEST|INVALID_PIN", "message": "..."}
+        403: {"error": "PIN_LOCKED", "message": "..."}
+        404: {"error": "PIN_NOT_SET|WORKER_NOT_FOUND", "message": "..."}
+        401: {"error": "WRONG_PIN", "message": "..."}
+    """
+    data = request.get_json()
+
+    if not data or not all(k in data for k in ['worker_id', 'pin']):
+        return jsonify({
+            'error': 'INVALID_REQUEST',
+            'message': 'worker_id와 pin 필드가 필요합니다.'
+        }), 400
+
+    try:
+        worker_id = int(data['worker_id'])
+    except (ValueError, TypeError):
+        return jsonify({
+            'error': 'INVALID_REQUEST',
+            'message': 'worker_id는 정수여야 합니다.'
+        }), 400
+
+    pin = str(data['pin'])
+
+    # PIN 형식 검증
+    if not _PIN_REGEX.match(pin):
+        return jsonify({
+            'error': 'INVALID_PIN',
+            'message': 'PIN은 4자리 숫자여야 합니다.'
+        }), 400
+
+    try:
+        conn = get_db_connection()
+
+        # 1. 작업자 조회
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, name, email, role, company, is_admin, is_manager,"
+                "       approval_status, email_verified"
+                " FROM workers WHERE id = %s",
+                (worker_id,)
+            )
+            worker_row = cur.fetchone()
+
+        if not worker_row:
+            conn.close()
+            return jsonify({
+                'error': 'WORKER_NOT_FOUND',
+                'message': '작업자를 찾을 수 없습니다.'
+            }), 404
+
+        # 2. PIN 설정 조회
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pin_hash, pin_fail_count, pin_locked_until"
+                " FROM hr.worker_auth_settings WHERE worker_id = %s",
+                (worker_id,)
+            )
+            pin_row = cur.fetchone()
+
+        if not pin_row or not pin_row['pin_hash']:
+            conn.close()
+            return jsonify({
+                'error': 'PIN_NOT_SET',
+                'message': 'PIN이 등록되어 있지 않습니다. ID/PW로 로그인 후 PIN을 등록하세요.'
+            }), 404
+
+        # 3. 잠금 여부 확인
+        now_utc = datetime.now(timezone.utc)
+        if pin_row['pin_locked_until'] and pin_row['pin_locked_until'] > now_utc:
+            remaining = int((pin_row['pin_locked_until'] - now_utc).total_seconds())
+            conn.close()
+            return jsonify({
+                'error': 'PIN_LOCKED',
+                'message': f'PIN이 잠겼습니다. {remaining}초 후에 다시 시도하세요.'
+            }), 403
+
+        # 4. PIN 검증
+        if not check_password_hash(pin_row['pin_hash'], pin):
+            # 실패 횟수 증가
+            new_fail = (pin_row['pin_fail_count'] or 0) + 1
+            locked_until = None
+            if new_fail >= _PIN_MAX_FAIL_COUNT:
+                locked_until = now_utc + timedelta(seconds=_PIN_LOCK_DURATION_SECONDS)
+
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE hr.worker_auth_settings
+                        SET pin_fail_count = %s, pin_locked_until = %s, updated_at = NOW()
+                        WHERE worker_id = %s
+                    """, (new_fail, locked_until, worker_id))
+            conn.close()
+
+            if locked_until:
+                return jsonify({
+                    'error': 'PIN_LOCKED',
+                    'message': f'PIN을 {_PIN_MAX_FAIL_COUNT}회 잘못 입력하여 5분간 잠겼습니다.'
+                }), 403
+
+            remaining_tries = _PIN_MAX_FAIL_COUNT - new_fail
+            return jsonify({
+                'error': 'WRONG_PIN',
+                'message': f'PIN이 올바르지 않습니다. ({remaining_tries}회 남음)'
+            }), 401
+
+        # 5. 성공 — 실패 횟수 초기화
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE hr.worker_auth_settings
+                    SET pin_fail_count = 0, pin_locked_until = NULL, updated_at = NOW()
+                    WHERE worker_id = %s
+                """, (worker_id,))
+        conn.close()
+
+    except Exception as e:
+        logger.error(f"pin_login DB error: worker_id={worker_id}, error={e}")
+        return jsonify({
+            'error': 'INTERNAL_ERROR',
+            'message': 'PIN 로그인 중 오류가 발생했습니다.'
+        }), 500
+
+    # 6. JWT 발급 (auth_service 재사용)
+    access_token = auth_service.create_access_token(
+        worker_id=worker_row['id'],
+        email=worker_row['email'],
+        role=worker_row['role']
+    )
+    refresh_token = auth_service.create_refresh_token(
+        worker_id=worker_row['id'],
+        email=worker_row['email']
+    )
+
+    logger.info(f"PIN login success: worker_id={worker_id}")
+    return jsonify({
+        'access_token': access_token,
+        'refresh_token': refresh_token,
+        'worker': {
+            'id': worker_row['id'],
+            'name': worker_row['name'],
+            'email': worker_row['email'],
+            'role': worker_row['role'],
+            'company': worker_row['company'],
+            'approval_status': worker_row['approval_status'],
+            'is_manager': worker_row['is_manager'],
+            'is_admin': worker_row['is_admin'],
+            'email_verified': worker_row['email_verified'],
+        }
+    }), 200
+
+
+@auth_bp.route("/pin-status", methods=["GET"])
+@jwt_required
+def pin_status() -> Tuple[Dict[str, Any], int]:
+    """
+    현재 작업자의 PIN 등록 여부 및 생체인증 상태 조회
+
+    Headers:
+        Authorization: Bearer {token}
+
+    Response:
+        200: {"pin_registered": bool, "biometric_enabled": bool}
+    """
+    worker_id = get_current_worker_id()
+
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pin_hash, biometric_enabled"
+                " FROM hr.worker_auth_settings WHERE worker_id = %s",
+                (worker_id,)
+            )
+            row = cur.fetchone()
+        conn.close()
+    except Exception as e:
+        logger.error(f"pin_status DB error: worker_id={worker_id}, error={e}")
+        return jsonify({
+            'error': 'INTERNAL_ERROR',
+            'message': 'PIN 상태 조회 중 오류가 발생했습니다.'
+        }), 500
+
+    pin_registered = bool(row and row['pin_hash'])
+    biometric_enabled = bool(row and row['biometric_enabled'])
+
+    return jsonify({
+        'pin_registered': pin_registered,
+        'biometric_enabled': biometric_enabled,
+    }), 200

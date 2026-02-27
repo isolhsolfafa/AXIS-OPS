@@ -5,6 +5,7 @@ import 'screens/auth/splash_screen.dart';
 import 'screens/auth/approval_pending_screen.dart';
 import 'screens/auth/forgot_password_screen.dart';
 import 'screens/auth/reset_password_screen.dart';
+import 'screens/auth/pin_login_screen.dart';
 import 'screens/home/home_screen.dart';
 import 'screens/admin/alert_list_screen.dart';
 import 'screens/admin/admin_options_screen.dart';
@@ -13,6 +14,8 @@ import 'screens/task/task_management_screen.dart';
 import 'screens/manager/manager_pending_tasks_screen.dart';
 import 'screens/gst/gst_products_screen.dart';
 import 'screens/checklist/checklist_screen.dart';
+import 'screens/settings/profile_screen.dart';
+import 'screens/settings/pin_settings_screen.dart';
 import 'utils/design_system.dart';
 
 void main() {
@@ -127,6 +130,9 @@ class GAxisApp extends ConsumerWidget {
         '/manager-pending-tasks': (context) => const ManagerPendingTasksScreen(),
         '/home': (context) => const HomeScreen(),
         '/forgot-password': (context) => const ForgotPasswordScreen(),
+        '/profile': (context) => const ProfileScreen(),
+        '/pin-settings': (context) => const PinSettingsScreen(),
+        '/pin-login': (context) => const PinLoginScreen(),
         '/reset-password': (context) {
           final args = ModalRoute.of(context)?.settings.arguments;
           final email = args is Map<String, dynamic>
@@ -219,13 +225,42 @@ class _AppStartupState extends ConsumerState<AppStartup> {
   Future<void> _initialize() async {
     try {
       final authNotifier = ref.read(authProvider.notifier);
+      final authService = authNotifier.authService;
+
+      // 1단계: refresh_token 존재 여부 확인
+      final hasRefreshToken = await authService.hasRefreshToken();
+
+      if (!mounted) return;
+
+      if (!hasRefreshToken) {
+        // refresh_token 없음 → 이메일/비밀번호 로그인 화면
+        setState(() => _isInitializing = false);
+        return;
+      }
+
+      // 2단계: PIN 등록 여부 확인 (로컬 캐시)
+      final hasPinRegistered = await authService.hasPinRegistered();
+
+      if (!mounted) return;
+
+      if (hasPinRegistered) {
+        // PIN 등록됨 → PIN 입력 화면으로 이동
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            settings: const RouteSettings(name: '/pin-login'),
+            builder: (_) => const PinLoginScreen(),
+          ),
+        );
+        return;
+      }
+
+      // 3단계: PIN 미등록 → refresh_token으로 자동 로그인 시도
       final success = await authNotifier.tryAutoLogin();
 
       if (!mounted) return;
 
       if (success) {
         // 자동 로그인 성공 → 마지막 경로 복원 시도
-        final authService = authNotifier.authService;
         final lastRoute = await authService.getLastRoute();
 
         if (!mounted) return;

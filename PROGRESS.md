@@ -1303,6 +1303,121 @@ frontend/lib/screens/manager/manager_pending_tasks_screen.dart  # Fix 4: toLocal
 
 ---
 
+## Sprint 12: PIN 간편 로그인 + 협력사 출퇴근 + QR 카메라 스캔 (완료 ✅)
+
+### BE 완료 내역
+- `010_sprint12_hr_schema.sql` — migration 실행 완료
+  - `hr` 스키마 생성
+  - `hr.worker_auth_settings` — PIN 인증 설정 (pin_hash, fail_count, locked_until)
+  - `hr.partner_attendance` — 협력사 출퇴근 기록 (check_type, method, 인덱스 2개)
+  - `hr.gst_attendance` — GST 사내 근태 (테이블만, API 미구현)
+- `backend/app/routes/auth.py` — PIN API 4개 추가
+  - `POST /api/auth/set-pin` — 4자리 숫자 PIN 설정 (werkzeug bcrypt, UPSERT)
+  - `PUT /api/auth/change-pin` — 현재 PIN 검증 후 변경
+  - `POST /api/auth/pin-login` — PIN 로그인 (3회 실패→5분 잠금, JWT 발급)
+  - `GET /api/auth/pin-status` — PIN 등록 여부 조회
+- `backend/app/routes/hr.py` — 출퇴근 API 2개 (신규 파일)
+  - `POST /api/hr/attendance/check` — 출근/퇴근 (협력사만, 당일 중복 방지)
+  - `GET /api/hr/attendance/today` — 당일 출퇴근 기록 조회
+- `backend/app/__init__.py` — hr_bp 블루프린트 등록
+
+### FE 완료 내역
+- `frontend/lib/screens/settings/profile_screen.dart` — 개인 설정 화면 (신규)
+  - PIN 등록/변경 버튼, 생체인증 "추후 오픈 예정" 메뉴
+- `frontend/lib/screens/settings/pin_settings_screen.dart` — PIN 설정 화면 (신규)
+  - 4자리 도트 + 숫자 키패드, 등록/변경 플로우
+- `frontend/lib/screens/auth/pin_login_screen.dart` — PIN 로그인 화면 (신규)
+  - 3회 실패→잠금, "이메일로 로그인" 링크
+- `frontend/lib/screens/home/home_screen.dart` — 출퇴근 카드 추가 (협력사만)
+- `frontend/lib/screens/qr/qr_scan_screen.dart` — QR 카메라 스캔 (수정)
+  - html5-qrcode JS interop, 카메라 메인 + 직접 입력 보조
+- `frontend/lib/services/qr_scanner_service.dart` + `qr_scanner_web.dart` + `qr_scanner_stub.dart` — QR 스캔 서비스 (신규)
+- `frontend/web/index.html` — html5-qrcode 스크립트 추가
+- `frontend/lib/main.dart` — /profile, /pin-settings, /pin-login 라우트 등록
+- `flutter build web` — 0 errors ✅
+
+### TEST 완료 내역 (22/22 PASSED)
+
+| 파일 | 테스트 수 | 내용 |
+|------|----------|------|
+| `test_pin_auth.py` | 14 | PIN 설정/변경/로그인/상태/잠금/UPSERT |
+| `test_attendance.py` | 8 | 출근/퇴근/중복방지/GST차단/당일조회 |
+
+### Sprint 12 완료 상태
+- ✅ hr 스키마 생성 (worker_auth_settings + partner_attendance + gst_attendance)
+- ✅ PIN 설정/변경/로그인/상태 API 4개 정상 동작
+- ✅ PIN 3회 실패 → 5분 잠금 동작
+- ✅ 출퇴근 check-in/check-out API 정상 (협력사만)
+- ✅ 당일 중복 출근 방지
+- ✅ 개인 설정 화면 — PIN 등록/변경 + 생체인증 "추후 오픈" 메뉴
+- ✅ PIN 로그인 화면 — 4자리 입력 + 키패드 + 실패 카운트 표시
+- ✅ 홈 화면 — 협력사 출퇴근 카드 (GST 제외)
+- ✅ QR 카메라 스캔 메인 + 텍스트 입력 보조
+- ✅ Sprint 12 신규 테스트 22/22 PASSED
+- ✅ 기존 테스트 regression 신규 0건
+- ✅ flutter build web 에러 0건
+
+### 생성/수정 파일
+```
+backend/migrations/010_sprint12_hr_schema.sql          # 신규
+backend/app/routes/hr.py                                # 신규
+backend/app/routes/auth.py                              # PIN API 4개 추가
+backend/app/__init__.py                                 # hr_bp 등록
+frontend/lib/screens/settings/profile_screen.dart       # 신규
+frontend/lib/screens/settings/pin_settings_screen.dart  # 신규
+frontend/lib/screens/auth/pin_login_screen.dart         # 신규
+frontend/lib/services/qr_scanner_service.dart           # 신규
+frontend/lib/services/qr_scanner_web.dart               # 신규
+frontend/lib/services/qr_scanner_stub.dart              # 신규
+frontend/lib/screens/home/home_screen.dart              # 출퇴근 카드 추가
+frontend/lib/screens/qr/qr_scan_screen.dart             # QR 카메라 스캔
+frontend/web/index.html                                 # html5-qrcode 추가
+frontend/lib/main.dart                                  # 라우트 3개 추가
+tests/backend/test_pin_auth.py                          # 신규 — 14 tests
+tests/backend/test_attendance.py                        # 신규 — 8 tests
+tests/conftest.py                                       # hr cleanup 추가
+```
+
+### Sprint 12 핫픽스: PIN 자동로그인 분기 로직 (Cowork 세션에서 직접 수정)
+
+Sprint 12 에이전트가 PIN 화면/API는 구현했지만, 앱 시작 시 PIN 분기 로직이 누락됨.
+수동으로 4개 파일 핫픽스 적용.
+
+**문제**: 앱을 껐다 켜도 항상 이메일 로그인 화면이 표시됨 (PIN 등록 사용자도 동일)
+
+**수정 내용**:
+
+1. **`auth_service.dart`** — PIN 헬퍼 메서드 3개 추가
+   - `hasRefreshToken()`: refresh_token 존재 확인 (자동 로그인 가능 여부)
+   - `hasPinRegistered()`: PIN 등록 여부 로컬 캐시 확인
+   - `savePinRegistered(bool)`: PIN 등록 상태 캐시 저장
+   - `logout()`에 `_pinRegisteredKey` 삭제 추가
+
+2. **`main.dart`** — `_initialize()` 3단계 분기 로직 추가
+   - 1단계: refresh_token 없음 → 이메일 로그인 화면 (기존)
+   - 2단계: refresh_token 있음 + PIN 등록됨 → PIN 입력 화면
+   - 3단계: refresh_token 있음 + PIN 미등록 → 자동 로그인 → 마지막 경로 복원
+
+3. **`pin_settings_screen.dart`** — PIN 등록/변경 성공 시 `savePinRegistered(true)` 호출 추가
+
+4. **`pin_login_screen.dart`** — 3가지 수정
+   - `worker_id`를 API 요청에 포함 (BE 필수 파라미터)
+   - `_loadWorkerInfo()`: secure storage에서 worker 정보 로드 (앱 재시작 시 authProvider 비어있음)
+   - PIN 성공 후 토큰 저장 + authProvider 상태 갱신 + 마지막 경로 복원
+
+**앱 시작 플로우 (수정 후)**:
+```
+앱 시작 → AppStartup._initialize()
+  ├─ refresh_token 없음 → SplashScreen (이메일 로그인)
+  ├─ refresh_token 있음 + PIN 등록 → PinLoginScreen
+  │   └─ PIN 성공 → 토큰 갱신 → 마지막 경로 복원 or /home
+  └─ refresh_token 있음 + PIN 미등록 → tryAutoLogin()
+      ├─ 성공 → 마지막 경로 복원 or /home
+      └─ 실패 → SplashScreen
+```
+
+---
+
 ## 전체 테스트 결과 (Sprint 10 기준)
 
 ```
@@ -1332,6 +1447,10 @@ Sprint 11 (GST Task + 대시보드 + Checklist):
         + test_checklist_api (14) + test_active_role (9) = 45 tests
   Regression 수정: task count 15→19/13→17 (PI/QI/SI 추가 반영)
   conftest.py FK cleanup 확장 (checklist_record 등)
+Sprint 12 (PIN 간편 로그인 + 협력사 출퇴근 + QR 카메라):
+                                22 passed (신규), 397 passed (전체)
+  신규: test_pin_auth (14) + test_attendance (8) = 22 tests
+  conftest.py hr 스키마 cleanup 추가
 ─────────────────────────────────────────────
-누적 테스트 파일: 32개, 전체 개별 파일 PASS 확인 완료
+누적 테스트 파일: 34개, Sprint 12 신규 regression 0건
 ```

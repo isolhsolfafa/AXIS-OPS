@@ -64,6 +64,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.routes.sync import sync_bp        # Sprint 4
     from app.routes.gst import gst_bp          # Sprint 11: GST 검사 공정
     from app.routes.checklist import checklist_bp  # Sprint 11: 체크리스트
+    from app.routes.hr import hr_bp            # Sprint 12: 협력사 출퇴근 관리
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(work_bp)
@@ -73,7 +74,8 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(sync_bp)
     app.register_blueprint(gst_bp)
     app.register_blueprint(checklist_bp)
-    logger.info("Blueprints registered: auth, work, product, alert, admin, sync, gst, checklist")
+    app.register_blueprint(hr_bp)
+    logger.info("Blueprints registered: auth, work, product, alert, admin, sync, gst, checklist, hr")
 
     # 헬스 체크 엔드포인트
     @app.route("/health", methods=["GET"])

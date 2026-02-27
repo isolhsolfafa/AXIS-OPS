@@ -15,6 +15,7 @@ class AuthService {
   static const String _workerIdKey = 'worker_id';
   static const String _workerRoleKey = 'worker_role';
   static const String _workerDataKey = 'worker_data';
+  static const String _pinRegisteredKey = 'pin_registered';
 
   /// SharedPreferences 키 — 마지막 방문 경로 복원용
   static const String _lastRouteKey = 'last_route';
@@ -171,6 +172,7 @@ class AuthService {
       await _secureStorage.delete(key: _workerIdKey);
       await _secureStorage.delete(key: _workerRoleKey);
       await _secureStorage.delete(key: _workerDataKey);
+      await _secureStorage.delete(key: _pinRegisteredKey);
 
       // 마지막 경로도 삭제
       final prefs = await SharedPreferences.getInstance();
@@ -256,6 +258,31 @@ class AuthService {
     } catch (e) {
       return false;
     }
+  }
+
+  // ── PIN 자동 로그인 분기 ──────────────────────────────────────────────
+
+  /// refresh_token 존재 여부 확인 (자동 로그인 가능한 사용자인지)
+  Future<bool> hasRefreshToken() async {
+    final token = await _secureStorage.read(key: _refreshTokenKey);
+    return token != null && token.isNotEmpty;
+  }
+
+  /// PIN 등록 여부 확인 (로컬 캐시)
+  ///
+  /// PIN 설정 시 savePinRegistered(true) 호출로 캐시됨
+  /// 로그아웃 시 삭제됨
+  Future<bool> hasPinRegistered() async {
+    final value = await _secureStorage.read(key: _pinRegisteredKey);
+    return value == 'true';
+  }
+
+  /// PIN 등록 상태 저장 (PIN 설정/해제 시 호출)
+  Future<void> savePinRegistered(bool registered) async {
+    await _secureStorage.write(
+      key: _pinRegisteredKey,
+      value: registered.toString(),
+    );
   }
 
   /// 앱 시작 시 자동 로그인 시도

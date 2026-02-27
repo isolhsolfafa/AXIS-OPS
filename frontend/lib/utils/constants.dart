@@ -1,6 +1,8 @@
-// Flask 테스트 서버 주소 (CLAUDE.md 섹션 9.2 참조)
-const String apiBaseUrl = 'http://localhost:5001/api';
-const String webSocketUrl = 'ws://localhost:5001/ws';
+// API 서버 주소 (CLAUDE.md 섹션 9.2 참조)
+// 로컬 테스트: 'http://localhost:5001/api'
+// 배포(Railway): 'https://axis-ops-api.up.railway.app/api'
+const String apiBaseUrl = 'https://axis-ops-api.up.railway.app/api';
+const String webSocketUrl = 'wss://axis-ops-api.up.railway.app/ws';
 const String appVersion = '0.1.0';
 
 // API 엔드포인트

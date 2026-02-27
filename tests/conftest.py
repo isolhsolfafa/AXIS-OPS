@@ -481,6 +481,15 @@ def create_test_worker(db_conn):
         try:
             cursor = db_conn.cursor()
             for worker_id in created_worker_ids:
+                # 0. hr 스키마 (Sprint 12) — workers 삭제 전에 먼저 정리
+                try:
+                    cursor.execute("DELETE FROM hr.worker_auth_settings WHERE worker_id = %s", (worker_id,))
+                except Exception:
+                    db_conn.rollback()
+                try:
+                    cursor.execute("DELETE FROM hr.partner_attendance WHERE worker_id = %s", (worker_id,))
+                except Exception:
+                    db_conn.rollback()
                 # 1. checklist_record (checked_by FK)
                 try:
                     cursor.execute("DELETE FROM checklist.checklist_record WHERE checked_by = %s", (worker_id,))

@@ -1,13 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:ui_web' as ui_web;
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 import '../../providers/task_provider.dart';
 import '../../providers/auth_provider.dart';
+import '../../services/qr_scanner_service.dart';
 import '../../utils/design_system.dart';
 
-/// QR 스캔 화면 (웹 호환 - 텍스트 입력 방식)
+/// QR 스캔 화면 (웹 호환 - 카메라 우선, 텍스트 입력 보조)
 ///
-/// Sprint 2 MVP: 텍스트 입력으로 QR 코드 ID 직접 입력
-/// 향후: dart:html의 MediaDevices API로 웹 카메라 지원 추가 예정
+/// html5-qrcode JS 라이브러리를 통한 카메라 QR 스캔
+/// 카메라 실패 시 텍스트 입력으로 자동 전환
 ///
 /// 두 가지 QR 타입 지원:
 /// 1. Worksheet QR: DOC_{SN} 형식 (예: DOC_GBWS-6408) → 제품 조회
@@ -22,13 +27,86 @@ class QrScanScreen extends ConsumerStatefulWidget {
 class _QrScanScreenState extends ConsumerState<QrScanScreen> {
   final _formKey = GlobalKey<FormState>();
   final _qrCodeController = TextEditingController();
+  final _qrScannerService = QrScannerService();
+
   bool _isProcessing = false;
   String _scanType = 'worksheet'; // 'worksheet' or 'location'
+  bool _showTextInput = false; // 카메라 실패 또는 사용자가 직접 펼침
+  bool _cameraInitializing = true;
+  bool _cameraFailed = false;
+
+  static const String _scannerDivId = 'qr-scanner-div';
+
+  @override
+  void initState() {
+    super.initState();
+    _registerScannerView();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _startCamera();
+    });
+  }
 
   @override
   void dispose() {
     _qrCodeController.dispose();
+    _qrScannerService.stop();
     super.dispose();
+  }
+
+  void _registerScannerView() {
+    // HtmlElementView용 플랫폼 뷰 등록 (한 번만 등록)
+    try {
+      ui_web.platformViewRegistry.registerViewFactory(
+        _scannerDivId,
+        (int viewId) {
+          final div = html.DivElement()
+            ..id = _scannerDivId
+            ..style.width = '100%'
+            ..style.height = '100%'
+            ..style.backgroundColor = '#000000';
+          return div;
+        },
+      );
+    } catch (_) {
+      // 이미 등록됐으면 무시
+    }
+  }
+
+  Future<void> _startCamera() async {
+    setState(() {
+      _cameraInitializing = true;
+      _cameraFailed = false;
+    });
+
+    final success = await _qrScannerService.start(
+      elementId: _scannerDivId,
+      onResult: _onQrDetected,
+      onError: (error) {
+        debugPrint('[QrScanScreen] Camera error: $error');
+        if (mounted) {
+          setState(() {
+            _cameraFailed = true;
+            _cameraInitializing = false;
+            _showTextInput = true; // 자동 폴백
+          });
+        }
+      },
+    );
+
+    if (mounted) {
+      setState(() {
+        _cameraFailed = !success;
+        _cameraInitializing = false;
+        if (!success) {
+          _showTextInput = true; // 자동 폴백
+        }
+      });
+    }
+  }
+
+  void _onQrDetected(String qrCode) {
+    if (_isProcessing) return;
+    _handleQrCode(qrCode);
   }
 
   /// QR 코드 처리
@@ -202,299 +280,398 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(20.0),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // 현재 제품 정보 (Worksheet QR 스캔 후)
-                if (currentProduct != null) ...[
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: GxGlass.cardSm(radius: GxRadius.lg),
-                    child: Column(
-                      children: [
-                        Row(
-                          children: [
-                            Container(
-                              width: 32,
-                              height: 32,
-                              decoration: BoxDecoration(
-                                color: GxColors.successBg,
-                                borderRadius: BorderRadius.circular(GxRadius.md),
-                              ),
-                              child: const Icon(Icons.check_circle, color: GxColors.success, size: 18),
-                            ),
-                            const SizedBox(width: 10),
-                            const Expanded(
-                              child: Text(
-                                '제품 스캔 완료',
-                                style: TextStyle(color: GxColors.success, fontWeight: FontWeight.w600, fontSize: 14),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        const Divider(height: 1, color: GxColors.mist),
-                        const SizedBox(height: 12),
-                        _buildInfoRow('QR 문서 ID', currentProduct.qrDocId),
-                        const SizedBox(height: 6),
-                        _buildInfoRow('시리얼 번호', currentProduct.serialNumber),
-                        const SizedBox(height: 6),
-                        _buildInfoRow('모델', currentProduct.model),
-                        if (currentProduct.mechPartner != null) ...[
-                          const SizedBox(height: 6),
-                          _buildInfoRow('기구 협력사', currentProduct.mechPartner!),
-                        ],
-                        if (currentProduct.elecPartner != null) ...[
-                          const SizedBox(height: 6),
-                          _buildInfoRow('전장 협력사', currentProduct.elecPartner!),
-                        ],
-                        if (currentProduct.locationQrId != null) ...[
-                          const SizedBox(height: 6),
-                          _buildInfoRow('위치', currentProduct.locationQrId!),
-                        ],
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                ],
-
-                // QR 타입 선택
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // 현재 제품 정보 (Worksheet QR 스캔 후)
+              if (currentProduct != null) ...[
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: GxGlass.cardSm(radius: GxRadius.lg),
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('QR 타입', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: GxColors.charcoal)),
-                      const SizedBox(height: 12),
                       Row(
                         children: [
-                          Expanded(
-                            child: GestureDetector(
-                              onTap: () => setState(() => _scanType = 'worksheet'),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(vertical: 10),
-                                decoration: BoxDecoration(
-                                  color: _scanType == 'worksheet' ? GxColors.accentSoft : GxColors.cloud,
-                                  borderRadius: BorderRadius.circular(GxRadius.sm),
-                                  border: Border.all(
-                                    color: _scanType == 'worksheet' ? GxColors.accent : GxColors.mist,
-                                    width: 1.5,
-                                  ),
-                                ),
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Icon(Icons.description, size: 16, color: _scanType == 'worksheet' ? GxColors.accent : GxColors.steel),
-                                    const SizedBox(width: 6),
-                                    Text(
-                                      'Worksheet',
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w600,
-                                        color: _scanType == 'worksheet' ? GxColors.accent : GxColors.steel,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
+                          Container(
+                            width: 32,
+                            height: 32,
+                            decoration: BoxDecoration(
+                              color: GxColors.successBg,
+                              borderRadius: BorderRadius.circular(GxRadius.md),
                             ),
+                            child: const Icon(Icons.check_circle, color: GxColors.success, size: 18),
                           ),
                           const SizedBox(width: 10),
-                          Expanded(
-                            child: GestureDetector(
-                              onTap: () => setState(() => _scanType = 'location'),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(vertical: 10),
-                                decoration: BoxDecoration(
-                                  color: _scanType == 'location' ? GxColors.accentSoft : GxColors.cloud,
-                                  borderRadius: BorderRadius.circular(GxRadius.sm),
-                                  border: Border.all(
-                                    color: _scanType == 'location' ? GxColors.accent : GxColors.mist,
-                                    width: 1.5,
-                                  ),
-                                ),
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Icon(Icons.location_on, size: 16, color: _scanType == 'location' ? GxColors.accent : GxColors.steel),
-                                    const SizedBox(width: 6),
-                                    Text(
-                                      'Location',
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w600,
-                                        color: _scanType == 'location' ? GxColors.accent : GxColors.steel,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
+                          const Expanded(
+                            child: Text(
+                              '제품 스캔 완료',
+                              style: TextStyle(color: GxColors.success, fontWeight: FontWeight.w600, fontSize: 14),
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 16),
-
-                      // QR 코드 입력 안내
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: GxColors.accentSoft,
-                          borderRadius: BorderRadius.circular(GxRadius.sm),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.info_outline, size: 16, color: GxColors.accent),
-                            const SizedBox(width: 6),
-                            Text(
-                              _scanType == 'worksheet'
-                                  ? '형식: DOC_GBWS-6408'
-                                  : '형식: LOC_ASSY_01',
-                              style: const TextStyle(fontSize: 12, color: GxColors.accent, fontWeight: FontWeight.w500),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-
-                      // QR 코드 입력 필드
-                      TextFormField(
-                        controller: _qrCodeController,
-                        decoration: InputDecoration(
-                          labelText: 'QR 코드',
-                          labelStyle: const TextStyle(color: GxColors.steel, fontSize: 13),
-                          hintText: _scanType == 'worksheet' ? 'DOC_GBWS-6408' : 'LOC_ASSY_01',
-                          hintStyle: const TextStyle(color: GxColors.silver),
-                          prefixIcon: const Icon(Icons.qr_code, color: GxColors.accent),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(GxRadius.sm),
-                            borderSide: const BorderSide(color: GxColors.mist),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(GxRadius.sm),
-                            borderSide: const BorderSide(color: GxColors.mist, width: 1.5),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(GxRadius.sm),
-                            borderSide: const BorderSide(color: GxColors.accent, width: 1.5),
-                          ),
-                          errorBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(GxRadius.sm),
-                            borderSide: const BorderSide(color: GxColors.danger, width: 1.5),
-                          ),
-                          filled: true,
-                          fillColor: GxColors.white,
-                        ),
-                        style: const TextStyle(fontSize: 14, color: GxColors.charcoal, fontWeight: FontWeight.w500),
-                        textCapitalization: TextCapitalization.characters,
-                        validator: (value) {
-                          if (value == null || value.isEmpty) {
-                            return 'QR 코드를 입력해주세요.';
-                          }
-                          if (_scanType == 'worksheet' && !value.toUpperCase().startsWith('DOC_')) {
-                            return 'Worksheet QR은 DOC_로 시작해야 합니다.';
-                          }
-                          if (_scanType == 'location' && !value.toUpperCase().startsWith('LOC_')) {
-                            return 'Location QR은 LOC_로 시작해야 합니다.';
-                          }
-                          return null;
-                        },
-                        onFieldSubmitted: (value) {
-                          if (_formKey.currentState!.validate()) {
-                            _handleQrCode(value);
-                          }
-                        },
-                      ),
+                      const SizedBox(height: 12),
+                      const Divider(height: 1, color: GxColors.mist),
+                      const SizedBox(height: 12),
+                      _buildInfoRow('QR 문서 ID', currentProduct.qrDocId),
+                      const SizedBox(height: 6),
+                      _buildInfoRow('시리얼 번호', currentProduct.serialNumber),
+                      const SizedBox(height: 6),
+                      _buildInfoRow('모델', currentProduct.model),
+                      if (currentProduct.mechPartner != null) ...[
+                        const SizedBox(height: 6),
+                        _buildInfoRow('기구 협력사', currentProduct.mechPartner!),
+                      ],
+                      if (currentProduct.elecPartner != null) ...[
+                        const SizedBox(height: 6),
+                        _buildInfoRow('전장 협력사', currentProduct.elecPartner!),
+                      ],
+                      if (currentProduct.locationQrId != null) ...[
+                        const SizedBox(height: 6),
+                        _buildInfoRow('위치', currentProduct.locationQrId!),
+                      ],
                     ],
                   ),
                 ),
                 const SizedBox(height: 16),
+              ],
 
-                // 스캔 버튼
-                SizedBox(
-                  height: 44,
-                  child: Opacity(
-                    opacity: _isProcessing ? 0.6 : 1.0,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        gradient: GxGradients.accentButton,
-                        borderRadius: BorderRadius.circular(GxRadius.sm),
-                        boxShadow: [
-                          BoxShadow(
-                            color: GxColors.accent.withValues(alpha: 0.35),
-                            blurRadius: 16,
-                            offset: const Offset(0, 4),
+              // QR 타입 선택
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: GxGlass.cardSm(radius: GxRadius.lg),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('QR 타입', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: GxColors.charcoal)),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: GestureDetector(
+                            onTap: () => setState(() => _scanType = 'worksheet'),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              decoration: BoxDecoration(
+                                color: _scanType == 'worksheet' ? GxColors.accentSoft : GxColors.cloud,
+                                borderRadius: BorderRadius.circular(GxRadius.sm),
+                                border: Border.all(
+                                  color: _scanType == 'worksheet' ? GxColors.accent : GxColors.mist,
+                                  width: 1.5,
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.description, size: 16, color: _scanType == 'worksheet' ? GxColors.accent : GxColors.steel),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    'Worksheet',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: _scanType == 'worksheet' ? GxColors.accent : GxColors.steel,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
-                        ],
-                      ),
-                      child: Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          onTap: _isProcessing
-                              ? null
-                              : () {
-                                  if (_formKey.currentState!.validate()) {
-                                    _handleQrCode(_qrCodeController.text);
-                                  }
-                                },
-                          borderRadius: BorderRadius.circular(GxRadius.sm),
-                          child: Center(
-                            child: _isProcessing
-                                ? const SizedBox(
-                                    height: 20,
-                                    width: 20,
-                                    child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation<Color>(Colors.white)),
-                                  )
-                                : const Text('스캔', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white)),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: GestureDetector(
+                            onTap: () => setState(() => _scanType = 'location'),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              decoration: BoxDecoration(
+                                color: _scanType == 'location' ? GxColors.accentSoft : GxColors.cloud,
+                                borderRadius: BorderRadius.circular(GxRadius.sm),
+                                border: Border.all(
+                                  color: _scanType == 'location' ? GxColors.accent : GxColors.mist,
+                                  width: 1.5,
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.location_on, size: 16, color: _scanType == 'location' ? GxColors.accent : GxColors.steel),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    'Location',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: _scanType == 'location' ? GxColors.accent : GxColors.steel,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // 카메라 뷰 (메인)
+              Container(
+                height: 300,
+                decoration: BoxDecoration(
+                  color: Colors.black,
+                  borderRadius: BorderRadius.circular(GxRadius.lg),
+                  border: Border.all(color: GxColors.mist, width: 1),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: _buildCameraView(),
+              ),
+              const SizedBox(height: 16),
+
+              // 직접 입력 섹션 (접이식)
+              Container(
+                decoration: GxGlass.cardSm(radius: GxRadius.lg),
+                child: Column(
+                  children: [
+                    // 헤더 (토글 버튼)
+                    InkWell(
+                      onTap: () => setState(() => _showTextInput = !_showTextInput),
+                      borderRadius: BorderRadius.circular(GxRadius.lg),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.keyboard,
+                              size: 18,
+                              color: _showTextInput ? GxColors.accent : GxColors.steel,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              '직접 입력',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                                color: _showTextInput ? GxColors.accent : GxColors.steel,
+                              ),
+                            ),
+                            const Spacer(),
+                            Icon(
+                              _showTextInput ? Icons.expand_less : Icons.expand_more,
+                              color: GxColors.silver,
+                              size: 20,
+                            ),
+                          ],
                         ),
                       ),
                     ),
-                  ),
-                ),
-                const SizedBox(height: 24),
 
-                // 웹 카메라 지원 안내
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: GxColors.warningBg,
-                    borderRadius: BorderRadius.circular(GxRadius.md),
-                  ),
-                  child: Column(
-                    children: [
-                      const Row(
-                        children: [
-                          Icon(Icons.info_outline, color: GxColors.warning, size: 18),
-                          SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'Sprint 2 MVP',
-                              style: TextStyle(color: GxColors.warning, fontWeight: FontWeight.w600, fontSize: 13),
-                            ),
+                    // 텍스트 입력 폼 (펼쳐졌을 때)
+                    if (_showTextInput) ...[
+                      const Divider(height: 1, color: GxColors.mist),
+                      Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Form(
+                          key: _formKey,
+                          child: Column(
+                            children: [
+                              // 형식 안내
+                              Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: GxColors.accentSoft,
+                                  borderRadius: BorderRadius.circular(GxRadius.sm),
+                                ),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    const Icon(Icons.info_outline, size: 16, color: GxColors.accent),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      _scanType == 'worksheet'
+                                          ? '형식: DOC_GBWS-6408'
+                                          : '형식: LOC_ASSY_01',
+                                      style: const TextStyle(fontSize: 12, color: GxColors.accent, fontWeight: FontWeight.w500),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+
+                              // QR 코드 입력 필드
+                              TextFormField(
+                                controller: _qrCodeController,
+                                decoration: InputDecoration(
+                                  labelText: 'QR 코드',
+                                  labelStyle: const TextStyle(color: GxColors.steel, fontSize: 13),
+                                  hintText: _scanType == 'worksheet' ? 'DOC_GBWS-6408' : 'LOC_ASSY_01',
+                                  hintStyle: const TextStyle(color: GxColors.silver),
+                                  prefixIcon: const Icon(Icons.qr_code, color: GxColors.accent),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(GxRadius.sm),
+                                    borderSide: const BorderSide(color: GxColors.mist),
+                                  ),
+                                  enabledBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(GxRadius.sm),
+                                    borderSide: const BorderSide(color: GxColors.mist, width: 1.5),
+                                  ),
+                                  focusedBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(GxRadius.sm),
+                                    borderSide: const BorderSide(color: GxColors.accent, width: 1.5),
+                                  ),
+                                  errorBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(GxRadius.sm),
+                                    borderSide: const BorderSide(color: GxColors.danger, width: 1.5),
+                                  ),
+                                  filled: true,
+                                  fillColor: GxColors.white,
+                                ),
+                                style: const TextStyle(fontSize: 14, color: GxColors.charcoal, fontWeight: FontWeight.w500),
+                                textCapitalization: TextCapitalization.characters,
+                                validator: (value) {
+                                  if (value == null || value.isEmpty) {
+                                    return 'QR 코드를 입력해주세요.';
+                                  }
+                                  if (_scanType == 'worksheet' && !value.toUpperCase().startsWith('DOC_')) {
+                                    return 'Worksheet QR은 DOC_로 시작해야 합니다.';
+                                  }
+                                  if (_scanType == 'location' && !value.toUpperCase().startsWith('LOC_')) {
+                                    return 'Location QR은 LOC_로 시작해야 합니다.';
+                                  }
+                                  return null;
+                                },
+                                onFieldSubmitted: (value) {
+                                  if (_formKey.currentState!.validate()) {
+                                    _handleQrCode(value);
+                                  }
+                                },
+                              ),
+                              const SizedBox(height: 12),
+
+                              // 확인 버튼
+                              SizedBox(
+                                height: 44,
+                                width: double.infinity,
+                                child: Opacity(
+                                  opacity: _isProcessing ? 0.6 : 1.0,
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      gradient: GxGradients.accentButton,
+                                      borderRadius: BorderRadius.circular(GxRadius.sm),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: GxColors.accent.withValues(alpha: 0.35),
+                                          blurRadius: 16,
+                                          offset: const Offset(0, 4),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Material(
+                                      color: Colors.transparent,
+                                      child: InkWell(
+                                        onTap: _isProcessing
+                                            ? null
+                                            : () {
+                                                if (_formKey.currentState!.validate()) {
+                                                  _handleQrCode(_qrCodeController.text);
+                                                }
+                                              },
+                                        borderRadius: BorderRadius.circular(GxRadius.sm),
+                                        child: Center(
+                                          child: _isProcessing
+                                              ? const SizedBox(
+                                                  height: 20,
+                                                  width: 20,
+                                                  child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation<Color>(Colors.white)),
+                                                )
+                                              : const Text('확인', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white)),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      const Text(
-                        '현재 텍스트 입력 방식으로 제공됩니다.\n'
-                        '웹 카메라 QR 스캔 기능은\n'
-                        '향후 업데이트에서 추가됩니다.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: GxColors.slate, fontSize: 12),
+                        ),
                       ),
                     ],
-                  ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildCameraView() {
+    if (_cameraInitializing) {
+      return const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(color: GxColors.white),
+            SizedBox(height: 12),
+            Text('카메라 초기화 중...', style: TextStyle(color: GxColors.silver, fontSize: 13)),
+          ],
+        ),
+      );
+    }
+
+    if (_cameraFailed) {
+      return Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.camera_alt_outlined, color: GxColors.silver, size: 40),
+          const SizedBox(height: 12),
+          const Text(
+            '카메라를 사용할 수 없습니다',
+            style: TextStyle(color: GxColors.silver, fontSize: 14),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            '아래 직접 입력을 사용하세요',
+            style: TextStyle(color: GxColors.slate, fontSize: 12),
+          ),
+        ],
+      );
+    }
+
+    // 카메라 활성 시 HtmlElementView로 QR 스캐너 div 렌더링
+    return Stack(
+      children: [
+        const HtmlElementView(viewType: _scannerDivId),
+        // 스캔 영역 오버레이
+        Center(
+          child: Container(
+            width: 220,
+            height: 220,
+            decoration: BoxDecoration(
+              border: Border.all(color: GxColors.accent, width: 2),
+              borderRadius: BorderRadius.circular(GxRadius.md),
+            ),
+          ),
+        ),
+        // 처리 중 오버레이
+        if (_isProcessing)
+          Container(
+            color: Colors.black54,
+            child: const Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  CircularProgressIndicator(color: GxColors.white),
+                  SizedBox(height: 12),
+                  Text('처리 중...', style: TextStyle(color: GxColors.white, fontSize: 13)),
+                ],
+              ),
+            ),
+          ),
+      ],
     );
   }
 
@@ -507,12 +684,3 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
     );
   }
 }
-
-// TODO: 향후 웹 카메라 지원 구현 예정
-// import 'dart:html' as html;
-//
-// Future<void> _scanWithCamera() async {
-//   final mediaDevices = html.window.navigator.mediaDevices;
-//   final stream = await mediaDevices?.getUserMedia({'video': true});
-//   // QR 스캔 로직 구현
-// }
