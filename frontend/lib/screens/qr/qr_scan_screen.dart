@@ -49,11 +49,30 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
     super.dispose();
   }
 
+  /// 카메라 컨테이너의 화면 좌표를 계산
+  Map<String, double>? _getCameraContainerRect() {
+    final context = _cameraContainerKey.currentContext;
+    if (context == null) return null;
+    final renderBox = context.findRenderObject() as RenderBox?;
+    if (renderBox == null || !renderBox.hasSize) return null;
+    final offset = renderBox.localToGlobal(Offset.zero);
+    return {
+      'left': offset.dx,
+      'top': offset.dy,
+      'width': renderBox.size.width,
+      'height': renderBox.size.height,
+    };
+  }
+
   Future<void> _startCamera() async {
     setState(() {
       _cameraInitializing = true;
       _cameraFailed = false;
     });
+
+    // 레이아웃 완료 후 컨테이너 위치 계산
+    await Future.delayed(const Duration(milliseconds: 100));
+    final rect = _getCameraContainerRect();
 
     final success = await _qrScannerService.start(
       elementId: _scannerDivId,
@@ -68,6 +87,10 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
           });
         }
       },
+      containerLeft: rect?['left'],
+      containerTop: rect?['top'],
+      containerWidth: rect?['width'],
+      containerHeight: rect?['height'],
     );
 
     if (mounted) {
@@ -396,6 +419,7 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
 
               // 카메라 뷰 (메인)
               Container(
+                key: _cameraContainerKey,
                 height: 300,
                 decoration: BoxDecoration(
                   color: Colors.black,
@@ -621,7 +645,7 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
     // 카메라 활성 시 DOM div가 이 영역 위에 오버레이됨
     return Stack(
       children: [
-        Container(key: _cameraContainerKey, color: Colors.black),
+        Container(color: Colors.black),
         // 스캔 영역 오버레이
         Center(
           child: Container(

@@ -24,10 +24,15 @@ class QrScannerService {
   /// [elementId]: 카메라 미리보기를 렌더링할 HTML 요소 ID
   /// [onResult]: QR 코드 인식 성공 콜백
   /// [onError]: 에러 콜백 (선택적)
+  /// [containerLeft/Top/Width/Height]: Flutter 카메라 컨테이너의 화면 좌표
   Future<bool> start({
     required String elementId,
     required void Function(String qrCode) onResult,
     void Function(String error)? onError,
+    double? containerLeft,
+    double? containerTop,
+    double? containerWidth,
+    double? containerHeight,
   }) async {
     if (_isRunning) {
       await stop();
@@ -37,6 +42,10 @@ class QrScannerService {
         elementId: elementId,
         onResult: onResult,
         onError: onError,
+        containerLeft: containerLeft,
+        containerTop: containerTop,
+        containerWidth: containerWidth,
+        containerHeight: containerHeight,
       );
       _isRunning = success;
       return success;
@@ -45,6 +54,21 @@ class QrScannerService {
       _isRunning = false;
       return false;
     }
+  }
+
+  /// DOM 스캐너 div 위치 업데이트 (스크롤 대응)
+  void updatePosition({
+    required double left,
+    required double top,
+    required double width,
+    required double height,
+  }) {
+    qr_impl.updateScannerDivPosition(
+      left: left,
+      top: top,
+      width: width,
+      height: height,
+    );
   }
 
   /// QR 스캐너 중지

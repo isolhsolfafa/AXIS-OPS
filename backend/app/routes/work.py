@@ -202,6 +202,30 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
 
     task_list = [_task_to_dict(task) for task in tasks]
 
+    # worker_name 일괄 조회 (작업자명 표시용)
+    worker_ids = list(set(t.worker_id for t in tasks if t.worker_id))
+    if worker_ids:
+        try:
+            from app.models.worker import get_db_connection as get_conn
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT id, name FROM workers WHERE id = ANY(%s)",
+                (worker_ids,)
+            )
+            worker_map = {row['id']: row['name'] for row in cur.fetchall()}
+            conn.close()
+            for item in task_list:
+                wid = item.get('worker_id')
+                item['worker_name'] = worker_map.get(wid) if wid else None
+        except Exception as e:
+            logger.warning(f"Worker name lookup failed: {e}")
+            for item in task_list:
+                item['worker_name'] = None
+    else:
+        for item in task_list:
+            item['worker_name'] = None
+
     return jsonify(task_list), 200
 
 

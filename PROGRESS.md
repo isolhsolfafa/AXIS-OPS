@@ -1454,3 +1454,62 @@ Sprint 12 (PIN 간편 로그인 + 협력사 출퇴근 + QR 카메라):
 ─────────────────────────────────────────────
 누적 테스트 파일: 34개, Sprint 12 신규 regression 0건
 ```
+
+---
+
+## Sprint 12 배포 + 핫픽스 (2026-02-28, Cowork 세션)
+
+### 배포 완료
+- **Netlify PWA**: `gaxis-ops.netlify.app` — `flutter build web` → `build/web` 드래그&드롭 배포
+- **Railway Flask API**: `axis-ops-api.up.railway.app` — GitHub push → 자동 배포
+- `constants.dart` apiBaseUrl → Railway 도메인으로 변경
+- `web/_redirects` 생성 (`/*  /index.html  200` SPA 라우팅)
+- 전체 API 동작 확인: auth/refresh ✅, hr/attendance/today ✅, app/alerts ✅
+
+### QR 카메라 수정
+- **Shadow DOM 이슈 해결**: Flutter `HtmlElementView` → `document.body`에 직접 div 생성 (`dart:html`)
+- **카메라 3단계 fallback**: environment(후면) → user(전면) → cameraId(첫번째 가용)
+- **권한 팝업 가려짐 해결**: `getUserMedia()` 선행 호출 → 권한 획득 후 div 생성
+- **스캐너 정사각형 조정**: 컨테이너 `width=height` (화면 78%), `aspectRatio: 1.0`, `borderRadius: 12px`
+
+### 앱 아이콘 커스터마이징
+- `logo-color.png`에서 G 다이아몬드 심볼 추출 (cols 232-448, rows 396-615)
+- favicon (32x32), PWA Icon-192/512 생성 (72% fill, 배경 #1E1E23)
+
+### WebSocket 임시 조치
+- FE raw WebSocket ↔ BE Flask-SocketIO 프로토콜 불일치 확인
+- reconnect 최대 2회, 간격 10초로 축소 (에러 로그 최소화)
+
+### Task 화면 제품 정보 개선
+
+#### BE 수정
+- `product.py`, `work.py` — API 응답에 `sales_order`, `customer`, `title_number`, `mech_start/end`, `elec_start/end` 추가
+
+#### FE 수정
+- `product_info.dart` — 6개 필드 추가 (`salesOrder`, `customer`, `titleNumber`, `mechStart/End`, `elecStart/End`)
+- `task_management_screen.dart` — 상단 헤더 간소화: **S/N, 모델 | 수주번호, 위치** 만 표시 (QR Doc ID 제거)
+- `task_detail_screen.dart` — 제품 상세 확장: 수주번호, 고객사, 기구/전장 협력사, 기구/전장 일정, 모듈 외주, QR Doc ID
+
+### BACKLOG 정비
+- 배포 항목(DP-3, DP-4) 완료 처리
+- BUG-1 (QR 카메라 팝업), BUG-2 (WebSocket 불일치) 추가
+- QR ETL 자동화 파이프라인 + QR 라벨 관리 페이지 추가
+- Geolocation 2차 보안 (GPS 위치 검증 + Admin 설정) 추가
+- 앱 아이콘 최적화(RV-3) 추가
+
+### 수정 파일 목록
+| 파일 | 변경 내용 |
+|------|----------|
+| `backend/app/routes/product.py` | API 응답에 sales_order 등 7개 필드 추가 |
+| `backend/app/routes/work.py` | location update 응답에 동일 필드 추가 |
+| `frontend/lib/models/product_info.dart` | 6개 필드 추가 (salesOrder, customer 등) |
+| `frontend/lib/screens/task/task_management_screen.dart` | 헤더 간소화 (S/N, 모델, 수주번호, 위치) |
+| `frontend/lib/screens/task/task_detail_screen.dart` | 제품 상세 정보 확장 |
+| `frontend/lib/services/qr_scanner_web.dart` | Shadow DOM 우회 + 권한 선행 요청 + 정사각형 |
+| `frontend/lib/services/websocket_service.dart` | reconnect 2회/10초 축소 |
+| `frontend/lib/utils/constants.dart` | apiBaseUrl Railway 도메인 |
+| `frontend/web/_redirects` | Netlify SPA 라우팅 |
+| `frontend/web/favicon.png` | G 심볼 아이콘 |
+| `frontend/web/icons/Icon-192.png` | PWA 아이콘 192x192 |
+| `frontend/web/icons/Icon-512.png` | PWA 아이콘 512x512 |
+| `BACKLOG.md` | 전면 정비 (완료 처리 + 버그/신규 항목 추가) |

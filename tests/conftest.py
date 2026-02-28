@@ -143,16 +143,41 @@ def db_schema():
         return
 
     def _execute_migrations():
-        """스키마 DROP 후 migrations 재실행"""
+        """스키마 DROP 후 migrations 재실행 (기존 worker 데이터 보존)"""
         params = _parse_db_url(db_url)
         conn = psycopg2.connect(**params)
         conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
         cursor = conn.cursor()
 
         try:
-            # 기존 스키마 정리 (재실행 대비) - Sprint 6 + Sprint 11 테이블 포함
+            # ── 기존 worker 데이터 백업 (실서비스 계정 보존) ──
+            backed_up_workers = []
+            backed_up_auth_settings = []
+            try:
+                cursor.execute(
+                    "SELECT id, name, email, password_hash, role::text, "
+                    "approval_status::text, email_verified, is_manager, is_admin, "
+                    "company, active_role "
+                    "FROM workers"
+                )
+                backed_up_workers = cursor.fetchall()
+                print(f"[db_schema] Backed up {len(backed_up_workers)} workers")
+
+                # hr.worker_auth_settings 백업 (PIN 설정)
+                cursor.execute(
+                    "SELECT worker_id, pin_hash, biometric_enabled, biometric_type, "
+                    "pin_fail_count, pin_locked_until "
+                    "FROM hr.worker_auth_settings"
+                )
+                backed_up_auth_settings = cursor.fetchall()
+                print(f"[db_schema] Backed up {len(backed_up_auth_settings)} auth settings")
+            except Exception as backup_err:
+                print(f"[db_schema] Worker backup skipped (table may not exist): {backup_err}")
+
+            # 기존 스키마 정리 (재실행 대비) - Sprint 6 + Sprint 11 + Sprint 12 테이블 포함
             drop_stmts = [
                 "DROP SCHEMA IF EXISTS checklist CASCADE",
+                "DROP SCHEMA IF EXISTS hr CASCADE",
                 "DROP TABLE IF EXISTS location_history CASCADE",
                 "DROP TABLE IF EXISTS offline_sync_queue CASCADE",
                 "DROP TABLE IF EXISTS app_alert_logs CASCADE",
@@ -188,6 +213,7 @@ def db_schema():
                 '006_sprint6_schema_changes.sql',
                 '008_sprint9_pause_resume.sql',
                 '009_sprint11_gst_tasks.sql',
+                '010_sprint12_hr_schema.sql',
             ]
 
             for filename in migration_files:
@@ -215,6 +241,53 @@ def db_schema():
                         except Exception as stmt_err:
                             # 개별 문장 실패 시 경고만 출력하고 계속 진행
                             print(f"Warning: Migration stmt failed in {filename}: {stmt_err}")
+            # ── 백업된 worker 데이터 복원 ──
+            if backed_up_workers:
+                restored = 0
+                for row in backed_up_workers:
+                    try:
+                        cursor.execute(
+                            """
+                            INSERT INTO workers (id, name, email, password_hash, role,
+                                approval_status, email_verified, is_manager, is_admin,
+                                company, active_role)
+                            VALUES (%s, %s, %s, %s, %s::role_enum,
+                                %s::approval_status_enum, %s, %s, %s,
+                                %s, %s)
+                            ON CONFLICT (id) DO NOTHING
+                            """,
+                            row
+                        )
+                        restored += 1
+                    except Exception as restore_err:
+                        print(f"[db_schema] Worker restore failed for id={row[0]}: {restore_err}")
+
+                # id 시퀀스를 최대값으로 조정
+                cursor.execute(
+                    "SELECT setval('workers_id_seq', COALESCE((SELECT MAX(id) FROM workers), 1))"
+                )
+                print(f"[db_schema] Restored {restored}/{len(backed_up_workers)} workers")
+
+            # hr.worker_auth_settings 복원
+            if backed_up_auth_settings:
+                restored_auth = 0
+                for row in backed_up_auth_settings:
+                    try:
+                        cursor.execute(
+                            """
+                            INSERT INTO hr.worker_auth_settings
+                                (worker_id, pin_hash, biometric_enabled, biometric_type,
+                                 pin_fail_count, pin_locked_until)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (worker_id) DO NOTHING
+                            """,
+                            row
+                        )
+                        restored_auth += 1
+                    except Exception as auth_err:
+                        print(f"[db_schema] Auth settings restore failed: {auth_err}")
+                print(f"[db_schema] Restored {restored_auth}/{len(backed_up_auth_settings)} auth settings")
+
         finally:
             cursor.close()
             conn.close()

@@ -19,6 +19,7 @@ class TaskItem {
   final int? durationMinutes; // 소요시간 (분 단위, completed_at - started_at)
   final bool isApplicable; // Task 적용 여부 (관리자/사내직원이 비활성화 가능)
   final bool locationQrVerified;
+  final String? workerName; // 작업자 이름
   final bool isPaused; // 일시정지 여부
   final int totalPauseMinutes; // 누적 일시정지 시간 (분)
   final DateTime createdAt;
@@ -37,6 +38,7 @@ class TaskItem {
     this.durationMinutes,
     this.isApplicable = true,
     this.locationQrVerified = false,
+    this.workerName,
     this.isPaused = false,
     this.totalPauseMinutes = 0,
     required this.createdAt,
@@ -82,6 +84,7 @@ class TaskItem {
       durationMinutes: json['duration_minutes'] as int?,
       isApplicable: json['is_applicable'] as bool? ?? true,
       locationQrVerified: json['location_qr_verified'] as bool? ?? false,
+      workerName: json['worker_name'] as String?,
       isPaused: json['is_paused'] as bool? ?? false,
       totalPauseMinutes: json['total_pause_minutes'] as int? ?? 0,
       createdAt: json['created_at'] != null
@@ -108,6 +111,7 @@ class TaskItem {
       'duration_minutes': durationMinutes,
       'is_applicable': isApplicable,
       'location_qr_verified': locationQrVerified,
+      'worker_name': workerName,
       'is_paused': isPaused,
       'total_pause_minutes': totalPauseMinutes,
       'created_at': createdAt.toIso8601String(),
@@ -124,6 +128,7 @@ class TaskItem {
     String? taskCategory,
     String? taskId,
     String? taskName,
+    String? workerName,
     DateTime? startedAt,
     DateTime? completedAt,
     int? durationMinutes,
@@ -142,6 +147,7 @@ class TaskItem {
       taskCategory: taskCategory ?? this.taskCategory,
       taskId: taskId ?? this.taskId,
       taskName: taskName ?? this.taskName,
+      workerName: workerName ?? this.workerName,
       startedAt: startedAt ?? this.startedAt,
       completedAt: completedAt ?? this.completedAt,
       durationMinutes: durationMinutes ?? this.durationMinutes,
@@ -201,6 +207,7 @@ class TaskItem {
         other.taskCategory == taskCategory &&
         other.taskId == taskId &&
         other.taskName == taskName &&
+        other.workerName == workerName &&
         other.startedAt == startedAt &&
         other.completedAt == completedAt &&
         other.durationMinutes == durationMinutes &&
@@ -222,6 +229,7 @@ class TaskItem {
       taskCategory,
       taskId,
       taskName,
+      workerName,
       startedAt,
       completedAt,
       durationMinutes,

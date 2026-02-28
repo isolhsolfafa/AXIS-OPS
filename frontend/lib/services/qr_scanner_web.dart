@@ -34,7 +34,8 @@ String ensureScannerDiv({html.Rectangle? containerRect}) {
       ..left = '${containerRect.left}px'
       ..top = '${containerRect.top}px'
       ..width = '${containerRect.width}px'
-      ..height = '${containerRect.height}px';
+      ..height = '${containerRect.height}px'
+      ..borderRadius = '12px';
   } else {
     // 기본값: 완전 정사각형 (QR코드용), 화면 중앙 정렬
     final screenWidth = html.window.innerWidth ?? 400;
@@ -89,10 +90,30 @@ Future<bool> _requestCameraPermission() async {
 /// 1. facingMode: environment (모바일 후면 카메라)
 /// 2. facingMode: user (데스크톱/전면 카메라)
 /// 3. 첫 번째 사용 가능한 카메라 ID
+/// 외부에서 스캐너 div 위치를 업데이트 (스크롤 시 호출)
+void updateScannerDivPosition({
+  required double left,
+  required double top,
+  required double width,
+  required double height,
+}) {
+  if (_scannerDiv == null) return;
+  _scannerDiv!.style
+    ..left = '${left}px'
+    ..top = '${top}px'
+    ..width = '${width}px'
+    ..height = '${height}px'
+    ..transform = '';  // translateX 제거
+}
+
 Future<bool> startQrScanner({
   required String elementId,
   required void Function(String qrCode) onResult,
   void Function(String error)? onError,
+  double? containerLeft,
+  double? containerTop,
+  double? containerWidth,
+  double? containerHeight,
 }) async {
   try {
     final html5QrcodeClass = js_util.getProperty(
@@ -113,8 +134,13 @@ Future<bool> startQrScanner({
       return false;
     }
 
-    // 권한 획득 후 DOM div 생성
-    final divId = ensureScannerDiv();
+    // 권한 획득 후 DOM div 생성 (컨테이너 위치 전달)
+    html.Rectangle? rect;
+    if (containerLeft != null && containerTop != null &&
+        containerWidth != null && containerHeight != null) {
+      rect = html.Rectangle(containerLeft, containerTop, containerWidth, containerHeight);
+    }
+    final divId = ensureScannerDiv(containerRect: rect);
 
     // DOM에 div가 실제로 존재하는지 확인
     await Future.delayed(const Duration(milliseconds: 300));

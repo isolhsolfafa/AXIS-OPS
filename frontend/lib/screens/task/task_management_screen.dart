@@ -307,6 +307,15 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
                     Text('ID: ${task.taskId}', style: const TextStyle(fontSize: 12, color: GxColors.steel)),
                     const SizedBox(width: 16),
                     Text('카테고리: ${task.taskCategory}', style: const TextStyle(fontSize: 12, color: GxColors.steel)),
+                    if (task.workerName != null) ...[
+                      const Spacer(),
+                      const Icon(Icons.person_outline, size: 13, color: GxColors.steel),
+                      const SizedBox(width: 3),
+                      Text(
+                        task.workerName!,
+                        style: const TextStyle(fontSize: 12, color: GxColors.slate, fontWeight: FontWeight.w500),
+                      ),
+                    ],
                   ],
                 ),
                 if (task.startedAt != null) ...[

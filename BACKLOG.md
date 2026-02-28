@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-02-28 (Sprint 12 완료, 배포 완료)
+> 마지막 업데이트: 2026-02-28 (Sprint 12 완료, 배포 완료, BUG-2/3/4 분석 완료, BUG-6 수정 완료)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -11,7 +11,11 @@
 | ID | 항목 | 상태 | 비고 |
 |----|------|------|------|
 | BUG-1 | QR 카메라 권한 팝업 가려짐 | 🔧 수정 중 | DOM 오버레이(z-index:9999)가 브라우저 권한 팝업을 가림. getUserMedia 선행 호출 방식으로 수정 진행 |
-| BUG-2 | WebSocket 프로토콜 불일치 | ⏸️ 보류 | FE: raw WebSocket(`/ws`) → BE: Flask-SocketIO(`/socket.io/`). 프로토콜 불일치로 연결 불가. 임시 조치: reconnect 2회/10초로 축소. 정식 수정 시 FE에 SocketIO 클라이언트 도입 또는 BE에 raw WebSocket 엔드포인트 추가 필요 |
+| BUG-2 | WebSocket 프로토콜 불일치 | 🔧 Sprint 13 (주말) | FE: raw WebSocket → BE: Flask-SocketIO 프로토콜 불일치. **수정 방안**: BE를 `flask-sock`(raw WS)으로 교체, FE 변경 없음. `socket_io_client` Flutter Web 이슈(#128) 회피. 상세: `SPRINT_13_PLAN.md` |
+| BUG-3 | 출퇴근 버튼 퇴근 후 비활성화 | 🔍 분석 완료 | BE는 당일 다중 in/out 쌍 지원(카운팅 로직), 그러나 FE에서 `checked_out` 상태가 종료 상태로 처리되어 재출근 버튼 비활성화됨. FE 상태 머신에 재출근 플로우 추가 필요. 일일 리셋은 KST 자정 기준 정상 동작 |
+| BUG-4 | 알림/알람 실시간 전달 안됨 | 🔍 분석 완료 (BUG-2 종속) | **근본 원인**: 1단계 리마인더가 `create_alert()`만 호출하여 DB 저장만 됨 → WebSocket broadcast 미호출. 추가로 BUG-2(프로토콜 불일치)로 실시간 전달 경로 자체가 끊김. **수정**: BUG-2 해결 + `scheduler_service.py`에서 `create_and_broadcast_alert()` 사용으로 변경. 3단계 에스컬레이션 익일 기준은 설계대로 정상 |
+| BUG-5 | QR 카메라 프레임 벗어남 | ✅ 수정 완료 | **근본 원인**: `ensureScannerDiv()`가 `containerRect` 없이 호출되어 하드코딩 위치(top:100px, 화면 78%) 사용 → Flutter 카메라 Container와 불일치. **수정**: `qr_scan_screen.dart`에서 `_cameraContainerKey`로 컨테이너 좌표 계산 → 서비스 레이어 통해 `ensureScannerDiv(containerRect)` 전달. borderRadius 12px 일치. `updatePosition()` 함수 추가(스크롤 대응) |
+| BUG-6 | 협력사 task 리스트에 작업자명 미표시 | ✅ 수정 완료 | BE `work.py`: task 목록 API에 `worker_name` 필드 추가 (workers 테이블 JOIN). FE `task_item.dart`: `workerName` 필드 추가. FE `task_management_screen.dart`: 카테고리 행에 작업자 아이콘+이름 표시. GST `gst_products_screen.dart`는 기존에 이미 worker_name 표시 구현됨 (시작된 작업만 표시 — 정상) |
 
 ---
 
