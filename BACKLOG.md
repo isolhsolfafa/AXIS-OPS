@@ -14,7 +14,7 @@
 | BUG-2 | WebSocket 프로토콜 불일치 | ✅ Sprint 13 수정 완료 | Flask-SocketIO → flask-sock(raw WS) 교체. events.py 전체 리라이트(ConnectionRegistry + ws_handler). FE 변경 0건. 배포/검증 대기 |
 | BUG-3 | 출퇴근 버튼 퇴근 후 비활성화 | 🔍 분석 완료 | BE는 당일 다중 in/out 쌍 지원(카운팅 로직), 그러나 FE에서 `checked_out` 상태가 종료 상태로 처리되어 재출근 버튼 비활성화됨. FE 상태 머신에 재출근 플로우 추가 필요. 일일 리셋은 KST 자정 기준 정상 동작 |
 | BUG-4 | 알림/알람 실시간 전달 안됨 | ✅ Sprint 13 수정 완료 | scheduler_service.py 5곳 `create_alert()` → `create_and_broadcast_alert()` 변경. DB 저장 + WebSocket broadcast 동시 처리. BUG-2 해결로 실시간 경로 복원. 배포/검증 대기 |
-| BUG-5 | QR 카메라 프레임 벗어남 | ✅ 수정 완료 | **근본 원인**: `ensureScannerDiv()`가 `containerRect` 없이 호출되어 하드코딩 위치(top:100px, 화면 78%) 사용 → Flutter 카메라 Container와 불일치. **수정**: `qr_scan_screen.dart`에서 `_cameraContainerKey`로 컨테이너 좌표 계산 → 서비스 레이어 통해 `ensureScannerDiv(containerRect)` 전달. borderRadius 12px 일치. `updatePosition()` 함수 추가(스크롤 대응) |
+| BUG-5 | QR 카메라 프레임 벗어남 | ✅ 수정 완료 + 배포 | **근본 원인**: `ensureScannerDiv()` CSS가 `left + right` 대칭 여백 가정 → `right = containerLeft`로 계산 → 비대칭 레이아웃에서 카메라 오른쪽 벗어남. **수정**: `left + width` 명시 방식으로 변경. Flutter `renderBox.size.width` 직접 전달. `right` CSS 제거. 리사이즈/스크롤 핸들러도 동일 방식 적용. 테스트 19건 추가 |
 | BUG-6 | 협력사 task 리스트에 작업자명 미표시 | ✅ 수정 완료 | BE `work.py`: task 목록 API에 `worker_name` 필드 추가 (workers 테이블 JOIN). FE `task_item.dart`: `workerName` 필드 추가. FE `task_management_screen.dart`: 카테고리 행에 작업자 아이콘+이름 표시. GST `gst_products_screen.dart`는 기존에 이미 worker_name 표시 구현됨 (시작된 작업만 표시 — 정상) |
 
 ---
@@ -160,4 +160,5 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 | 12 | PIN + 출퇴근 + QR 카메라 | 22 PASSED |
 | 12 핫픽스 | PIN 자동로그인 분기 로직 | 수동 수정 4건 |
 | 12 배포 | Netlify PWA + Railway API 배포 | 전체 API 동작 확인 |
-| 13 | WebSocket flask-sock 마이그레이션 + BUG-2/4 수정 | 코딩 완료, 배포 대기 |
+| 13 | WebSocket flask-sock 마이그레이션 + BUG-2/4 수정 | 18 PASSED, 배포 완료 |
+| BUG-5 핫픽스 | QR 카메라 DOM left+width CSS 수정 | 19 PASSED |

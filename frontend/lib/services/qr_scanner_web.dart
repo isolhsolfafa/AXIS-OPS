@@ -7,63 +7,22 @@ import 'package:flutter/foundation.dart';
 dynamic _scanner;
 html.DivElement? _scannerDiv;
 html.StyleElement? _scannerStyle;
+StreamSubscription? _resizeSubscription;
 
-/// html5-qrcode 내부 video/canvas 요소를 컨테이너에 맞추는 CSS 주입
-///
-/// html5-qrcode 라이브러리 내부 DOM 구조:
-///   #qr-scanner-dom-div
-///     └── div (내부 컨테이너 — 라이브러리가 자체 width/height 계산)
-///           ├── video (카메라 피드)
-///           ├── canvas (스캔 분석용)
-///           └── div (qr-shaded-region — 스캔 영역 표시)
-///
-/// 문제: 라이브러리가 aspectRatio/qrbox 기반으로 내부 크기를 계산하여
-///       부모 컨테이너 밖으로 넘침 → CSS로 강제 제한
+/// 저장된 컨테이너 위치/크기 (반응형 리사이즈 시 재사용)
+double _savedLeft = 20.0;
+double _savedTopPx = 100.0;
+double _savedWidth = 360.0;
+double _savedHeight = 300.0;
+
+/// 최소한의 CSS만 주입 — 컨테이너 overflow만 제어
+/// html5-qrcode 내부 요소는 절대 건드리지 않음 (QR 인식 로직 보존)
 void _injectScannerCss() {
-  if (_scannerStyle != null) return; // 이미 주입됨
+  if (_scannerStyle != null) return;
   _scannerStyle = html.StyleElement()
     ..text = '''
       #qr-scanner-dom-div {
         overflow: hidden !important;
-        box-sizing: border-box !important;
-      }
-      #qr-scanner-dom-div * {
-        box-sizing: border-box !important;
-      }
-      #qr-scanner-dom-div > div {
-        position: relative !important;
-        width: 100% !important;
-        height: 100% !important;
-        overflow: hidden !important;
-        max-width: 100% !important;
-      }
-      #qr-scanner-dom-div > div > div {
-        position: relative !important;
-        width: 100% !important;
-        height: 100% !important;
-        overflow: hidden !important;
-        max-width: 100% !important;
-      }
-      #qr-scanner-dom-div video {
-        object-fit: cover !important;
-        width: 100% !important;
-        height: 100% !important;
-        position: absolute !important;
-        top: 0 !important;
-        left: 0 !important;
-        max-width: none !important;
-        min-width: 100% !important;
-        min-height: 100% !important;
-      }
-      #qr-scanner-dom-div img {
-        display: none !important;
-      }
-      #qr-scanner-dom-div canvas {
-        position: absolute !important;
-        top: 0 !important;
-        left: 0 !important;
-        width: 100% !important;
-        height: 100% !important;
       }
     ''';
   html.document.head!.append(_scannerStyle!);
@@ -75,56 +34,30 @@ void _removeScannerCss() {
   _scannerStyle = null;
 }
 
-/// html5-qrcode가 시작 후 생성한 내부 요소의 inline style을 강제 수정
-///
-/// 라이브러리가 start() 완료 후 내부 div에 고정 width/height를 inline으로 넣기 때문에
-/// CSS !important만으로는 부족 → JS로 직접 inline style 제거/수정
-void _forceContainerFit(String divId) {
-  // 약간의 딜레이 후 실행 (라이브러리가 내부 DOM 구성 완료할 시간)
-  Future.delayed(const Duration(milliseconds: 200), () {
-    final container = html.document.getElementById(divId);
-    if (container == null) return;
-
-    // 1차 자식 div (라이브러리가 생성한 내부 컨테이너)
-    final children = container.querySelectorAll('div');
-    for (var i = 0; i < children.length; i++) {
-      final child = children[i] as html.Element;
-      child.style
-        ..width = '100%'
-        ..height = '100%'
-        ..maxWidth = '100%'
-        ..overflow = 'hidden'
-        ..position = 'relative';
-    }
-
-    // video 요소 강제 스타일
-    final videos = container.querySelectorAll('video');
-    for (var i = 0; i < videos.length; i++) {
-      final video = videos[i] as html.Element;
-      video.style
-        ..width = '100%'
-        ..height = '100%'
-        ..objectFit = 'cover'
-        ..position = 'absolute'
-        ..top = '0'
-        ..left = '0';
-    }
-
-    debugPrint('[QrScannerWeb] Forced container fit on $divId');
-  });
-}
-
 /// DOM에 스캐너 div를 직접 생성 (Flutter Shadow DOM 우회)
 ///
-/// [containerRect]: 카메라 뷰 영역의 위치/크기 (화면 좌표)
+/// ★ 정렬 전략:
+/// - Flutter renderBox에서 얻은 실제 left, top, width, height를 그대로 사용
+/// - CSS `left` + `width` 명시 방식 (right 방식 제거)
+///   → 대칭 여백 가정 오류 수정 (right=left는 ScrollView가 완전 중앙일 때만 성립)
+/// - position: fixed 기준이므로 Flutter logical pixel = CSS pixel (DPR 보정 불필요)
+///
+/// [containerLeft]: Flutter 컨테이너의 왼쪽 위치 (논리 px = CSS px)
+/// [containerTop]: Flutter 컨테이너의 상단 위치 (논리 px = CSS px)
+/// [containerWidth]: Flutter 컨테이너 너비 (논리 px = CSS px)
+/// [containerHeight]: Flutter 컨테이너 높이 (논리 px = CSS px)
 /// 반환: 생성된 div의 ID
-String ensureScannerDiv({html.Rectangle? containerRect}) {
+String ensureScannerDiv({
+  double? containerLeft,
+  double? containerTop,
+  double? containerWidth,
+  double? containerHeight,
+}) {
   const divId = 'qr-scanner-dom-div';
 
-  // CSS 주입
   _injectScannerCss();
 
-  // 이미 존재하면 위치만 업데이트
+  // 이미 존재하면 재사용
   _scannerDiv = html.document.getElementById(divId) as html.DivElement?;
   if (_scannerDiv == null) {
     _scannerDiv = html.DivElement()
@@ -132,38 +65,92 @@ String ensureScannerDiv({html.Rectangle? containerRect}) {
     html.document.body!.append(_scannerDiv!);
   }
 
-  // 스타일 설정 — 카메라 뷰 영역에 오버레이
+  // 스타일 설정 — Flutter 카메라 컨테이너 위에 position:fixed 오버레이
   _scannerDiv!.style
     ..position = 'fixed'
     ..zIndex = '9999'
     ..backgroundColor = '#000000'
-    ..overflow = 'hidden';
+    ..overflow = 'hidden'
+    ..borderRadius = '12px';
 
-  if (containerRect != null) {
+  if (containerLeft != null && containerTop != null &&
+      containerWidth != null && containerHeight != null) {
+    // ★ 핵심: left + width 방식 (정확한 위치 지정)
+    // Flutter renderBox.localToGlobal() 논리 픽셀 = CSS position:fixed 픽셀
+    // right 제거 → 대칭 여백 가정 오류 수정
+    _savedLeft = containerLeft;
+    _savedTopPx = containerTop;
+    _savedWidth = containerWidth;
+    _savedHeight = containerHeight;
+
     _scannerDiv!.style
-      ..left = '${containerRect.left}px'
-      ..top = '${containerRect.top}px'
-      ..width = '${containerRect.width}px'
-      ..height = '${containerRect.height}px'
-      ..borderRadius = '12px';
+      ..left = '${containerLeft}px'
+      ..top = '${containerTop}px'
+      ..width = '${containerWidth}px'
+      ..height = '${containerHeight}px'
+      ..right = '' // right 제거 — width로 명시
+      ..transform = '';
+
+    debugPrint('[QrScannerWeb] ensureScannerDiv (explicit): '
+        'left=${containerLeft}px, top=${containerTop}px, '
+        'width=${containerWidth}px, height=${containerHeight}px');
   } else {
-    // 기본값: 완전 정사각형 (QR코드용), 화면 중앙 정렬
+    // fallback: 화면 중앙, padding 5% 양쪽
     final screenWidth = html.window.innerWidth ?? 400;
-    final boxSize = (screenWidth * 0.78).clamp(260, 360).toInt();
+    final margin = (screenWidth * 0.05).clamp(16, 40).toInt();
+    final fallbackWidth = screenWidth - margin * 2;
+
+    _savedLeft = margin.toDouble();
+    _savedTopPx = 100;
+    _savedWidth = fallbackWidth.toDouble();
+    _savedHeight = 300;
+
     _scannerDiv!.style
-      ..left = '50%'
+      ..left = '${margin}px'
       ..top = '100px'
-      ..width = '${boxSize}px'
-      ..height = '${boxSize}px'
-      ..transform = 'translateX(-50%)'  // 수평 중앙
-      ..borderRadius = '12px';
+      ..width = '${fallbackWidth}px'
+      ..height = '300px'
+      ..right = '' // right 제거
+      ..transform = '';
+
+    debugPrint('[QrScannerWeb] ensureScannerDiv (fallback): '
+        'margin=${margin}px, viewport=${screenWidth}px, width=${fallbackWidth}px');
   }
+
+  // 반응형: 창 크기 변경 시 자동 재조정 (회전, 리사이즈 대응)
+  _startResizeListener();
 
   return divId;
 }
 
-/// DOM에서 스캐너 div + CSS 제거
+/// 창 크기 변경 리스너 (화면 회전, 브라우저 리사이즈 대응)
+void _startResizeListener() {
+  _resizeSubscription?.cancel();
+  _resizeSubscription = html.window.onResize.listen((_) {
+    if (_scannerDiv == null) return;
+    // 저장된 left/top/width/height 재적용 (명시적 위치 유지)
+    _scannerDiv!.style
+      ..left = '${_savedLeft}px'
+      ..top = '${_savedTopPx}px'
+      ..width = '${_savedWidth}px'
+      ..height = '${_savedHeight}px'
+      ..right = '';
+
+    final viewportWidth = html.window.innerWidth ?? 400;
+    debugPrint('[QrScannerWeb] onResize: viewport=${viewportWidth}px, '
+        'left=${_savedLeft}px, width=${_savedWidth}px');
+  });
+}
+
+/// 리사이즈 리스너 해제
+void _stopResizeListener() {
+  _resizeSubscription?.cancel();
+  _resizeSubscription = null;
+}
+
+/// DOM에서 스캐너 div + CSS + 리스너 제거
 void removeScannerDiv() {
+  _stopResizeListener();
   _scannerDiv?.remove();
   _scannerDiv = null;
   _removeScannerCss();
@@ -176,10 +163,7 @@ Future<bool> _requestCameraPermission() async {
     final mediaDevices = html.window.navigator.mediaDevices;
     if (mediaDevices == null) return false;
 
-    // getUserMedia 호출 → 브라우저 권한 팝업 표시
     final stream = await mediaDevices.getUserMedia({'video': true});
-
-    // 권한 획득 성공 → stream 즉시 중지 (html5-qrcode가 자체적으로 다시 열음)
     stream.getTracks().forEach((track) => track.stop());
 
     debugPrint('[QrScannerWeb] Camera permission granted');
@@ -190,17 +174,6 @@ Future<bool> _requestCameraPermission() async {
   }
 }
 
-/// QR 스캐너 시작 (웹 구현 — DOM 직접 생성 방식)
-///
-/// 플로우:
-/// 1. getUserMedia()로 카메라 권한 먼저 요청 (팝업 표시)
-/// 2. 권한 획득 후 DOM div 생성
-/// 3. html5-qrcode 스캐너 시작
-///
-/// 카메라 우선순위:
-/// 1. facingMode: environment (모바일 후면 카메라)
-/// 2. facingMode: user (데스크톱/전면 카메라)
-/// 3. 첫 번째 사용 가능한 카메라 ID
 /// 외부에서 스캐너 div 위치를 업데이트 (스크롤 시 호출)
 void updateScannerDivPosition({
   required double left,
@@ -209,14 +182,28 @@ void updateScannerDivPosition({
   required double height,
 }) {
   if (_scannerDiv == null) return;
+
+  _savedLeft = left;
+  _savedTopPx = top;
+  _savedWidth = width;
+  _savedHeight = height;
+
+  // 명시적 left + width 방식 (대칭 가정 오류 수정)
   _scannerDiv!.style
     ..left = '${left}px'
     ..top = '${top}px'
     ..width = '${width}px'
     ..height = '${height}px'
-    ..transform = '';  // translateX 제거
+    ..right = '' // right 제거
+    ..transform = '';
 }
 
+/// QR 스캐너 시작 (웹 구현 — DOM 직접 생성 방식)
+///
+/// 전략:
+/// - left + right CSS로 반응형 가로 크기 결정 (width 직접 설정 안함)
+/// - html5-qrcode에 컨테이너 크기를 자동 계산하도록 유도
+/// - 내부 요소 CSS 오버라이드 하지 않음 (QR 인식 보존)
 Future<bool> startQrScanner({
   required String elementId,
   required void Function(String qrCode) onResult,
@@ -237,36 +224,55 @@ Future<bool> startQrScanner({
       return false;
     }
 
+    // ★ 진단 로그: Flutter에서 전달받은 좌표 vs viewport
+    final viewportWidth = html.window.innerWidth ?? 400;
+    final viewportHeight = html.window.innerHeight ?? 800;
+    final dpr = html.window.devicePixelRatio;
+    debugPrint('[QrScannerWeb] ═══════════════════════════════════════');
+    debugPrint('[QrScannerWeb] Flutter coords: left=$containerLeft, top=$containerTop, '
+        'width=$containerWidth, height=$containerHeight');
+    debugPrint('[QrScannerWeb] Viewport: ${viewportWidth}x$viewportHeight, DPR: $dpr');
+    final bodyRect = html.document.body?.getBoundingClientRect();
+    debugPrint('[QrScannerWeb] Body rect: left=${bodyRect?.left}, top=${bodyRect?.top}, width=${bodyRect?.width}');
+    debugPrint('[QrScannerWeb] ═══════════════════════════════════════');
+
     // ★ 핵심: div 생성 전에 카메라 권한을 먼저 요청
-    // 이 시점에는 오버레이 div가 없으므로 브라우저 팝업이 정상 표시됨
     final hasPermission = await _requestCameraPermission();
     if (!hasPermission) {
       onError?.call('카메라 권한이 거부되었습니다. 브라우저 설정에서 카메라를 허용해주세요.');
       return false;
     }
 
-    // 권한 획득 후 DOM div 생성 (컨테이너 위치 전달)
-    html.Rectangle? rect;
-    if (containerLeft != null && containerTop != null &&
-        containerWidth != null && containerHeight != null) {
-      rect = html.Rectangle(containerLeft, containerTop, containerWidth, containerHeight);
-    }
-    final divId = ensureScannerDiv(containerRect: rect);
+    // 권한 획득 후 DOM div 생성 (Flutter 실제 좌표 그대로 전달)
+    final divId = ensureScannerDiv(
+      containerLeft: containerLeft,
+      containerTop: containerTop,
+      containerWidth: containerWidth,
+      containerHeight: containerHeight,
+    );
 
-    // DOM에 div가 실제로 존재하는지 확인
-    await Future.delayed(const Duration(milliseconds: 300));
+    // DOM에 div가 실제로 존재하는지 확인 + 레이아웃 안정화
+    await Future.delayed(const Duration(milliseconds: 500));
+
+    // ★ 실제 div 크기를 DOM에서 읽어서 qrbox 계산
+    final divRect = _scannerDiv?.getBoundingClientRect();
+    final actualDivHeight = divRect?.height ?? (containerHeight ?? 300);
+    debugPrint('[QrScannerWeb] Actual div rect: '
+        'left=${divRect?.left}, top=${divRect?.top}, '
+        'width=${divRect?.width}, height=${divRect?.height}');
+    debugPrint('[QrScannerWeb] Div actual style: left=${_scannerDiv?.style.left}, '
+        'top=${_scannerDiv?.style.top}, right=${_scannerDiv?.style.right}, '
+        'width=${_scannerDiv?.style.width}');
 
     _scanner = js_util.callConstructor(html5QrcodeClass, [divId]);
 
-    // qrbox를 컨테이너 크기에 맞게 동적 계산
-    // aspectRatio 제거 — 라이브러리가 자체 크기 계산을 하지 않도록
-    final qrboxSize = (containerWidth != null)
-        ? (containerWidth * 0.6).clamp(150, 250).toInt()
-        : 200;
+    // ★ qrbox: 실제 div 크기 기준으로 계산 (높이의 65%, 정사각형)
+    final int qrboxSize = (actualDivHeight * 0.65).clamp(120, 250).toInt();
+    debugPrint('[QrScannerWeb] qrbox size: $qrboxSize (from divHeight=$actualDivHeight)');
+
     final config = js_util.jsify({
       'fps': 10,
-      'qrbox': qrboxSize,  // 정수 전달 → 정사각형 스캔 영역
-      'disableFlip': false,
+      'qrbox': {'width': qrboxSize, 'height': qrboxSize},
     });
 
     final successCallback = js_util.allowInterop((String decodedText, dynamic result) {
@@ -274,7 +280,7 @@ Future<bool> startQrScanner({
     });
 
     final errorCallback = js_util.allowInterop((String errorMessage, dynamic error) {
-      // QR 미인식은 정상 상태
+      // QR 미인식은 정상 상태 — 무시
     });
 
     // 1차 시도: 후면 카메라 (모바일)
@@ -286,7 +292,7 @@ Future<bool> startQrScanner({
         [envConstraints, config, successCallback, errorCallback],
       );
       await js_util.promiseToFuture(promise);
-      _forceContainerFit(divId);
+      debugPrint('[QrScannerWeb] Started with environment camera');
       return true;
     } catch (e) {
       debugPrint('[QrScannerWeb] environment camera failed: $e');
@@ -302,7 +308,7 @@ Future<bool> startQrScanner({
         [userConstraints, config, successCallback, errorCallback],
       );
       await js_util.promiseToFuture(promise);
-      _forceContainerFit(divId);
+      debugPrint('[QrScannerWeb] Started with user camera');
       return true;
     } catch (e) {
       debugPrint('[QrScannerWeb] user camera failed: $e');
@@ -321,7 +327,7 @@ Future<bool> startQrScanner({
           [cameraId, config, successCallback, errorCallback],
         );
         await js_util.promiseToFuture(promise);
-        _forceContainerFit(divId);
+        debugPrint('[QrScannerWeb] Started with camera ID: $cameraId');
         return true;
       }
     } catch (e) {

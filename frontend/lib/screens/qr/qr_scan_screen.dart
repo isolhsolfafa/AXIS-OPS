@@ -70,9 +70,21 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
       _cameraFailed = false;
     });
 
-    // 레이아웃 완료 후 컨테이너 위치 계산
-    await Future.delayed(const Duration(milliseconds: 100));
+    // 레이아웃 완료 대기 (모바일에서 AppBar/SafeArea 안정화 필요)
+    await Future.delayed(const Duration(milliseconds: 300));
     final rect = _getCameraContainerRect();
+
+    // 진단 로그
+    if (rect != null) {
+      final mq = MediaQuery.of(context);
+      debugPrint('[QrScanScreen] ═══════════════════════════════════════');
+      debugPrint('[QrScanScreen] Container rect: $rect');
+      debugPrint('[QrScanScreen] Screen: ${mq.size.width}x${mq.size.height}');
+      debugPrint('[QrScanScreen] Padding: ${mq.padding}');
+      debugPrint('[QrScanScreen] ViewPadding: ${mq.viewPadding}');
+      debugPrint('[QrScanScreen] DevicePixelRatio: ${mq.devicePixelRatio}');
+      debugPrint('[QrScanScreen] ═══════════════════════════════════════');
+    }
 
     final success = await _qrScannerService.start(
       elementId: _scannerDivId,
@@ -643,20 +655,10 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
     }
 
     // 카메라 활성 시 DOM div가 이 영역 위에 오버레이됨
+    // html5-qrcode가 자체 스캔 영역 UI를 렌더링하므로 Flutter 오버레이 불필요
     return Stack(
       children: [
         Container(color: Colors.black),
-        // 스캔 영역 오버레이
-        Center(
-          child: Container(
-            width: 220,
-            height: 220,
-            decoration: BoxDecoration(
-              border: Border.all(color: GxColors.accent, width: 2),
-              borderRadius: BorderRadius.circular(GxRadius.md),
-            ),
-          ),
-        ),
         // 처리 중 오버레이
         if (_isProcessing)
           Container(

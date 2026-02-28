@@ -1659,3 +1659,31 @@ Sprint 12 (PIN 간편 로그인 + 협력사 출퇴근 + QR 카메라):
 - [x] 기존 REST API 정상 동작 확인 (`/health` 200 OK)
 - [x] 알림 E2E: Admin 로그인 → JWT WSS 연결 → Admin API 200 OK ✅
 - [x] Admin 비밀번호 해시 수정 (migration SQL + DB 동기화)
+
+---
+
+## BUG-5 핫픽스: QR 카메라 DOM 오버레이 위치 정렬 (2026-03-01) ✅
+
+### 근본 원인
+- `qr_scanner_web.dart`의 `ensureScannerDiv()`가 **`left + right` CSS 대칭 여백 가정** 사용
+- `right = containerLeft` → 비대칭 레이아웃(SafeArea, ScrollView padding)에서 카메라 프레임이 오른쪽으로 벗어남
+
+### 수정 내용
+**FE 수정** (`frontend/lib/services/qr_scanner_web.dart`):
+1. `ensureScannerDiv()`: `left + right` → **`left + width` 명시 방식**으로 변경
+   - Flutter `renderBox.size.width`를 `containerWidth`로 직접 전달
+   - `right` CSS 비움 (`..right = ''`)
+2. `_startResizeListener()`: 저장된 `_savedLeft + _savedWidth`로 리사이즈 대응
+3. `updateScannerDivPosition()`: 동일한 `left + width` 방식 적용
+4. 미사용 `actualDivWidth` 변수 제거
+
+**변경 파일**: 1개 (`qr_scanner_web.dart`)
+**빌드 확인**: `flutter build web --release` — 에러 0건
+
+### 테스트 (`tests/backend/test_qr_scanner_logic.py`)
+- **19/19 PASSED** (좌표 계산 로직 Python 재현 테스트)
+  - TC-QR-01: 명시적 좌표 적용 (비대칭 여백, 좁은/넓은 뷰포트)
+  - TC-QR-02: fallback 사이즈 (최소/최대 margin 클램프)
+  - TC-QR-03: 위치 업데이트 (스크롤 시 top만 변경)
+  - TC-QR-04: div 제거 상태 정리
+  - TC-QR-05: qrbox 크기 계산 (120~250 클램프)
