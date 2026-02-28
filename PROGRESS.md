@@ -1579,7 +1579,7 @@ Sprint 12 (PIN 간편 로그인 + 협력사 출퇴근 + QR 카메라):
 
 ---
 
-## Sprint 13: WebSocket flask-sock 마이그레이션 (코딩 완료, 배포 대기)
+## Sprint 13: WebSocket flask-sock 마이그레이션 (완료 ✅)
 
 > 목표: BUG-2 (WebSocket 프로토콜 불일치) + BUG-4 (알림 실시간 전달 안됨) 해결
 > FE 변경: 0건 (이미 raw WebSocket 사용 중)
@@ -1647,10 +1647,14 @@ Sprint 12 (PIN 간편 로그인 + 협력사 출퇴근 + QR 카메라):
 | `BACKLOG.md` | BUG-2/4 완료, Sprint 13 이력 추가 |
 | `AGENT_TEAM_LAUNCH.md` | Sprint 13 프롬프트 추가 |
 
-### 배포 대기 항목
-- [ ] git commit & push
-- [ ] Railway 배포 (Procfile gthread 확인)
-- [ ] flutter build web → Netlify 배포
-- [ ] WSS 연결 테스트: `wss://axis-ops-api.up.railway.app/ws`
-- [ ] 알림 E2E: Admin 알림 생성 → PWA 실시간 수신
-- [ ] 기존 REST API 정상 동작 확인
+### 테스트 결과
+- Sprint 13 신규: **18/18 PASSED** (ConnectionRegistry, 메시징, 포맷, 동시 연결, ping/pong)
+- 회귀 테스트: **415 passed, 5 failed (기존 flaky), 12 skipped** — Sprint 13 regression 0건
+
+### 배포 완료 (2026-03-01)
+- [x] git commit & push (`4f6644f`)
+- [x] Railway 배포 — `gunicorn --worker-class gthread --threads 4` 정상 동작
+- [x] flutter build web → Netlify 배포 (https://gaxis-ops.netlify.app)
+- [x] WSS 연결 테스트: `wss://axis-ops-api.up.railway.app/ws` — connected + ping/pong ✅
+- [x] 기존 REST API 정상 동작 확인 (`/health` 200 OK)
+- [ ] 알림 E2E: Admin 알림 생성 → PWA 실시간 수신 (Admin 로그인 이슈 별도 확인 필요)
