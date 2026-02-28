@@ -6,6 +6,45 @@ import 'package:flutter/foundation.dart';
 
 dynamic _scanner;
 html.DivElement? _scannerDiv;
+html.StyleElement? _scannerStyle;
+
+/// html5-qrcode 내부 video/canvas 요소를 컨테이너에 맞추는 CSS 주입
+void _injectScannerCss() {
+  if (_scannerStyle != null) return; // 이미 주입됨
+  _scannerStyle = html.StyleElement()
+    ..text = '''
+      #qr-scanner-dom-div {
+        overflow: hidden !important;
+      }
+      #qr-scanner-dom-div video {
+        object-fit: cover !important;
+        width: 100% !important;
+        height: 100% !important;
+        position: absolute !important;
+        top: 0 !important;
+        left: 0 !important;
+      }
+      #qr-scanner-dom-div > div {
+        position: relative !important;
+        width: 100% !important;
+        height: 100% !important;
+      }
+      #qr-scanner-dom-div img,
+      #qr-scanner-dom-div canvas {
+        position: absolute !important;
+        top: 50% !important;
+        left: 50% !important;
+        transform: translate(-50%, -50%) !important;
+      }
+    ''';
+  html.document.head!.append(_scannerStyle!);
+}
+
+/// 주입된 CSS 제거
+void _removeScannerCss() {
+  _scannerStyle?.remove();
+  _scannerStyle = null;
+}
 
 /// DOM에 스캐너 div를 직접 생성 (Flutter Shadow DOM 우회)
 ///
@@ -13,6 +52,9 @@ html.DivElement? _scannerDiv;
 /// 반환: 생성된 div의 ID
 String ensureScannerDiv({html.Rectangle? containerRect}) {
   const divId = 'qr-scanner-dom-div';
+
+  // CSS 주입
+  _injectScannerCss();
 
   // 이미 존재하면 위치만 업데이트
   _scannerDiv = html.document.getElementById(divId) as html.DivElement?;
@@ -52,10 +94,11 @@ String ensureScannerDiv({html.Rectangle? containerRect}) {
   return divId;
 }
 
-/// DOM에서 스캐너 div 제거
+/// DOM에서 스캐너 div + CSS 제거
 void removeScannerDiv() {
   _scannerDiv?.remove();
   _scannerDiv = null;
+  _removeScannerCss();
 }
 
 /// 카메라 권한을 먼저 요청 (브라우저 팝업이 보이는 상태에서)
