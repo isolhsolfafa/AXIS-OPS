@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-02-28 (Sprint 12 완료, 배포 완료, BUG-2/3/4 분석 완료, BUG-6 수정 완료)
+> 마지막 업데이트: 2026-02-28 (Sprint 13 코딩 완료 — WebSocket flask-sock 마이그레이션, BUG-2/4 수정)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -11,9 +11,9 @@
 | ID | 항목 | 상태 | 비고 |
 |----|------|------|------|
 | BUG-1 | QR 카메라 권한 팝업 가려짐 | 🔧 수정 중 | DOM 오버레이(z-index:9999)가 브라우저 권한 팝업을 가림. getUserMedia 선행 호출 방식으로 수정 진행 |
-| BUG-2 | WebSocket 프로토콜 불일치 | 🔧 Sprint 13 (주말) | FE: raw WebSocket → BE: Flask-SocketIO 프로토콜 불일치. **수정 방안**: BE를 `flask-sock`(raw WS)으로 교체, FE 변경 없음. `socket_io_client` Flutter Web 이슈(#128) 회피. 상세: `SPRINT_13_PLAN.md` |
+| BUG-2 | WebSocket 프로토콜 불일치 | ✅ Sprint 13 수정 완료 | Flask-SocketIO → flask-sock(raw WS) 교체. events.py 전체 리라이트(ConnectionRegistry + ws_handler). FE 변경 0건. 배포/검증 대기 |
 | BUG-3 | 출퇴근 버튼 퇴근 후 비활성화 | 🔍 분석 완료 | BE는 당일 다중 in/out 쌍 지원(카운팅 로직), 그러나 FE에서 `checked_out` 상태가 종료 상태로 처리되어 재출근 버튼 비활성화됨. FE 상태 머신에 재출근 플로우 추가 필요. 일일 리셋은 KST 자정 기준 정상 동작 |
-| BUG-4 | 알림/알람 실시간 전달 안됨 | 🔍 분석 완료 (BUG-2 종속) | **근본 원인**: 1단계 리마인더가 `create_alert()`만 호출하여 DB 저장만 됨 → WebSocket broadcast 미호출. 추가로 BUG-2(프로토콜 불일치)로 실시간 전달 경로 자체가 끊김. **수정**: BUG-2 해결 + `scheduler_service.py`에서 `create_and_broadcast_alert()` 사용으로 변경. 3단계 에스컬레이션 익일 기준은 설계대로 정상 |
+| BUG-4 | 알림/알람 실시간 전달 안됨 | ✅ Sprint 13 수정 완료 | scheduler_service.py 5곳 `create_alert()` → `create_and_broadcast_alert()` 변경. DB 저장 + WebSocket broadcast 동시 처리. BUG-2 해결로 실시간 경로 복원. 배포/검증 대기 |
 | BUG-5 | QR 카메라 프레임 벗어남 | ✅ 수정 완료 | **근본 원인**: `ensureScannerDiv()`가 `containerRect` 없이 호출되어 하드코딩 위치(top:100px, 화면 78%) 사용 → Flutter 카메라 Container와 불일치. **수정**: `qr_scan_screen.dart`에서 `_cameraContainerKey`로 컨테이너 좌표 계산 → 서비스 레이어 통해 `ensureScannerDiv(containerRect)` 전달. borderRadius 12px 일치. `updatePosition()` 함수 추가(스크롤 대응) |
 | BUG-6 | 협력사 task 리스트에 작업자명 미표시 | ✅ 수정 완료 | BE `work.py`: task 목록 API에 `worker_name` 필드 추가 (workers 테이블 JOIN). FE `task_item.dart`: `workerName` 필드 추가. FE `task_management_screen.dart`: 카테고리 행에 작업자 아이콘+이름 표시. GST `gst_products_screen.dart`는 기존에 이미 worker_name 표시 구현됨 (시작된 작업만 표시 — 정상) |
 
@@ -92,12 +92,9 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 - **관련**: RV-1 (checklist 스키마 재검토)과 연결될 수 있음
 - **시기**: checklist 스키마 확정 후
 
-### WebSocket 실시간 통신 정식 구현
-- **내용**: 현재 FE raw WebSocket과 BE Flask-SocketIO 간 프로토콜 불일치 → 정식 연동
-- **방안 A**: FE에 `socket_io_client` 패키지 도입 (Flutter Web 호환)
-- **방안 B**: BE에 raw WebSocket 엔드포인트 추가 (`/ws` → pure WebSocket)
-- **현재 임시 조치**: reconnect 최대 2회, 간격 10초로 축소 (에러 로그 최소화)
-- **시기**: 실시간 알림/푸시 기능 필요 시
+### ~~WebSocket 실시간 통신 정식 구현~~ → ✅ Sprint 13 완료
+- Sprint 13에서 flask-sock(raw WS) 마이그레이션으로 해결
+- FE `web_socket_channel`과 BE `/ws` 엔드포인트 정합성 확보
 
 ### QR ETL 자동화 파이프라인 + QR 라벨 관리 페이지
 - **내용**: ETL 파이프라인을 Git 기반 Cron으로 자동 실행 → DB 적재 → QR 이미지 자동 생성 → QR 라벨 다운로드 페이지 상시 최신화
@@ -163,3 +160,4 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 | 12 | PIN + 출퇴근 + QR 카메라 | 22 PASSED |
 | 12 핫픽스 | PIN 자동로그인 분기 로직 | 수동 수정 4건 |
 | 12 배포 | Netlify PWA + Railway API 배포 | 전체 API 동작 확인 |
+| 13 | WebSocket flask-sock 마이그레이션 + BUG-2/4 수정 | 코딩 완료, 배포 대기 |

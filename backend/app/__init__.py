@@ -2,19 +2,20 @@
 Flask 앱 팩토리
 Sprint 1: 인증 API + 에러 핸들러
 Sprint 2: work, product blueprint 등록
+Sprint 13: Flask-SocketIO → flask-sock 마이그레이션
 """
 
 import logging
 from flask import Flask, jsonify
 from flask_cors import CORS
-from flask_socketio import SocketIO
+from flask_sock import Sock
 
 from app.config import Config
 
 
 logger = logging.getLogger(__name__)
 
-socketio = SocketIO(cors_allowed_origins="*")
+sock = Sock()
 
 
 def create_app(config_class: type = Config) -> Flask:
@@ -40,13 +41,17 @@ def create_app(config_class: type = Config) -> Flask:
     CORS(app, resources={r"/api/*": {"origins": "*"}})
     logger.info("CORS configured for /api/*")
 
-    # SocketIO 초기화 (Sprint 3)
-    socketio.init_app(app)
+    # flask-sock 초기화 (Sprint 13)
+    sock.init_app(app)
 
-    # WebSocket 이벤트 핸들러 등록 (Sprint 3)
-    from app.websocket.events import register_events
-    register_events(socketio)
-    logger.info("WebSocket events registered")
+    # WebSocket 라우트 등록 (Sprint 13)
+    from app.websocket.events import ws_handler
+
+    @sock.route('/ws')
+    def websocket_route(ws):
+        ws_handler(ws)
+
+    logger.info("WebSocket route /ws registered (flask-sock)")
 
     # 스케줄러 초기화 및 시작 (Sprint 4) — 테스트 환경에서는 비활성화
     if not app.config.get('TESTING', False):

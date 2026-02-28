@@ -2167,6 +2167,65 @@ Sprint 11까지의 모든 테스트가 여전히 PASS하는지 확인.
 
 ---
 
+## 🚀 Sprint 13 프롬프트 — WebSocket 정합성 수정 + 알림 실시간 전달 복원 (Sprint 12 완료 후 사용)
+
+```
+CLAUDE.md를 처음부터 끝까지 다시 읽고 Sprint 13을 시작해줘.
+SPRINT_13_PLAN.md도 반드시 읽어.
+
+⚠️ Sprint 13 핵심 목표:
+1. BUG-2 수정: Flask-SocketIO → flask-sock(raw WebSocket) 마이그레이션
+2. BUG-4 수정: scheduler_service.py의 create_alert() → create_and_broadcast_alert() 변경 (DB저장+WS broadcast 동시 처리)
+3. FE 변경 0건 (이미 raw WebSocket 사용 중)
+
+## 변경 대상 BE 파일 (8개)
+1. requirements.txt — Flask-SocketIO/eventlet 제거, flask-sock 추가
+2. Procfile — eventlet → gthread --threads 4
+3. app/websocket/events.py — **전체 리라이트** (ConnectionRegistry + ws_handler + emit 함수)
+4. app/websocket/__init__.py — ws_handler/registry export
+5. app/__init__.py — SocketIO 제거, Sock 초기화 + /ws 라우트 등록
+6. run.py — socketio.run() → app.run()
+7. app/services/scheduler_service.py — 5곳 create_alert → create_and_broadcast_alert
+8. tests/backend/test_websocket.py — 전면 리라이트 (ConnectionRegistry 단위 테스트)
+
+## events.py 핵심 구조
+- ConnectionRegistry: thread-safe dict (threading.Lock), connections + rooms 관리
+- ws_handler(ws): JWT from query param → registry 등록 → 메시지 루프 (ping/pong) → disconnect 정리
+- emit_new_alert(worker_id, data): worker room 전송 (기존 시그니처 유지)
+- emit_process_alert(data): role room 또는 broadcast (기존 시그니처 유지)
+- emit_task_completed(serial, category, worker_id): broadcast (기존 시그니처 유지)
+- 메시지 포맷: {"event": "xxx", "data": {...}} — FE websocket_service.dart와 일치
+
+## 팀 구성
+2명의 teammate를 생성해줘. 모든 teammate는 Sonnet 모델 사용:
+
+1. **BE** (Backend 담당) - 소유: backend/**
+2. **TEST** (테스트 담당) - 소유: tests/**
+
+FE 변경 없으므로 FE teammate 불필요.
+
+## 테스트 체크리스트
+- T-01~T-10: ConnectionRegistry 단위 테스트 (등록/해제, room, 메시지 전송, 동시 연결)
+- T-11: test_websocket.py 전면 수정
+- T-13: test_scheduler.py 영향 확인 (create_and_broadcast_alert 변경)
+
+## 배포 순서 (Day 2)
+1. git commit & push
+2. Railway 배포 (Procfile gthread 확인)
+3. flutter build web → Netlify 배포
+4. WSS 연결 테스트 (wss://axis-ops-api.up.railway.app/ws)
+
+## 규칙
+- SPRINT_13_PLAN.md의 섹션 2~7 순서대로 작업
+- alert_service.py의 emit_new_alert, emit_process_alert 시그니처 절대 변경 금지
+- FE 코드 수정 금지 (websocket_service.dart 그대로)
+- ⚠️ DB 시간: get_db_connection()의 `options="-c timezone=Asia/Seoul"` 절대 삭제 금지
+- .env 파일 절대 커밋 금지
+- Sprint 13 완료 시 PROGRESS.md, BACKLOG.md에 기록
+```
+
+---
+
 ## 주요 단축키
 
 | 단축키 | 기능 |

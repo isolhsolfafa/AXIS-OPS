@@ -1,11 +1,10 @@
 Flask>=3.0
-Flask-SocketIO>=5.3
+flask-sock
 flask-cors
 psycopg2-binary
 PyJWT>=2.8
 python-dotenv
 gunicorn
-eventlet>=0.33
 email-validator
 bcrypt
 APScheduler>=3.10

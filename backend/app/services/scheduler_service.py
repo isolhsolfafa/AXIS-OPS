@@ -174,22 +174,22 @@ def task_reminder_job() -> None:
         logger.info("Running task_reminder_job")
         tasks = _get_active_tasks()
 
-        from app.models.alert_log import create_alert
+        from app.services.alert_service import create_and_broadcast_alert
         for t in tasks:
             duration_hours = round(t['duration_minutes'] / 60, 1)
-            create_alert(
-                alert_type='TASK_REMINDER',
-                message=(
+            create_and_broadcast_alert({
+                'alert_type': 'TASK_REMINDER',
+                'message': (
                     f"[{t['serial_number']}] {t['task_category']} - "
                     f"{t['task_name']}: 작업 시작 후 {duration_hours}시간 경과, "
                     f"아직 완료 전입니다."
                 ),
-                serial_number=t['serial_number'],
-                qr_doc_id=t['qr_doc_id'],
-                triggered_by_worker_id=None,
-                target_worker_id=t['worker_id'],
-                target_role=None,
-            )
+                'serial_number': t['serial_number'],
+                'qr_doc_id': t['qr_doc_id'],
+                'triggered_by_worker_id': None,
+                'target_worker_id': t['worker_id'],
+                'target_role': None,
+            })
 
         logger.info(f"task_reminder_job: {len(tasks)} reminders sent")
 
@@ -206,7 +206,7 @@ def shift_end_reminder_job() -> None:
         logger.info("Running shift_end_reminder_job")
         tasks = _get_active_tasks()
 
-        from app.models.alert_log import create_alert
+        from app.services.alert_service import create_and_broadcast_alert
         notified_workers = set()
         for t in tasks:
             worker_id = t['worker_id']
@@ -214,19 +214,19 @@ def shift_end_reminder_job() -> None:
                 continue  # 같은 작업자에 중복 발송 방지
             notified_workers.add(worker_id)
 
-            create_alert(
-                alert_type='SHIFT_END_REMINDER',
-                message=(
+            create_and_broadcast_alert({
+                'alert_type': 'SHIFT_END_REMINDER',
+                'message': (
                     f"퇴근 전 미완료 작업이 있습니다. "
                     f"[{t['serial_number']}] {t['task_category']} - {t['task_name']}. "
                     f"작업을 완료하거나 관리자에게 보고해주세요."
                 ),
-                serial_number=t['serial_number'],
-                qr_doc_id=t['qr_doc_id'],
-                triggered_by_worker_id=None,
-                target_worker_id=worker_id,
-                target_role=None,
-            )
+                'serial_number': t['serial_number'],
+                'qr_doc_id': t['qr_doc_id'],
+                'triggered_by_worker_id': None,
+                'target_worker_id': worker_id,
+                'target_role': None,
+            })
 
         logger.info(f"shift_end_reminder_job: {len(notified_workers)} workers notified")
 
@@ -249,27 +249,27 @@ def task_escalation_job() -> None:
 
         overdue_tasks = _get_overdue_tasks(before=today_midnight)
 
-        from app.models.alert_log import create_alert
+        from app.services.alert_service import create_and_broadcast_alert
         escalated = 0
 
         for t in overdue_tasks:
             # 작업자의 company 관리자 목록 조회
             managers = _get_company_managers(t['worker_id'])
             for manager_id in managers:
-                create_alert(
-                    alert_type='TASK_ESCALATION',
-                    message=(
+                create_and_broadcast_alert({
+                    'alert_type': 'TASK_ESCALATION',
+                    'message': (
                         f"[에스컬레이션] [{t['serial_number']}] "
                         f"{t['task_category']} - {t['task_name']}: "
                         f"전일({t['started_date']}) 시작 후 미완료. "
                         f"작업자: {t['worker_name']} ({t['worker_company'] or '-'})"
                     ),
-                    serial_number=t['serial_number'],
-                    qr_doc_id=t['qr_doc_id'],
-                    triggered_by_worker_id=t['worker_id'],
-                    target_worker_id=manager_id,
-                    target_role=t['task_category'],
-                )
+                    'serial_number': t['serial_number'],
+                    'qr_doc_id': t['qr_doc_id'],
+                    'triggered_by_worker_id': t['worker_id'],
+                    'target_worker_id': manager_id,
+                    'target_role': t['task_category'],
+                })
                 escalated += 1
 
         logger.info(f"task_escalation_job: {escalated} escalation alerts sent for {len(overdue_tasks)} overdue tasks")
@@ -576,7 +576,7 @@ def force_pause_all_active_tasks(pause_type: str, message: str) -> None:
     from app.models.worker import get_db_connection
     from app.models.work_pause_log import create_pause
     from app.models.task_detail import set_paused
-    from app.models.alert_log import create_alert
+    from app.services.alert_service import create_and_broadcast_alert
     from psycopg2 import Error as PsycopgError
 
     conn = None
@@ -626,15 +626,15 @@ def force_pause_all_active_tasks(pause_type: str, message: str) -> None:
 
             # 작업자에게 알림
             try:
-                create_alert(
-                    alert_type='BREAK_TIME_PAUSE',
-                    message=f"[{task_row['serial_number']}] {task_row['task_name']}: {message}",
-                    serial_number=task_row['serial_number'],
-                    qr_doc_id=task_row['qr_doc_id'],
-                    triggered_by_worker_id=None,
-                    target_worker_id=worker_id,
-                    target_role=None,
-                )
+                create_and_broadcast_alert({
+                    'alert_type': 'BREAK_TIME_PAUSE',
+                    'message': f"[{task_row['serial_number']}] {task_row['task_name']}: {message}",
+                    'serial_number': task_row['serial_number'],
+                    'qr_doc_id': task_row['qr_doc_id'],
+                    'triggered_by_worker_id': None,
+                    'target_worker_id': worker_id,
+                    'target_role': None,
+                })
             except Exception as e:
                 logger.warning(f"Failed to create BREAK_TIME_PAUSE alert for worker_id={worker_id}: {e}")
 
@@ -651,7 +651,7 @@ def send_break_end_notifications(pause_type: str, message: str) -> None:
         message: 알림 메시지
     """
     from app.models.worker import get_db_connection
-    from app.models.alert_log import create_alert
+    from app.services.alert_service import create_and_broadcast_alert
     from psycopg2 import Error as PsycopgError
 
     conn = None
@@ -690,15 +690,15 @@ def send_break_end_notifications(pause_type: str, message: str) -> None:
         notified_workers.add(worker_id)
 
         try:
-            create_alert(
-                alert_type='BREAK_TIME_END',
-                message=f"[{row['serial_number']}] {row['task_name']}: {message}",
-                serial_number=row['serial_number'],
-                qr_doc_id=row['qr_doc_id'],
-                triggered_by_worker_id=None,
-                target_worker_id=worker_id,
-                target_role=None,
-            )
+            create_and_broadcast_alert({
+                'alert_type': 'BREAK_TIME_END',
+                'message': f"[{row['serial_number']}] {row['task_name']}: {message}",
+                'serial_number': row['serial_number'],
+                'qr_doc_id': row['qr_doc_id'],
+                'triggered_by_worker_id': None,
+                'target_worker_id': worker_id,
+                'target_role': None,
+            })
         except Exception as e:
             logger.warning(f"Failed to create BREAK_TIME_END alert for worker_id={worker_id}: {e}")
 

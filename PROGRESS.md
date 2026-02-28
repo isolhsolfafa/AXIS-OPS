@@ -1513,3 +1513,144 @@ Sprint 12 (PIN 간편 로그인 + 협력사 출퇴근 + QR 카메라):
 | `frontend/web/icons/Icon-192.png` | PWA 아이콘 192x192 |
 | `frontend/web/icons/Icon-512.png` | PWA 아이콘 512x512 |
 | `BACKLOG.md` | 전면 정비 (완료 처리 + 버그/신규 항목 추가) |
+
+---
+
+## Sprint 12 → 13 사이 버그 수정 (2026-02-28, Cowork 세션)
+
+### BUG-6 수정: 협력사 task 리스트에 작업자명 미표시
+
+#### BE 수정
+- `work.py` — `get_tasks_by_serial()`: task 목록 반환 시 workers 테이블 batch lookup 추가
+  - `worker_ids = list(set(t.worker_id for t in tasks if t.worker_id))`
+  - `SELECT id, name FROM workers WHERE id = ANY(%s)` → `worker_map` 생성
+  - 각 task에 `worker_name` 필드 추가
+
+#### FE 수정
+- `task_item.dart` — `workerName` 필드 추가 (constructor, fromJson, toJson, copyWith, equality, hashCode)
+- `task_management_screen.dart` — 카테고리 행에 작업자 아이콘(`Icons.person_outline`) + 이름 표시
+
+### BUG-5 수정: QR 카메라 프레임 벗어남 (2차 수정 포함)
+
+#### 1차 수정: 컨테이너 좌표 전달
+- `qr_scan_screen.dart` — `_getCameraContainerRect()` 메서드 추가, `_cameraContainerKey`로 Flutter 컨테이너 위치/크기 계산
+- `qr_scanner_service.dart` — `start()`에 `containerLeft/Top/Width/Height` 파라미터 추가 + `updatePosition()` 메서드
+- `qr_scanner_web.dart` — `ensureScannerDiv(containerRect)` 전달, `updateScannerDivPosition()` 함수 추가
+- `qr_scanner_stub.dart` — 새 시그니처 매칭
+
+#### 2차 수정: html5-qrcode 내부 video 요소 CSS 오버라이드
+- `qr_scanner_web.dart` — `_injectScannerCss()`: `#qr-scanner-dom-div video`에 `object-fit: cover`, `position: absolute`, `width/height: 100%`
+
+#### 3차 수정: 카메라 위치 오른쪽 치우침 해결
+- `qr_scanner_web.dart` — CSS 전면 개선:
+  - 모든 자식(`*`)에 `box-sizing: border-box`
+  - 내부 div 2단계(`> div`, `> div > div`) 모두 `overflow: hidden` + `max-width: 100%`
+  - video: `min-width/min-height: 100%` 추가
+  - img `display: none` (불필요한 이미지 요소 숨김)
+- config 변경: `aspectRatio: 1.0` 제거, `qrbox` 정수형으로 동적 계산 (컨테이너 60%)
+- `_forceContainerFit()` 함수 추가: start() 완료 후 200ms 뒤 JS로 내부 요소 inline style 직접 덮어쓰기
+
+### Worker DB 보존 수정
+
+#### 문제
+- `conftest.py`가 production Railway DB에 `DROP TABLE workers CASCADE` 실행
+- 테스트 DB URL = 프로덕션 DB URL (같은 Railway 인스턴스)
+- Sprint 테스트 실행 시마다 admin 외 모든 worker 데이터 초기화됨
+
+#### 수정
+- `conftest.py` — `db_schema` fixture에 backup/restore 로직 추가:
+  - DROP 전: `SELECT * FROM workers` → `backed_up_workers` 보관
+  - 마이그레이션 후: `INSERT INTO workers (...) ON CONFLICT (id) DO NOTHING` + `setval(workers_id_seq)`
+  - `hr.worker_auth_settings` 동일하게 backup/restore
+- `010_sprint12_hr_schema.sql` migration_files 목록에 추가 (누락 수정)
+- `DROP SCHEMA IF EXISTS hr CASCADE` drop_stmts에 추가
+
+### 수정 파일 목록
+| 파일 | 변경 내용 |
+|------|----------|
+| `backend/app/routes/work.py` | worker_name batch lookup 추가 (BUG-6) |
+| `frontend/lib/models/task_item.dart` | workerName 필드 추가 (BUG-6) |
+| `frontend/lib/screens/task/task_management_screen.dart` | 작업자 아이콘+이름 표시 (BUG-6) |
+| `frontend/lib/services/qr_scanner_web.dart` | CSS 강화 + config 변경 + _forceContainerFit (BUG-5) |
+| `frontend/lib/screens/qr/qr_scan_screen.dart` | _getCameraContainerRect + key 이동 (BUG-5) |
+| `frontend/lib/services/qr_scanner_service.dart` | container 좌표 파라미터 + updatePosition (BUG-5) |
+| `frontend/lib/services/qr_scanner_stub.dart` | 새 시그니처 매칭 (BUG-5) |
+| `tests/conftest.py` | worker backup/restore + hr schema (DB 보존) |
+
+---
+
+## Sprint 13: WebSocket flask-sock 마이그레이션 (코딩 완료, 배포 대기)
+
+> 목표: BUG-2 (WebSocket 프로토콜 불일치) + BUG-4 (알림 실시간 전달 안됨) 해결
+> FE 변경: 0건 (이미 raw WebSocket 사용 중)
+
+### BE 수정
+
+#### 1. 의존성 변경
+- `requirements.txt` — `Flask-SocketIO>=5.3`, `eventlet>=0.33` 제거 → `flask-sock` 추가
+- `Procfile` — `--worker-class eventlet` → `--worker-class gthread --threads 4`
+
+#### 2. events.py 전체 리라이트 (핵심)
+- `ConnectionRegistry` 클래스: thread-safe dict (`threading.Lock()`)
+  - `register(ws_id, ws, worker_id, role)` → worker_{id}, role_{role} room 자동 등록
+  - `unregister(ws_id)` → room 정리, 빈 room 삭제
+  - `send_to_room(room, message)` → 특정 room 전송
+  - `broadcast(message)` → 전체 전송
+- `ws_handler(ws)` — `/ws` 라우트 핸들러
+  - JWT query param → `decode_jwt()` → worker_id, role 추출
+  - connected 이벤트 전송
+  - 메시지 루프: ping → pong, 60초 timeout
+  - disconnect 시 registry cleanup
+- emit 함수 3개 — **기존 시그니처 100% 유지** (alert_service.py 호환)
+  - `emit_new_alert(worker_id, alert_data)` → worker room 전송
+  - `emit_process_alert(alert_data)` → role room 또는 broadcast
+  - `emit_task_completed(serial_number, task_category, worker_id)` → broadcast
+- 메시지 포맷: `{"event": "xxx", "data": {...}}` — FE `websocket_service.dart`와 일치
+
+#### 3. 앱 팩토리 수정
+- `app/__init__.py` — `from flask_socketio import SocketIO` 제거 → `from flask_sock import Sock`
+  - `socketio = SocketIO()` → `sock = Sock()`
+  - `socketio.init_app(app)` → `sock.init_app(app)`
+  - `@sock.route('/ws')` 데코레이터로 ws_handler 등록
+- `websocket/__init__.py` — `register_events(socketio)` 제거 → `ws_handler, registry` export
+- `run.py` — `from app import create_app, socketio` → `from app import create_app`
+  - `socketio.run(app, ...)` → `app.run(host, port, debug)`
+
+#### 4. 스케줄러 BUG-4 수정
+- `scheduler_service.py` — 5곳 `create_alert()` → `create_and_broadcast_alert()` 변경:
+  1. `task_reminder_job()` — 매 1시간 TASK_REMINDER
+  2. `shift_end_reminder_job()` — 17:00/20:00 SHIFT_END_REMINDER
+  3. `task_escalation_job()` — 익일 09:00 TASK_ESCALATION
+  4. `force_pause_all_active_tasks()` — 휴게시간 BREAK_TIME_PAUSE
+  5. `send_break_end_notifications()` — 휴게시간 종료 BREAK_TIME_END
+- 효과: DB 저장 + WebSocket broadcast 동시 처리 (이전: DB 저장만)
+
+### 테스트 수정
+- `test_websocket.py` — 전면 리라이트 (Flask-SocketIO test_client → ConnectionRegistry 단위 테스트)
+  - `TestConnectionRegistry`: 등록/해제, room 생성/삭제, unknown ws_id 처리
+  - `TestRegistryMessaging`: room 전송, broadcast, role room, 전송 실패 처리, 빈 room
+  - `TestMessageFormat`: new_alert/process_alert/task_completed JSON 포맷 검증
+  - `TestConcurrentConnections`: 다중 worker 분리, 같은 worker 다중 기기
+  - `TestPingPong`: ping/pong 메시지 포맷
+
+### 수정 파일 목록
+| 파일 | 변경 내용 |
+|------|----------|
+| `backend/requirements.txt` | Flask-SocketIO/eventlet 제거, flask-sock 추가 |
+| `backend/Procfile` | gthread --threads 4 |
+| `backend/app/websocket/events.py` | 전체 리라이트 (ConnectionRegistry + ws_handler) |
+| `backend/app/websocket/__init__.py` | ws_handler/registry export |
+| `backend/app/__init__.py` | SocketIO → Sock + /ws 라우트 |
+| `backend/run.py` | socketio.run() → app.run() |
+| `backend/app/services/scheduler_service.py` | 5곳 create_and_broadcast_alert 변경 |
+| `tests/backend/test_websocket.py` | 전면 리라이트 (단위 테스트) |
+| `BACKLOG.md` | BUG-2/4 완료, Sprint 13 이력 추가 |
+| `AGENT_TEAM_LAUNCH.md` | Sprint 13 프롬프트 추가 |
+
+### 배포 대기 항목
+- [ ] git commit & push
+- [ ] Railway 배포 (Procfile gthread 확인)
+- [ ] flutter build web → Netlify 배포
+- [ ] WSS 연결 테스트: `wss://axis-ops-api.up.railway.app/ws`
+- [ ] 알림 E2E: Admin 알림 생성 → PWA 실시간 수신
+- [ ] 기존 REST API 정상 동작 확인

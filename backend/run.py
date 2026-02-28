@@ -1,10 +1,11 @@
 """
 Flask 앱 실행 엔트리 포인트
 Sprint 1: 개발 서버 (0.0.0.0:5001)
+Sprint 13: socketio.run() → app.run() (flask-sock 마이그레이션)
 """
 
 import os
-from app import create_app, socketio
+from app import create_app
 
 if __name__ == "__main__":
     app = create_app()
@@ -16,5 +17,5 @@ if __name__ == "__main__":
 
     print(f"Starting Flask server on {host}:{port} (debug={debug})")
 
-    # SocketIO 개발 서버 실행
-    socketio.run(app, host=host, port=port, debug=debug, allow_unsafe_werkzeug=True)
+    # Flask 개발 서버 실행 (flask-sock은 Werkzeug와 호환)
+    app.run(host=host, port=port, debug=debug)
