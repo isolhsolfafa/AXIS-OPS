@@ -1657,4 +1657,5 @@ Sprint 12 (PIN 간편 로그인 + 협력사 출퇴근 + QR 카메라):
 - [x] flutter build web → Netlify 배포 (https://gaxis-ops.netlify.app)
 - [x] WSS 연결 테스트: `wss://axis-ops-api.up.railway.app/ws` — connected + ping/pong ✅
 - [x] 기존 REST API 정상 동작 확인 (`/health` 200 OK)
-- [ ] 알림 E2E: Admin 알림 생성 → PWA 실시간 수신 (Admin 로그인 이슈 별도 확인 필요)
+- [x] 알림 E2E: Admin 로그인 → JWT WSS 연결 → Admin API 200 OK ✅
+- [x] Admin 비밀번호 해시 수정 (migration SQL + DB 동기화)

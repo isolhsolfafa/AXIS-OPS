@@ -170,7 +170,7 @@ ALTER TABLE app_task_details
 INSERT INTO workers (name, email, password_hash, role, company,
                      approval_status, email_verified, is_manager, is_admin)
 VALUES ('관리자', 'dkkim1@gst-in.com',
-        '$2b$12$uwQnptMVikZ6EekhK0yuSuxye6pyIhhGQ9C8Cn.8.I1TWMi7DWtR2',
+        '$2b$12$rA3QYwD/moabyRWHG4MrPuUQMEw3M4lBP79UCi/9uc/BiBeHMa2yO',
         'ADMIN', 'GST', 'approved', TRUE, TRUE, TRUE)
 ON CONFLICT (email) DO NOTHING;
 
