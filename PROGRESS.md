@@ -1758,3 +1758,75 @@ Console 로그 확인:
 | 7차 | `newObject()` + `setProperty()` | ❌ 직사각형 (iPad/Android/iOS 3기기) |
 | 8차 | `JSON.parse()` + `allowInterop` 콜백 | ❌ 직사각형 |
 | 9차 | 순수 JS `<script>` 태그 주입 | ✅ 정사각형 (205×205) |
+
+---
+
+## Sprint 14: 작업자명 표시 + QR 스캔 영역 정사각형 (2026-03-02) ✅
+
+### 목표
+1. Task를 시작한 작업자 전원의 이름이 화면에 표시되도록 (협력사 Task Detail + GST 대시보드)
+2. QR 스캔 영역이 직사각형(바코드형) → 정사각형으로 수정 (10차)
+
+### BE 변경
+
+**`backend/app/routes/work.py` — `get_tasks_by_serial()`**:
+- task_list 빌드 후 `work_start_log` + `work_completion_log` 배치 JOIN 조회 (ANY 사용, N+1 없음)
+- 결과를 `workers_by_task` dict로 그룹화 → 각 task에 `workers` 배열 추가
+- Legacy fallback: `work_start_log` 없는 task는 기존 `worker_id`/`worker_name`으로 단일 항목 생성
+- 기존 `worker_id`, `worker_name` 필드 유지 (하위 호환)
+
+**`backend/app/routes/gst.py` — `get_gst_products()`**:
+- 동일 패턴: 기존 conn 재사용, task_detail_ids 배치 수집, workers 일괄 조회
+
+**workers 배열 항목 구조**:
+```json
+{
+  "worker_id": 10,
+  "worker_name": "김철수",
+  "started_at": "2026-03-02T10:00:00+09:00",
+  "completed_at": "2026-03-02T10:30:00+09:00",
+  "duration_minutes": 30,
+  "status": "completed"
+}
+```
+
+### FE 변경
+
+**Task Detail 작업자 정보 섹션** (`task_detail_screen.dart`):
+- `_buildWorkerInfoSection()` 추가 (제품 정보 ~ 작업 시간 사이)
+- 단일 작업자: 이름만 표시
+- 다중 작업자: ✅/🔄 아이콘 + 이름 + 시작~종료 시간 + 소요분
+
+**GST 대시보드 작업자명 보완** (`gst_products_screen.dart`):
+- workers 배열 우선 사용, 다중이면 "김철수 외 2명" 형식
+- 빈 배열이면 기존 `worker_name` fallback
+
+**TaskItem 모델** (`task_item.dart`):
+- `workers: List<Map<String, dynamic>>` 필드 추가 (fromJson/toJson/copyWith)
+
+**QR 스캔 영역 정사각형 (10차)** (`qr_scanner_web.dart` + `qr_scan_screen.dart`):
+- qrbox: JS 콜백 함수 → 정수 `200` (자동 정사각형)
+- 카메라 컨테이너: `height: 300` 고정 → 정사각형 `width = height = min(screenWidth-40, 350)`
+- start() 성공 후 `qr-shaded-region` DOM 크기 로그 추가
+
+### 변경 파일
+| 파일 | 변경 내용 |
+|------|-----------|
+| `backend/app/routes/work.py` | workers 배열 배치 조회 + 그룹핑 + fallback |
+| `backend/app/routes/gst.py` | 동일 workers 배열 패턴 |
+| `frontend/lib/models/task_item.dart` | workers 필드 추가 |
+| `frontend/lib/screens/task/task_detail_screen.dart` | 작업자 정보 섹션 신규 |
+| `frontend/lib/screens/gst/gst_products_screen.dart` | workers 기반 "외 N명" 표시 |
+| `frontend/lib/services/qr_scanner_web.dart` | qrbox 정수 + scan-region 로그 |
+| `frontend/lib/screens/qr/qr_scan_screen.dart` | 정사각형 카메라 컨테이너 |
+| `tests/backend/test_task_workers_api.py` | 신규 7건 |
+| `tests/backend/test_qr_scanner_logic.py` | 추가 2건 |
+
+### 테스트 결과
+- Sprint 14 신규: **28/28 PASSED** (workers API 7 + QR 로직 21)
+- 빌드: `flutter build web --release` — 에러 0건
+
+### 배포 (2026-03-02)
+- [x] git commit & push (`bdbe203`)
+- [x] Railway 자동 배포 (GitHub push)
+- [x] flutter build web → Netlify 배포 (https://gaxis-ops.netlify.app)
