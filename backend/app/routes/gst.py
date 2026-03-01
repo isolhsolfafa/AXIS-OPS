@@ -143,6 +143,7 @@ def get_gst_products(category: str) -> Tuple[Dict[str, Any], int]:
         rows = cur.fetchall()
 
         products = []
+        task_detail_ids = []
         for row in rows:
             # task_status 계산
             if row['completed_at'] is not None:
@@ -168,6 +169,62 @@ def get_gst_products(category: str) -> Tuple[Dict[str, Any], int]:
                 'is_paused': row['is_paused'],
                 'is_applicable': row['is_applicable'],
             })
+            task_detail_ids.append(row['task_detail_id'])
+
+        # workers 배열 일괄 조회 (N+1 방지)
+        workers_by_task: dict = {p['task_detail_id']: [] for p in products}
+        if task_detail_ids:
+            try:
+                cur.execute(
+                    """
+                    SELECT
+                        wsl.task_id,
+                        wsl.worker_id,
+                        w.name AS worker_name,
+                        wsl.started_at,
+                        wcl.completed_at,
+                        wcl.duration_minutes,
+                        CASE WHEN wcl.id IS NOT NULL THEN 'completed' ELSE 'in_progress' END AS status
+                    FROM work_start_log wsl
+                    JOIN workers w ON wsl.worker_id = w.id
+                    LEFT JOIN work_completion_log wcl
+                        ON wsl.task_id = wcl.task_id AND wsl.worker_id = wcl.worker_id
+                    WHERE wsl.task_id = ANY(%s)
+                    ORDER BY wsl.task_id, wsl.started_at ASC
+                    """,
+                    (task_detail_ids,)
+                )
+                for wrow in cur.fetchall():
+                    tid = wrow['task_id']
+                    if tid in workers_by_task:
+                        workers_by_task[tid].append({
+                            'worker_id': wrow['worker_id'],
+                            'worker_name': wrow['worker_name'],
+                            'started_at': wrow['started_at'].isoformat() if wrow['started_at'] else None,
+                            'completed_at': wrow['completed_at'].isoformat() if wrow['completed_at'] else None,
+                            'duration_minutes': wrow['duration_minutes'],
+                            'status': wrow['status'],
+                        })
+            except Exception as e:
+                logger.warning(f"GST workers batch query failed: {e}")
+
+        for product in products:
+            tid = product['task_detail_id']
+            workers_list = workers_by_task.get(tid, [])
+            # legacy fallback: work_start_log 없는 경우 단일 작업자 정보로 보완
+            if not workers_list and product.get('worker_id'):
+                started = product.get('started_at')
+                completed = product.get('completed_at')
+                status_str = 'completed' if completed else ('in_progress' if started else 'not_started')
+                workers_list = [{
+                    'worker_id': product['worker_id'],
+                    'worker_name': product.get('worker_name'),
+                    'started_at': started,
+                    'completed_at': completed,
+                    'duration_minutes': None,
+                    'status': status_str,
+                }]
+            product['workers'] = workers_list
 
         logger.info(
             f"GST products fetched: category={category}, status={status_filter}, "

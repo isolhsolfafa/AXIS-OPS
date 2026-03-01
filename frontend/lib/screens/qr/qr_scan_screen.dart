@@ -429,17 +429,24 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
               ),
               const SizedBox(height: 16),
 
-              // 카메라 뷰 (메인)
-              Container(
-                key: _cameraContainerKey,
-                height: 300,
-                decoration: BoxDecoration(
-                  color: Colors.black,
-                  borderRadius: BorderRadius.circular(GxRadius.lg),
-                  border: Border.all(color: GxColors.mist, width: 1),
-                ),
-                clipBehavior: Clip.antiAlias,
-                child: _buildCameraView(),
+              // 카메라 뷰 (메인) — 정사각형 컨테이너 (qrbox integer와 함께 정사각형 스캔 영역 보장)
+              Builder(
+                builder: (context) {
+                  final screenWidth = MediaQuery.of(context).size.width;
+                  final cameraSize = (screenWidth - 40).clamp(200.0, 350.0); // padding 20*2
+                  return Container(
+                    key: _cameraContainerKey,
+                    width: cameraSize,
+                    height: cameraSize,
+                    decoration: BoxDecoration(
+                      color: Colors.black,
+                      borderRadius: BorderRadius.circular(GxRadius.lg),
+                      border: Border.all(color: GxColors.mist, width: 1),
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: _buildCameraView(),
+                  );
+                },
               ),
               const SizedBox(height: 16),
 

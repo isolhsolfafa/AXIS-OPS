@@ -232,3 +232,32 @@ class TestBuildVerification:
         - 에러 0건, 경고 0건 (info-level deprecation만 존재)
         """
         assert True
+
+
+class TestSquareContainer:
+    """TC-QR-11~12: 정사각형 컨테이너 테스트"""
+
+    def test_qrbox_integer_config(self):
+        """TC-QR-11: qrbox 정수 config → 정사각형 계산
+
+        html5-qrcode의 qrbox 옵션에 정수를 넘기면 width=height=qrbox인
+        정사각형 스캔 영역이 설정됨.
+        calculate_qrbox_size()가 정수를 반환하는지 확인.
+        """
+        result = calculate_qrbox_size(300)
+        assert result == 195  # 300 * 0.65 = 195
+        assert isinstance(result, int), \
+            f"qrbox 크기는 정수여야 함 (html5-qrcode 호환), got {type(result)}"
+
+    def test_square_container_aspect_ratio(self):
+        """TC-QR-12: 정사각형 컨테이너 → viewfinder width == height
+
+        컨테이너가 정사각형(예: 300x300)일 때 calculate_scanner_position_explicit()의
+        결과에서 width 값과 height 값이 동일해야 함.
+        BUG-5 수정 후 left+width 방식이므로 컨테이너 비율이 그대로 보존됨.
+        """
+        result = calculate_scanner_position_explicit(20, 156, 300, 300)
+        width_val = float(result['width'].replace('px', ''))
+        height_val = float(result['height'].replace('px', ''))
+        assert width_val == height_val, \
+            f"정사각형 컨테이너(300x300): width({width_val}) == height({height_val}) 기대"

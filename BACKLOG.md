@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-02-28 (Sprint 13 코딩 완료 — WebSocket flask-sock 마이그레이션, BUG-2/4 수정)
+> 마지막 업데이트: 2026-03-01 (BUG-5 스캔 영역 수정 완료 — 순수 JS config 주입 + 스플래시 스크린 추가)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -14,7 +14,7 @@
 | BUG-2 | WebSocket 프로토콜 불일치 | ✅ Sprint 13 수정 완료 | Flask-SocketIO → flask-sock(raw WS) 교체. events.py 전체 리라이트(ConnectionRegistry + ws_handler). FE 변경 0건. 배포/검증 대기 |
 | BUG-3 | 출퇴근 버튼 퇴근 후 비활성화 | 🔍 분석 완료 | BE는 당일 다중 in/out 쌍 지원(카운팅 로직), 그러나 FE에서 `checked_out` 상태가 종료 상태로 처리되어 재출근 버튼 비활성화됨. FE 상태 머신에 재출근 플로우 추가 필요. 일일 리셋은 KST 자정 기준 정상 동작 |
 | BUG-4 | 알림/알람 실시간 전달 안됨 | ✅ Sprint 13 수정 완료 | scheduler_service.py 5곳 `create_alert()` → `create_and_broadcast_alert()` 변경. DB 저장 + WebSocket broadcast 동시 처리. BUG-2 해결로 실시간 경로 복원. 배포/검증 대기 |
-| BUG-5 | QR 카메라 프레임 벗어남 | ✅ 수정 완료 + 배포 | **근본 원인**: `ensureScannerDiv()` CSS가 `left + right` 대칭 여백 가정 → `right = containerLeft`로 계산 → 비대칭 레이아웃에서 카메라 오른쪽 벗어남. **수정**: `left + width` 명시 방식으로 변경. Flutter `renderBox.size.width` 직접 전달. `right` CSS 제거. 리사이즈/스크롤 핸들러도 동일 방식 적용. 테스트 19건 추가 |
+| BUG-5 | QR 카메라 프레임 벗어남 + 스캔 영역 직사각형 | ✅ 수정 완료 + 배포 | **1차 원인(위치)**: `left+right` CSS → `left+width` 명시로 해결. **2차 원인(스캔 영역)**: Dart `jsify()` interop이 html5-qrcode qrbox 객체 전달 실패 (6~8차 시도 모두 실패) → **9차 수정**: 순수 JS `<script>` 태그로 config 생성, Dart interop 완전 제거. qrbox 콜백 함수가 205×205 정사각형 반환 확인. 웹 검증 완료 |
 | BUG-6 | 협력사 task 리스트에 작업자명 미표시 | ✅ 수정 완료 | BE `work.py`: task 목록 API에 `worker_name` 필드 추가 (workers 테이블 JOIN). FE `task_item.dart`: `workerName` 필드 추가. FE `task_management_screen.dart`: 카테고리 행에 작업자 아이콘+이름 표시. GST `gst_products_screen.dart`는 기존에 이미 worker_name 표시 구현됨 (시작된 작업만 표시 — 정상) |
 
 ---
@@ -161,4 +161,5 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 | 12 핫픽스 | PIN 자동로그인 분기 로직 | 수동 수정 4건 |
 | 12 배포 | Netlify PWA + Railway API 배포 | 전체 API 동작 확인 |
 | 13 | WebSocket flask-sock 마이그레이션 + BUG-2/4 수정 | 18 PASSED, 배포 완료 |
-| BUG-5 핫픽스 | QR 카메라 DOM left+width CSS 수정 | 19 PASSED |
+| BUG-5 핫픽스 | QR 카메라 위치(left+width) + 스캔 영역(순수 JS config) + 스플래시 스크린 | 19 PASSED, 웹 검증 완료 |
+| 14 | 작업자명 표시(Task Detail + GST 대시보드) + QR 스캔 영역 정사각형 | 예정 |

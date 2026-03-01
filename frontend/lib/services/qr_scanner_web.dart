@@ -266,21 +266,16 @@ Future<bool> startQrScanner({
 
     _scanner = js_util.callConstructor(html5QrcodeClass, [divId]);
 
-    // ★ 9차 수정: config 전체를 순수 JavaScript로 생성 — Dart interop 완전 제거
-    // 실패 이력: jsify(중첩객체), jsify(정수), newObject+setProperty, JSON.parse+allowInterop 콜백
-    // 결론: Dart-JS 변환 자체가 문제 → JS <script> 태그로 config를 네이티브 JS에서 직접 생성
+    // ★ 10차 수정: qrbox를 integer로 변경 — 컨테이너가 정사각형이므로 숫자값이 자동으로 정사각형 스캔 영역 생성
+    // 9차 실패 이력: qrbox callback이 정사각형 크기를 반환해도 컨테이너가 landscape이면 뷰파인더가 가로로 늘어남
+    // 해결책: 컨테이너를 정사각형으로 만들고 qrbox도 integer로 지정
     final configScript = html.ScriptElement()
       ..text = '''
         window.__qrScanConfig = {
           fps: 10,
-          qrbox: function(viewfinderWidth, viewfinderHeight) {
-            var size = Math.round(Math.min(viewfinderWidth, viewfinderHeight) * 0.7);
-            size = Math.max(120, Math.min(250, size));
-            console.log("[QrScannerWeb] ★ JS qrbox: viewfinder=" + viewfinderWidth + "x" + viewfinderHeight + " → qrbox=" + size + "x" + size);
-            return { width: size, height: size };
-          }
+          qrbox: 200
         };
-        console.log("[QrScannerWeb] __qrScanConfig created, typeof qrbox=" + typeof window.__qrScanConfig.qrbox);
+        console.log("[QrScannerWeb] config.qrbox type=" + typeof window.__qrScanConfig.qrbox + " value=" + window.__qrScanConfig.qrbox);
       ''';
     html.document.head!.append(configScript);
     configScript.remove(); // 스크립트 실행 완료 후 DOM에서 제거
@@ -308,6 +303,12 @@ Future<bool> startQrScanner({
       );
       await js_util.promiseToFuture(promise);
       debugPrint('[QrScannerWeb] Started with environment camera');
+      try {
+        final scanRegion = html.document.getElementById('qr-shaded-region');
+        if (scanRegion != null) {
+          debugPrint('[QrScannerWeb] scan-region style: ${scanRegion.style.width} x ${scanRegion.style.height}');
+        }
+      } catch (_) {}
       return true;
     } catch (e) {
       debugPrint('[QrScannerWeb] environment camera failed: $e');
@@ -324,6 +325,12 @@ Future<bool> startQrScanner({
       );
       await js_util.promiseToFuture(promise);
       debugPrint('[QrScannerWeb] Started with user camera');
+      try {
+        final scanRegion = html.document.getElementById('qr-shaded-region');
+        if (scanRegion != null) {
+          debugPrint('[QrScannerWeb] scan-region style: ${scanRegion.style.width} x ${scanRegion.style.height}');
+        }
+      } catch (_) {}
       return true;
     } catch (e) {
       debugPrint('[QrScannerWeb] user camera failed: $e');
@@ -343,6 +350,12 @@ Future<bool> startQrScanner({
         );
         await js_util.promiseToFuture(promise);
         debugPrint('[QrScannerWeb] Started with camera ID: $cameraId');
+        try {
+          final scanRegion = html.document.getElementById('qr-shaded-region');
+          if (scanRegion != null) {
+            debugPrint('[QrScannerWeb] scan-region style: ${scanRegion.style.width} x ${scanRegion.style.height}');
+          }
+        } catch (_) {}
         return true;
       }
     } catch (e) {

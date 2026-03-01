@@ -19,7 +19,8 @@ class TaskItem {
   final int? durationMinutes; // 소요시간 (분 단위, completed_at - started_at)
   final bool isApplicable; // Task 적용 여부 (관리자/사내직원이 비활성화 가능)
   final bool locationQrVerified;
-  final String? workerName; // 작업자 이름
+  final String? workerName; // 작업자 이름 (단일 작업자 — 하위 호환용)
+  final List<Map<String, dynamic>> workers; // 멀티 작업자 목록
   final bool isPaused; // 일시정지 여부
   final int totalPauseMinutes; // 누적 일시정지 시간 (분)
   final DateTime createdAt;
@@ -39,6 +40,7 @@ class TaskItem {
     this.isApplicable = true,
     this.locationQrVerified = false,
     this.workerName,
+    this.workers = const [],
     this.isPaused = false,
     this.totalPauseMinutes = 0,
     required this.createdAt,
@@ -85,6 +87,11 @@ class TaskItem {
       isApplicable: json['is_applicable'] as bool? ?? true,
       locationQrVerified: json['location_qr_verified'] as bool? ?? false,
       workerName: json['worker_name'] as String?,
+      workers: json['workers'] != null
+          ? List<Map<String, dynamic>>.from(
+              (json['workers'] as List).map((w) => Map<String, dynamic>.from(w as Map)),
+            )
+          : const [],
       isPaused: json['is_paused'] as bool? ?? false,
       totalPauseMinutes: json['total_pause_minutes'] as int? ?? 0,
       createdAt: json['created_at'] != null
@@ -112,6 +119,7 @@ class TaskItem {
       'is_applicable': isApplicable,
       'location_qr_verified': locationQrVerified,
       'worker_name': workerName,
+      'workers': workers,
       'is_paused': isPaused,
       'total_pause_minutes': totalPauseMinutes,
       'created_at': createdAt.toIso8601String(),
@@ -129,6 +137,7 @@ class TaskItem {
     String? taskId,
     String? taskName,
     String? workerName,
+    List<Map<String, dynamic>>? workers,
     DateTime? startedAt,
     DateTime? completedAt,
     int? durationMinutes,
@@ -148,6 +157,7 @@ class TaskItem {
       taskId: taskId ?? this.taskId,
       taskName: taskName ?? this.taskName,
       workerName: workerName ?? this.workerName,
+      workers: workers ?? this.workers,
       startedAt: startedAt ?? this.startedAt,
       completedAt: completedAt ?? this.completedAt,
       durationMinutes: durationMinutes ?? this.durationMinutes,
@@ -208,6 +218,7 @@ class TaskItem {
         other.taskId == taskId &&
         other.taskName == taskName &&
         other.workerName == workerName &&
+        other.workers == workers &&
         other.startedAt == startedAt &&
         other.completedAt == completedAt &&
         other.durationMinutes == durationMinutes &&

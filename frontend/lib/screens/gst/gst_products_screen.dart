@@ -253,7 +253,13 @@ class _GstProductsScreenState extends ConsumerState<GstProductsScreen> {
     final serialNumber = product['serial_number'] as String? ?? '-';
     final model = product['model'] as String? ?? '-';
     final taskName = product['task_name'] as String? ?? '-';
-    final workerName = product['worker_name'] as String?;
+    // 멀티 작업자 지원: workers 배열 우선, 없으면 worker_name fallback
+    final workers = product['workers'] as List?;
+    final workerName = (workers != null && workers.isNotEmpty)
+        ? (workers.length > 1
+            ? '${workers.first['worker_name']} 외 ${workers.length - 1}명'
+            : workers.first['worker_name'] as String?)
+        : product['worker_name'] as String?;
     final startedAt = product['started_at'] as String?;
     final taskDetailId = product['task_detail_id'] as int?;
 

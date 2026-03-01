@@ -226,6 +226,66 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
         for item in task_list:
             item['worker_name'] = None
 
+    # workers 배열 일괄 조회 (N+1 방지: task_id 배열로 한 번에 조회)
+    task_db_ids = [item['id'] for item in task_list if item.get('id')]
+    workers_by_task: Dict[int, list] = {item['id']: [] for item in task_list if item.get('id')}
+    if task_db_ids:
+        try:
+            from app.models.worker import get_db_connection as get_conn
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT
+                    wsl.task_id,
+                    wsl.worker_id,
+                    w.name AS worker_name,
+                    wsl.started_at,
+                    wcl.completed_at,
+                    wcl.duration_minutes,
+                    CASE WHEN wcl.id IS NOT NULL THEN 'completed' ELSE 'in_progress' END AS status
+                FROM work_start_log wsl
+                JOIN workers w ON wsl.worker_id = w.id
+                LEFT JOIN work_completion_log wcl
+                    ON wsl.task_id = wcl.task_id AND wsl.worker_id = wcl.worker_id
+                WHERE wsl.task_id = ANY(%s)
+                ORDER BY wsl.task_id, wsl.started_at ASC
+                """,
+                (task_db_ids,)
+            )
+            for row in cur.fetchall():
+                tid = row['task_id']
+                if tid in workers_by_task:
+                    workers_by_task[tid].append({
+                        'worker_id': row['worker_id'],
+                        'worker_name': row['worker_name'],
+                        'started_at': row['started_at'].isoformat() if row['started_at'] else None,
+                        'completed_at': row['completed_at'].isoformat() if row['completed_at'] else None,
+                        'duration_minutes': row['duration_minutes'],
+                        'status': row['status'],
+                    })
+            conn.close()
+        except Exception as e:
+            logger.warning(f"Workers batch query failed: {e}")
+
+    for item in task_list:
+        tid = item.get('id')
+        workers_list = workers_by_task.get(tid, []) if tid else []
+        # legacy fallback: work_start_log 없는 경우 단일 작업자 정보로 보완
+        if not workers_list and item.get('worker_id') and item.get('worker_id') != 0:
+            started = item.get('started_at')
+            completed = item.get('completed_at')
+            status_str = 'completed' if completed else ('in_progress' if started else 'not_started')
+            workers_list = [{
+                'worker_id': item['worker_id'],
+                'worker_name': item.get('worker_name'),
+                'started_at': started,
+                'completed_at': completed,
+                'duration_minutes': item.get('duration_minutes'),
+                'status': status_str,
+            }]
+        item['workers'] = workers_list
+
     return jsonify(task_list), 200
 
 

@@ -250,6 +250,10 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                 const SizedBox(height: 16),
               ],
 
+              // 작업자 정보
+              _buildWorkerInfoSection(task),
+              const SizedBox(height: 16),
+
               // 작업 시간 정보
               _buildSectionTitle('작업 시간'),
               const SizedBox(height: 8),
@@ -539,6 +543,92 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   }
 
   // ===================== 헬퍼 위젯 =====================
+
+  /// 작업자 정보 섹션 (단일/멀티 작업자 지원)
+  Widget _buildWorkerInfoSection(task) {
+    final workers = task.workers as List<Map<String, dynamic>>;
+    final workerName = task.workerName as String?;
+
+    // workers 배열이 없고 workerName도 없으면 섹션 숨김
+    if (workers.isEmpty && (workerName == null || workerName.isEmpty)) {
+      return const SizedBox.shrink();
+    }
+
+    final sectionTitle = workers.length > 1
+        ? '작업자 정보 (${workers.length}명)'
+        : '작업자 정보';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildSectionTitle(sectionTitle),
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: GxGlass.cardSm(radius: GxRadius.lg),
+          child: workers.isNotEmpty
+              ? Column(
+                  children: workers.asMap().entries.map((entry) {
+                    final i = entry.key;
+                    final w = entry.value;
+                    final name = w['worker_name'] as String? ?? '-';
+                    final startedAt = w['started_at'] != null
+                        ? DateTime.tryParse(w['started_at'] as String)?.toLocal()
+                        : null;
+                    final completedAt = w['completed_at'] != null
+                        ? DateTime.tryParse(w['completed_at'] as String)?.toLocal()
+                        : null;
+                    final isDone = completedAt != null;
+
+                    String timeLabel = '';
+                    if (startedAt != null) {
+                      final startStr = '${startedAt.hour.toString().padLeft(2, '0')}:${startedAt.minute.toString().padLeft(2, '0')}';
+                      if (completedAt != null) {
+                        final endStr = '${completedAt.hour.toString().padLeft(2, '0')}:${completedAt.minute.toString().padLeft(2, '0')}';
+                        final diffMin = completedAt.difference(startedAt).inMinutes;
+                        timeLabel = '$startStr~$endStr  ${diffMin}분';
+                      } else {
+                        timeLabel = '$startStr~';
+                      }
+                    }
+
+                    return Column(
+                      children: [
+                        if (i > 0) const Divider(height: 16, color: GxColors.mist),
+                        Row(
+                          children: [
+                            Icon(
+                              isDone ? Icons.check_circle : Icons.sync,
+                              size: 16,
+                              color: isDone ? GxColors.success : GxColors.accent,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              name,
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: GxColors.charcoal,
+                              ),
+                            ),
+                            if (timeLabel.isNotEmpty) ...[
+                              const Spacer(),
+                              Text(
+                                timeLabel,
+                                style: const TextStyle(fontSize: 12, color: GxColors.slate),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ],
+                    );
+                  }).toList(),
+                )
+              : _buildInfoRow('작업자', workerName ?? '-'),
+        ),
+      ],
+    );
+  }
 
   Widget _buildSectionTitle(String title) {
     return Padding(
