@@ -266,25 +266,28 @@ Future<bool> startQrScanner({
 
     _scanner = js_util.callConstructor(html5QrcodeClass, [divId]);
 
-    // ★ qrbox: 실제 div 크기 기준으로 계산 (높이의 65%, 정사각형)
-    final int qrboxSize = (actualDivHeight * 0.65).clamp(120, 250).toInt();
-    debugPrint('[QrScannerWeb] qrbox size: $qrboxSize (from divHeight=$actualDivHeight)');
+    // ★ 9차 수정: config 전체를 순수 JavaScript로 생성 — Dart interop 완전 제거
+    // 실패 이력: jsify(중첩객체), jsify(정수), newObject+setProperty, JSON.parse+allowInterop 콜백
+    // 결론: Dart-JS 변환 자체가 문제 → JS <script> 태그로 config를 네이티브 JS에서 직접 생성
+    final configScript = html.ScriptElement()
+      ..text = '''
+        window.__qrScanConfig = {
+          fps: 10,
+          qrbox: function(viewfinderWidth, viewfinderHeight) {
+            var size = Math.round(Math.min(viewfinderWidth, viewfinderHeight) * 0.7);
+            size = Math.max(120, Math.min(250, size));
+            console.log("[QrScannerWeb] ★ JS qrbox: viewfinder=" + viewfinderWidth + "x" + viewfinderHeight + " → qrbox=" + size + "x" + size);
+            return { width: size, height: size };
+          }
+        };
+        console.log("[QrScannerWeb] __qrScanConfig created, typeof qrbox=" + typeof window.__qrScanConfig.qrbox);
+      ''';
+    html.document.head!.append(configScript);
+    configScript.remove(); // 스크립트 실행 완료 후 DOM에서 제거
 
-    // ★ config를 js_util.newObject()로 수동 생성
-    // jsify()는 Dart Map → JS 객체 변환 시 html5-qrcode가 인식 못하는 형태 생성
-    // newObject + setProperty로 순수 JS 객체를 직접 만들어야 qrbox가 적용됨
-    final qrboxObj = js_util.newObject();
-    js_util.setProperty(qrboxObj, 'width', qrboxSize);
-    js_util.setProperty(qrboxObj, 'height', qrboxSize);
-
-    final config = js_util.newObject();
-    js_util.setProperty(config, 'fps', 10);
-    js_util.setProperty(config, 'qrbox', qrboxObj);
-
-    // 디버그: 생성된 config 검증
-    debugPrint('[QrScannerWeb] config.fps = ${js_util.getProperty(config, 'fps')}');
-    debugPrint('[QrScannerWeb] config.qrbox.width = ${js_util.getProperty(qrboxObj, 'width')}');
-    debugPrint('[QrScannerWeb] config.qrbox.height = ${js_util.getProperty(qrboxObj, 'height')}');
+    // window.__qrScanConfig를 가져옴 — 순수 JS 네이티브 객체
+    final config = js_util.getProperty(js_util.globalThis, '__qrScanConfig');
+    debugPrint('[QrScannerWeb] config from window.__qrScanConfig, fps=${js_util.getProperty(config, 'fps')}');
 
     final successCallback = js_util.allowInterop((String decodedText, dynamic result) {
       debugPrint('[QrScannerWeb] ★ QR DETECTED: $decodedText');
