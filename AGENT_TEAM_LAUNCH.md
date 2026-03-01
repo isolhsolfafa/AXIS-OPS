@@ -2232,48 +2232,32 @@ FE 변경 없으므로 FE teammate 불필요.
 CLAUDE.md를 처음부터 끝까지 다시 읽고 BUG-5 핫픽스를 시작해줘.
 BACKLOG.md의 BUG-5 항목도 읽어.
 
-⚠️ BUG-5 현재 상태 (6차 수정 — qrbox 정수 + 인식 로그 적용 완료):
+⚠️ BUG-5 현재 상태 (7차 수정 — newObject 방식 적용 완료):
 - ✅ 카메라 위치: 해결됨 (DOM div가 Flutter Container와 정확히 일치)
 - ✅ 카메라 영상: 정상 작동 (후면 카메라 피드 표시됨)
-- ✅ qrbox 정수 방식 적용됨 (방법 A) — 정사각형 스캔 영역으로 변경 완료
 - ✅ QR 인식 콜백 로그 추가됨 — '[QrScannerWeb] ★ QR DETECTED: ...' 출력
-- ❓ 빌드 + 실제 테스트 필요: 스캔 영역이 정사각형인지, QR 인식이 되는지 검증
+- ✅ config 객체: js_util.newObject() + setProperty()로 수동 생성 완료 (jsify 제거)
+- ❌ 방법 A 실패: `jsify({'qrbox': qrboxSize})` 정수 방식도 바코드 형태 유지됨
+- ❓ 빌드 + 실제 테스트 필요: newObject 방식으로 정사각형 되는지 검증
 
-## 핵심 문제: 스캔 영역이 바코드 형태
-html5-qrcode의 스캔 영역(흰색 브라켓)이 가로로 넓은 직사각형으로 렌더링됨.
-QR 코드는 정사각형이므로 스캔 영역도 정사각형이어야 인식 가능.
+## 핵심 문제: js_util.jsify()가 html5-qrcode 호환 JS 객체를 만들지 못함
+테스트 결과:
+1. ❌ `jsify({'qrbox': {'width': N, 'height': N}})` — 바코드 형태
+2. ❌ `jsify({'qrbox': qrboxSize})` (정수) — 여전히 바코드 형태
+3. ✅ (현재 적용) `newObject() + setProperty()` — 순수 JS 객체 직접 생성
 
-### 의심 원인: js_util.jsify() 중첩 객체 문제
-현재 코드:
+### 현재 코드 (7차 수정):
 ```dart
-final config = js_util.jsify({
-  'fps': 10,
-  'qrbox': {'width': qrboxSize, 'height': qrboxSize},
-});
-```
-`js_util.jsify()`가 중첩된 Map `{'width': N, 'height': N}`를 JS 객체로 올바르게 변환하지 못할 가능성.
-html5-qrcode가 qrbox를 읽지 못하면 컨테이너 전체 너비를 사용하여 바코드 형태가 됨.
+final qrboxObj = js_util.newObject();
+js_util.setProperty(qrboxObj, 'width', qrboxSize);
+js_util.setProperty(qrboxObj, 'height', qrboxSize);
 
-### 수정 방법 (2가지 중 택 1)
-
-**방법 A (권장): qrbox를 정수로 전달 — 자동으로 정사각형**
-```dart
-final config = js_util.jsify({
-  'fps': 10,
-  'qrbox': qrboxSize,  // 정수 = N×N 정사각형
-});
-```
-html5-qrcode에서 `qrbox: 195`는 195×195 정사각형 스캔 영역을 생성.
-
-**방법 B: qrbox 객체를 별도로 생성**
-```dart
-final qrbox = js_util.newObject();
-js_util.setProperty(qrbox, 'width', qrboxSize);
-js_util.setProperty(qrbox, 'height', qrboxSize);
 final config = js_util.newObject();
 js_util.setProperty(config, 'fps', 10);
-js_util.setProperty(config, 'qrbox', qrbox);
+js_util.setProperty(config, 'qrbox', qrboxObj);
 ```
+이 방식은 `jsify()`를 완전히 우회하여 html5-qrcode가 인식할 수 있는 순수 JS 객체를 생성.
+config 검증 로그도 추가됨: `config.fps`, `config.qrbox.width`, `config.qrbox.height` 값 출력.
 
 ## 기술 스택
 - Flutter Web (PWA): Android Chrome 모바일 환경
@@ -2303,23 +2287,37 @@ qr_scan_screen.dart는 변경 불필요 (카메라 위치는 이미 해결됨).
 BE 변경 없으므로 BE teammate 불필요.
 
 ## FE 작업 순서
-⚠️ 아래 1~2번은 이미 적용 완료됨 — 코드 확인만 하고 3번부터 진행
+⚠️ 아래 1~3번은 이미 적용 완료됨 — 코드 확인만 하고 4번부터 진행
 
-1. ✅ (완료) qr_scanner_web.dart의 qrbox 설정을 정수 방식으로 변경됨
+1. ✅ (완료) config 객체를 newObject + setProperty로 수동 생성 (jsify 완전 제거)
    ```dart
-   'qrbox': qrboxSize,  // 정수 = N×N 정사각형 (기존: {'width': N, 'height': N} 객체 — jsify 오류)
+   final qrboxObj = js_util.newObject();
+   js_util.setProperty(qrboxObj, 'width', qrboxSize);
+   js_util.setProperty(qrboxObj, 'height', qrboxSize);
+   final config = js_util.newObject();
+   js_util.setProperty(config, 'fps', 10);
+   js_util.setProperty(config, 'qrbox', qrboxObj);
    ```
 2. ✅ (완료) QR 인식 콜백에 로그 추가됨
-   ```dart
-   debugPrint('[QrScannerWeb] ★ QR DETECTED: $decodedText');
-   ```
-3. `flutter build web --release` 실행하여 빌드 확인
-4. 진단 로그로 스캔 영역 검증:
-   - `[QrScannerWeb] qrbox size: N` 값이 120~250 범위인지
-   - `[QrScannerWeb] Actual div rect:` width/height가 올바른지
+3. ✅ (완료) config 검증 로그 추가됨 (fps, qrbox.width, qrbox.height 값 출력)
+4. `flutter build web --release` 실행하여 빌드 확인
+5. 진단 로그로 스캔 영역 검증:
+   - `[QrScannerWeb] config.fps = 10` 출력되는지
+   - `[QrScannerWeb] config.qrbox.width = N` (N은 120~250) 출력되는지
    - 스캔 영역이 정사각형 (흰색 브라켓 4개가 정사각형 꼭짓점)인지 확인
-5. 만약 qrbox 정수 방식이 안되면 방법 B (js_util.newObject 별도 생성)로 전환
-6. QR 인식 테스트: DOC_GBWS-6408 QR을 카메라에 비춰서 콘솔에 '★ QR DETECTED' 출력 확인
+6. 만약 newObject 방식도 안되면 → html5-qrcode의 `qrbox` 콜백 함수 방식 시도:
+   ```dart
+   // qrbox를 함수로 전달 — html5-qrcode가 viewfinder 크기를 인자로 줌
+   final qrboxFn = js_util.allowInterop((int viewfinderWidth, int viewfinderHeight) {
+     final size = (viewfinderHeight * 0.65).clamp(120, 250).toInt();
+     final result = js_util.newObject();
+     js_util.setProperty(result, 'width', size);
+     js_util.setProperty(result, 'height', size);
+     return result;
+   });
+   js_util.setProperty(config, 'qrbox', qrboxFn);
+   ```
+7. QR 인식 테스트: DOC_GBWS-6408 QR을 카메라에 비춰서 콘솔에 '★ QR DETECTED' 출력 확인
 
 ## TEST 작업 (tests/frontend/test_qr_scanner_web_test.dart)
 Dart 단위 테스트 작성 (dart:html mock 사용):

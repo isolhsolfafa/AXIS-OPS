@@ -270,13 +270,21 @@ Future<bool> startQrScanner({
     final int qrboxSize = (actualDivHeight * 0.65).clamp(120, 250).toInt();
     debugPrint('[QrScannerWeb] qrbox size: $qrboxSize (from divHeight=$actualDivHeight)');
 
-    // ★ qrbox를 정수로 전달 → 자동으로 N×N 정사각형 스캔 영역
-    // 중첩 객체 {'width': N, 'height': N}은 js_util.jsify()에서 올바르게 변환되지 않아
-    // html5-qrcode가 컨테이너 전체 너비를 사용하여 바코드 형태가 됨
-    final config = js_util.jsify({
-      'fps': 10,
-      'qrbox': qrboxSize,
-    });
+    // ★ config를 js_util.newObject()로 수동 생성
+    // jsify()는 Dart Map → JS 객체 변환 시 html5-qrcode가 인식 못하는 형태 생성
+    // newObject + setProperty로 순수 JS 객체를 직접 만들어야 qrbox가 적용됨
+    final qrboxObj = js_util.newObject();
+    js_util.setProperty(qrboxObj, 'width', qrboxSize);
+    js_util.setProperty(qrboxObj, 'height', qrboxSize);
+
+    final config = js_util.newObject();
+    js_util.setProperty(config, 'fps', 10);
+    js_util.setProperty(config, 'qrbox', qrboxObj);
+
+    // 디버그: 생성된 config 검증
+    debugPrint('[QrScannerWeb] config.fps = ${js_util.getProperty(config, 'fps')}');
+    debugPrint('[QrScannerWeb] config.qrbox.width = ${js_util.getProperty(qrboxObj, 'width')}');
+    debugPrint('[QrScannerWeb] config.qrbox.height = ${js_util.getProperty(qrboxObj, 'height')}');
 
     final successCallback = js_util.allowInterop((String decodedText, dynamic result) {
       debugPrint('[QrScannerWeb] ★ QR DETECTED: $decodedText');
