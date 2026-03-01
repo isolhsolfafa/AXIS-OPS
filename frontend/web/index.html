@@ -32,9 +32,93 @@
 
   <title>G-AXIS OPS</title>
   <link rel="manifest" href="manifest.json">
+
+  <!-- Splash Screen Style -->
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #F5F5F7;
+    }
+
+    #splash-screen {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: #F5F5F7;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 99999;
+      transition: opacity 0.4s ease-out;
+    }
+
+    #splash-screen.fade-out {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    #splash-logo {
+      width: 120px;
+      height: 120px;
+      object-fit: contain;
+      margin-bottom: 24px;
+      animation: logo-pulse 2s ease-in-out infinite;
+    }
+
+    #splash-text {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 13px;
+      font-weight: 500;
+      color: #8E8E93;
+      letter-spacing: 0.5px;
+    }
+
+    #splash-loader {
+      margin-top: 32px;
+      width: 36px;
+      height: 36px;
+      border: 3px solid #E5E5EA;
+      border-top: 3px solid #6366F1;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    @keyframes logo-pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.85; transform: scale(0.97); }
+    }
+  </style>
 </head>
 <body>
+  <!-- Splash Screen: Flutter 엔진 로딩 중 표시 -->
+  <div id="splash-screen">
+    <img id="splash-logo" src="img/g-axis-2.png" alt="G-AXIS">
+    <div id="splash-text">Loading...</div>
+    <div id="splash-loader"></div>
+  </div>
+
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <script src="flutter_bootstrap.js" async></script>
+
+  <!-- Flutter 엔진 로드 완료 시 스플래시 제거 -->
+  <script>
+    window.addEventListener('flutter-first-frame', function () {
+      var splash = document.getElementById('splash-screen');
+      if (splash) {
+        splash.classList.add('fade-out');
+        setTimeout(function () {
+          splash.remove();
+        }, 400);
+      }
+    });
+  </script>
 </body>
 </html>

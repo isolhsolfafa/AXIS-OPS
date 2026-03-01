@@ -1687,3 +1687,34 @@ Sprint 12 (PIN 간편 로그인 + 협력사 출퇴근 + QR 카메라):
   - TC-QR-03: 위치 업데이트 (스크롤 시 top만 변경)
   - TC-QR-04: div 제거 상태 정리
   - TC-QR-05: qrbox 크기 계산 (120~250 클램프)
+
+---
+
+## BUG-5 추가 수정: QR 스캔 영역 바코드→정사각형 + 진단 로그 (2026-03-01)
+
+### 문제 (5차 수정 후 발견)
+카메라 위치는 해결되었으나:
+1. **스캔 영역이 바코드 형태**: html5-qrcode 흰색 브라켓이 가로로 긴 직사각형으로 렌더링
+2. **QR 인식 미동작**: 정사각형 QR 코드가 스캔 영역과 불일치하여 인식 불가
+
+### 원인 분석
+`js_util.jsify()`의 중첩 객체 변환 문제로 추정:
+```dart
+// 현재 (문제): jsify()가 중첩 Map을 올바른 JS 객체로 변환하지 못할 수 있음
+'qrbox': {'width': qrboxSize, 'height': qrboxSize}
+
+// 해결: 정수로 전달하면 자동으로 N×N 정사각형
+'qrbox': qrboxSize
+```
+
+### 코드 수정 완료 (6차 수정)
+**`frontend/lib/services/qr_scanner_web.dart`**:
+1. `qrbox`: `{'width': N, 'height': N}` → `qrboxSize` (정수) 변경 — 자동 정사각형
+2. `successCallback`에 `debugPrint('[QrScannerWeb] ★ QR DETECTED: $decodedText')` 추가
+
+### 팀에이전트 프롬프트 준비
+`AGENT_TEAM_LAUNCH.md`에 BUG-5 핫픽스 프롬프트 업데이트:
+- FE: qrbox 정수 방식 이미 적용 → 빌드 + 테스트 검증 필요
+- TEST: 10개 테스트케이스 (좌표, qrbox 계산, 인식 콜백, 리사이즈 등)
+- 테스트 QR: `DOC_GBWS-6408` (Worksheet QR 형식)
+- 검증: 정사각형 스캔 영역 + QR 인식 성공 + 바코드도 지원

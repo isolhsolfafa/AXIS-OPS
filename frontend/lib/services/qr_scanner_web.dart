@@ -270,12 +270,16 @@ Future<bool> startQrScanner({
     final int qrboxSize = (actualDivHeight * 0.65).clamp(120, 250).toInt();
     debugPrint('[QrScannerWeb] qrbox size: $qrboxSize (from divHeight=$actualDivHeight)');
 
+    // ★ qrbox를 정수로 전달 → 자동으로 N×N 정사각형 스캔 영역
+    // 중첩 객체 {'width': N, 'height': N}은 js_util.jsify()에서 올바르게 변환되지 않아
+    // html5-qrcode가 컨테이너 전체 너비를 사용하여 바코드 형태가 됨
     final config = js_util.jsify({
       'fps': 10,
-      'qrbox': {'width': qrboxSize, 'height': qrboxSize},
+      'qrbox': qrboxSize,
     });
 
     final successCallback = js_util.allowInterop((String decodedText, dynamic result) {
+      debugPrint('[QrScannerWeb] ★ QR DETECTED: $decodedText');
       onResult(decodedText);
     });
 

@@ -2226,6 +2226,135 @@ FE 변경 없으므로 FE teammate 불필요.
 
 ---
 
+## 🔧 BUG-5 핫픽스 프롬프트 — QR 스캔 영역 정사각형 수정 + QR 인식 검증 (Sprint 13 완료 후 사용)
+
+```
+CLAUDE.md를 처음부터 끝까지 다시 읽고 BUG-5 핫픽스를 시작해줘.
+BACKLOG.md의 BUG-5 항목도 읽어.
+
+⚠️ BUG-5 현재 상태 (6차 수정 — qrbox 정수 + 인식 로그 적용 완료):
+- ✅ 카메라 위치: 해결됨 (DOM div가 Flutter Container와 정확히 일치)
+- ✅ 카메라 영상: 정상 작동 (후면 카메라 피드 표시됨)
+- ✅ qrbox 정수 방식 적용됨 (방법 A) — 정사각형 스캔 영역으로 변경 완료
+- ✅ QR 인식 콜백 로그 추가됨 — '[QrScannerWeb] ★ QR DETECTED: ...' 출력
+- ❓ 빌드 + 실제 테스트 필요: 스캔 영역이 정사각형인지, QR 인식이 되는지 검증
+
+## 핵심 문제: 스캔 영역이 바코드 형태
+html5-qrcode의 스캔 영역(흰색 브라켓)이 가로로 넓은 직사각형으로 렌더링됨.
+QR 코드는 정사각형이므로 스캔 영역도 정사각형이어야 인식 가능.
+
+### 의심 원인: js_util.jsify() 중첩 객체 문제
+현재 코드:
+```dart
+final config = js_util.jsify({
+  'fps': 10,
+  'qrbox': {'width': qrboxSize, 'height': qrboxSize},
+});
+```
+`js_util.jsify()`가 중첩된 Map `{'width': N, 'height': N}`를 JS 객체로 올바르게 변환하지 못할 가능성.
+html5-qrcode가 qrbox를 읽지 못하면 컨테이너 전체 너비를 사용하여 바코드 형태가 됨.
+
+### 수정 방법 (2가지 중 택 1)
+
+**방법 A (권장): qrbox를 정수로 전달 — 자동으로 정사각형**
+```dart
+final config = js_util.jsify({
+  'fps': 10,
+  'qrbox': qrboxSize,  // 정수 = N×N 정사각형
+});
+```
+html5-qrcode에서 `qrbox: 195`는 195×195 정사각형 스캔 영역을 생성.
+
+**방법 B: qrbox 객체를 별도로 생성**
+```dart
+final qrbox = js_util.newObject();
+js_util.setProperty(qrbox, 'width', qrboxSize);
+js_util.setProperty(qrbox, 'height', qrboxSize);
+final config = js_util.newObject();
+js_util.setProperty(config, 'fps', 10);
+js_util.setProperty(config, 'qrbox', qrbox);
+```
+
+## 기술 스택
+- Flutter Web (PWA): Android Chrome 모바일 환경
+- html5-qrcode v2.3.8 (CDN: unpkg.com/html5-qrcode@2.3.8)
+- DOM 조작: dart:html + dart:js_util
+- 카메라 Container: height 300px, borderRadius 12px
+- Container 위치: SingleChildScrollView > Column 내부 (padding 20px)
+- position: fixed 오버레이 방식
+
+## 변경 대상 FE 파일 (1개)
+1. frontend/lib/services/qr_scanner_web.dart — qrbox 설정 수정 (1곳)
+
+qr_scan_screen.dart는 변경 불필요 (카메라 위치는 이미 해결됨).
+
+## 테스트 QR 코드 데이터
+테스트용 QR 코드 내용: `DOC_GBWS-6408`
+- 형식: Worksheet QR (DOC_ 접두사)
+- 기대 동작: QR 인식 → _onQrDetected → _handleQrCode('DOC_GBWS-6408') → taskNotifier.scanQrCode() 호출
+- 데스크탑에서 화면에 QR 이미지를 띄운 후 모바일 카메라로 스캔하여 테스트
+
+## 팀 구성
+2명의 teammate를 생성해줘. 모든 teammate는 Sonnet 모델 사용:
+
+1. **FE** (Frontend 담당) - 소유: frontend/**
+2. **TEST** (테스트 담당) - 소유: tests/**
+
+BE 변경 없으므로 BE teammate 불필요.
+
+## FE 작업 순서
+⚠️ 아래 1~2번은 이미 적용 완료됨 — 코드 확인만 하고 3번부터 진행
+
+1. ✅ (완료) qr_scanner_web.dart의 qrbox 설정을 정수 방식으로 변경됨
+   ```dart
+   'qrbox': qrboxSize,  // 정수 = N×N 정사각형 (기존: {'width': N, 'height': N} 객체 — jsify 오류)
+   ```
+2. ✅ (완료) QR 인식 콜백에 로그 추가됨
+   ```dart
+   debugPrint('[QrScannerWeb] ★ QR DETECTED: $decodedText');
+   ```
+3. `flutter build web --release` 실행하여 빌드 확인
+4. 진단 로그로 스캔 영역 검증:
+   - `[QrScannerWeb] qrbox size: N` 값이 120~250 범위인지
+   - `[QrScannerWeb] Actual div rect:` width/height가 올바른지
+   - 스캔 영역이 정사각형 (흰색 브라켓 4개가 정사각형 꼭짓점)인지 확인
+5. 만약 qrbox 정수 방식이 안되면 방법 B (js_util.newObject 별도 생성)로 전환
+6. QR 인식 테스트: DOC_GBWS-6408 QR을 카메라에 비춰서 콘솔에 '★ QR DETECTED' 출력 확인
+
+## TEST 작업 (tests/frontend/test_qr_scanner_web_test.dart)
+Dart 단위 테스트 작성 (dart:html mock 사용):
+1. TC-QR-01: ensureScannerDiv() 좌표가 정확히 반영되는지 (left, top, width, height)
+2. TC-QR-02: ensureScannerDiv() containerLeft=null이면 fallback 사이즈 적용
+3. TC-QR-03: updateScannerDivPosition()이 스타일 업데이트하는지
+4. TC-QR-04: removeScannerDiv()가 div + CSS + resizeListener 제거하는지
+5. TC-QR-05: qrbox 크기 계산 검증 — height=300이면 qrbox=195, height=100이면 qrbox=120(clamp)
+6. TC-QR-06: qrbox 크기가 250 초과하지 않는지 (height=500이면 qrbox=250, not 325)
+7. TC-QR-07: 카메라 fallback 순서 검증 (environment → user → cameraId)
+8. TC-QR-08: stopQrScanner() 후 _scanner=null + div 제거 확인
+9. TC-QR-09: QR 코드 인식 콜백 테스트 — 'DOC_GBWS-6408' 문자열이 onResult로 전달되는지
+10. TC-QR-10: window.onResize 리스너 등록/해제 확인
+
+## 검증 기준
+- [ ] 스캔 영역이 정사각형 (흰색 브라켓 4개가 정사각형 형태)
+- [ ] QR 코드 'DOC_GBWS-6408'을 카메라로 비추면 인식됨
+- [ ] 인식 후 _onQrDetected → _handleQrCode 정상 호출
+- [ ] 바코드도 인식 가능 (html5-qrcode 기본 멀티포맷)
+- [ ] 카메라 시작/중지 정상
+- [ ] 모바일 Chrome + 데스크탑 Chrome 모두 동작
+- [ ] 콘솔에 '[QrScannerWeb] ★ QR DETECTED: DOC_GBWS-6408' 출력
+
+## 규칙
+- html5-qrcode 내부 DOM 요소(video, canvas, img, 자식 div)는 CSS/JS로 절대 수정하지 않음
+- overflow: hidden 외에 container div에 추가 CSS 최소화
+- _forceContainerFit() 같은 자식 요소 강제 스타일 함수 절대 만들지 않음
+- qr_scan_screen.dart의 카메라 위치 계산 로직(localToGlobal) 변경하지 않음 (이미 해결됨)
+- ⚠️ DB 시간: get_db_connection()의 `options="-c timezone=Asia/Seoul"` 절대 삭제 금지
+- .env 파일 절대 커밋 금지
+- 완료 시 PROGRESS.md, BACKLOG.md에 기록
+```
+
+---
+
 ## 주요 단축키
 
 | 단축키 | 기능 |
