@@ -1830,3 +1830,72 @@ Console 로그 확인:
 - [x] git commit & push (`bdbe203`)
 - [x] Railway 자동 배포 (GitHub push)
 - [x] flutter build web → Netlify 배포 (https://gaxis-ops.netlify.app)
+
+---
+
+## Sprint 14 핫픽스: BUG-7/8/9/10/11 수정 (2026-03-02) ✅ 완료
+
+### 배경
+Sprint 14 배포 후 현장 테스트에서 추가 버그 5건 발견.
+공정 진행 task와 시간 계산은 핵심 기능이므로 3-에이전트 팀(BE/FE/TEST)으로 구현.
+
+### 수정 내역
+
+**BUG-7: 휴게시간 자동 일시정지/재개 수정** ✅
+- 원인 1: `IntervalTrigger(minutes=1)` → 정각 보장 안 됨 → `CronTrigger(second=0)` 변경
+- 원인 2: `send_break_end_notifications()`가 알림만 → `resume_pause()` + `set_paused(False)` 자동재개 추가
+- 원인 3: `force_pause_all_active_tasks()`가 `t.worker_id`(첫 번째만) → `work_start_log LEFT JOIN work_completion_log`로 모든 활동 작업자 조회 + 각각 pause log 생성
+
+**BUG-8: 작업시간(duration)에서 휴게시간 자동 차감** ✅
+- `_calculate_working_minutes(started_at, completed_at)` 함수 신규 구현
+- `_calculate_break_overlap()` 헬퍼: 작업구간과 break 구간의 겹침(분) 계산
+- admin_settings 4개 break period (morning/lunch/afternoon/dinner) 자동 차감
+- 다일(multi-day) 작업 지원: 각 날짜별 break 차감
+- `_record_completion_log()`에서 raw delta 대신 `_calculate_working_minutes()` 사용
+- `_finalize_task_multi_worker()`에서 이중차감 방지: manual pause만 차감 (break auto-pause는 `_calculate_working_minutes`에서 이미 처리)
+
+**BUG-9: Force-close에서 pause/휴게시간 차감** ✅
+- `admin.py` force-close: pending workers duration에 `_calculate_working_minutes()` 적용
+- manual pause만 별도 차감 (break auto-pause 이중차감 방지)
+- `duration_minutes = max(0, duration_minutes - manual_pause_minutes)`
+
+**BUG-10: QR 카메라 프레임 스크롤 싱크** ✅
+- `qr_scan_screen.dart`: `ScrollController` 추가 + `_onScroll()` 리스너
+- 스크롤 시 `_getCameraContainerRect()`로 현재 위치 계산 → `updateScannerDivPosition()` 호출
+- `updateScannerDivPosition()`은 `qr_scanner_web.dart`에 이미 구현됨 (Sprint 14)
+
+**BUG-11: Location QR 필수 설정 작동** ✅
+- BE `task_service.start_work()`: `get_setting('location_qr_required', False)` 체크, True이고 `location_qr_verified=False`면 400 `LOCATION_QR_REQUIRED` 반환
+- FE `task_detail_screen.dart`: `LOCATION_QR_REQUIRED` 에러 시 Location QR 필요 다이얼로그 + "QR 스캔" 버튼
+- FE `api_service.dart`: 400 상태코드 에러코드 전파 (`[ERROR_CODE] message` 형식)
+- `migration 010`: `location_qr_required` admin_settings 초기값 추가
+
+### 변경 파일
+| 파일 | 변경 내용 |
+|------|----------|
+| `backend/app/services/scheduler_service.py` | IntervalTrigger→CronTrigger, auto-resume, 멀티작업자 pause |
+| `backend/app/services/task_service.py` | `_calculate_working_minutes()`, `_calculate_break_overlap()` 신규, duration 수정, 이중차감 방지, location_qr 체크 |
+| `backend/app/routes/admin.py` | force-close: `_calculate_working_minutes` + manual pause 차감 |
+| `backend/migrations/010_sprint12_hr_schema.sql` | `location_qr_required` admin_settings 초기값 |
+| `frontend/lib/screens/qr/qr_scan_screen.dart` | ScrollController + onScroll → updateScannerDivPosition |
+| `frontend/lib/screens/task/task_detail_screen.dart` | LOCATION_QR_REQUIRED 에러 다이얼로그 |
+| `frontend/lib/services/api_service.dart` | 400 에러코드 전파 |
+| `tests/backend/test_break_time_scheduler.py` | +7건 (CronTrigger, auto-resume, 멀티작업자) |
+| `tests/backend/test_working_hours.py` | 신규 18건 (break overlap, working minutes, edge cases) |
+| `tests/backend/test_force_close.py` | +3건 (pause 차감, break overlap) |
+| `tests/backend/test_qr_scanner_logic.py` | +2건 (scroll sync) |
+| `tests/backend/test_location_qr_required.py` | 신규 5건 |
+
+### 테스트 결과
+- Sprint 14 핫픽스 전체: **76 passed, 1 skipped, 0 failed**
+  - test_break_time_scheduler: 7건 추가
+  - test_working_hours: 18건 신규
+  - test_force_close: 3건 추가
+  - test_qr_scanner_logic: 2건 추가
+  - test_location_qr_required: 5건 신규
+- 빌드: `flutter build web --release` — 에러 0건
+
+### 배포 (2026-03-02)
+- [x] git commit & push (`192d135`)
+- [x] Railway 자동 배포 (GitHub push)
+- [x] flutter build web → Netlify 배포 (https://gaxis-ops.netlify.app)
