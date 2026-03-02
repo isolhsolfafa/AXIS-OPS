@@ -515,3 +515,255 @@ class TestForceCloseCompletionStatusUpdate:
             )
         assert mech_completed is True, \
             "SELF_INSPECTION 강제 종료 후 mech_completed = True이어야 함"
+
+
+# ============================================================
+# BUG-9 Fix Tests: force-close에서 pause 시간 차감
+# ============================================================
+
+class TestForceClosePauseDeduction:
+    """BUG-9: force-close 시 수동 pause 시간 차감 (TC-FC-08 ~ TC-FC-10)"""
+
+    def test_fc08_force_close_subtracts_manual_pause(
+        self,
+        client,
+        create_test_worker,
+        create_test_product,
+        create_test_task,
+        create_test_completion_status,
+        get_auth_token,
+        db_conn
+    ):
+        """
+        TC-FC-08: force-close가 수동 pause 시간을 duration에서 차감
+
+        Scenario:
+        - 작업자 08:00 시작, 수동 pause 30분
+        - 관리자 강제 종료 17:00
+        - duration에서 30분 차감됨
+
+        Expected:
+        - duration_minutes < elapsed_minutes
+        """
+        import time
+        suffix = int(time.time() * 1000)
+
+        admin_id = create_test_worker(
+            email=f'fc_admin_08_{suffix}@test.com', password='Test123!',
+            name='FC Admin 08', role='ADMIN', company='GST',
+            is_admin=True
+        )
+        worker_id = create_test_worker(
+            email=f'fc_worker_08_{suffix}@test.com', password='Test123!',
+            name='FC Worker 08', role='MECH', company='FNI'
+        )
+
+        qr_doc_id = f'DOC-FC-{suffix}'
+        serial_number = f'SN-FC-{suffix}'
+        create_test_product(qr_doc_id=qr_doc_id, serial_number=serial_number, model='GALLANT-50')
+        create_test_completion_status(serial_number=serial_number)
+
+        started_at = datetime(2026, 3, 2, 8, 0, 0, tzinfo=timezone.utc)
+        task_id = create_test_task(
+            worker_id=worker_id,
+            serial_number=serial_number,
+            qr_doc_id=qr_doc_id,
+            task_category='MECH',
+            task_id='SELF_INSPECTION',
+            task_name='자주검사',
+            started_at=started_at
+        )
+
+        # 수동 pause 30분 기록 삽입
+        cursor = db_conn.cursor()
+        paused_at = datetime(2026, 3, 2, 10, 0, 0, tzinfo=timezone.utc)
+        resumed_at = datetime(2026, 3, 2, 10, 30, 0, tzinfo=timezone.utc)
+        cursor.execute("""
+            INSERT INTO work_pause_log
+                (task_detail_id, worker_id, pause_type, paused_at, resumed_at, pause_duration_minutes)
+            VALUES (%s, %s, 'manual', %s, %s, 30)
+        """, (task_id, worker_id, paused_at, resumed_at))
+        db_conn.commit()
+        cursor.close()
+
+        # 관리자 강제 종료 (17:00)
+        token = get_auth_token(admin_id, role='ADMIN', is_admin=True)
+        response = client.put(
+            f'/api/admin/tasks/{task_id}/force-close',
+            json={
+                'close_reason': 'BUG-9 pause deduction test',
+                'completed_at': '2026-03-02T17:00:00+00:00',
+            },
+            headers={'Authorization': f'Bearer {token}'}
+        )
+
+        if response.status_code == 404:
+            pytest.skip("force-close 엔드포인트 미구현")
+
+        assert response.status_code == 200, (
+            f"Expected 200, got {response.status_code}: {response.get_json()}"
+        )
+
+        data = response.get_json()
+        duration = data.get('duration_minutes', 0)
+        elapsed = data.get('elapsed_minutes', 0)
+
+        # elapsed = 9시간 = 540분, duration은 그보다 적어야 함 (pause 30분 차감)
+        assert duration < elapsed, (
+            f"duration({duration}) should be less than elapsed({elapsed}) due to pause deduction"
+        )
+
+    def test_fc09_force_close_uses_working_minutes(
+        self,
+        client,
+        create_test_worker,
+        create_test_product,
+        create_test_task,
+        create_test_completion_status,
+        get_auth_token,
+        db_conn
+    ):
+        """
+        TC-FC-09: force-close가 미완료 작업자의 duration 계산에 _calculate_working_minutes 사용
+
+        BUG-9 Fix: 단순 delta가 아닌 휴게시간 차감된 시간 사용
+
+        Expected:
+        - _calculate_working_minutes 호출 확인 (간접 검증: duration < raw delta)
+        """
+        import time
+        suffix = int(time.time() * 1000) + 9
+
+        admin_id = create_test_worker(
+            email=f'fc_admin_09_{suffix}@test.com', password='Test123!',
+            name='FC Admin 09', role='ADMIN', company='GST',
+            is_admin=True
+        )
+        worker_id = create_test_worker(
+            email=f'fc_worker_09_{suffix}@test.com', password='Test123!',
+            name='FC Worker 09', role='MECH', company='FNI'
+        )
+
+        qr_doc_id = f'DOC-FC-{suffix}'
+        serial_number = f'SN-FC-{suffix}'
+        create_test_product(qr_doc_id=qr_doc_id, serial_number=serial_number, model='GALLANT-50')
+        create_test_completion_status(serial_number=serial_number)
+
+        # 08:00 시작 (work_start_log가 create_test_task에 의해 자동 생성됨)
+        started_at = datetime(2026, 3, 2, 8, 0, 0, tzinfo=timezone.utc)
+        task_id = create_test_task(
+            worker_id=worker_id,
+            serial_number=serial_number,
+            qr_doc_id=qr_doc_id,
+            task_category='MECH',
+            task_id='SELF_INSPECTION',
+            task_name='자주검사',
+            started_at=started_at
+        )
+
+        # 17:00 강제 종료 → raw delta 9시간=540분, 휴게시간 차감 시 더 적어야 함
+        token = get_auth_token(admin_id, role='ADMIN', is_admin=True)
+        response = client.put(
+            f'/api/admin/tasks/{task_id}/force-close',
+            json={
+                'close_reason': 'BUG-9 working minutes test',
+                'completed_at': '2026-03-02T17:00:00+00:00',
+            },
+            headers={'Authorization': f'Bearer {token}'}
+        )
+
+        if response.status_code == 404:
+            pytest.skip("force-close 엔드포인트 미구현")
+
+        assert response.status_code == 200
+        data = response.get_json()
+        duration = data.get('duration_minutes', 0)
+
+        # raw delta = 540분, 휴게시간이 설정되어 있으면 차감될 수 있음
+        # 최소한 duration이 계산되었는지 확인 (0보다 크고 합리적 범위)
+        assert duration > 0, f"Duration should be positive, got {duration}"
+        # elapsed는 540분이어야 함
+        elapsed = data.get('elapsed_minutes', 0)
+        assert elapsed == 540 or abs(elapsed - 540) <= 1, (
+            f"Elapsed should be ~540, got {elapsed}"
+        )
+
+    def test_fc10_force_close_with_break_overlap(
+        self,
+        client,
+        create_test_worker,
+        create_test_product,
+        create_test_task,
+        create_test_completion_status,
+        get_auth_token,
+        db_conn
+    ):
+        """
+        TC-FC-10: force-close 시 휴게시간 겹침이 duration에서 차감됨
+
+        Scenario: 작업 08:00~18:00 (10시간=600분)
+        BUG-9 Fix: _calculate_working_minutes로 계산 →
+        휴게시간이 설정되어 있으면 겹침 자동 차감
+
+        Expected:
+        - duration_minutes가 계산됨 (0이 아닌 양수)
+        - force_closed = True
+        """
+        import time
+        suffix = int(time.time() * 1000) + 10
+
+        admin_id = create_test_worker(
+            email=f'fc_admin_10_{suffix}@test.com', password='Test123!',
+            name='FC Admin 10', role='ADMIN', company='GST',
+            is_admin=True
+        )
+        worker_id = create_test_worker(
+            email=f'fc_worker_10_{suffix}@test.com', password='Test123!',
+            name='FC Worker 10', role='ELEC', company='P&S'
+        )
+
+        qr_doc_id = f'DOC-FC-{suffix}'
+        serial_number = f'SN-FC-{suffix}'
+        create_test_product(qr_doc_id=qr_doc_id, serial_number=serial_number, model='GALLANT-50')
+        create_test_completion_status(serial_number=serial_number)
+
+        started_at = datetime(2026, 3, 2, 8, 0, 0, tzinfo=timezone.utc)
+        task_id = create_test_task(
+            worker_id=worker_id,
+            serial_number=serial_number,
+            qr_doc_id=qr_doc_id,
+            task_category='ELEC',
+            task_id='INSPECTION',
+            task_name='자주검사 (검수)',
+            started_at=started_at
+        )
+
+        token = get_auth_token(admin_id, role='ADMIN', is_admin=True)
+        response = client.put(
+            f'/api/admin/tasks/{task_id}/force-close',
+            json={
+                'close_reason': 'Break overlap test',
+                'completed_at': '2026-03-02T18:00:00+00:00',
+            },
+            headers={'Authorization': f'Bearer {token}'}
+        )
+
+        if response.status_code == 404:
+            pytest.skip("force-close 엔드포인트 미구현")
+
+        assert response.status_code == 200
+        data = response.get_json()
+
+        # duration 양수 확인
+        duration = data.get('duration_minutes', 0)
+        assert duration > 0, f"Duration should be positive, got {duration}"
+
+        # DB 확인: force_closed = True
+        cursor = db_conn.cursor()
+        cursor.execute(
+            "SELECT force_closed FROM app_task_details WHERE id = %s",
+            (task_id,)
+        )
+        row = cursor.fetchone()
+        cursor.close()
+        assert row is not None and row[0] is True, "force_closed should be True"

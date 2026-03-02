@@ -60,3 +60,10 @@ CREATE TABLE IF NOT EXISTS hr.gst_attendance (
 
 CREATE INDEX IF NOT EXISTS idx_gst_att_worker
     ON hr.gst_attendance(worker_id, check_time DESC);
+
+-- ────────────────────────────────────────────────────────────────
+-- 5. admin_settings: location_qr_required 초기값 (BUG-11)
+-- ────────────────────────────────────────────────────────────────
+INSERT INTO admin_settings (setting_key, setting_value, description) VALUES
+    ('location_qr_required', 'false', 'Location QR 인증 필수 여부 (작업 시작 전)')
+ON CONFLICT (setting_key) DO NOTHING;

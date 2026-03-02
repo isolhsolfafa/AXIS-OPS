@@ -13,7 +13,7 @@ Sprint 9: 일시정지 중인 작업 완료 시 자동 재개 + duration에서 p
 
 import logging
 from typing import Dict, Any, Optional, Tuple, List
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.config import Config
 from app.models.task_detail import (
@@ -92,6 +92,15 @@ class TaskService:
                         'error': 'PHASE_BLOCKED',
                         'message': 'Tank Docking이 완료되지 않았습니다. POST_DOCKING 공정을 시작할 수 없습니다.'
                     }, 400
+
+        # BUG-11: Location QR 인증 필수 여부 확인
+        from app.models.admin_settings import get_setting as _get_admin_setting
+        location_qr_required = _get_admin_setting('location_qr_required', False)
+        if location_qr_required and not task.location_qr_verified:
+            return {
+                'error': 'LOCATION_QR_REQUIRED',
+                'message': 'Location QR 인증이 필요합니다. QR 스캔 화면에서 Location QR을 먼저 스캔해주세요.'
+            }, 400
 
         # 이미 완료된 작업인지 확인
         if task.completed_at:
@@ -535,6 +544,116 @@ class TaskService:
 
 
 # ──────────────────────────────────────────────────────────────
+# BUG-8 Fix: 근무시간 계산 (휴게시간 자동 차감)
+# ──────────────────────────────────────────────────────────────
+
+# 휴게시간 설정 키 매핑 (admin_settings)
+_BREAK_PERIOD_KEYS = [
+    ('break_morning_start', 'break_morning_end'),
+    ('lunch_start', 'lunch_end'),
+    ('break_afternoon_start', 'break_afternoon_end'),
+    ('dinner_start', 'dinner_end'),
+]
+
+
+def _calculate_working_minutes(started_at: datetime, completed_at: datetime) -> int:
+    """
+    근무시간 계산: 총 경과시간에서 휴게시간 겹침을 자동 차감.
+
+    admin_settings에서 4개 휴게시간 구간을 읽어
+    [started_at, completed_at] 구간과의 overlap(분)을 계산하고
+    raw_minutes에서 차감.
+
+    Args:
+        started_at: 작업 시작 시각 (timezone-aware, KST)
+        completed_at: 작업 완료 시각 (timezone-aware, KST)
+
+    Returns:
+        휴게시간이 차감된 실근무시간(분), 최소 0
+    """
+    from app.models.admin_settings import get_setting
+
+    raw_minutes = int((completed_at - started_at).total_seconds() / 60)
+    if raw_minutes <= 0:
+        return 0
+
+    total_break_overlap = 0
+
+    for start_key, end_key in _BREAK_PERIOD_KEYS:
+        break_start_str = get_setting(start_key, None)
+        break_end_str = get_setting(end_key, None)
+        if not break_start_str or not break_end_str:
+            continue
+
+        overlap = _calculate_break_overlap(
+            started_at, completed_at, break_start_str, break_end_str
+        )
+        total_break_overlap += overlap
+
+    return max(0, raw_minutes - total_break_overlap)
+
+
+def _calculate_break_overlap(
+    work_start: datetime,
+    work_end: datetime,
+    break_start_str: str,
+    break_end_str: str
+) -> int:
+    """
+    작업 구간 [work_start, work_end]과 휴게시간 [break_start, break_end]의
+    겹침 시간(분)을 계산.
+
+    작업이 여러 날에 걸치는 경우 각 날의 휴게시간과 개별적으로 겹침을 계산.
+
+    Args:
+        work_start: 작업 시작 (timezone-aware)
+        work_end: 작업 완료 (timezone-aware)
+        break_start_str: 휴게 시작 "HH:MM"
+        break_end_str: 휴게 종료 "HH:MM"
+
+    Returns:
+        겹침 시간(분), 없으면 0
+    """
+    try:
+        bh, bm = map(int, break_start_str.split(':'))
+        eh, em = map(int, break_end_str.split(':'))
+    except (ValueError, AttributeError):
+        return 0
+
+    total_overlap = 0
+
+    # 작업 시작일부터 완료일까지 각 날짜의 휴게시간과 overlap 계산
+    current_date = work_start.date()
+    end_date = work_end.date()
+
+    while current_date <= end_date:
+        # 해당 날짜의 휴게시간 구간 (KST)
+        break_start_dt = work_start.tzinfo.localize(
+            datetime(current_date.year, current_date.month, current_date.day, bh, bm)
+        ) if hasattr(work_start.tzinfo, 'localize') else datetime(
+            current_date.year, current_date.month, current_date.day, bh, bm,
+            tzinfo=work_start.tzinfo
+        )
+        break_end_dt = work_start.tzinfo.localize(
+            datetime(current_date.year, current_date.month, current_date.day, eh, em)
+        ) if hasattr(work_start.tzinfo, 'localize') else datetime(
+            current_date.year, current_date.month, current_date.day, eh, em,
+            tzinfo=work_start.tzinfo
+        )
+
+        # overlap = max(0, min(work_end, break_end) - max(work_start, break_start))
+        overlap_start = max(work_start, break_start_dt)
+        overlap_end = min(work_end, break_end_dt)
+
+        if overlap_end > overlap_start:
+            total_overlap += int((overlap_end - overlap_start).total_seconds() / 60)
+
+        current_date += timedelta(days=1)
+
+    return total_overlap
+
+
+# ──────────────────────────────────────────────────────────────
 # Sprint 6 Phase C: 멀티 작업자 duration 헬퍼 함수
 # ──────────────────────────────────────────────────────────────
 
@@ -573,9 +692,8 @@ def _record_completion_log(task, worker_id: int, completed_at: datetime) -> Opti
         )
         row = cur.fetchone()
         if row and row['started_at']:
-            personal_duration = int(
-                (completed_at - row['started_at']).total_seconds() / 60
-            )
+            # BUG-8 Fix: 휴게시간 자동 차감된 실근무시간 계산
+            personal_duration = _calculate_working_minutes(row['started_at'], completed_at)
         else:
             personal_duration = None
 
@@ -685,14 +803,21 @@ def _finalize_task_multi_worker(task_detail_id: int, completed_at: datetime) -> 
         )
         raw_duration_minutes = int(cur.fetchone()['duration_minutes'])
 
-        # Sprint 9: total_pause_minutes 조회 후 차감
+        # BUG-8 Fix: 수동 pause만 차감 (break auto-pause는 _calculate_working_minutes에서 이미 차감됨)
+        # break 자동 일시정지 유형: break_morning, lunch, break_afternoon, dinner
         cur.execute(
-            "SELECT COALESCE(total_pause_minutes, 0) AS total_pause FROM app_task_details WHERE id = %s",
+            """
+            SELECT COALESCE(SUM(pause_duration_minutes), 0) AS manual_pause
+            FROM work_pause_log
+            WHERE task_detail_id = %s
+              AND pause_type NOT IN ('break_morning', 'lunch', 'break_afternoon', 'dinner')
+              AND resumed_at IS NOT NULL
+            """,
             (task_detail_id,)
         )
-        total_pause_row = cur.fetchone()
-        total_pause_minutes = int(total_pause_row['total_pause']) if total_pause_row else 0
-        duration_minutes = max(0, raw_duration_minutes - total_pause_minutes)
+        manual_pause_row = cur.fetchone()
+        manual_pause_minutes = int(manual_pause_row['manual_pause']) if manual_pause_row else 0
+        duration_minutes = max(0, raw_duration_minutes - manual_pause_minutes)
 
         # 최초 시작 시각 (work_start_log)
         cur.execute(
@@ -731,7 +856,7 @@ def _finalize_task_multi_worker(task_detail_id: int, completed_at: datetime) -> 
 
         logger.info(
             f"_finalize_task_multi_worker: task_id={task_detail_id}, "
-            f"raw_duration={raw_duration_minutes}m, pause={total_pause_minutes}m, "
+            f"raw_duration={raw_duration_minutes}m, manual_pause={manual_pause_minutes}m, "
             f"net_duration={duration_minutes}m, elapsed={elapsed_minutes}m"
         )
 

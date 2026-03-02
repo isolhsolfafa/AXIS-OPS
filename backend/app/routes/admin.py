@@ -17,6 +17,7 @@ from app.models.worker import get_db_connection, update_approval_status, get_wor
 from app.models.admin_settings import get_all_settings, update_setting
 from app.services.alert_service import create_and_broadcast_alert
 from app.services.scheduler_service import trigger_unfinished_task_check_manually
+from app.services.task_service import _calculate_working_minutes
 from psycopg2 import Error as PsycopgError
 
 
@@ -1021,6 +1022,7 @@ def force_close_task(task_id: int) -> Tuple[Dict[str, Any], int]:
         )
         existing_duration = int(cur.fetchone()['duration_sum'])
         # 아직 미완료인 작업자의 duration도 합산 (현재 시각 기준)
+        # BUG-9 Fix: _calculate_working_minutes로 휴게시간 자동 차감
         cur.execute(
             """
             SELECT wsl.worker_id, wsl.started_at
@@ -1035,10 +1037,23 @@ def force_close_task(task_id: int) -> Tuple[Dict[str, Any], int]:
         pending_duration = 0
         for pw in pending_workers:
             if pw['started_at']:
-                pending_duration += int(
-                    (completed_at - pw['started_at']).total_seconds() / 60
-                )
+                pending_duration += _calculate_working_minutes(pw['started_at'], completed_at)
         duration_minutes = existing_duration + pending_duration
+
+        # BUG-9 Fix: 수동 pause만 차감 (break auto-pause는 _calculate_working_minutes에서 이미 차감)
+        cur.execute(
+            """
+            SELECT COALESCE(SUM(pause_duration_minutes), 0) AS manual_pause
+            FROM work_pause_log
+            WHERE task_detail_id = %s
+              AND pause_type NOT IN ('break_morning', 'lunch', 'break_afternoon', 'dinner')
+              AND resumed_at IS NOT NULL
+            """,
+            (task_id,)
+        )
+        manual_pause_minutes = int(cur.fetchone()['manual_pause'])
+        duration_minutes = max(0, duration_minutes - manual_pause_minutes)
+
         if duration_minutes == 0 and elapsed_minutes > 0:
             duration_minutes = elapsed_minutes  # fallback
 

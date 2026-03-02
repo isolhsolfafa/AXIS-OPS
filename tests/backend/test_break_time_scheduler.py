@@ -499,3 +499,338 @@ class TestBreakTimeSchedulerJobs:
             check_break_time_job()
         except Exception as e:
             pytest.fail(f"check_break_time_job raised exception: {e}")
+
+
+# ============================================================
+# BUG-7 Fix Tests: CronTrigger, auto-resume, multi-worker pause
+# ============================================================
+class TestBug7CronTrigger:
+    """BUG-7: CronTrigger(second=0) 사용 검증 (TC-BT-01)"""
+
+    def test_bt01_check_break_time_uses_cron_trigger(self, app):
+        """
+        TC-BT-01: check_break_time job이 CronTrigger(second=0)을 사용하는지 확인
+
+        IntervalTrigger 대신 CronTrigger를 사용해야 정확히 HH:MM:00에 실행됨.
+        """
+        import app.services.scheduler_service as sched_mod
+
+        # _scheduler 전역 리셋
+        sched_mod._scheduler = None
+        scheduler = sched_mod.init_scheduler()
+
+        try:
+            from apscheduler.triggers.cron import CronTrigger
+            job = scheduler.get_job('check_break_time')
+            assert job is not None, "'check_break_time' job not found"
+            assert isinstance(job.trigger, CronTrigger), (
+                f"Expected CronTrigger, got {type(job.trigger).__name__}"
+            )
+        finally:
+            if scheduler.running:
+                scheduler.shutdown()
+            sched_mod._scheduler = None
+
+
+class TestBug7AutoResume:
+    """BUG-7: send_break_end_notifications이 auto-resume 수행하는지 검증 (TC-BT-02, TC-BT-03)"""
+
+    def test_bt02_break_end_calls_resume_pause(
+        self, app, sched_worker, active_task, db_conn
+    ):
+        """
+        TC-BT-02: send_break_end_notifications이 resume_pause를 호출하는지 확인
+
+        Flow: force_pause → send_break_end_notifications
+        Expected: work_pause_log.resumed_at IS NOT NULL
+        """
+        from app.services.scheduler_service import (
+            force_pause_all_active_tasks,
+            send_break_end_notifications,
+        )
+
+        force_pause_all_active_tasks('break_morning', 'Test pause')
+
+        # pause_log 있는지 확인
+        assert _get_pause_log_count(db_conn, active_task, 'break_morning') >= 1
+
+        send_break_end_notifications('break_morning', 'Test resume')
+
+        # resumed_at가 설정됐는지 확인
+        cursor = db_conn.cursor()
+        cursor.execute(
+            """SELECT COUNT(*) FROM work_pause_log
+               WHERE task_detail_id = %s AND pause_type = 'break_morning'
+                 AND resumed_at IS NOT NULL""",
+            (active_task,)
+        )
+        resumed_count = cursor.fetchone()[0]
+        cursor.close()
+
+        assert resumed_count >= 1, (
+            "send_break_end_notifications should auto-resume paused tasks"
+        )
+
+    def test_bt03_break_end_sets_paused_false(
+        self, app, sched_worker, active_task, db_conn
+    ):
+        """
+        TC-BT-03: send_break_end_notifications 후 is_paused = False
+
+        Expected: app_task_details.is_paused == False
+        """
+        from app.services.scheduler_service import (
+            force_pause_all_active_tasks,
+            send_break_end_notifications,
+        )
+
+        force_pause_all_active_tasks('lunch', 'Test pause')
+        assert _get_task_is_paused(db_conn, active_task) is True
+
+        send_break_end_notifications('lunch', 'Test resume')
+        assert _get_task_is_paused(db_conn, active_task) is False, (
+            "Task should be unpaused after break end notifications"
+        )
+
+
+class TestBug7MultiWorkerPause:
+    """BUG-7: 멀티 작업자 일시정지 (TC-BT-04 ~ TC-BT-07)"""
+
+    def test_bt04_force_pause_all_active_workers(
+        self, app, db_conn, create_test_worker, create_test_product,
+        get_auth_token
+    ):
+        """
+        TC-BT-04: force_pause_all_active_tasks가 모든 활성 작업자에 pause 생성
+
+        3명의 작업자가 같은 Task에 참여 중일 때
+        각 작업자마다 work_pause_log 레코드가 생성되어야 함.
+        """
+        from app.services.scheduler_service import force_pause_all_active_tasks
+
+        suffix = int(time.time() * 1000)
+
+        # 3명의 작업자 생성
+        workers = []
+        for i in range(3):
+            wid = create_test_worker(
+                email=f'bt04_w{i}_{suffix}@bt7test.com',
+                password='Test123!',
+                name=f'BT04 Worker {i}',
+                role='MECH',
+                company='FNI',
+            )
+            workers.append(wid)
+
+        # 제품 + Task 생성 (worker_id = 첫 번째 작업자)
+        qr_doc_id = f'DOC-BT04-{suffix}'
+        sn = f'SN-BT04-{suffix}'
+        create_test_product(qr_doc_id=qr_doc_id, serial_number=sn)
+
+        started_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        cursor = db_conn.cursor()
+        cursor.execute("""
+            INSERT INTO app_task_details (
+                worker_id, serial_number, qr_doc_id, task_category,
+                task_id, task_name, started_at, is_applicable
+            )
+            VALUES (%s, %s, %s, 'MECH', 'SELF_INSPECTION', '자주검사', %s, TRUE)
+            RETURNING id
+        """, (workers[0], sn, qr_doc_id, started_at))
+        task_id = cursor.fetchone()[0]
+
+        # 3명 모두 work_start_log에 등록 (미완료 상태)
+        for wid in workers:
+            cursor.execute("""
+                INSERT INTO work_start_log
+                    (task_id, worker_id, serial_number, qr_doc_id,
+                     task_category, task_id_ref, task_name, started_at)
+                VALUES (%s, %s, %s, %s, 'MECH', 'SELF_INSPECTION', '자주검사', %s)
+            """, (task_id, wid, sn, qr_doc_id, started_at))
+        db_conn.commit()
+        cursor.close()
+
+        # force pause
+        force_pause_all_active_tasks('break_afternoon', 'Multi-worker pause test')
+
+        # 각 작업자마다 pause_log 생성 확인
+        cursor = db_conn.cursor()
+        cursor.execute(
+            """SELECT COUNT(DISTINCT worker_id) FROM work_pause_log
+               WHERE task_detail_id = %s AND pause_type = 'break_afternoon'""",
+            (task_id,)
+        )
+        distinct_workers = cursor.fetchone()[0]
+        cursor.close()
+
+        assert distinct_workers == 3, (
+            f"Expected 3 workers with pause logs, got {distinct_workers}"
+        )
+
+    def test_bt05_individual_alerts_per_worker(
+        self, app, db_conn, create_test_worker, create_test_product,
+        get_auth_token
+    ):
+        """
+        TC-BT-05: force_pause가 각 작업자에게 개별 알림 발송
+
+        Expected: target_worker_id가 서로 다른 BREAK_TIME_PAUSE 알림이 생성됨
+        """
+        from app.services.scheduler_service import force_pause_all_active_tasks
+
+        suffix = int(time.time() * 1000) + 5
+
+        workers = []
+        for i in range(2):
+            wid = create_test_worker(
+                email=f'bt05_w{i}_{suffix}@bt7test.com',
+                password='Test123!',
+                name=f'BT05 Worker {i}',
+                role='MECH',
+                company='FNI',
+            )
+            workers.append(wid)
+
+        qr_doc_id = f'DOC-BT05-{suffix}'
+        sn = f'SN-BT05-{suffix}'
+        create_test_product(qr_doc_id=qr_doc_id, serial_number=sn)
+
+        started_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        cursor = db_conn.cursor()
+        cursor.execute("""
+            INSERT INTO app_task_details (
+                worker_id, serial_number, qr_doc_id, task_category,
+                task_id, task_name, started_at, is_applicable
+            )
+            VALUES (%s, %s, %s, 'MECH', 'PANEL_WORK', '판넬 작업', %s, TRUE)
+            RETURNING id
+        """, (workers[0], sn, qr_doc_id, started_at))
+        task_id = cursor.fetchone()[0]
+
+        for wid in workers:
+            cursor.execute("""
+                INSERT INTO work_start_log
+                    (task_id, worker_id, serial_number, qr_doc_id,
+                     task_category, task_id_ref, task_name, started_at)
+                VALUES (%s, %s, %s, %s, 'MECH', 'PANEL_WORK', '판넬 작업', %s)
+            """, (task_id, wid, sn, qr_doc_id, started_at))
+        db_conn.commit()
+        cursor.close()
+
+        # 기존 알림 수 기록
+        alert_counts_before = {}
+        for wid in workers:
+            alert_counts_before[wid] = _get_alert_count(db_conn, wid, 'BREAK_TIME_PAUSE')
+
+        force_pause_all_active_tasks('dinner', 'Individual alert test')
+
+        # 각 작업자의 알림 수 확인
+        for wid in workers:
+            new_count = _get_alert_count(db_conn, wid, 'BREAK_TIME_PAUSE')
+            assert new_count > alert_counts_before[wid], (
+                f"Worker {wid} should have received BREAK_TIME_PAUSE alert"
+            )
+
+    def test_bt06_auto_pause_disabled_skips_job(
+        self, app, sched_worker, active_task, db_conn
+    ):
+        """
+        TC-BT-06: auto_pause_enabled=False일 때 check_break_time_job이 실행 안 됨
+
+        동일 테스트가 TC-SCHED-06에도 있지만, BUG-7 Fix 맥락으로 재확인.
+        """
+        from app.services.scheduler_service import check_break_time_job
+
+        if db_conn:
+            cursor = db_conn.cursor()
+            cursor.execute(
+                "UPDATE admin_settings SET setting_value = 'false' "
+                "WHERE setting_key = 'auto_pause_enabled'"
+            )
+            db_conn.commit()
+            cursor.close()
+
+        try:
+            check_break_time_job()
+            assert _get_task_is_paused(db_conn, active_task) is False
+        finally:
+            if db_conn and not db_conn.closed:
+                cursor = db_conn.cursor()
+                cursor.execute(
+                    "UPDATE admin_settings SET setting_value = 'true' "
+                    "WHERE setting_key = 'auto_pause_enabled'"
+                )
+                db_conn.commit()
+                cursor.close()
+
+    def test_bt07_three_workers_all_get_pause(
+        self, app, db_conn, create_test_worker, create_test_product,
+        get_auth_token
+    ):
+        """
+        TC-BT-07: 3명이 활성 상태일 때 모두 pause 로그 받음 (첫 번째만이 아닌)
+
+        BUG-7 핵심: 기존 코드는 worker_id(= 첫 작업자)만 대상이었음
+        수정 후: work_start_log에서 모든 활성 작업자 조회
+        """
+        from app.services.scheduler_service import force_pause_all_active_tasks
+
+        suffix = int(time.time() * 1000) + 7
+
+        workers = []
+        for i in range(3):
+            wid = create_test_worker(
+                email=f'bt07_w{i}_{suffix}@bt7test.com',
+                password='Test123!',
+                name=f'BT07 Worker {i}',
+                role='ELEC',
+                company='P&S',
+            )
+            workers.append(wid)
+
+        qr_doc_id = f'DOC-BT07-{suffix}'
+        sn = f'SN-BT07-{suffix}'
+        create_test_product(qr_doc_id=qr_doc_id, serial_number=sn)
+
+        started_at = datetime.now(timezone.utc) - timedelta(minutes=30)
+        cursor = db_conn.cursor()
+        cursor.execute("""
+            INSERT INTO app_task_details (
+                worker_id, serial_number, qr_doc_id, task_category,
+                task_id, task_name, started_at, is_applicable
+            )
+            VALUES (%s, %s, %s, 'ELEC', 'WIRING', '배선 포설', %s, TRUE)
+            RETURNING id
+        """, (workers[0], sn, qr_doc_id, started_at))
+        task_id = cursor.fetchone()[0]
+
+        for wid in workers:
+            cursor.execute("""
+                INSERT INTO work_start_log
+                    (task_id, worker_id, serial_number, qr_doc_id,
+                     task_category, task_id_ref, task_name, started_at)
+                VALUES (%s, %s, %s, %s, 'ELEC', 'WIRING', '배선 포설', %s)
+            """, (task_id, wid, sn, qr_doc_id, started_at))
+        db_conn.commit()
+        cursor.close()
+
+        force_pause_all_active_tasks('break_morning', '3-worker test')
+
+        # 3명 모두 pause 로그 받았는지 확인
+        cursor = db_conn.cursor()
+        cursor.execute(
+            """SELECT worker_id FROM work_pause_log
+               WHERE task_detail_id = %s AND pause_type = 'break_morning'
+               ORDER BY worker_id""",
+            (task_id,)
+        )
+        paused_worker_ids = [r[0] for r in cursor.fetchall()]
+        cursor.close()
+
+        assert len(paused_worker_ids) == 3, (
+            f"Expected 3 pause logs, got {len(paused_worker_ids)}: {paused_worker_ids}"
+        )
+        for wid in workers:
+            assert wid in paused_worker_ids, (
+                f"Worker {wid} should have a pause log"
+            )

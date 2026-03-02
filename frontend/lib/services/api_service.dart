@@ -197,6 +197,13 @@ class ApiService {
                        '서버 오류가 발생했습니다.';
         if (statusCode == 401) {
           return Exception('인증 실패: 다시 로그인해주세요.');
+        } else if (statusCode == 400) {
+          // 서버 에러 코드 보존 (LOCATION_QR_REQUIRED 등 FE 분기 필요)
+          final errorCode = error.response?.data?['error'] ?? '';
+          if (errorCode.isNotEmpty) {
+            return Exception('[$errorCode] $message');
+          }
+          return Exception('요청 오류: $message');
         } else if (statusCode == 403) {
           // 서버 에러 코드 보존 (APPROVAL_PENDING, APPROVAL_REJECTED 등 분기 필요)
           final errorCode = error.response?.data?['error'] ?? '';

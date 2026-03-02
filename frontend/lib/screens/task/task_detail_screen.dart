@@ -491,8 +491,62 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     final success = await taskNotifier.startTask(taskId: taskId, workerId: workerId);
     if (mounted) {
       setState(() => _isActionLoading = false);
+      if (!success) {
+        final errorMessage = ref.read(taskProvider).errorMessage ?? '';
+        if (errorMessage.contains('LOCATION_QR_REQUIRED')) {
+          _showLocationQrRequiredDialog();
+          return;
+        }
+      }
       _showSnack(success, '작업을 시작했습니다.', '작업 시작에 실패했습니다.');
     }
+  }
+
+  /// Location QR 인증 필요 다이얼로그
+  void _showLocationQrRequiredDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.lg)),
+        title: Row(
+          children: [
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: GxColors.warningBg,
+                borderRadius: BorderRadius.circular(GxRadius.md),
+              ),
+              child: const Icon(Icons.location_on, color: GxColors.warning, size: 18),
+            ),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Text(
+                'Location QR 필요',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: GxColors.charcoal),
+              ),
+            ),
+          ],
+        ),
+        content: const Text(
+          'Location QR 인증이 필요합니다.\nQR 스캔 화면에서 Location QR을 먼저 스캔해주세요.',
+          style: TextStyle(fontSize: 14, color: GxColors.slate, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('닫기', style: TextStyle(color: GxColors.steel, fontWeight: FontWeight.w500)),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              Navigator.pushNamed(context, '/qr-scan');
+            },
+            child: const Text('QR 스캔', style: TextStyle(color: GxColors.accent, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _handleCompleteTask(int taskId, int workerId) async {

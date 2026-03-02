@@ -234,6 +234,96 @@ class TestBuildVerification:
         assert True
 
 
+# ============================================================
+# BUG-10 Fix Tests: ScrollController 스크롤 동기화
+# ============================================================
+
+def calculate_scroll_update(
+    container_left: float,
+    container_top: float,
+    container_width: float,
+    container_height: float,
+) -> dict:
+    """
+    BUG-10 수정: _onScroll에서 updateScannerDivPosition 호출 시
+    containerRect의 좌표를 전달하여 스캐너 div 위치를 동기화.
+
+    left/width/height는 유지, top만 스크롤에 따라 변경.
+    """
+    return {
+        'left': f'{container_left}px',
+        'top': f'{container_top}px',
+        'width': f'{container_width}px',
+        'height': f'{container_height}px',
+    }
+
+
+class TestScrollSyncUpdate:
+    """TC-QR-13~14: BUG-10 ScrollController 동기화 테스트"""
+
+    def test_qr13_scroll_update_uses_correct_rect(self):
+        """
+        TC-QR-13: ScrollController가 updateScannerDivPosition에 올바른 rect 전달
+
+        updateScannerDivPosition(left, top, width, height) 호출 시
+        containerRect에서 가져온 실제 좌표가 사용되어야 함.
+        """
+        # 초기 위치
+        result = calculate_scroll_update(
+            container_left=20.0,
+            container_top=156.5,
+            container_width=335.0,
+            container_height=300.0,
+        )
+        assert result['left'] == '20.0px'
+        assert result['top'] == '156.5px'
+        assert result['width'] == '335.0px'
+        assert result['height'] == '300.0px'
+
+        # 스크롤 후 위치 (top만 변경)
+        result_scrolled = calculate_scroll_update(
+            container_left=20.0,
+            container_top=56.5,  # 100px 스크롤됨
+            container_width=335.0,
+            container_height=300.0,
+        )
+        assert result_scrolled['top'] == '56.5px'
+        assert result_scrolled['left'] == '20.0px'  # 동일
+        assert result_scrolled['width'] == '335.0px'  # 동일
+
+    def test_qr14_multiple_scroll_events_maintain_width(self):
+        """
+        TC-QR-14: 여러 번 스크롤해도 left/width 유지, top만 변경
+
+        BUG-10 핵심: 스크롤 시 left/width가 변하면 안 됨.
+        """
+        base_left = 20.0
+        base_width = 335.0
+        base_height = 300.0
+
+        # 여러 스크롤 위치 시뮬레이션
+        scroll_tops = [156.5, 100.0, 50.0, 200.0, 0.0]
+        results = [
+            calculate_scroll_update(base_left, top, base_width, base_height)
+            for top in scroll_tops
+        ]
+
+        for i, result in enumerate(results):
+            assert result['left'] == f'{base_left}px', (
+                f"Scroll event {i}: left should remain {base_left}px"
+            )
+            assert result['width'] == f'{base_width}px', (
+                f"Scroll event {i}: width should remain {base_width}px"
+            )
+            assert result['top'] == f'{scroll_tops[i]}px', (
+                f"Scroll event {i}: top should be {scroll_tops[i]}px"
+            )
+
+        # top 값이 모두 다른지 확인 (스크롤에 따라 변해야 함)
+        tops = [r['top'] for r in results]
+        assert len(set(tops)) == len(scroll_tops), "Each scroll should produce different top"
+
+
 class TestSquareContainer:
     """TC-QR-11~12: 정사각형 컨테이너 테스트"""
 

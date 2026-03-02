@@ -15,7 +15,6 @@ from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.interval import IntervalTrigger
 
 from app.config import Config
 from app.services.duration_validator import check_unfinished_tasks
@@ -92,10 +91,10 @@ def init_scheduler() -> BackgroundScheduler:
         replace_existing=True
     )
 
-    # ── Sprint 9: 휴게시간 자동 일시정지 — 매 분 ──────────────────
+    # ── Sprint 9: 휴게시간 자동 일시정지 — 매 분 (정확히 HH:MM:00에 실행) ──
     _scheduler.add_job(
         func=check_break_time_job,
-        trigger=IntervalTrigger(minutes=1),
+        trigger=CronTrigger(second=0),  # 매 분 정각(HH:MM:00)에 실행 → current_time == start_time 비교 보장
         id='check_break_time',
         name='휴게시간 자동 일시정지 (매 분)',
         replace_existing=True
@@ -568,6 +567,7 @@ def force_pause_all_active_tasks(pause_type: str, message: str) -> None:
     """
     현재 진행 중인 모든 작업을 강제 일시정지.
     Sprint 9: 휴게시간 시작 시 호출
+    BUG-7 Fix: 멀티 작업자 지원 — work_start_log 기준으로 모든 활성 작업자에 pause 생성
 
     Args:
         pause_type: 일시정지 유형 ('break_morning' | 'lunch' | 'break_afternoon' | 'dinner')
@@ -588,7 +588,6 @@ def force_pause_all_active_tasks(pause_type: str, message: str) -> None:
         cur.execute(
             """
             SELECT t.id AS task_detail_id,
-                   t.worker_id,
                    t.serial_number,
                    t.qr_doc_id,
                    t.task_category,
@@ -602,6 +601,24 @@ def force_pause_all_active_tasks(pause_type: str, message: str) -> None:
         )
         active_tasks = cur.fetchall()
 
+        # BUG-7 Fix: 각 task에 대해 모든 활성 작업자(시작 O, 완료 X) 조회
+        task_active_workers = {}
+        for task_row in active_tasks:
+            task_id = task_row['task_detail_id']
+            cur.execute(
+                """
+                SELECT DISTINCT wsl.worker_id
+                FROM work_start_log wsl
+                LEFT JOIN work_completion_log wcl
+                       ON wsl.task_id = wcl.task_id AND wsl.worker_id = wcl.worker_id
+                WHERE wsl.task_id = %s AND wcl.id IS NULL
+                """,
+                (task_id,)
+            )
+            worker_rows = cur.fetchall()
+            active_worker_ids = [r['worker_id'] for r in worker_rows]
+            task_active_workers[task_id] = active_worker_ids
+
     except PsycopgError as e:
         logger.error(f"force_pause_all_active_tasks query failed: {e}")
         return
@@ -612,45 +629,53 @@ def force_pause_all_active_tasks(pause_type: str, message: str) -> None:
     paused_count = 0
     for task_row in active_tasks:
         task_id = task_row['task_detail_id']
-        worker_id = task_row['worker_id']
+        active_worker_ids = task_active_workers.get(task_id, [])
 
-        if not worker_id:
-            continue  # 담당 작업자 없으면 건너뜀
+        if not active_worker_ids:
+            continue  # 활성 작업자가 없으면 건너뜀
 
-        # 일시정지 로그 생성
-        pause_log = create_pause(task_id, worker_id, pause_type=pause_type)
-        if pause_log:
-            # 작업 상태 업데이트
+        task_paused = False
+        for worker_id in active_worker_ids:
+            # 각 활성 작업자마다 일시정지 로그 생성
+            pause_log = create_pause(task_id, worker_id, pause_type=pause_type)
+            if pause_log:
+                task_paused = True
+                paused_count += 1
+
+                # 작업자에게 알림
+                try:
+                    create_and_broadcast_alert({
+                        'alert_type': 'BREAK_TIME_PAUSE',
+                        'message': f"[{task_row['serial_number']}] {task_row['task_name']}: {message}",
+                        'serial_number': task_row['serial_number'],
+                        'qr_doc_id': task_row['qr_doc_id'],
+                        'triggered_by_worker_id': None,
+                        'target_worker_id': worker_id,
+                        'target_role': None,
+                    })
+                except Exception as e:
+                    logger.warning(f"Failed to create BREAK_TIME_PAUSE alert for worker_id={worker_id}: {e}")
+
+        # task 자체의 is_paused 상태 업데이트 (1명이라도 pause 되었으면)
+        if task_paused:
             set_paused(task_id, is_paused=True)
-            paused_count += 1
 
-            # 작업자에게 알림
-            try:
-                create_and_broadcast_alert({
-                    'alert_type': 'BREAK_TIME_PAUSE',
-                    'message': f"[{task_row['serial_number']}] {task_row['task_name']}: {message}",
-                    'serial_number': task_row['serial_number'],
-                    'qr_doc_id': task_row['qr_doc_id'],
-                    'triggered_by_worker_id': None,
-                    'target_worker_id': worker_id,
-                    'target_role': None,
-                })
-            except Exception as e:
-                logger.warning(f"Failed to create BREAK_TIME_PAUSE alert for worker_id={worker_id}: {e}")
-
-    logger.info(f"force_pause_all_active_tasks: paused {paused_count} tasks (pause_type={pause_type})")
+    logger.info(f"force_pause_all_active_tasks: created {paused_count} pause logs (pause_type={pause_type})")
 
 
 def send_break_end_notifications(pause_type: str, message: str) -> None:
     """
-    휴게시간 종료 알림 발송. (재개는 작업자가 수동으로)
+    휴게시간 종료 알림 발송 + 자동 재개 처리.
     Sprint 9: 휴게시간 종료 시 호출
+    BUG-7 Fix: 알림뿐 아니라 paused 작업을 실제로 auto-resume
 
     Args:
         pause_type: 일시정지 유형 (break_morning | lunch | break_afternoon | dinner)
         message: 알림 메시지
     """
     from app.models.worker import get_db_connection
+    from app.models.work_pause_log import resume_pause
+    from app.models.task_detail import set_paused
     from app.services.alert_service import create_and_broadcast_alert
     from psycopg2 import Error as PsycopgError
 
@@ -660,12 +685,17 @@ def send_break_end_notifications(pause_type: str, message: str) -> None:
         cur = conn.cursor()
 
         # 아직 재개되지 않은 해당 pause_type의 일시정지 로그 조회
+        # BUG-7 Fix: task_detail_id, total_pause_minutes도 함께 조회 (자동 재개용)
         cur.execute(
             """
-            SELECT DISTINCT wpl.worker_id,
+            SELECT wpl.id AS pause_log_id,
+                   wpl.worker_id,
+                   wpl.task_detail_id,
                    t.serial_number,
                    t.qr_doc_id,
-                   t.task_name
+                   t.task_name,
+                   t.id AS task_id,
+                   t.total_pause_minutes
             FROM work_pause_log wpl
             JOIN app_task_details t ON wpl.task_detail_id = t.id
             WHERE wpl.pause_type = %s
@@ -682,24 +712,52 @@ def send_break_end_notifications(pause_type: str, message: str) -> None:
         if conn:
             conn.close()
 
+    now_kst = datetime.now(Config.KST)
     notified_workers = set()
+    resumed_count = 0
+
     for row in rows:
         worker_id = row['worker_id']
-        if worker_id in notified_workers:
-            continue
-        notified_workers.add(worker_id)
+        pause_log_id = row['pause_log_id']
+        task_detail_id = row['task_detail_id']
+        current_total_pause = row['total_pause_minutes'] or 0
 
+        # BUG-7 Fix: 자동 재개 처리 — pause_log resume + task is_paused 해제
         try:
-            create_and_broadcast_alert({
-                'alert_type': 'BREAK_TIME_END',
-                'message': f"[{row['serial_number']}] {row['task_name']}: {message}",
-                'serial_number': row['serial_number'],
-                'qr_doc_id': row['qr_doc_id'],
-                'triggered_by_worker_id': None,
-                'target_worker_id': worker_id,
-                'target_role': None,
-            })
+            updated_pause = resume_pause(pause_log_id, now_kst)
+            if updated_pause:
+                pause_duration = updated_pause.pause_duration_minutes or 0
+                new_total_pause_minutes = current_total_pause + pause_duration
+                set_paused(task_detail_id, is_paused=False, total_pause_minutes=new_total_pause_minutes)
+                resumed_count += 1
+            else:
+                # resume 실패해도 is_paused는 해제
+                set_paused(task_detail_id, is_paused=False)
         except Exception as e:
-            logger.warning(f"Failed to create BREAK_TIME_END alert for worker_id={worker_id}: {e}")
+            logger.warning(f"Failed to auto-resume pause_log_id={pause_log_id}: {e}")
+            # resume 실패해도 알림은 계속 발송
+            try:
+                set_paused(task_detail_id, is_paused=False)
+            except Exception:
+                pass
 
-    logger.info(f"send_break_end_notifications: notified {len(notified_workers)} workers (pause_type={pause_type})")
+        # 알림 발송 (작업자당 1회)
+        if worker_id not in notified_workers:
+            notified_workers.add(worker_id)
+            try:
+                create_and_broadcast_alert({
+                    'alert_type': 'BREAK_TIME_END',
+                    'message': f"[{row['serial_number']}] {row['task_name']}: {message}",
+                    'serial_number': row['serial_number'],
+                    'qr_doc_id': row['qr_doc_id'],
+                    'triggered_by_worker_id': None,
+                    'target_worker_id': worker_id,
+                    'target_role': None,
+                })
+            except Exception as e:
+                logger.warning(f"Failed to create BREAK_TIME_END alert for worker_id={worker_id}: {e}")
+
+    logger.info(
+        f"send_break_end_notifications: notified {len(notified_workers)} workers, "
+        f"auto-resumed {resumed_count} pause logs (pause_type={pause_type})"
+    )

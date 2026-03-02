@@ -24,6 +24,7 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
   final _formKey = GlobalKey<FormState>();
   final _qrCodeController = TextEditingController();
   final _qrScannerService = QrScannerService();
+  final ScrollController _scrollController = ScrollController();
 
   bool _isProcessing = false;
   String _scanType = 'worksheet'; // 'worksheet' or 'location'
@@ -37,6 +38,7 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
   @override
   void initState() {
     super.initState();
+    _scrollController.addListener(_onScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _startCamera();
     });
@@ -44,9 +46,24 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
 
   @override
   void dispose() {
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
     _qrCodeController.dispose();
     _qrScannerService.stop();
     super.dispose();
+  }
+
+  /// Scroll listener: sync DOM scanner div position with Flutter camera container
+  void _onScroll() {
+    final rect = _getCameraContainerRect();
+    if (rect != null) {
+      _qrScannerService.updatePosition(
+        left: rect['left']!,
+        top: rect['top']!,
+        width: rect['width']!,
+        height: rect['height']!,
+      );
+    }
   }
 
   /// 카메라 컨테이너의 화면 좌표를 계산
@@ -291,6 +308,7 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
       ),
       body: SafeArea(
         child: SingleChildScrollView(
+          controller: _scrollController,
           padding: const EdgeInsets.all(20.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
