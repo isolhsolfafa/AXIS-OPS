@@ -2023,3 +2023,46 @@ Sprint 14 배포 후 현장 테스트에서 추가 버그 5건 발견.
 - [x] git commit & push (`c7457c4`)
 - [x] Railway 자동 배포 (GitHub push)
 - [x] flutter build web → Netlify 배포 (https://gaxis-ops.netlify.app)
+
+---
+
+## Sprint 16.1: 버전 관리 + System Online + LOC 형식 정리 (2026-03-03) ✅
+
+### 목표
+1. 버전 관리 시스템: BE/FE 단일 소스에서 관리, splash 화면 표시
+2. System Online 실제 연동: 목업 → BE `/health` API 실시간 체크
+3. 버전 `v1.1.0` (MINOR 업)
+
+### BE 완료 내역
+- **`backend/version.py`** (신규)
+  - `VERSION = "1.1.0"`, `BUILD_DATE = "2026-03-03"` — 단일 소스
+- **`backend/app/__init__.py`** — health 엔드포인트 수정
+  - `{"status": "ok", "version": "1.1.0", "build_date": "2026-03-03"}` 반환
+
+### FE 완료 내역
+- **`frontend/lib/utils/app_version.dart`** (신규)
+  - `AppVersion.version`, `AppVersion.display` — FE 단일 소스
+- **`frontend/lib/services/api_service.dart`** — `getPublic()` 추가
+  - 인증 없이 루트 경로 GET 요청 (Dio 별도 인스턴스, `/api` prefix 우회)
+- **`frontend/lib/screens/auth/splash_screen.dart`** — 3개 수정
+  - 버전: `'G-AXIS OPS v1.0.0'` → `AppVersion.display` (중앙 관리)
+  - System Online: 목업 → `_checkSystemHealth()` 실시간 `/health` 호출
+  - 상태 표시: Connecting...(회색) → System Online(초록) / System Offline(빨강)
+
+### 변경 파일 목록
+| 파일 | 변경 내용 |
+|------|----------|
+| `backend/version.py` | 신규 — 버전 단일 소스 |
+| `backend/app/__init__.py` | /health에 version, build_date 추가 |
+| `frontend/lib/utils/app_version.dart` | 신규 — FE 버전 단일 소스 |
+| `frontend/lib/services/api_service.dart` | getPublic() 메서드 추가 |
+| `frontend/lib/screens/auth/splash_screen.dart` | 버전 중앙관리 + health check 실연동 |
+
+### 테스트 결과
+- 빌드: `flutter build web --release` — 에러 0건
+- `/health` API 응답 확인: version, build_date 포함
+
+### 배포 (2026-03-03)
+- [x] git commit & push (`b17f696`)
+- [x] Railway 자동 배포 (GitHub push)
+- [x] flutter build web → Netlify 배포 (https://gaxis-ops.netlify.app)

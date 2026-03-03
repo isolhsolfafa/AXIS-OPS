@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-03-03 (Sprint 16 완료 — Admin prefix 로그인, BUG-13/14/15, QR 카메라 정사각형)
+> 마지막 업데이트: 2026-03-03 (Sprint 16.1 완료 — v1.1.0 버전 관리, System Online 실연동)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -175,3 +175,4 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 | 14 핫픽스 | BUG-7/8/9/10/11: 휴게시간 자동재개 + 작업시간 계산 + force-close + QR 스크롤 + Location QR | 76 PASSED, 1 SKIP, 배포 완료 |
 | 15 | BUG-12 다중작업자 Join + BUG-11 재수정 + MH/WH 로깅 | 28 PASSED, 배포 완료 |
 | 16 | Admin prefix 로그인 + BUG-13/14/15 + QR 카메라 정사각형 | 9 PASSED, 배포 완료 |
+| 16.1 | v1.1.0 버전 관리 + System Online 실연동 | 빌드 에러 0건, 배포 완료 |
