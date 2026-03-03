@@ -290,7 +290,9 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
                 """,
                 (task_db_ids,)
             )
-            for row in cur.fetchall():
+            rows = cur.fetchall()
+            # BUG-14: 다중 작업자 표시 디버깅
+            for row in rows:
                 tid = row['task_id']
                 if tid in workers_by_task:
                     workers_by_task[tid].append({
@@ -301,6 +303,10 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
                         'duration_minutes': row['duration_minutes'],
                         'status': row['status'],
                     })
+            for tid, wlist in workers_by_task.items():
+                if len(wlist) >= 2:
+                    names = [w['worker_name'] for w in wlist]
+                    logger.info(f"[BUG-14] task_id={tid} has {len(wlist)} workers: {names}")
             conn.close()
         except Exception as e:
             logger.warning(f"Workers batch query failed: {e}")

@@ -194,7 +194,8 @@ def get_gst_products(category: str) -> Tuple[Dict[str, Any], int]:
                     """,
                     (task_detail_ids,)
                 )
-                for wrow in cur.fetchall():
+                wrows = cur.fetchall()
+                for wrow in wrows:
                     tid = wrow['task_id']
                     if tid in workers_by_task:
                         workers_by_task[tid].append({
@@ -205,6 +206,11 @@ def get_gst_products(category: str) -> Tuple[Dict[str, Any], int]:
                             'duration_minutes': wrow['duration_minutes'],
                             'status': wrow['status'],
                         })
+                # BUG-14: 다중 작업자 표시 디버깅
+                for tid, wlist in workers_by_task.items():
+                    if len(wlist) >= 2:
+                        names = [w['worker_name'] for w in wlist]
+                        logger.info(f"[BUG-14] GST task_id={tid} has {len(wlist)} workers: {names}")
             except Exception as e:
                 logger.warning(f"GST workers batch query failed: {e}")
 

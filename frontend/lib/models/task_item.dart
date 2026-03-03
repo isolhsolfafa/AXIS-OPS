@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 /// TaskItem 모델 (작업 Task)
 ///
 /// DB 테이블: app_task_details
@@ -90,9 +92,17 @@ class TaskItem {
       locationQrVerified: json['location_qr_verified'] as bool? ?? false,
       workerName: json['worker_name'] as String?,
       workers: json['workers'] != null
-          ? List<Map<String, dynamic>>.from(
-              (json['workers'] as List).map((w) => Map<String, dynamic>.from(w as Map)),
-            )
+          ? () {
+              final parsed = List<Map<String, dynamic>>.from(
+                (json['workers'] as List).map((w) => Map<String, dynamic>.from(w as Map)),
+              );
+              // BUG-14: 다중 작업자 디버그 로그
+              if (parsed.length >= 2) {
+                debugPrint('[BUG-14] task ${json['id']} has ${parsed.length} workers: '
+                    '${parsed.map((w) => w['worker_name']).toList()}');
+              }
+              return parsed;
+            }()
           : const [],
       isPaused: json['is_paused'] as bool? ?? false,
       totalPauseMinutes: json['total_pause_minutes'] as int? ?? 0,

@@ -20,6 +20,7 @@ from app.config import Config
 from app.models.worker import (
     create_worker,
     get_worker_by_email,
+    get_admin_by_email_prefix,
     update_email_verified,
     create_verification_code,
     create_password_reset_code,
@@ -410,8 +411,13 @@ class AuthService:
         Returns:
             (response dict with access_token + refresh_token, status code)
         """
-        # 사용자 조회
-        worker = get_worker_by_email(email)
+        # 사용자 조회 (Admin prefix 매칭: '@' 없으면 admin prefix 우선 시도)
+        if '@' in email:
+            worker = get_worker_by_email(email)
+        else:
+            worker = get_admin_by_email_prefix(email)
+            if worker is None:
+                worker = get_worker_by_email(email)  # fallback
 
         if worker is None:
             return {

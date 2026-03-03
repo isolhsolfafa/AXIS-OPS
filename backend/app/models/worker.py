@@ -272,6 +272,42 @@ def get_worker_by_email(email: str) -> Optional[Worker]:
             conn.close()
 
 
+def get_admin_by_email_prefix(prefix: str) -> Optional[Worker]:
+    """
+    이메일 prefix로 관리자 조회 (Admin 간편 로그인용)
+
+    'admin' 입력 시 'admin@gst-in.com' 매칭.
+    매칭 결과가 정확히 1명일 때만 반환, 0명/2명+ → None.
+
+    Args:
+        prefix: 이메일 @ 앞부분 (예: 'dkkim1', 'admin')
+
+    Returns:
+        Worker 객체 (매칭 1명), 없거나 2명+ 시 None
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            "SELECT * FROM workers WHERE email LIKE %s AND is_admin = TRUE",
+            (prefix + '@%',)
+        )
+
+        rows = cur.fetchall()
+        if len(rows) == 1:
+            return Worker.from_db_row(rows[0])
+        return None
+
+    except PsycopgError as e:
+        logger.error(f"Failed to get admin by email prefix={prefix}: {e}")
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
 def update_approval_status(worker_id: int, status: str) -> bool:
     """
     작업자 승인 상태 업데이트 (관리자 전용)

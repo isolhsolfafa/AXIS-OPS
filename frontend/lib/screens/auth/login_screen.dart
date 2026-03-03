@@ -151,6 +151,14 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         validator: validateLoginId,
                         enabled: !authState.isLoading,
                       ),
+                      const SizedBox(height: 4),
+                      const Text(
+                        'Admin은 이메일 앞부분만 입력 가능',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: GxColors.steel,
+                        ),
+                      ),
                       const SizedBox(height: 12),
 
                       // 비밀번호 필드

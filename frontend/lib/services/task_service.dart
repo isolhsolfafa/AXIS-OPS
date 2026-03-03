@@ -262,7 +262,8 @@ class TaskService {
       }
       return {};
     } catch (e) {
-      return {};
+      // BUG-13: 에러 시 안전한 쪽(블록 활성)으로 기본값 반환
+      return {'location_qr_required': true};
     }
   }
 
