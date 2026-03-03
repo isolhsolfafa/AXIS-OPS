@@ -1899,3 +1899,67 @@ Sprint 14 배포 후 현장 테스트에서 추가 버그 5건 발견.
 - [x] git commit & push (`192d135`)
 - [x] Railway 자동 배포 (GitHub push)
 - [x] flutter build web → Netlify 배포 (https://gaxis-ops.netlify.app)
+
+---
+
+## Sprint 15: 멀티 작업자 Join + BUG-11 재수정 + MH/WH 로깅 (2026-03-03) ✅
+
+### 목표
+1. 🔴 BUG-12: 멀티 작업자 start/end FE 언블록 — worker2가 이미 시작된 task에 참여/완료 가능
+2. 🔴 BUG-11 재수정: Location QR 차단이 여전히 동작하지 않는 문제
+3. 🔴 Working Hour 계산 검증 — 휴게시간 차감 로깅 추가
+4. MH 계산 Method B 확인 — duration = 개인별 SUM, line_efficiency 로깅
+
+### BE 완료 내역
+- **my_status batch query** (work.py L271-317, gst.py L211-252)
+  - `work_start_log` + `work_completion_log` JOIN으로 작업자별 참여 상태 조회
+  - 응답 필드: `my_status` = 'not_started' | 'in_progress' | 'completed'
+  - N+1 방지: `ANY(%s)` 배열 쿼리로 일괄 조회
+- **BUG-11 재수정** (task_service.py L96-110)
+  - `task.location_qr_verified` (항상 FALSE) → `product.location_qr_id` 체크로 변경
+  - `admin_settings.location_qr_required` 설정 기반 조건부 차단
+  - `[BUG-11]` 디버그 로그 추가
+- **[WORKING_HOURS] 로깅** (task_service.py L598-610)
+  - 각 break period overlap 개별 로깅
+  - 요약 로그: raw_minutes, break_overlap, net_working_minutes
+- **MH line_efficiency 로깅** (task_service.py L875-880)
+  - `_finalize_task_multi_worker`에서 MH(duration), CT(elapsed), workers, line_efficiency% 로깅
+
+### FE 완료 내역
+- **task_item.dart**: `myStatus` 필드 + `myWorkStatus` getter 추가
+- **task_detail_screen.dart**: `_buildJoinButton()` (작업 참여) + `_buildMyCompletedBadge()` (내 작업 완료)
+  - 버튼 분기: pending→시작, in_progress+not_started→참여, in_progress+completed→내완료뱃지
+- **task_management_screen.dart**: `task.myWorkStatus` 기반 상태 표시 (참여 가능/내 작업 완료)
+- **qr_scan_screen.dart**: Location QR 필수 팝업 + 자동 location scan 모드 전환
+- **task_provider.dart**: `_extractErrorMessage()` 헬퍼 (startTask/completeTask 에러 처리)
+- 빌드: `flutter build web --release` — 에러 0건
+
+### 변경 파일 목록
+| 파일 | 변경 내용 |
+|------|----------|
+| `backend/app/routes/work.py` | my_status batch query 추가 |
+| `backend/app/routes/gst.py` | my_status batch query 추가 |
+| `backend/app/services/task_service.py` | BUG-11 fix + [WORKING_HOURS] 로깅 + MH 로깅 |
+| `frontend/lib/models/task_item.dart` | myStatus 필드 + myWorkStatus getter |
+| `frontend/lib/providers/task_provider.dart` | _extractErrorMessage 헬퍼 |
+| `frontend/lib/screens/qr/qr_scan_screen.dart` | Location QR 필수 팝업 |
+| `frontend/lib/screens/task/task_detail_screen.dart` | Join 버튼 + 내완료 뱃지 |
+| `frontend/lib/screens/task/task_management_screen.dart` | myWorkStatus 기반 상태 표시 |
+| `frontend/lib/services/task_service.dart` | toggleTaskApplicable 서비스 추가 |
+| `tests/backend/test_multi_worker_join.py` | 신규 10건 |
+| `tests/backend/test_location_qr_recheck.py` | 신규 6건 |
+| `tests/backend/test_working_hours_recheck.py` | 신규 7건 |
+| `tests/backend/test_mh_calculation_method_b.py` | 신규 5건 |
+
+### 테스트 결과
+- Sprint 15 신규: **28/28 PASSED**
+  - test_multi_worker_join: 10건 (my_status 필드 + join 플로우)
+  - test_location_qr_recheck: 6건 (BUG-11 location_qr_required 설정 분기)
+  - test_working_hours_recheck: 7건 (break time 차감 검증)
+  - test_mh_calculation_method_b: 5건 (MH=SUM(개인), line_efficiency)
+- 빌드: `flutter build web --release` — 에러 0건
+
+### 배포 (2026-03-03)
+- [x] git commit & push (`0d923f5`)
+- [x] Railway 자동 배포 (GitHub push)
+- [x] flutter build web → Netlify 배포 (https://gaxis-ops.netlify.app)
