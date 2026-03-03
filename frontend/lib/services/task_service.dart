@@ -249,14 +249,14 @@ class TaskService {
     }
   }
 
-  /// Admin 설정 조회
+  /// 앱 설정 조회 (일반 작업자 접근 가능)
   ///
   /// Returns: admin_settings 맵 (key → value)
   ///
-  /// API: GET /api/admin/settings
+  /// API: GET /api/app/settings (jwt_required만, admin_required 없음)
   Future<Map<String, dynamic>> getAdminSettings() async {
     try {
-      final response = await _apiService.get('/admin/settings');
+      final response = await _apiService.get('/app/settings');
       if (response is Map<String, dynamic>) {
         return response;
       }

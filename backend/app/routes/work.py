@@ -18,12 +18,49 @@ from app.models.completion_status import get_or_create_completion_status
 from app.models.product_info import get_product_by_serial_number
 from app.models.work_pause_log import create_pause, resume_pause, get_active_pause, get_pauses_by_task
 from app.models.task_detail import set_paused
+from app.models.admin_settings import get_all_settings
 
 
 logger = logging.getLogger(__name__)
 
 work_bp = Blueprint("work", __name__, url_prefix="/api/app")
 task_service = TaskService()
+
+
+@work_bp.route("/settings", methods=["GET"])
+@jwt_required
+def get_app_settings() -> Tuple[Dict[str, Any], int]:
+    """
+    앱 동작에 필요한 설정값 조회 (일반 작업자 접근 가능)
+
+    admin_required 없이 jwt_required만 적용하여
+    QR 스캔 시 location_qr_required 등 앱 설정을 확인할 수 있음
+
+    Headers:
+        Authorization: Bearer {token}
+
+    Returns:
+        200: {
+            "location_qr_required": bool,
+            "heating_jacket_enabled": bool,
+            "phase_block_enabled": bool,
+            "auto_pause_enabled": bool
+        }
+    """
+    settings_list = get_all_settings()
+
+    result: Dict[str, Any] = {}
+    for s in settings_list:
+        result[s.setting_key] = s.setting_value
+
+    # 앱에 필요한 기본값 보장
+    result.setdefault('location_qr_required', True)
+    result.setdefault('heating_jacket_enabled', False)
+    result.setdefault('phase_block_enabled', False)
+    result.setdefault('auto_pause_enabled', True)
+
+    return jsonify(result), 200
+
 
 
 def _task_to_dict(task) -> Dict[str, Any]:
