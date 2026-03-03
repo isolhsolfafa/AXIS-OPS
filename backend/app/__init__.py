@@ -83,10 +83,16 @@ def create_app(config_class: type = Config) -> Flask:
     logger.info("Blueprints registered: auth, work, product, alert, admin, sync, gst, checklist, hr")
 
     # 헬스 체크 엔드포인트
+    from version import VERSION, BUILD_DATE
+
     @app.route("/health", methods=["GET"])
     def health_check():
-        """헬스 체크"""
-        return jsonify({"status": "ok", "message": "Server is running"}), 200
+        """헬스 체크 + 버전 정보"""
+        return jsonify({
+            "status": "ok",
+            "version": VERSION,
+            "build_date": BUILD_DATE,
+        }), 200
 
     # 404 에러 핸들러
     @app.errorhandler(404)

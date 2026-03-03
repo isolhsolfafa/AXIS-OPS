@@ -180,6 +180,28 @@ class ApiService {
     }
   }
 
+  /// 인증 없이 GET 요청 (health check 등)
+  ///
+  /// Dio의 baseUrl(/api)을 우회하여 루트 경로로 요청.
+  /// [path]: 루트 기준 경로 (예: '/health')
+  Future<Map<String, dynamic>?> getPublic(String path) async {
+    try {
+      // apiBaseUrl에서 /api 제거하여 루트 URL 추출
+      final rootUrl = apiBaseUrl.replaceAll(RegExp(r'/api$'), '');
+      final dio = Dio(BaseOptions(
+        connectTimeout: const Duration(seconds: 5),
+        receiveTimeout: const Duration(seconds: 5),
+      ));
+      final response = await dio.get('$rootUrl$path');
+      if (response.statusCode == 200 && response.data is Map) {
+        return Map<String, dynamic>.from(response.data as Map);
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   /// DioException을 사용자 친화적인 에러 메시지로 변환
   Exception _handleError(DioException error) {
     switch (error.type) {

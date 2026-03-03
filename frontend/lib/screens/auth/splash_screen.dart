@@ -1,5 +1,7 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import '../../services/api_service.dart';
+import '../../utils/app_version.dart';
 import '../../utils/design_system.dart';
 import 'login_screen.dart';
 import 'register_screen.dart';
@@ -19,6 +21,8 @@ class _SplashScreenState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
   late AnimationController _animController;
   late Animation<double> _floatAnimation;
+  bool _isSystemOnline = false;
+  bool _healthChecked = false;
 
   @override
   void initState() {
@@ -31,6 +35,28 @@ class _SplashScreenState extends State<SplashScreen>
     _floatAnimation = Tween<double>(begin: 0, end: -10).animate(
       CurvedAnimation(parent: _animController, curve: Curves.easeInOut),
     );
+
+    _checkSystemHealth();
+  }
+
+  Future<void> _checkSystemHealth() async {
+    try {
+      final apiService = ApiService();
+      final response = await apiService.getPublic('/health');
+      if (mounted) {
+        setState(() {
+          _isSystemOnline = response != null && response['status'] == 'ok';
+          _healthChecked = true;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isSystemOnline = false;
+          _healthChecked = true;
+        });
+      }
+    }
   }
 
   @override
@@ -198,7 +224,7 @@ class _SplashScreenState extends State<SplashScreen>
                   ),
                   const SizedBox(height: 28),
 
-                  // System Online 인디케이터
+                  // System Online 인디케이터 (실시간 /health 체크)
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     decoration: BoxDecoration(
@@ -213,11 +239,20 @@ class _SplashScreenState extends State<SplashScreen>
                           width: 6,
                           height: 6,
                           decoration: BoxDecoration(
-                            color: GxColors.success,
+                            color: !_healthChecked
+                                ? GxColors.silver
+                                : _isSystemOnline
+                                    ? GxColors.success
+                                    : GxColors.danger,
                             shape: BoxShape.circle,
                             boxShadow: [
                               BoxShadow(
-                                color: GxColors.success.withValues(alpha: 0.4),
+                                color: (!_healthChecked
+                                        ? GxColors.silver
+                                        : _isSystemOnline
+                                            ? GxColors.success
+                                            : GxColors.danger)
+                                    .withValues(alpha: 0.4),
                                 blurRadius: 4,
                                 spreadRadius: 1,
                               ),
@@ -226,7 +261,11 @@ class _SplashScreenState extends State<SplashScreen>
                         ),
                         const SizedBox(width: 6),
                         Text(
-                          'System Online',
+                          !_healthChecked
+                              ? 'Connecting...'
+                              : _isSystemOnline
+                                  ? 'System Online'
+                                  : 'System Offline',
                           style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w500,
@@ -238,9 +277,9 @@ class _SplashScreenState extends State<SplashScreen>
                   ),
                   const SizedBox(height: 16),
 
-                  // 버전 정보
+                  // 버전 정보 (중앙 관리)
                   Text(
-                    'G-AXIS OPS v1.0.0',
+                    AppVersion.display,
                     style: TextStyle(
                       fontSize: 11,
                       color: Colors.white.withValues(alpha: 0.35),
