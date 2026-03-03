@@ -171,10 +171,12 @@ void removeScannerDiv() {
 }
 
 /// 스캐너 div를 일시적으로 숨김 (다이얼로그 표시 시 z-index 충돌 방지)
+/// ★ MutationObserver를 일시 해제하여 hide→show 깜빡임 루프 방지
 void hideScannerDiv() {
   if (_scannerDiv == null) return;
+  _squareObserver?.disconnect();
   _scannerDiv!.style.display = 'none';
-  debugPrint('[QrScannerWeb] Scanner div hidden (dialog overlay)');
+  debugPrint('[QrScannerWeb] Scanner div hidden + observer paused (dialog overlay)');
 }
 
 /// ★ 11차 수정: html5-qrcode가 카메라 시작 후 컨테이너/내부 요소 크기를
@@ -238,10 +240,13 @@ void _forceSquareAfterCameraStart() {
 }
 
 /// 숨겨진 스캐너 div를 다시 표시
+/// ★ MutationObserver 재활성화 + 정사각형 강제 재적용
 void showScannerDiv() {
   if (_scannerDiv == null) return;
   _scannerDiv!.style.display = 'block';
-  debugPrint('[QrScannerWeb] Scanner div shown (dialog closed)');
+  // 다시 표시 후 정사각형 강제 + Observer 재활성화
+  _forceSquareAfterCameraStart();
+  debugPrint('[QrScannerWeb] Scanner div shown + observer resumed (dialog closed)');
 }
 
 /// 카메라 권한을 먼저 요청 (브라우저 팝업이 보이는 상태에서)

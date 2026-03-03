@@ -37,9 +37,12 @@ def create_app(config_class: type = Config) -> Flask:
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
 
-    # CORS 설정
-    CORS(app, resources={r"/api/*": {"origins": "*"}})
-    logger.info("CORS configured for /api/*")
+    # CORS 설정 (/api/* + /health)
+    CORS(app, resources={
+        r"/api/*": {"origins": "*"},
+        r"/health": {"origins": "*"},
+    })
+    logger.info("CORS configured for /api/* and /health")
 
     # flask-sock 초기화 (Sprint 13)
     sock.init_app(app)

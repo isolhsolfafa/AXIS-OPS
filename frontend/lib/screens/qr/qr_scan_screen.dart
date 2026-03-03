@@ -12,7 +12,7 @@ import '../../utils/design_system.dart';
 ///
 /// 두 가지 QR 타입 지원:
 /// 1. Worksheet QR: DOC_{SN} 형식 (예: DOC_GBWS-6408) → 제품 조회
-/// 2. Location QR: LOC_{LOCATION} 형식 (예: LOC_ASSY_01) → 위치 등록
+/// 2. Location QR: LOC_{LOCATION} 형식 (예: LOC_01) → 위치 등록
 class QrScanScreen extends ConsumerStatefulWidget {
   const QrScanScreen({Key? key}) : super(key: key);
 
@@ -196,6 +196,7 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
                   _showLocationQrRequiredPopup();
                   setState(() {
                     _scanType = 'location';
+                    _showTextInput = true; // 직접 입력도 자동 펼침
                     _isProcessing = false;
                   });
                 }
@@ -221,7 +222,7 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
       } else {
         // Location QR: LOC_{LOCATION} 형식
         if (!qrCode.toUpperCase().startsWith('LOC_')) {
-          _showErrorDialog('잘못된 Location QR 형식입니다.\n예: LOC_ASSY_01');
+          _showErrorDialog('잘못된 Location QR 형식입니다.\n예: LOC_01');
           setState(() {
             _isProcessing = false;
           });
@@ -600,7 +601,7 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
                                     Text(
                                       _scanType == 'worksheet'
                                           ? '형식: DOC_GBWS-6408'
-                                          : '형식: LOC_ASSY_01',
+                                          : '형식: LOC_01',
                                       style: const TextStyle(fontSize: 12, color: GxColors.accent, fontWeight: FontWeight.w500),
                                     ),
                                   ],
@@ -614,7 +615,7 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
                                 decoration: InputDecoration(
                                   labelText: 'QR 코드',
                                   labelStyle: const TextStyle(color: GxColors.steel, fontSize: 13),
-                                  hintText: _scanType == 'worksheet' ? 'DOC_GBWS-6408' : 'LOC_ASSY_01',
+                                  hintText: _scanType == 'worksheet' ? 'DOC_GBWS-6408' : 'LOC_01',
                                   hintStyle: const TextStyle(color: GxColors.silver),
                                   prefixIcon: const Icon(Icons.qr_code, color: GxColors.accent),
                                   border: OutlineInputBorder(
