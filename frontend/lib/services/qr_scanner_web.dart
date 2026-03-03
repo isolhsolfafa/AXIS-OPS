@@ -8,6 +8,7 @@ dynamic _scanner;
 html.DivElement? _scannerDiv;
 html.StyleElement? _scannerStyle;
 StreamSubscription? _resizeSubscription;
+html.MutationObserver? _squareObserver;
 
 /// 저장된 컨테이너 위치/크기 (반응형 리사이즈 시 재사용)
 double _savedLeft = 20.0;
@@ -15,14 +16,25 @@ double _savedTopPx = 100.0;
 double _savedWidth = 360.0;
 double _savedHeight = 300.0;
 
-/// 최소한의 CSS만 주입 — 컨테이너 overflow만 제어
-/// html5-qrcode 내부 요소는 절대 건드리지 않음 (QR 인식 로직 보존)
+/// CSS 주입 — 컨테이너 정사각형 강제 + 내부 video crop
+/// ★ 11차 수정: html5-qrcode가 컨테이너 높이를 카메라 비율(세로)로 덮어쓰는 문제 대응
+/// 모바일 카메라는 세로(portrait) 비율이라 컨테이너가 직사각형으로 늘어남
+/// → width/height/max-height를 !important로 고정 + video를 object-fit:cover로 crop
 void _injectScannerCss() {
   if (_scannerStyle != null) return;
   _scannerStyle = html.StyleElement()
     ..text = '''
       #qr-scanner-dom-div {
         overflow: hidden !important;
+        aspect-ratio: 1 / 1 !important;
+      }
+      #qr-scanner-dom-div video {
+        object-fit: cover !important;
+        width: 100% !important;
+        height: 100% !important;
+      }
+      #qr-scanner-dom-div img {
+        object-fit: cover !important;
       }
     ''';
   html.document.head!.append(_scannerStyle!);
@@ -148,8 +160,10 @@ void _stopResizeListener() {
   _resizeSubscription = null;
 }
 
-/// DOM에서 스캐너 div + CSS + 리스너 제거
+/// DOM에서 스캐너 div + CSS + 리스너 + MutationObserver 제거
 void removeScannerDiv() {
+  _squareObserver?.disconnect();
+  _squareObserver = null;
   _stopResizeListener();
   _scannerDiv?.remove();
   _scannerDiv = null;
@@ -161,6 +175,66 @@ void hideScannerDiv() {
   if (_scannerDiv == null) return;
   _scannerDiv!.style.display = 'none';
   debugPrint('[QrScannerWeb] Scanner div hidden (dialog overlay)');
+}
+
+/// ★ 11차 수정: html5-qrcode가 카메라 시작 후 컨테이너/내부 요소 크기를
+/// 카메라 비율로 덮어쓰는 것을 강제 복원
+/// 카메라 start() 성공 후 호출
+void _forceSquareAfterCameraStart() {
+  if (_scannerDiv == null) return;
+
+  // 1. 컨테이너 div 자체를 정사각형으로 강제
+  _scannerDiv!.style
+    ..width = '${_savedWidth}px'
+    ..height = '${_savedWidth}px'  // ★ height = width (정사각형)
+    ..maxHeight = '${_savedWidth}px';
+
+  // 2. html5-qrcode가 생성한 내부 요소들도 강제 조정
+  // 내부 video 태그
+  final videos = _scannerDiv!.querySelectorAll('video');
+  for (final v in videos) {
+    (v as html.Element).style
+      ..objectFit = 'cover'
+      ..width = '100%'
+      ..height = '100%';
+  }
+
+  // html5-qrcode 내부 컨테이너 (id에 __scan_region 또는 직접 자식 div)
+  final children = _scannerDiv!.children;
+  for (final child in children) {
+    if (child is html.DivElement) {
+      child.style
+        ..width = '100%'
+        ..height = '${_savedWidth}px'
+        ..maxHeight = '${_savedWidth}px'
+        ..overflow = 'hidden';
+    }
+  }
+
+  // 3. MutationObserver: html5-qrcode가 비동기로 크기를 다시 변경하면 즉시 재적용
+  _squareObserver?.disconnect();
+  _squareObserver = html.MutationObserver((mutations, observer) {
+    if (_scannerDiv == null) return;
+    final currentHeight = _scannerDiv!.style.height;
+    final expectedHeight = '${_savedWidth}px';
+    if (currentHeight != expectedHeight) {
+      _scannerDiv!.style
+        ..height = expectedHeight
+        ..maxHeight = expectedHeight;
+      // 내부 video도 재적용
+      final vids = _scannerDiv!.querySelectorAll('video');
+      for (final v in vids) {
+        (v as html.Element).style
+          ..objectFit = 'cover'
+          ..width = '100%'
+          ..height = '100%';
+      }
+      debugPrint('[QrScannerWeb] ★ MutationObserver re-applied square: $currentHeight → $expectedHeight');
+    }
+  });
+  _squareObserver!.observe(_scannerDiv!, childList: true, subtree: true, attributes: true, attributeFilter: ['style']);
+
+  debugPrint('[QrScannerWeb] ★ forceSquare applied + MutationObserver active: ${_savedWidth}x${_savedWidth}px');
 }
 
 /// 숨겨진 스캐너 div를 다시 표시
@@ -317,12 +391,9 @@ Future<bool> startQrScanner({
       );
       await js_util.promiseToFuture(promise);
       debugPrint('[QrScannerWeb] Started with environment camera');
-      try {
-        final scanRegion = html.document.getElementById('qr-shaded-region');
-        if (scanRegion != null) {
-          debugPrint('[QrScannerWeb] scan-region style: ${scanRegion.style.width} x ${scanRegion.style.height}');
-        }
-      } catch (_) {}
+      // ★ 11차: 카메라 시작 후 약간의 딜레이 뒤 강제 정사각형 적용
+      await Future.delayed(const Duration(milliseconds: 300));
+      _forceSquareAfterCameraStart();
       return true;
     } catch (e) {
       debugPrint('[QrScannerWeb] environment camera failed: $e');
@@ -339,12 +410,8 @@ Future<bool> startQrScanner({
       );
       await js_util.promiseToFuture(promise);
       debugPrint('[QrScannerWeb] Started with user camera');
-      try {
-        final scanRegion = html.document.getElementById('qr-shaded-region');
-        if (scanRegion != null) {
-          debugPrint('[QrScannerWeb] scan-region style: ${scanRegion.style.width} x ${scanRegion.style.height}');
-        }
-      } catch (_) {}
+      await Future.delayed(const Duration(milliseconds: 300));
+      _forceSquareAfterCameraStart();
       return true;
     } catch (e) {
       debugPrint('[QrScannerWeb] user camera failed: $e');
@@ -364,12 +431,8 @@ Future<bool> startQrScanner({
         );
         await js_util.promiseToFuture(promise);
         debugPrint('[QrScannerWeb] Started with camera ID: $cameraId');
-        try {
-          final scanRegion = html.document.getElementById('qr-shaded-region');
-          if (scanRegion != null) {
-            debugPrint('[QrScannerWeb] scan-region style: ${scanRegion.style.width} x ${scanRegion.style.height}');
-          }
-        } catch (_) {}
+        await Future.delayed(const Duration(milliseconds: 300));
+        _forceSquareAfterCameraStart();
         return true;
       }
     } catch (e) {
