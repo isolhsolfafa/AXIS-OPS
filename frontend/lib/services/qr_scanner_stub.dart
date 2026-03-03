@@ -24,6 +24,10 @@ Future<bool> startQrScanner({
 
 Future<void> stopQrScanner() async {}
 
+void hideScannerDiv() {}
+
+void showScannerDiv() {}
+
 Future<List<Map<String, String>>> getQrCameras() async {
   return [];
 }

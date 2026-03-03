@@ -266,8 +266,11 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
   }
 
   void _showLocationQrRequiredPopup() {
+    // 카메라 DOM div를 숨겨서 다이얼로그가 보이게 함 (z-index 충돌 방지)
+    _qrScannerService.hide();
     showDialog(
       context: context,
+      barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.lg)),
         title: Row(
@@ -296,7 +299,11 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              // 다이얼로그 닫힌 후 카메라 다시 표시
+              _qrScannerService.show();
+            },
             child: const Text('확인', style: TextStyle(color: GxColors.accent, fontWeight: FontWeight.w600)),
           ),
         ],
@@ -305,6 +312,8 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
   }
 
   void _showErrorDialog(String message) {
+    // 카메라 DOM div를 숨겨서 다이얼로그가 보이게 함 (z-index 충돌 방지)
+    _qrScannerService.hide();
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -319,7 +328,11 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
         content: Text(message, style: const TextStyle(fontSize: 14, color: GxColors.slate)),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(),
+            onPressed: () {
+              Navigator.of(context).pop();
+              // 다이얼로그 닫힌 후 카메라 다시 표시
+              _qrScannerService.show();
+            },
             child: const Text('확인', style: TextStyle(color: GxColors.accent, fontWeight: FontWeight.w600)),
           ),
         ],

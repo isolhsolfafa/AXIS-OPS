@@ -83,6 +83,16 @@ class QrScannerService {
     }
   }
 
+  /// 스캐너 div를 일시적으로 숨김 (다이얼로그 표시 시 z-index 충돌 방지)
+  void hide() {
+    qr_impl.hideScannerDiv();
+  }
+
+  /// 숨겨진 스캐너 div를 다시 표시
+  void show() {
+    qr_impl.showScannerDiv();
+  }
+
   /// 사용 가능한 카메라 목록 조회
   Future<List<Map<String, String>>> getCameras() async {
     try {

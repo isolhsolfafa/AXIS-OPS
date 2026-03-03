@@ -156,6 +156,20 @@ void removeScannerDiv() {
   _removeScannerCss();
 }
 
+/// 스캐너 div를 일시적으로 숨김 (다이얼로그 표시 시 z-index 충돌 방지)
+void hideScannerDiv() {
+  if (_scannerDiv == null) return;
+  _scannerDiv!.style.display = 'none';
+  debugPrint('[QrScannerWeb] Scanner div hidden (dialog overlay)');
+}
+
+/// 숨겨진 스캐너 div를 다시 표시
+void showScannerDiv() {
+  if (_scannerDiv == null) return;
+  _scannerDiv!.style.display = 'block';
+  debugPrint('[QrScannerWeb] Scanner div shown (dialog closed)');
+}
+
 /// 카메라 권한을 먼저 요청 (브라우저 팝업이 보이는 상태에서)
 /// 권한 획득 후 stream을 즉시 중지하고 true 반환
 Future<bool> _requestCameraPermission() async {
