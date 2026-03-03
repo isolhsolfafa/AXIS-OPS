@@ -133,6 +133,78 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   ),
                   const SizedBox(height: 24),
 
+                  // 담당공정 설정 (GST 작업자 또는 관리자만 표시)
+                  if (worker?.company == 'GST' || worker?.isAdmin == true) ...[
+                    _buildSectionHeader('담당공정'),
+                    const SizedBox(height: 8),
+                    Container(
+                      decoration: GxGlass.cardSm(radius: GxRadius.lg),
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () => _showActiveRoleDialog(context, ref, worker?.activeRole),
+                          borderRadius: BorderRadius.circular(GxRadius.lg),
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 36,
+                                  height: 36,
+                                  decoration: BoxDecoration(
+                                    color: _getRoleColor(worker?.activeRole).withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(GxRadius.md),
+                                  ),
+                                  child: Icon(Icons.swap_horiz, size: 18, color: _getRoleColor(worker?.activeRole)),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      const Text(
+                                        '담당공정 변경',
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w500,
+                                          color: GxColors.graphite,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        worker?.activeRole != null
+                                            ? _getActiveRoleLabel(worker?.activeRole)
+                                            : '미설정',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: worker?.activeRole != null
+                                              ? _getRoleColor(worker?.activeRole)
+                                              : GxColors.silver,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: GxColors.accentSoft,
+                                    borderRadius: BorderRadius.circular(GxRadius.sm),
+                                  ),
+                                  child: const Text(
+                                    '변경하기',
+                                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: GxColors.accent),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                  ],
+
                   // PIN 설정 섹션
                   _buildSectionHeader('PIN 설정'),
                   const SizedBox(height: 8),
@@ -268,6 +340,99 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  /// 담당공정 한국어 레이블
+  String _getActiveRoleLabel(String? role) {
+    switch (role) {
+      case 'PI': return 'PI 가압검사';
+      case 'QI': return 'QI 공정검사';
+      case 'SI': return 'SI 마무리공정';
+      default: return role ?? '미설정';
+    }
+  }
+
+  /// 담당공정 색상
+  Color _getRoleColor(String? role) {
+    switch (role) {
+      case 'PI': return GxColors.success;
+      case 'QI': return const Color(0xFF7C3AED);
+      case 'SI': return GxColors.accent;
+      default: return GxColors.steel;
+    }
+  }
+
+  /// 담당공정 선택 다이얼로그
+  Future<void> _showActiveRoleDialog(BuildContext context, WidgetRef ref, String? currentRole) async {
+    final roles = [
+      {'code': 'PI', 'label': 'PI 가압검사', 'icon': Icons.compress, 'color': GxColors.success},
+      {'code': 'QI', 'label': 'QI 공정검사', 'icon': Icons.verified, 'color': const Color(0xFF7C3AED)},
+      {'code': 'SI', 'label': 'SI 마무리공정', 'icon': Icons.local_shipping, 'color': GxColors.accent},
+    ];
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.lg)),
+        title: const Text(
+          '담당공정 선택',
+          style: TextStyle(color: GxColors.charcoal, fontWeight: FontWeight.w600, fontSize: 15),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: roles.map((r) {
+            final isSelected = currentRole == r['code'];
+            final color = r['color'] as Color;
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: InkWell(
+                onTap: () async {
+                  Navigator.of(ctx).pop();
+                  await ref.read(authProvider.notifier).changeActiveRole(r['code'] as String);
+                  if (mounted) setState(() {});
+                },
+                borderRadius: BorderRadius.circular(GxRadius.md),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: isSelected ? color.withValues(alpha: 0.1) : GxColors.cloud,
+                    borderRadius: BorderRadius.circular(GxRadius.md),
+                    border: Border.all(
+                      color: isSelected ? color : GxColors.mist,
+                      width: isSelected ? 1.5 : 1,
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(r['icon'] as IconData, size: 18, color: color),
+                      const SizedBox(width: 10),
+                      Text(
+                        r['label'] as String,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                          color: isSelected ? color : GxColors.graphite,
+                        ),
+                      ),
+                      if (isSelected) ...[
+                        const Spacer(),
+                        Icon(Icons.check_circle, size: 16, color: color),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('닫기', style: TextStyle(color: GxColors.slate)),
+          ),
+        ],
+      ),
     );
   }
 

@@ -308,16 +308,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     }
   }
 
-  /// 활성 역할 한국어 레이블
-  String _getActiveRoleLabel(String? role) {
-    switch (role) {
-      case 'PI': return 'PI 가압검사';
-      case 'QI': return 'QI 공정검사';
-      case 'SI': return 'SI 마무리공정';
-      default: return role ?? '';
-    }
-  }
-
   /// 역할별 아이콘 반환
   IconData _getRoleIcon(String? role) {
     switch (role) {
@@ -330,78 +320,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       case 'ADMIN': return Icons.admin_panel_settings;
       default: return Icons.person;
     }
-  }
-
-  /// GST 작업자 active_role 변경 다이얼로그
-  Future<void> _showActiveRoleDialog(BuildContext context, WidgetRef ref, String? currentRole) async {
-    final roles = [
-      {'code': 'PI', 'label': 'PI 가압검사', 'icon': Icons.compress, 'color': GxColors.success},
-      {'code': 'QI', 'label': 'QI 공정검사', 'icon': Icons.verified, 'color': const Color(0xFF7C3AED)},
-      {'code': 'SI', 'label': 'SI 마무리공정', 'icon': Icons.local_shipping, 'color': GxColors.accent},
-    ];
-
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.lg)),
-        title: const Text(
-          '활성 역할 선택',
-          style: TextStyle(color: GxColors.charcoal, fontWeight: FontWeight.w600, fontSize: 15),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: roles.map((r) {
-            final isSelected = currentRole == r['code'];
-            final color = r['color'] as Color;
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: InkWell(
-                onTap: () async {
-                  Navigator.of(ctx).pop();
-                  await ref.read(authProvider.notifier).changeActiveRole(r['code'] as String);
-                },
-                borderRadius: BorderRadius.circular(GxRadius.md),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: isSelected ? color.withValues(alpha: 0.1) : GxColors.cloud,
-                    borderRadius: BorderRadius.circular(GxRadius.md),
-                    border: Border.all(
-                      color: isSelected ? color : GxColors.mist,
-                      width: isSelected ? 1.5 : 1,
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(r['icon'] as IconData, size: 18, color: color),
-                      const SizedBox(width: 10),
-                      Text(
-                        r['label'] as String,
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-                          color: isSelected ? color : GxColors.graphite,
-                        ),
-                      ),
-                      if (isSelected) ...[
-                        const Spacer(),
-                        Icon(Icons.check_circle, size: 16, color: color),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-            );
-          }).toList(),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('취소', style: TextStyle(color: GxColors.steel)),
-          ),
-        ],
-      ),
-    );
   }
 
   Future<void> _handleLogout(BuildContext context, WidgetRef ref) async {
@@ -603,53 +521,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       ),
                     ],
                   ),
-                  // GST 작업자 active_role 표시
-                  if (worker?.company == 'GST' || worker?.isAdmin == true) ...[
-                    const SizedBox(height: 10),
-                    const Divider(color: GxColors.mist, height: 1),
-                    const SizedBox(height: 10),
-                    InkWell(
-                      onTap: () => _showActiveRoleDialog(context, ref, worker?.activeRole),
-                      borderRadius: BorderRadius.circular(GxRadius.sm),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 2),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.swap_horiz, size: 14, color: GxColors.steel),
-                            const SizedBox(width: 6),
-                            const Text(
-                              '활성 역할:',
-                              style: TextStyle(fontSize: 12, color: GxColors.steel),
-                            ),
-                            const SizedBox(width: 6),
-                            if (worker?.activeRole != null)
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: _getRoleColor(worker?.activeRole).withValues(alpha: 0.1),
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: Text(
-                                  _getActiveRoleLabel(worker?.activeRole),
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                    color: _getRoleColor(worker?.activeRole),
-                                  ),
-                                ),
-                              )
-                            else
-                              const Text(
-                                '미설정 (탭하여 선택)',
-                                style: TextStyle(fontSize: 11, color: GxColors.silver),
-                              ),
-                            const Spacer(),
-                            const Icon(Icons.edit_outlined, size: 14, color: GxColors.silver),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
                 ],
               ),
             ),
