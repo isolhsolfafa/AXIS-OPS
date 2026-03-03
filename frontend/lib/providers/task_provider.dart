@@ -91,6 +91,17 @@ class TaskNotifier extends StateNotifier<TaskState> {
 
   TaskNotifier(this._taskService) : super(const TaskState());
 
+  /// Exception에서 사용자 친화적 에러 메시지 추출
+  /// ApiService가 이미 [ERROR_CODE] message 형식으로 변환하므로
+  /// "Exception: " 접두사만 제거하여 반환
+  String _extractErrorMessage(Object e) {
+    final raw = e.toString();
+    if (raw.startsWith('Exception: ')) {
+      return raw.substring('Exception: '.length);
+    }
+    return raw;
+  }
+
   /// QR 스캔 → 제품 조회
   ///
   /// [qrDocId]: QR 문서 ID (예: DOC_GBWS-6408)
@@ -208,7 +219,7 @@ class TaskNotifier extends StateNotifier<TaskState> {
     } catch (e) {
       state = state.copyWith(
         isLoading: false,
-        errorMessage: e.toString(),
+        errorMessage: _extractErrorMessage(e),
       );
       return false;
     }
@@ -251,7 +262,7 @@ class TaskNotifier extends StateNotifier<TaskState> {
     } catch (e) {
       state = state.copyWith(
         isLoading: false,
-        errorMessage: e.toString(),
+        errorMessage: _extractErrorMessage(e),
       );
       return false;
     }

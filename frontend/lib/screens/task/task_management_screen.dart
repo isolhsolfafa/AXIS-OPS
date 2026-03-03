@@ -237,18 +237,31 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
       statusIcon = Icons.pause_circle;
       statusText = '일시정지';
     } else {
-      switch (task.status) {
+      switch (task.myWorkStatus) {
         case 'completed':
           statusColor = GxColors.success;
           statusBg = GxColors.successBg;
           statusIcon = Icons.check_circle;
-          statusText = '완료';
+          statusText = task.status == 'completed' ? '완료' : '내 작업 완료';
           break;
         case 'in_progress':
           statusColor = GxColors.accent;
           statusBg = GxColors.accentSoft;
           statusIcon = Icons.play_circle;
           statusText = '진행 중';
+          break;
+        case 'not_started':
+          if (task.status == 'in_progress') {
+            statusColor = GxColors.accent;
+            statusBg = GxColors.accentSoft;
+            statusIcon = Icons.group_add;
+            statusText = '참여 가능';
+          } else {
+            statusColor = GxColors.steel;
+            statusBg = GxColors.mist;
+            statusIcon = Icons.radio_button_unchecked;
+            statusText = '대기';
+          }
           break;
         default:
           statusColor = GxColors.steel;
@@ -376,6 +389,52 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
                                 ),
                               ),
                             ),
+                          ),
+                        ),
+                      ),
+                    // 참여 가능 (다른 사람이 진행 중, 나는 아직 미참여)
+                    if (task.status == 'in_progress' && task.myWorkStatus == 'not_started')
+                      Expanded(
+                        child: SizedBox(
+                          height: 38,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              gradient: GxGradients.accentButton,
+                              borderRadius: BorderRadius.circular(GxRadius.sm),
+                            ),
+                            child: Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: () => _handleStartTask(task.id, workerId),
+                                borderRadius: BorderRadius.circular(GxRadius.sm),
+                                child: Center(
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: const [
+                                      Icon(Icons.group_add, size: 18, color: Colors.white),
+                                      SizedBox(width: 4),
+                                      Text('참여', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    // 내 작업 완료 (나는 완료, 전체 Task는 아직 진행 중)
+                    if (task.status == 'in_progress' && task.myWorkStatus == 'completed')
+                      Expanded(
+                        child: Container(
+                          height: 38,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: GxColors.successBg,
+                            borderRadius: BorderRadius.circular(GxRadius.sm),
+                          ),
+                          child: const Text(
+                            '내 작업 완료',
+                            style: TextStyle(color: GxColors.success, fontWeight: FontWeight.w600, fontSize: 13),
                           ),
                         ),
                       ),

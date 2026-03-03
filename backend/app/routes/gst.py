@@ -208,6 +208,30 @@ def get_gst_products(category: str) -> Tuple[Dict[str, Any], int]:
             except Exception as e:
                 logger.warning(f"GST workers batch query failed: {e}")
 
+        # my_status 일괄 조회 (현재 작업자의 참여 상태: not_started / in_progress / completed)
+        my_status_map: dict = {}
+        if task_detail_ids:
+            try:
+                cur.execute(
+                    """
+                    SELECT t.id AS task_id,
+                           CASE
+                               WHEN wcl.id IS NOT NULL THEN 'completed'
+                               WHEN wsl.id IS NOT NULL THEN 'in_progress'
+                               ELSE 'not_started'
+                           END AS my_status
+                    FROM app_task_details t
+                    LEFT JOIN work_start_log wsl ON wsl.task_id = t.id AND wsl.worker_id = %s
+                    LEFT JOIN work_completion_log wcl ON wcl.task_id = t.id AND wcl.worker_id = %s
+                    WHERE t.id = ANY(%s)
+                    """,
+                    (worker_id, worker_id, task_detail_ids)
+                )
+                for mrow in cur.fetchall():
+                    my_status_map[mrow['task_id']] = mrow['my_status']
+            except Exception as e:
+                logger.warning(f"GST my_status batch query failed: {e}")
+
         for product in products:
             tid = product['task_detail_id']
             workers_list = workers_by_task.get(tid, [])
@@ -225,6 +249,7 @@ def get_gst_products(category: str) -> Tuple[Dict[str, Any], int]:
                     'status': status_str,
                 }]
             product['workers'] = workers_list
+            product['my_status'] = my_status_map.get(tid, 'not_started')
 
         logger.info(
             f"GST products fetched: category={category}, status={status_filter}, "

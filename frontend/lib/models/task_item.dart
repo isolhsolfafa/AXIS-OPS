@@ -25,6 +25,7 @@ class TaskItem {
   final int totalPauseMinutes; // 누적 일시정지 시간 (분)
   final DateTime createdAt;
   final DateTime? updatedAt;
+  final String? myStatus; // 이 작업자의 참여 상태 ('not_started', 'in_progress', 'completed')
 
   TaskItem({
     required this.id,
@@ -45,6 +46,7 @@ class TaskItem {
     this.totalPauseMinutes = 0,
     required this.createdAt,
     this.updatedAt,
+    this.myStatus,
   });
 
   /// JSON에서 TaskItem 객체 생성
@@ -100,6 +102,7 @@ class TaskItem {
       updatedAt: json['updated_at'] != null
           ? DateTime.parse(json['updated_at'] as String)
           : null,
+      myStatus: json['my_status'] as String?,
     );
   }
 
@@ -124,6 +127,7 @@ class TaskItem {
       'total_pause_minutes': totalPauseMinutes,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt?.toIso8601String(),
+      'my_status': myStatus,
     };
   }
 
@@ -147,6 +151,7 @@ class TaskItem {
     int? totalPauseMinutes,
     DateTime? createdAt,
     DateTime? updatedAt,
+    String? myStatus,
   }) {
     return TaskItem(
       id: id ?? this.id,
@@ -167,15 +172,19 @@ class TaskItem {
       totalPauseMinutes: totalPauseMinutes ?? this.totalPauseMinutes,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      myStatus: myStatus ?? this.myStatus,
     );
   }
 
-  /// Task 상태 확인
+  /// Task 상태 확인 (전체 Task 상태)
   String get status {
     if (completedAt != null) return 'completed';
     if (startedAt != null) return 'in_progress';
     return 'pending';
   }
+
+  /// 이 작업자 기준 참여 상태 (BE에서 전달, 없으면 task status fallback)
+  String get myWorkStatus => myStatus ?? status;
 
   /// Task 진행률 (0.0 ~ 1.0)
   double get progress {
@@ -227,7 +236,8 @@ class TaskItem {
         other.isPaused == isPaused &&
         other.totalPauseMinutes == totalPauseMinutes &&
         other.createdAt == createdAt &&
-        other.updatedAt == updatedAt;
+        other.updatedAt == updatedAt &&
+        other.myStatus == myStatus;
   }
 
   @override
@@ -250,6 +260,7 @@ class TaskItem {
       totalPauseMinutes,
       createdAt,
       updatedAt,
+      myStatus,
     );
   }
 }

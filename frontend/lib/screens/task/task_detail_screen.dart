@@ -319,6 +319,10 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                 const Center(child: CircularProgressIndicator(color: GxColors.accent, strokeWidth: 2))
               else if (task.status == 'pending')
                 _buildStartButton(task.id, workerId)
+              else if (task.status == 'in_progress' && task.myWorkStatus == 'not_started')
+                _buildJoinButton(task.id, workerId)
+              else if (task.status == 'in_progress' && task.myWorkStatus == 'completed')
+                _buildMyCompletedBadge()
               else if (task.status == 'in_progress' && task.isPaused)
                 _buildResumeRow(task.id)
               else if (task.status == 'in_progress' && !task.isPaused)
@@ -353,6 +357,49 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
             Text('작업 시작', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.white)),
           ])),
         ),
+      ),
+    );
+  }
+
+  Widget _buildJoinButton(int taskId, int workerId) {
+    return Container(
+      height: 48,
+      decoration: BoxDecoration(
+        gradient: GxGradients.accentButton,
+        borderRadius: BorderRadius.circular(GxRadius.sm),
+        boxShadow: [BoxShadow(color: GxColors.accent.withValues(alpha: 0.35), blurRadius: 16, offset: const Offset(0, 4))],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => _handleStartTask(taskId, workerId),
+          borderRadius: BorderRadius.circular(GxRadius.sm),
+          child: Center(child: Row(mainAxisAlignment: MainAxisAlignment.center, children: const [
+            Icon(Icons.group_add, size: 20, color: Colors.white),
+            SizedBox(width: 8),
+            Text('작업 참여', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.white)),
+          ])),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMyCompletedBadge() {
+    return Container(
+      height: 48,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: GxColors.successBg,
+        borderRadius: BorderRadius.circular(GxRadius.sm),
+        border: Border.all(color: GxColors.success, width: 1),
+      ),
+      child: const Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.check_circle, size: 20, color: GxColors.success),
+          SizedBox(width: 8),
+          Text('내 작업 완료', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: GxColors.success)),
+        ],
       ),
     );
   }

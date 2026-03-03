@@ -184,6 +184,24 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
             );
 
             if (tasksSuccess) {
+              // BUG-11: Location QR 필요 여부 체크
+              final taskService = ref.read(taskServiceProvider);
+              final adminSettings = await taskService.getAdminSettings();
+              final locationQrRequired = adminSettings['location_qr_required'] == true;
+              final hasLocationQr = product.locationQrId != null && product.locationQrId!.isNotEmpty;
+
+              if (locationQrRequired && !hasLocationQr) {
+                // Location QR 스캔 필요 → 팝업 + location 모드로 전환
+                if (mounted) {
+                  _showLocationQrRequiredPopup();
+                  setState(() {
+                    _scanType = 'location';
+                    _isProcessing = false;
+                  });
+                }
+                return;
+              }
+
               // Task 목록 화면으로 이동
               if (mounted) {
                 Navigator.pushReplacementNamed(
@@ -245,6 +263,45 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
         _isProcessing = false;
       });
     }
+  }
+
+  void _showLocationQrRequiredPopup() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.lg)),
+        title: Row(
+          children: [
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: GxColors.warningBg,
+                borderRadius: BorderRadius.circular(GxRadius.md),
+              ),
+              child: const Icon(Icons.location_on, color: GxColors.warning, size: 18),
+            ),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Text(
+                'Location QR 필요',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: GxColors.charcoal),
+              ),
+            ),
+          ],
+        ),
+        content: const Text(
+          'Location QR 인증이 필요합니다.\nLocation QR을 스캔하여 작업 위치를 등록해주세요.',
+          style: TextStyle(fontSize: 14, color: GxColors.slate, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('확인', style: TextStyle(color: GxColors.accent, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showErrorDialog(String message) {

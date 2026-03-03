@@ -249,6 +249,23 @@ class TaskService {
     }
   }
 
+  /// Admin 설정 조회
+  ///
+  /// Returns: admin_settings 맵 (key → value)
+  ///
+  /// API: GET /api/admin/settings
+  Future<Map<String, dynamic>> getAdminSettings() async {
+    try {
+      final response = await _apiService.get('/admin/settings');
+      if (response is Map<String, dynamic>) {
+        return response;
+      }
+      return {};
+    } catch (e) {
+      return {};
+    }
+  }
+
   /// Task 비활성화 (관리자/사내직원 전용)
   ///
   /// [taskId]: app_task_details의 ID

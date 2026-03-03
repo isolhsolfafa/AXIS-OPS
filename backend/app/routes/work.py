@@ -268,6 +268,35 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
         except Exception as e:
             logger.warning(f"Workers batch query failed: {e}")
 
+    # my_status 일괄 조회 (현재 작업자의 참여 상태: not_started / in_progress / completed)
+    my_status_map: Dict[int, str] = {}
+    if task_db_ids:
+        try:
+            worker_id = get_current_worker_id()
+            from app.models.worker import get_db_connection as get_conn
+            conn2 = get_conn()
+            cur2 = conn2.cursor()
+            cur2.execute(
+                """
+                SELECT t.id AS task_id,
+                       CASE
+                           WHEN wcl.id IS NOT NULL THEN 'completed'
+                           WHEN wsl.id IS NOT NULL THEN 'in_progress'
+                           ELSE 'not_started'
+                       END AS my_status
+                FROM app_task_details t
+                LEFT JOIN work_start_log wsl ON wsl.task_id = t.id AND wsl.worker_id = %s
+                LEFT JOIN work_completion_log wcl ON wcl.task_id = t.id AND wcl.worker_id = %s
+                WHERE t.id = ANY(%s)
+                """,
+                (worker_id, worker_id, task_db_ids)
+            )
+            for row in cur2.fetchall():
+                my_status_map[row['task_id']] = row['my_status']
+            conn2.close()
+        except Exception as e:
+            logger.warning(f"my_status batch query failed: {e}")
+
     for item in task_list:
         tid = item.get('id')
         workers_list = workers_by_task.get(tid, []) if tid else []
@@ -285,6 +314,7 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
                 'status': status_str,
             }]
         item['workers'] = workers_list
+        item['my_status'] = my_status_map.get(tid, 'not_started') if tid else 'not_started'
 
     return jsonify(task_list), 200
 

@@ -93,14 +93,21 @@ class TaskService:
                         'message': 'Tank Docking이 완료되지 않았습니다. POST_DOCKING 공정을 시작할 수 없습니다.'
                     }, 400
 
-        # BUG-11: Location QR 인증 필수 여부 확인
+        # BUG-11 Fix: Location QR 인증 필수 여부 확인
+        # task.location_qr_verified는 업데이트되지 않으므로 product.location_qr_id로 체크
         from app.models.admin_settings import get_setting as _get_admin_setting
         location_qr_required = _get_admin_setting('location_qr_required', False)
-        if location_qr_required and not task.location_qr_verified:
-            return {
-                'error': 'LOCATION_QR_REQUIRED',
-                'message': 'Location QR 인증이 필요합니다. QR 스캔 화면에서 Location QR을 먼저 스캔해주세요.'
-            }, 400
+        logger.info(f"[BUG-11] location_qr_required={location_qr_required}, type={type(location_qr_required)}")
+        if location_qr_required:
+            product = get_product_by_qr_doc_id(task.qr_doc_id)
+            logger.info(
+                f"[BUG-11] product.location_qr_id={product.location_qr_id if product else 'NO_PRODUCT'}"
+            )
+            if product and not product.location_qr_id:
+                return {
+                    'error': 'LOCATION_QR_REQUIRED',
+                    'message': 'Location QR이 등록되지 않았습니다. QR 스캔 화면에서 Location QR을 먼저 스캔해주세요.'
+                }, 400
 
         # 이미 완료된 작업인지 확인
         if task.completed_at:
@@ -588,9 +595,20 @@ def _calculate_working_minutes(started_at: datetime, completed_at: datetime) -> 
         overlap = _calculate_break_overlap(
             started_at, completed_at, break_start_str, break_end_str
         )
+        if overlap > 0:
+            logger.info(
+                f"[WORKING_HOURS] break={start_key}: "
+                f"{break_start_str}~{break_end_str}, overlap={overlap}m"
+            )
         total_break_overlap += overlap
 
-    return max(0, raw_minutes - total_break_overlap)
+    net_working_minutes = max(0, raw_minutes - total_break_overlap)
+    logger.info(
+        f"[WORKING_HOURS] started={started_at}, completed={completed_at}, "
+        f"raw_minutes={raw_minutes}, break_overlap={total_break_overlap}, "
+        f"net_working_minutes={net_working_minutes}"
+    )
+    return net_working_minutes
 
 
 def _calculate_break_overlap(
@@ -856,8 +874,9 @@ def _finalize_task_multi_worker(task_detail_id: int, completed_at: datetime) -> 
 
         logger.info(
             f"_finalize_task_multi_worker: task_id={task_detail_id}, "
-            f"raw_duration={raw_duration_minutes}m, manual_pause={manual_pause_minutes}m, "
-            f"net_duration={duration_minutes}m, elapsed={elapsed_minutes}m"
+            f"MH(duration)={duration_minutes}m, CT(elapsed)={elapsed_minutes}m, "
+            f"workers={worker_count}, "
+            f"line_efficiency={round(duration_minutes * 100 / max(1, elapsed_minutes * worker_count))}%"
         )
 
         return {
