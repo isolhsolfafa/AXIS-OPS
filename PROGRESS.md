@@ -1903,6 +1903,7 @@ Sprint 14 배포 후 현장 테스트에서 추가 버그 5건 발견.
 ---
 
 ## Sprint 15: 멀티 작업자 Join + BUG-11 재수정 + MH/WH 로깅 (2026-03-03) ✅
+> Sprint 15.5 (BUG-15 + /api/app/settings) 포함: commit b277ac8
 
 ### 목표
 1. 🔴 BUG-12: 멀티 작업자 start/end FE 언블록 — worker2가 이미 시작된 task에 참여/완료 가능
@@ -1961,5 +1962,64 @@ Sprint 14 배포 후 현장 테스트에서 추가 버그 5건 발견.
 
 ### 배포 (2026-03-03)
 - [x] git commit & push (`0d923f5`)
+- [x] Railway 자동 배포 (GitHub push)
+- [x] flutter build web → Netlify 배포 (https://gaxis-ops.netlify.app)
+
+---
+
+## Sprint 16: Admin 로그인 간소화 + BUG-13/14 수정 + QR 카메라 정사각형 (2026-03-03) ✅
+
+### 목표
+1. FEAT-1: Admin 이메일 prefix 매칭 로그인 (`admin` → `admin@gst-in.com`)
+2. BUG-13: FE `getAdminSettings()` 에러 시 안전모드 기본값 반환
+3. BUG-14: 다중 작업자 표시 디버깅 로깅 (BE + FE)
+4. BUG-15: QR 카메라 DOM 정사각형 3중 방어 (CSS + DOM 강제 + MutationObserver)
+5. `/api/app/settings` 일반 작업자 접근 허용 엔드포인트 (Sprint 15.5에서 구현, 테스트 추가)
+
+### BE 완료 내역
+- **Admin prefix 매칭** (worker.py L275-305)
+  - `get_admin_by_email_prefix(prefix)` 신규 함수
+  - `SELECT * FROM workers WHERE email LIKE '{prefix}@%' AND is_admin = TRUE`
+  - 매칭 1명일 때만 반환, 0명/2명+ → None (보안)
+- **auth_service.py login() 분기** (L414-419)
+  - `@` 포함 → 기존 정확 매칭
+  - `@` 미포함 → admin prefix 우선 → fallback 정확 매칭
+- **BUG-14 디버그 로깅** (work.py L293-298, gst.py L197-202)
+  - workers batch query 결과에서 2명+ 인 task에 `[BUG-14]` 로그 출력
+
+### FE 완료 내역
+- **BUG-13 안전모드** (task_service.dart L264)
+  - `getAdminSettings()` catch: `{}` → `{'location_qr_required': true}` (블록 활성 기본값)
+- **BUG-14 디버그 로그** (task_item.dart L93-100)
+  - `fromJson` workers 파싱 시 2명+ → `debugPrint('[BUG-14]...')` 출력
+- **Admin 힌트 텍스트** (login_screen.dart L155-161)
+  - 이메일 필드 아래 `'Admin은 이메일 앞부분만 입력 가능'` 안내 텍스트
+- **QR 카메라 정사각형 3중 방어** (qr_scanner_web.dart)
+  - 방어 1: CSS `aspect-ratio: 1/1 !important` + `video { object-fit: cover }`
+  - 방어 2: `_forceSquareAfterCameraStart()` — 카메라 start 후 DOM height=width 강제
+  - 방어 3: MutationObserver 실시간 감시 (html5-qrcode 비동기 크기 변경 즉시 재적용)
+
+### 변경 파일 목록
+| 파일 | 변경 내용 |
+|------|----------|
+| `backend/app/models/worker.py` | `get_admin_by_email_prefix()` 신규 |
+| `backend/app/services/auth_service.py` | login() prefix 매칭 분기 |
+| `backend/app/routes/work.py` | BUG-14 다중 작업자 디버그 로깅 |
+| `backend/app/routes/gst.py` | BUG-14 다중 작업자 디버그 로깅 |
+| `frontend/lib/services/task_service.dart` | BUG-13 안전모드 기본값 |
+| `frontend/lib/models/task_item.dart` | BUG-14 debugPrint + foundation import |
+| `frontend/lib/screens/auth/login_screen.dart` | Admin 힌트 텍스트 |
+| `frontend/lib/services/qr_scanner_web.dart` | QR 카메라 정사각형 3중 방어 |
+| `tests/backend/test_sprint16_admin_login.py` | 신규 4건 |
+| `tests/backend/test_sprint16_app_settings.py` | 신규 5건 |
+
+### 테스트 결과
+- Sprint 16 신규: **9/9 PASSED**
+  - test_sprint16_admin_login: 4건 (full email, prefix, 일반사용자 거부, @매칭)
+  - test_sprint16_app_settings: 5건 (admin/worker 접근, 미인증 거부, admin-only)
+- 빌드: `flutter build web --release` — 에러 0건
+
+### 배포 (2026-03-03)
+- [x] git commit & push (`c7457c4`)
 - [x] Railway 자동 배포 (GitHub push)
 - [x] flutter build web → Netlify 배포 (https://gaxis-ops.netlify.app)
