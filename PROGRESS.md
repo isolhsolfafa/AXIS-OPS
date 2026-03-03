@@ -2066,3 +2066,38 @@ Sprint 14 배포 후 현장 테스트에서 추가 버그 5건 발견.
 - [x] git commit & push (`b17f696`)
 - [x] Railway 자동 배포 (GitHub push)
 - [x] flutter build web → Netlify 배포 (https://gaxis-ops.netlify.app)
+
+---
+
+## Sprint 16.2: 담당공정 설정 이동 + BUG-16/17 배포 (2026-03-03) ✅
+
+### 목표
+1. 담당공정 설정 이동: 홈 화면 프로필 카드의 "활성 역할" → 개인설정(ProfileScreen)으로 이동
+2. 용어 변경: "활성 역할" → "담당공정" (현장 작업자 이해도 향상)
+3. BUG-16/17 코드 반영분 배포 확인
+
+### FE 완료 내역
+- **홈 화면 제거** (`home_screen.dart`)
+  - 프로필 카드 내 활성 역할 UI 블록 삭제 (line 606-652)
+  - `_showActiveRoleDialog()` 메서드 삭제 (ProfileScreen으로 이동)
+  - `_getActiveRoleLabel()` 메서드 삭제 (ProfileScreen으로 이동)
+  - `_getRoleColor()`, `_getRoleIcon()` — 다른 UI에서 사용하므로 유지
+- **개인설정 화면 추가** (`profile_screen.dart`)
+  - PIN 설정 위에 "담당공정" 섹션 추가 (GST/Admin만 표시)
+  - 담당공정 변경 버튼 → PI/QI/SI 선택 다이얼로그
+  - 헬퍼 메서드 3개 추가: `_getActiveRoleLabel()`, `_getRoleColor()`, `_showActiveRoleDialog()`
+  - 선택 후 `setState()` 호출로 UI 즉시 갱신
+
+### 변경 파일 목록
+| 파일 | 변경 내용 |
+|------|----------|
+| `frontend/lib/screens/home/home_screen.dart` | 활성 역할 UI + 관련 메서드 삭제 |
+| `frontend/lib/screens/settings/profile_screen.dart` | 담당공정 섹션 + 헬퍼 메서드 3개 추가 |
+
+### 테스트 결과
+- 빌드: `flutter build web --release` — 에러 0건
+
+### 배포 (2026-03-03)
+- [x] git commit & push (`e3d0c8e`)
+- [x] Railway 자동 배포 (GitHub push)
+- [x] flutter build web → Netlify 배포 (https://gaxis-ops.netlify.app)
