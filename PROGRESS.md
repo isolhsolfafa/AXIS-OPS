@@ -2211,7 +2211,7 @@ Sprint 14 배포 후 현장 테스트에서 추가 버그 5건 발견.
 - FE 빌드: `flutter build web --release` — 에러 0건
 
 ### 배포 (2026-03-04)
-- [ ] DB 마이그레이션 없음 (기존 테이블 활용)
-- [ ] git commit & push
-- [ ] Railway 자동 배포 (GitHub push)
-- [ ] flutter build web → Netlify 배포 (https://gaxis-ops.netlify.app)
+- [x] DB 마이그레이션 없음 (기존 테이블 활용)
+- [x] git commit & push (`f566e25`)
+- [x] Railway 자동 배포 (GitHub push)
+- [x] flutter build web → Netlify 배포 (https://gaxis-ops.netlify.app)
