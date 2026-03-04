@@ -29,6 +29,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   String? _checkInTime;
   bool _attendanceLoading = false;
 
+  // 출퇴근 분류 (Sprint 17)
+  String _selectedWorkSite = 'GST';
+  String _selectedProductLine = 'SCR';
+
   @override
   void initState() {
     super.initState();
@@ -115,6 +119,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       if (!mounted) return;
       final status = response['status'] as String? ?? 'not_checked_in';
       final checkInAt = response['check_in_time'] as String?;
+      // 마지막 IN 레코드의 work_site/product_line 복원
+      final records = response['records'] as List<dynamic>? ?? [];
+      String lastWorkSite = 'GST';
+      String lastProductLine = 'SCR';
+      for (final r in records.reversed) {
+        if (r['check_type'] == 'in') {
+          lastWorkSite = r['work_site'] as String? ?? 'GST';
+          lastProductLine = r['product_line'] as String? ?? 'SCR';
+          break;
+        }
+      }
       setState(() {
         if (status == 'checked_in') {
           _attendanceStatus = AttendanceStatus.checkedIn;
@@ -126,6 +141,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           _attendanceStatus = AttendanceStatus.notCheckedIn;
           _checkInTime = null;
         }
+        _selectedWorkSite = lastWorkSite;
+        _selectedProductLine = lastProductLine;
       });
     } catch (e) {
       debugPrint('[HomeScreen] fetchAttendanceStatus error: $e');
@@ -138,7 +155,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     try {
       final apiService = ref.read(apiServiceProvider);
       final checkType = _attendanceStatus == AttendanceStatus.notCheckedIn ? 'in' : 'out';
-      await apiService.post('/hr/attendance/check', data: {'check_type': checkType});
+      final Map<String, dynamic> body = {'check_type': checkType};
+      // 출근 시만 work_site/product_line 전송 (퇴근 시 BE에서 자동 복사)
+      if (checkType == 'in') {
+        body['work_site'] = _selectedWorkSite;
+        body['product_line'] = _selectedProductLine;
+      }
+      await apiService.post('/hr/attendance/check', data: body);
       await _fetchAttendanceStatus();
     } catch (e) {
       if (mounted) {
@@ -182,101 +205,151 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         break;
     }
 
+    // 드롭다운 옵션 (work_site + product_line 조합)
+    const siteLineOptions = <String, Map<String, String>>{
+      'GST 공장 (SCR)': {'work_site': 'GST', 'product_line': 'SCR'},
+      'GST 공장 (CHI)': {'work_site': 'GST', 'product_line': 'CHI'},
+      '협력사 본사 (SCR)': {'work_site': 'HQ', 'product_line': 'SCR'},
+      '협력사 본사 (CHI)': {'work_site': 'HQ', 'product_line': 'CHI'},
+    };
+    // 현재 선택값에 해당하는 레이블 찾기
+    String currentLabel = siteLineOptions.entries
+        .firstWhere(
+          (e) => e.value['work_site'] == _selectedWorkSite && e.value['product_line'] == _selectedProductLine,
+          orElse: () => siteLineOptions.entries.first,
+        )
+        .key;
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: GxGlass.cardSm(radius: GxRadius.lg),
-      child: Row(
+      child: Column(
         children: [
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              color: statusColor.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(GxRadius.md),
-            ),
-            child: Icon(
-              _attendanceStatus == AttendanceStatus.notCheckedIn
-                  ? Icons.login
-                  : _attendanceStatus == AttendanceStatus.checkedIn
-                      ? Icons.access_time
-                      : Icons.logout,
-              size: 16,
-              color: statusColor,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
+          Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: statusColor.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(GxRadius.md),
+                ),
+                child: Icon(
+                  _attendanceStatus == AttendanceStatus.notCheckedIn
+                      ? Icons.login
+                      : _attendanceStatus == AttendanceStatus.checkedIn
+                          ? Icons.access_time
+                          : Icons.logout,
+                  size: 16,
+                  color: statusColor,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      '근태',
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: GxColors.graphite),
+                    Row(
+                      children: [
+                        const Text(
+                          '근태',
+                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: GxColors.graphite),
+                        ),
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: statusColor.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            statusLabel,
+                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: statusColor),
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: statusColor.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(10),
+                    if (_checkInTime != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        '출근: ${_formatTime(_checkInTime!)}',
+                        style: const TextStyle(fontSize: 11, color: GxColors.steel),
                       ),
-                      child: Text(
-                        statusLabel,
-                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: statusColor),
-                      ),
-                    ),
+                    ],
                   ],
                 ),
-                if (_checkInTime != null) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    '출근: ${_formatTime(_checkInTime!)}',
-                    style: const TextStyle(fontSize: 11, color: GxColors.steel),
+              ),
+              if (!buttonDisabled)
+                GestureDetector(
+                  onTap: _attendanceLoading ? null : _handleAttendance,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    decoration: BoxDecoration(
+                      gradient: buttonDisabled ? null : GxGradients.accentButton,
+                      color: buttonDisabled ? GxColors.mist : null,
+                      borderRadius: BorderRadius.circular(GxRadius.sm),
+                    ),
+                    child: _attendanceLoading
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          )
+                        : Text(
+                            buttonLabel,
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: buttonDisabled ? GxColors.silver : Colors.white,
+                            ),
+                          ),
                   ),
-                ],
-              ],
-            ),
-          ),
-          if (!buttonDisabled)
-            GestureDetector(
-              onTap: _attendanceLoading ? null : _handleAttendance,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                decoration: BoxDecoration(
-                  gradient: buttonDisabled ? null : GxGradients.accentButton,
-                  color: buttonDisabled ? GxColors.mist : null,
-                  borderRadius: BorderRadius.circular(GxRadius.sm),
+                )
+              else
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: GxColors.mist,
+                    borderRadius: BorderRadius.circular(GxRadius.sm),
+                  ),
+                  child: Text(
+                    buttonLabel,
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: GxColors.silver),
+                  ),
                 ),
-                child: _attendanceLoading
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                      )
-                    : Text(
-                        buttonLabel,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: buttonDisabled ? GxColors.silver : Colors.white,
-                        ),
-                      ),
-              ),
-            )
-          else
+            ],
+          ),
+          // 출근 전 상태에서만 근무지/제품군 드롭다운 표시
+          if (_attendanceStatus == AttendanceStatus.notCheckedIn) ...[
+            const SizedBox(height: 10),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
               decoration: BoxDecoration(
-                color: GxColors.mist,
+                color: GxColors.cloud,
                 borderRadius: BorderRadius.circular(GxRadius.sm),
+                border: Border.all(color: GxColors.mist),
               ),
-              child: Text(
-                buttonLabel,
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: GxColors.silver),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  value: currentLabel,
+                  isExpanded: true,
+                  icon: const Icon(Icons.arrow_drop_down, color: GxColors.steel, size: 20),
+                  style: const TextStyle(fontSize: 12, color: GxColors.graphite),
+                  items: siteLineOptions.keys.map((label) {
+                    return DropdownMenuItem<String>(value: label, child: Text(label));
+                  }).toList(),
+                  onChanged: (label) {
+                    if (label != null && siteLineOptions.containsKey(label)) {
+                      setState(() {
+                        _selectedWorkSite = siteLineOptions[label]!['work_site']!;
+                        _selectedProductLine = siteLineOptions[label]!['product_line']!;
+                      });
+                    }
+                  },
+                ),
               ),
             ),
+          ],
         ],
       ),
     );

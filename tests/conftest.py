@@ -214,6 +214,7 @@ def db_schema():
                 '008_sprint9_pause_resume.sql',
                 '009_sprint11_gst_tasks.sql',
                 '010_sprint12_hr_schema.sql',
+                '017_add_attendance_classification.sql',
             ]
 
             for filename in migration_files:

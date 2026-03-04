@@ -2,6 +2,7 @@
 HR 라우트 — 협력사 출퇴근 관리
 엔드포인트: /api/hr/*
 Sprint 12: partner_attendance 출퇴근 기록 API
+Sprint 17: work_site + product_line 분류 체계 추가
 """
 
 import logging
@@ -45,7 +46,9 @@ def attendance_check() -> Tuple[Dict[str, Any], int]:
     Request Body:
         {
             "check_type": str,  # 'in' / 'out'
-            "note": str         # optional: 비고
+            "note": str,        # optional: 비고
+            "work_site": str,   # optional: 'GST' | 'HQ' (default 'GST')
+            "product_line": str # optional: 'SCR' | 'CHI' (default 'SCR')
         }
 
     Response:
@@ -69,6 +72,8 @@ def attendance_check() -> Tuple[Dict[str, Any], int]:
         }), 400
 
     note = data.get('note')
+    work_site = data.get('work_site', 'GST').strip().upper()
+    product_line = data.get('product_line', 'SCR').strip().upper()
 
     worker_id = get_current_worker_id()
 
@@ -95,7 +100,7 @@ def attendance_check() -> Tuple[Dict[str, Any], int]:
         # 당일 출퇴근 기록 조회 (KST 날짜 기준)
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, check_type, check_time
+                SELECT id, check_type, check_time, work_site, product_line
                 FROM hr.partner_attendance
                 WHERE worker_id = %s
                   AND check_time >= %s
@@ -118,6 +123,20 @@ def attendance_check() -> Tuple[Dict[str, Any], int]:
                     'message': '이미 출근 기록이 있습니다.'
                 }), 400
 
+            # work_site / product_line 유효성 검사 (출근 시만)
+            if work_site not in ('GST', 'HQ'):
+                conn.close()
+                return jsonify({
+                    'error': 'INVALID_WORK_SITE',
+                    'message': "work_site는 'GST' 또는 'HQ'이어야 합니다."
+                }), 400
+            if product_line not in ('SCR', 'CHI'):
+                conn.close()
+                return jsonify({
+                    'error': 'INVALID_PRODUCT_LINE',
+                    'message': "product_line은 'SCR' 또는 'CHI'이어야 합니다."
+                }), 400
+
         elif check_type == 'out':
             # 체크인 없이 체크아웃 불가
             if not check_ins or len(check_ins) <= len(check_outs):
@@ -127,16 +146,26 @@ def attendance_check() -> Tuple[Dict[str, Any], int]:
                     'message': '출근 기록이 없습니다. 먼저 출근 체크를 해주세요.'
                 }), 400
 
+            # 퇴근 시: FE 값 무시, 마지막 IN 레코드에서 work_site/product_line 복사
+            last_in = None
+            for r in reversed(today_records):
+                if r['check_type'] == 'in':
+                    last_in = r
+                    break
+            if last_in:
+                work_site = last_in.get('work_site', 'GST')
+                product_line = last_in.get('product_line', 'SCR')
+
         # 출퇴근 기록 삽입
         now_utc = datetime.now(timezone.utc)
         with conn:
             with conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO hr.partner_attendance
-                        (worker_id, check_type, check_time, method, note)
-                    VALUES (%s, %s, %s, 'button', %s)
-                    RETURNING id, worker_id, check_type, check_time, method, note
-                """, (worker_id, check_type, now_utc, note))
+                        (worker_id, check_type, check_time, method, note, work_site, product_line)
+                    VALUES (%s, %s, %s, 'button', %s, %s, %s)
+                    RETURNING id, worker_id, check_type, check_time, method, note, work_site, product_line
+                """, (worker_id, check_type, now_utc, note, work_site, product_line))
                 record = cur.fetchone()
         conn.close()
 
@@ -159,6 +188,8 @@ def attendance_check() -> Tuple[Dict[str, Any], int]:
             'check_time': record['check_time'].isoformat() if record['check_time'] else None,
             'method': record['method'],
             'note': record['note'],
+            'work_site': record['work_site'],
+            'product_line': record['product_line'],
         }
     }), 201
 
@@ -193,7 +224,7 @@ def attendance_today() -> Tuple[Dict[str, Any], int]:
         conn = get_db_connection()
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, check_type, check_time, method, note
+                SELECT id, check_type, check_time, method, note, work_site, product_line
                 FROM hr.partner_attendance
                 WHERE worker_id = %s
                   AND check_time >= %s
@@ -216,6 +247,8 @@ def attendance_today() -> Tuple[Dict[str, Any], int]:
             'check_time': r['check_time'].isoformat() if r['check_time'] else None,
             'method': r['method'],
             'note': r['note'],
+            'work_site': r.get('work_site', 'GST'),
+            'product_line': r.get('product_line', 'SCR'),
         }
         for r in rows
     ]

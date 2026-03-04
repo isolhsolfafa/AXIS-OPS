@@ -363,3 +363,205 @@ class TestPartnerAttendance:
         elif 'check_in' in data:
             assert data['check_in'] is None, f"기록 없을 때 check_in이 None이 아님: {data['check_in']}"
         # 그 외 구현에 따라 다를 수 있으므로 200이면 통과
+
+    # ------------------------------------------------------------------
+    # TC-ATT-09: 출근 시 work_site + product_line 전달 → DB 정상 저장
+    # ------------------------------------------------------------------
+    def test_check_in_with_work_site_product_line(self, client, create_test_worker, get_auth_token, db_conn):
+        """TC-ATT-09: 출근 시 work_site + product_line DB 정상 저장"""
+        if not _check_hr_attendance_schema(db_conn):
+            pytest.skip("hr.partner_attendance 테이블 없음")
+
+        worker_id = create_test_worker(
+            email=f'att_site_{int(time.time()*1000)}@att_test.com',
+            password='Test123!',
+            name='ATT Site Test',
+            role='MECH',
+            company='FNI'
+        )
+        token = get_auth_token(worker_id)
+
+        response = client.post(
+            '/api/hr/attendance/check',
+            json={'check_type': 'in', 'work_site': 'HQ', 'product_line': 'CHI'},
+            headers={'Authorization': f'Bearer {token}'}
+        )
+
+        if response.status_code in (404, 405):
+            pytest.skip("POST /api/hr/attendance/check 엔드포인트 미구현")
+
+        assert response.status_code in (200, 201), (
+            f"출근(HQ/CHI) → Expected 201, got {response.status_code}: {response.get_json()}"
+        )
+        data = response.get_json()
+        record = data.get('record', data)
+        assert record.get('work_site') == 'HQ', f"work_site 불일치: {record.get('work_site')}"
+        assert record.get('product_line') == 'CHI', f"product_line 불일치: {record.get('product_line')}"
+
+        # DB 직접 확인
+        if db_conn:
+            cursor = db_conn.cursor()
+            cursor.execute(
+                "SELECT work_site, product_line FROM hr.partner_attendance WHERE worker_id = %s ORDER BY check_time DESC LIMIT 1",
+                (worker_id,)
+            )
+            row = cursor.fetchone()
+            cursor.close()
+            assert row is not None, "DB 레코드 없음"
+            assert row[0] == 'HQ', f"DB work_site={row[0]}"
+            assert row[1] == 'CHI', f"DB product_line={row[1]}"
+
+    # ------------------------------------------------------------------
+    # TC-ATT-10: 퇴근 시 work_site/product_line 미전달 → 마지막 IN 값 자동 복사
+    # ------------------------------------------------------------------
+    def test_check_out_copies_last_in_classification(self, client, create_test_worker, get_auth_token, db_conn):
+        """TC-ATT-10: 퇴근 시 마지막 IN 레코드의 work_site/product_line 자동 복사"""
+        if not _check_hr_attendance_schema(db_conn):
+            pytest.skip("hr.partner_attendance 테이블 없음")
+
+        worker_id = create_test_worker(
+            email=f'att_outcopy_{int(time.time()*1000)}@att_test.com',
+            password='Test123!',
+            name='ATT Out Copy Test',
+            role='ELEC',
+            company='FNI'
+        )
+        token = get_auth_token(worker_id)
+
+        # 출근 (HQ / CHI)
+        in_resp = client.post(
+            '/api/hr/attendance/check',
+            json={'check_type': 'in', 'work_site': 'HQ', 'product_line': 'CHI'},
+            headers={'Authorization': f'Bearer {token}'}
+        )
+        if in_resp.status_code in (404, 405):
+            pytest.skip("POST /api/hr/attendance/check 엔드포인트 미구현")
+        if in_resp.status_code not in (200, 201):
+            pytest.skip(f"출근 기록 실패 ({in_resp.status_code})")
+
+        # 퇴근 (work_site/product_line 미전달)
+        out_resp = client.post(
+            '/api/hr/attendance/check',
+            json={'check_type': 'out'},
+            headers={'Authorization': f'Bearer {token}'}
+        )
+        assert out_resp.status_code in (200, 201), (
+            f"퇴근 → Expected 201, got {out_resp.status_code}: {out_resp.get_json()}"
+        )
+        data = out_resp.get_json()
+        record = data.get('record', data)
+        # 마지막 IN의 HQ / CHI가 복사되어야 함
+        assert record.get('work_site') == 'HQ', f"퇴근 work_site 불일치: {record.get('work_site')}"
+        assert record.get('product_line') == 'CHI', f"퇴근 product_line 불일치: {record.get('product_line')}"
+
+    # ------------------------------------------------------------------
+    # TC-ATT-11: 잘못된 work_site 전달 → 400 INVALID_WORK_SITE
+    # ------------------------------------------------------------------
+    def test_invalid_work_site(self, client, create_test_worker, get_auth_token, db_conn):
+        """TC-ATT-11: 잘못된 work_site 전달 시 400"""
+        if not _check_hr_attendance_schema(db_conn):
+            pytest.skip("hr.partner_attendance 테이블 없음")
+
+        worker_id = create_test_worker(
+            email=f'att_badsite_{int(time.time()*1000)}@att_test.com',
+            password='Test123!',
+            name='ATT Bad Site',
+            role='MECH',
+            company='FNI'
+        )
+        token = get_auth_token(worker_id)
+
+        response = client.post(
+            '/api/hr/attendance/check',
+            json={'check_type': 'in', 'work_site': 'INVALID'},
+            headers={'Authorization': f'Bearer {token}'}
+        )
+
+        if response.status_code in (404, 405):
+            pytest.skip("POST /api/hr/attendance/check 엔드포인트 미구현")
+
+        assert response.status_code == 400, (
+            f"잘못된 work_site → Expected 400, got {response.status_code}"
+        )
+        data = response.get_json()
+        assert data.get('error') == 'INVALID_WORK_SITE', f"에러 코드 불일치: {data.get('error')}"
+
+    # ------------------------------------------------------------------
+    # TC-ATT-12: 잘못된 product_line 전달 → 400 INVALID_PRODUCT_LINE
+    # ------------------------------------------------------------------
+    def test_invalid_product_line(self, client, create_test_worker, get_auth_token, db_conn):
+        """TC-ATT-12: 잘못된 product_line 전달 시 400"""
+        if not _check_hr_attendance_schema(db_conn):
+            pytest.skip("hr.partner_attendance 테이블 없음")
+
+        worker_id = create_test_worker(
+            email=f'att_badline_{int(time.time()*1000)}@att_test.com',
+            password='Test123!',
+            name='ATT Bad Line',
+            role='MECH',
+            company='BAT'
+        )
+        token = get_auth_token(worker_id)
+
+        response = client.post(
+            '/api/hr/attendance/check',
+            json={'check_type': 'in', 'product_line': 'INVALID'},
+            headers={'Authorization': f'Bearer {token}'}
+        )
+
+        if response.status_code in (404, 405):
+            pytest.skip("POST /api/hr/attendance/check 엔드포인트 미구현")
+
+        assert response.status_code == 400, (
+            f"잘못된 product_line → Expected 400, got {response.status_code}"
+        )
+        data = response.get_json()
+        assert data.get('error') == 'INVALID_PRODUCT_LINE', f"에러 코드 불일치: {data.get('error')}"
+
+    # ------------------------------------------------------------------
+    # TC-ATT-13: today 조회 시 work_site/product_line 포함 확인
+    # ------------------------------------------------------------------
+    def test_today_includes_classification(self, client, create_test_worker, get_auth_token, db_conn):
+        """TC-ATT-13: /attendance/today 응답에 work_site/product_line 포함"""
+        if not _check_hr_attendance_schema(db_conn):
+            pytest.skip("hr.partner_attendance 테이블 없음")
+
+        worker_id = create_test_worker(
+            email=f'att_todayclass_{int(time.time()*1000)}@att_test.com',
+            password='Test123!',
+            name='ATT Today Class',
+            role='ELEC',
+            company='FNI'
+        )
+        token = get_auth_token(worker_id)
+
+        # 출근 (GST / SCR — default)
+        in_resp = client.post(
+            '/api/hr/attendance/check',
+            json={'check_type': 'in'},
+            headers={'Authorization': f'Bearer {token}'}
+        )
+        if in_resp.status_code in (404, 405):
+            pytest.skip("POST /api/hr/attendance/check 엔드포인트 미구현")
+        if in_resp.status_code not in (200, 201):
+            pytest.skip(f"출근 기록 실패 ({in_resp.status_code})")
+
+        # today 조회
+        response = client.get(
+            '/api/hr/attendance/today',
+            headers={'Authorization': f'Bearer {token}'}
+        )
+
+        if response.status_code in (404, 405):
+            pytest.skip("GET /api/hr/attendance/today 엔드포인트 미구현")
+
+        assert response.status_code == 200
+        data = response.get_json()
+        records = data.get('records', [])
+        assert len(records) >= 1, "출근 기록이 없음"
+
+        first = records[0]
+        assert 'work_site' in first, f"records에 work_site 필드 없음: {first.keys()}"
+        assert 'product_line' in first, f"records에 product_line 필드 없음: {first.keys()}"
+        assert first['work_site'] == 'GST', f"default work_site 불일치: {first['work_site']}"
+        assert first['product_line'] == 'SCR', f"default product_line 불일치: {first['product_line']}"
