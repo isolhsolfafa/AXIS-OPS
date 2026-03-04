@@ -606,6 +606,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             ],
 
             // 주요 기능
+            // 작업 진행현황 (Sprint 18) — 전체 사용자 표시
+            _buildFeatureCard(
+              icon: Icons.bar_chart_rounded,
+              iconBg: const Color(0xFF0D9488).withValues(alpha: 0.08),
+              iconColor: const Color(0xFF0D9488),
+              title: worker?.company == 'GST' || worker?.isAdmin == true
+                  ? '전사 작업 진행현황'
+                  : '작업 진행현황',
+              subtitle: '담당 S/N별 공정 진행률 조회',
+              onTap: () => Navigator.pushNamed(context, '/sn-progress'),
+            ),
+            const SizedBox(height: 8),
+
             _buildFeatureCard(
               icon: Icons.qr_code_scanner,
               iconBg: GxColors.accentSoft,

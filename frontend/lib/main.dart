@@ -16,6 +16,7 @@ import 'screens/gst/gst_products_screen.dart';
 import 'screens/checklist/checklist_screen.dart';
 import 'screens/settings/profile_screen.dart';
 import 'screens/settings/pin_settings_screen.dart';
+import 'screens/progress/sn_progress_screen.dart';
 import 'utils/design_system.dart';
 
 void main() {
@@ -34,6 +35,7 @@ const _saveableRoutes = {
   '/admin-options',
   '/alerts',
   '/gst-products',
+  '/sn-progress',
 };
 
 /// G-AXIS 앱 메인 클래스
@@ -129,6 +131,7 @@ class GAxisApp extends ConsumerWidget {
         '/admin-options': (context) => const AdminOptionsScreen(),
         '/manager-pending-tasks': (context) => const ManagerPendingTasksScreen(),
         '/home': (context) => const HomeScreen(),
+        '/sn-progress': (context) => const SnProgressScreen(),
         '/forgot-password': (context) => const ForgotPasswordScreen(),
         '/profile': (context) => const ProfileScreen(),
         '/pin-settings': (context) => const PinSettingsScreen(),

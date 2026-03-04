@@ -3,6 +3,8 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
+> **현재 버전**: v1.3.0 (Sprint 18, 2026-03-04)
+
 ---
 
 ## Sprint 1: 인증 + DB 기반 (완료)
@@ -2149,3 +2151,67 @@ Sprint 14 배포 후 현장 테스트에서 추가 버그 5건 발견.
 - [x] git commit & push (`b379df4`, `3da2fd7`)
 - [x] Railway 자동 배포 (GitHub push)
 - [x] flutter build web → Netlify 배포 (https://gaxis-ops.netlify.app)
+
+---
+
+## Sprint 18: 협력사별 S/N 작업 진행률 뷰 — v1.3.0 (2026-03-04) ✅
+
+### 목표
+1. 협력사 관리자/작업자가 자사 담당 S/N들의 작업 진행률을 종합 조회
+2. 카테고리(MECH/ELEC/TMS)별 진행바 + 전체 진행률 표시
+3. AXIS-VIEW(React)에서도 동일 API 재사용 가능하도록 범용 설계
+4. 버전 `v1.2.0` → `v1.3.0`
+
+### BE 완료 내역
+- **`backend/app/services/progress_service.py`** (신규)
+  - `get_partner_sn_progress()` — 협력사별 S/N 필터링 + 카테고리별 진행률 집계
+  - 회사별 WHERE 절 자동 구성: FNI/BAT(mech_partner), TMS(M)(mech_partner OR module_outsourcing), TMS(E)/P&S/C&A(elec_partner), GST/Admin(전체)
+  - `is_applicable = false` task는 진행률 집계에서 자동 제외
+  - 완료 제품 필터: `all_completed = false OR all_completed_at > NOW() - N days`
+  - `my_category` 필드로 자사 담당 공정 강조 지원
+- **`backend/app/routes/product.py`** — `GET /api/app/product/progress` 엔드포인트 추가
+  - `@jwt_required` 인증
+  - Admin은 `?company=` 파라미터로 특정 회사 필터 가능
+  - `?days=` 파라미터로 완료 후 포함 기간 설정 (기본 1일)
+  - Response: `{ products: [...], summary: { total, in_progress, completed_recent } }`
+- **`backend/version.py`** — `VERSION = "1.3.0"`
+
+### FE 완료 내역
+- **`frontend/lib/screens/progress/sn_progress_screen.dart`** (신규)
+  - ConsumerStatefulWidget, RefreshIndicator(pull-to-refresh)
+  - 30초 자동 갱신 Timer
+  - Summary 카드 (전체/진행 중/최근 완료)
+  - S/N별 카드: 모델명, 고객명, 전체 진행바, 카테고리별 미니 진행바, 납기일
+  - 자사 담당 공정 강조색 (굵은 글자 + 두꺼운 바)
+  - 100% 완료 시 초록 배경 + "(완료)" 뱃지
+  - ship_plan_date 오름차순 정렬
+- **`frontend/lib/screens/home/home_screen.dart`** — "작업 진행현황" 카드 추가
+  - 협력사: "작업 진행현황", GST/Admin: "전사 작업 진행현황"
+  - teal 컬러 아이콘 (0xFF0D9488)
+- **`frontend/lib/main.dart`** — import + `/sn-progress` 라우트 등록 + saveable routes 추가
+- **`frontend/lib/utils/app_version.dart`** — `version = '1.3.0'`
+
+### TEST 완료 내역 (10개 신규)
+| TC | 테스트 | 설명 |
+|----|--------|------|
+| TC-PROG-01 | `test_progress_requires_auth` | JWT 없이 접근 시 401 반환 |
+| TC-PROG-02 | `test_fni_worker_sees_own_products` | FNI 작업자 → mech_partner=FNI 제품만 조회 |
+| TC-PROG-03 | `test_admin_sees_all_products` | Admin → 전체 제품 조회 |
+| TC-PROG-04 | `test_admin_company_filter` | Admin → ?company=FNI 필터링 |
+| TC-PROG-05 | `test_non_admin_ignores_company_param` | 비admin ?company= 무시, 자기 회사만 |
+| TC-PROG-06 | `test_category_progress_accuracy` | MECH 67%, ELEC 50%, overall 60% 정확성 |
+| TC-PROG-07 | `test_non_applicable_excluded` | is_applicable=false → 진행률 제외 |
+| TC-PROG-08 | `test_tms_m_filter` | TMS(M) → mech_partner=TMS OR module_outsourcing=TMS |
+| TC-PROG-09 | `test_summary_counts` | summary total/in_progress/completed_recent 정확 |
+| TC-PROG-10 | `test_ps_worker_elec_filter` | P&S → elec_partner=P&S 제품만 |
+
+### 테스트 결과
+- `test_sn_progress.py`: **10 passed**
+- `test_attendance.py` 회귀: **13 passed** (변경 없음)
+- FE 빌드: `flutter build web --release` — 에러 0건
+
+### 배포 (2026-03-04)
+- [ ] DB 마이그레이션 없음 (기존 테이블 활용)
+- [ ] git commit & push
+- [ ] Railway 자동 배포 (GitHub push)
+- [ ] flutter build web → Netlify 배포 (https://gaxis-ops.netlify.app)

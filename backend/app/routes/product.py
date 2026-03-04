@@ -14,14 +14,54 @@ from app.models.product_info import (
     update_location_qr,
     is_tms_product,
 )
+from app.models.worker import get_worker_by_id
 from app.services.task_service import TaskService
 from app.services.task_seed import initialize_product_tasks
+from app.services.progress_service import get_partner_sn_progress
 
 
 logger = logging.getLogger(__name__)
 
 product_bp = Blueprint("product", __name__, url_prefix="/api/app/product")
 task_service = TaskService()
+
+
+@product_bp.route("/progress", methods=["GET"])
+@jwt_required
+def get_sn_progress() -> Tuple[Dict[str, Any], int]:
+    """
+    협력사별 S/N 작업 진행률 조회 (Sprint 18)
+
+    Query Parameters:
+        company: (admin 전용) 특정 회사 필터
+        days: 완료 후 N일 이내 포함 (기본 1)
+
+    Headers:
+        Authorization: Bearer {token}
+
+    Response:
+        200: { "products": [...], "summary": { "total", "in_progress", "completed_recent" } }
+    """
+    worker = get_worker_by_id(get_current_worker_id())
+    if not worker:
+        return jsonify({'error': 'WORKER_NOT_FOUND', 'message': '작업자를 찾을 수 없습니다.'}), 404
+
+    # admin이면 company 파라미터 허용
+    company_override = request.args.get('company') if worker.is_admin else None
+    days = request.args.get('days', 1, type=int)
+
+    try:
+        result = get_partner_sn_progress(
+            worker_company=worker.company,
+            worker_role=worker.role,
+            is_admin=worker.is_admin,
+            include_completed_within_days=days,
+            company_override=company_override,
+        )
+        return jsonify(result), 200
+    except Exception as e:
+        logger.error(f"Progress query failed: {e}")
+        return jsonify({'error': 'INTERNAL_ERROR', 'message': '진행률 조회 실패'}), 500
 
 
 @product_bp.route("/<qr_doc_id>", methods=["GET"])
