@@ -2101,3 +2101,51 @@ Sprint 14 배포 후 현장 테스트에서 추가 버그 5건 발견.
 - [x] git commit & push (`e3d0c8e`)
 - [x] Railway 자동 배포 (GitHub push)
 - [x] flutter build web → Netlify 배포 (https://gaxis-ops.netlify.app)
+
+---
+
+## Sprint 17: 출퇴근 분류 체계 — work_site + product_line (2026-03-04) ✅
+
+### 목표
+1. 협력사 출퇴근 기록에 근무지(work_site: GST/HQ)와 제품군(product_line: SCR/CHI) 분류 추가
+2. CHI(칠러) 제조기술부 통합 대비 + ELEC 협력사 변동 대응
+3. 버전 `v1.1.0` → `v1.2.0` (MINOR 업 — 신규 기능)
+
+### BE 완료 내역
+- **`backend/migrations/017_add_attendance_classification.sql`** (신규)
+  - `hr.partner_attendance`에 `work_site VARCHAR(10) NOT NULL DEFAULT 'GST'` 추가
+  - `hr.partner_attendance`에 `product_line VARCHAR(10) NOT NULL DEFAULT 'SCR'` 추가
+  - CHECK constraint: `work_site IN ('GST', 'HQ')`, `product_line IN ('SCR', 'CHI')`
+  - 복합 인덱스: `idx_partner_att_site_line(work_site, product_line)`
+  - 기존 데이터는 DEFAULT 값(GST/SCR) 자동 적용
+- **`backend/app/routes/hr.py`** — 2개 엔드포인트 수정
+  - `attendance_check()`: work_site/product_line 파싱, IN 시 유효성 검사, OUT 시 마지막 IN에서 자동 복사
+  - `attendance_today()`: SELECT/Response에 work_site, product_line 추가
+- **`backend/version.py`** — `VERSION = "1.2.0"`, `BUILD_DATE = "2026-03-04"`
+
+### FE 완료 내역
+- **`frontend/lib/screens/home/home_screen.dart`**
+  - 미출근 상태에서 드롭다운 4옵션 표시 (GST공장-SCR, GST공장-CHI, 협력사본사-SCR, 협력사본사-CHI)
+  - 퇴근 중/완료 시 드롭다운 숨김
+  - 출근(IN) 시만 work_site/product_line API 전송
+  - 이전 출근 기록에서 기본값 복원
+- **`frontend/lib/utils/app_version.dart`** — `version = '1.2.0'`
+
+### TEST 완료 내역 (5개 신규)
+| TC | 테스트 | 설명 |
+|----|--------|------|
+| TC-ATT-09 | `test_check_in_with_work_site_product_line` | 출근 시 work_site+product_line DB 저장 |
+| TC-ATT-10 | `test_check_out_copies_last_in_classification` | 퇴근 시 마지막 IN 값 자동 복사 |
+| TC-ATT-11 | `test_invalid_work_site` | 잘못된 work_site → 400 |
+| TC-ATT-12 | `test_invalid_product_line` | 잘못된 product_line → 400 |
+| TC-ATT-13 | `test_today_includes_classification` | today 응답에 분류 필드 포함 |
+
+### 테스트 결과
+- `test_attendance.py`: **13 passed** (기존 8 + 신규 5)
+- FE 빌드: `flutter build web --release` — 에러 0건
+
+### 배포 (2026-03-04)
+- [x] DB 마이그레이션 실행 (Staging Railway PostgreSQL)
+- [x] git commit & push (`b379df4`, `3da2fd7`)
+- [x] Railway 자동 배포 (GitHub push)
+- [x] flutter build web → Netlify 배포 (https://gaxis-ops.netlify.app)
