@@ -2215,3 +2215,47 @@ Sprint 14 배포 후 현장 테스트에서 추가 버그 5건 발견.
 - [x] git commit & push (`f566e25`)
 - [x] Railway 자동 배포 (GitHub push)
 - [x] flutter build web → Netlify 배포 (https://gaxis-ops.netlify.app)
+
+---
+
+## Sprint 19-A: Refresh Token Rotation + Device ID (2026-03-05) ✅
+
+### 목표
+1. Refresh Token Rotation 구현 — 토큰 탈취 창 30일 → 2시간 축소
+2. Device ID 수집 (로깅 전용) — 다중 기기 식별 기반 마련 (Phase C에서 DB 저장 예정)
+
+### Phase A: Refresh Token Rotation (BE 코드 수정만)
+- **`backend/app/services/auth_service.py`** — `refresh_access_token()` 수정
+  - 기존: `access_token`만 반환
+  - 변경: `access_token` + 새 `refresh_token` 함께 반환
+  - `jti` (UUID v4) 필드 추가 → 같은 초에 생성해도 고유 토큰 보장
+- **FE 수정 불필요**: OPS FE `auth_service.dart:252`에 `if (response['refresh_token'] != null)` 이미 있음
+
+### Phase B: Device ID 수집
+- **`frontend/lib/services/auth_service.dart`** — `getDeviceId()` 메서드 추가
+  - SharedPreferences 기반 (웹+모바일 크로스플랫폼)
+  - `dart:math` Random.secure()로 UUID v4 생성 (외부 패키지 불필요)
+  - 최초 생성 후 영구 저장, 이후 재사용
+- **`frontend/lib/screens/auth/pin_login_screen.dart`** — PIN 로그인에 device_id 전송
+- **`backend/app/routes/auth.py`** — login, refresh, pin-login 3곳에 device_id 수신 + 로깅
+  - `data.get('device_id', 'unknown')` — 미전송 시 'unknown' 기본값 (에러 아님)
+
+### TEST 완료 내역 (6개 신규)
+| TC | 테스트 | 설명 |
+|----|--------|------|
+| TC-ROT-01 | `test_refresh_returns_both_tokens` | refresh 응답에 access_token + refresh_token 모두 포함 |
+| TC-ROT-02 | `test_new_refresh_token_works` | 새 refresh_token으로 재차 refresh 성공 |
+| TC-ROT-03 | `test_old_refresh_token_still_works` | 이전 refresh_token 아직 유효 (Phase C에서 차단 예정) |
+| TC-ROT-04 | `test_login_with_device_id` | login에 device_id 포함 → 정상 200 |
+| TC-ROT-05 | `test_login_without_device_id` | device_id 미전송 → 정상 처리 |
+| TC-ROT-06 | `test_refresh_with_device_id` | refresh에 device_id 포함 → rotation 정상 |
+
+### 테스트 결과
+- `test_auth_rotation.py`: **6 passed**
+- `test_refresh_token.py` 회귀: **28 passed** (회귀 0건)
+- FE 빌드: `flutter build web --release` — 에러 0건
+
+### 배포 (2026-03-05)
+- [x] git commit & push (`0f527c1`)
+- [x] Railway 자동 배포 (GitHub push)
+- [x] flutter build web → Netlify 배포 (https://gaxis-ops.netlify.app)

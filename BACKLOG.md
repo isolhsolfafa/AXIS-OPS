@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-03-04 (Sprint 18 완료 — 협력사별 S/N 진행률 뷰, v1.3.0)
+> 마지막 업데이트: 2026-03-05 (Sprint 19-A 완료 — Rotation + Device ID)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -181,3 +181,5 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 | 16.2 | 담당공정 설정 이동 (홈→개인설정) + BUG-16/17 배포 | 빌드 에러 0건, 배포 완료 |
 | 17 | 출퇴근 분류 체계 (work_site + product_line) v1.2.0 | 13 PASSED, 배포 완료 |
 | 18 | 협력사별 S/N 진행률 뷰 v1.3.0 | 10 PASSED, 배포 완료 |
+| 19-A | 보안: Refresh Token Rotation + Device ID | 6 PASSED + 28 회귀, 배포 완료 |
+| 19-B | 보안: DB 토큰 관리 + Geolocation | 대기 (선행: 19-A 완료) |
