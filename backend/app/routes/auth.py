@@ -117,11 +117,18 @@ def login() -> Tuple[Dict[str, Any], int]:
             'message': '이메일과 비밀번호가 필요합니다.'
         }), 400
 
+    # Sprint 19-A Phase B: device_id 수신 (로깅 전용, DB 저장은 Phase C)
+    device_id = data.get('device_id', 'unknown')
+
     # auth_service.login 호출
     response, status_code = auth_service.login(
         email=data['email'],
         password=data['password']
     )
+
+    if status_code == 200:
+        logger.info(f"Login device_id={device_id}, email={data['email']}")
+
     return jsonify(response), status_code
 
 
@@ -366,9 +373,16 @@ def refresh() -> Tuple[Dict[str, Any], int]:
             'message': 'refresh_token 필드가 필요합니다.'
         }), 400
 
+    # Sprint 19-A Phase B: device_id 로깅
+    device_id = data.get('device_id', 'unknown')
+
     response, status_code = auth_service.refresh_access_token(
         refresh_token=data['refresh_token']
     )
+
+    if status_code == 200:
+        logger.info(f"Token refresh device_id={device_id}")
+
     return jsonify(response), status_code
 
 
@@ -682,7 +696,9 @@ def pin_login() -> Tuple[Dict[str, Any], int]:
         email=worker_row['email']
     )
 
-    logger.info(f"PIN login success: worker_id={worker_id}")
+    # Sprint 19-A Phase B: device_id 로깅
+    device_id = data.get('device_id', 'unknown')
+    logger.info(f"PIN login success: worker_id={worker_id}, device_id={device_id}")
     return jsonify({
         'access_token': access_token,
         'refresh_token': refresh_token,

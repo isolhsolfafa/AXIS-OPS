@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'api_service.dart';
@@ -16,6 +17,7 @@ class AuthService {
   static const String _workerRoleKey = 'worker_role';
   static const String _workerDataKey = 'worker_data';
   static const String _pinRegisteredKey = 'pin_registered';
+  static const String _deviceIdKey = 'axis_device_id';
 
   /// SharedPreferences 키 — 마지막 방문 경로 복원용
   static const String _lastRouteKey = 'last_route';
@@ -32,6 +34,28 @@ class AuthService {
     _apiService.onRefreshFailed = callback;
   }
 
+  /// Sprint 19-A: 기기 고유 ID 반환 (최초 생성 후 SharedPreferences에 영구 저장)
+  Future<String> getDeviceId() async {
+    final prefs = await SharedPreferences.getInstance();
+    var id = prefs.getString(_deviceIdKey);
+    if (id == null || id.isEmpty) {
+      id = _generateUuid();
+      await prefs.setString(_deviceIdKey, id);
+    }
+    return id;
+  }
+
+  /// UUID v4 생성 (외부 패키지 없이 dart:math 사용)
+  static String _generateUuid() {
+    final rng = Random.secure();
+    final bytes = List<int>.generate(16, (_) => rng.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 1
+    final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-'
+        '${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
+  }
+
   /// 로그인
   ///
   /// [email]: 사용자 이메일
@@ -42,11 +66,13 @@ class AuthService {
   /// Response: {"access_token": str, "refresh_token": str, "worker": {...}}
   Future<Map<String, dynamic>> login(String email, String password) async {
     try {
+      final deviceId = await getDeviceId();
       final response = await _apiService.post(
         authLoginEndpoint,
         data: {
           'email': email,
           'password': password,
+          'device_id': deviceId,
         },
       );
 
@@ -241,9 +267,13 @@ class AuthService {
         return false;
       }
 
+      final deviceId = await getDeviceId();
       final response = await _apiService.post(
         authRefreshEndpoint,
-        data: {'refresh_token': storedRefreshToken},
+        data: {
+          'refresh_token': storedRefreshToken,
+          'device_id': deviceId,
+        },
       );
 
       if (response['access_token'] != null) {

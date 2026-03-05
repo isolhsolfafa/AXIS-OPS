@@ -7,6 +7,7 @@ Sprint 5: SMTP 실제 발송, Refresh Token, Admin freepass 정책
 import logging
 import smtplib
 import time
+import uuid
 from collections import defaultdict
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -157,6 +158,7 @@ class AuthService:
             'sub': str(worker_id),
             'email': email,
             'type': 'refresh',
+            'jti': str(uuid.uuid4()),  # Sprint 19-A: rotation 시 고유성 보장
             'iat': now,
             'exp': now + Config.JWT_REFRESH_TOKEN_EXPIRES,
         }
@@ -528,10 +530,17 @@ class AuthService:
             role=worker.role
         )
 
-        logger.info(f"Access token refreshed: worker_id={worker_id}")
+        # Sprint 19-A: Refresh Token Rotation — 새 refresh_token도 함께 발급
+        new_refresh_token = self.create_refresh_token(
+            worker_id=worker.id,
+            email=worker.email
+        )
+
+        logger.info(f"Token rotation: worker_id={worker_id}, new refresh_token issued")
 
         return {
             'access_token': new_access_token,
+            'refresh_token': new_refresh_token,
         }, 200
 
     def verify_email(self, code: str) -> Tuple[Dict[str, Any], int]:

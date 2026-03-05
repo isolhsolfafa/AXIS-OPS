@@ -79,16 +79,18 @@ class _PinLoginScreenState extends ConsumerState<PinLoginScreen> {
     try {
       final authNotifier = ref.read(authProvider.notifier);
       final apiService = ref.read(apiServiceProvider);
+      final authService = authNotifier.authService;
+      final deviceId = await authService.getDeviceId();
       final response = await apiService.post(
         '/auth/pin-login',
         data: {
           'worker_id': _workerId,
           'pin': _enteredPin,
+          'device_id': deviceId,
         },
       );
 
       // PIN 로그인 성공 → 토큰 저장 + auth 상태 갱신
-      final authService = authNotifier.authService;
       if (response['access_token'] != null) {
         await authService.saveToken(response['access_token']);
       }
