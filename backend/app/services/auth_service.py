@@ -2,8 +2,10 @@
 인증 서비스
 Sprint 1: 회원가입, 로그인, 이메일 인증
 Sprint 5: SMTP 실제 발송, Refresh Token, Admin freepass 정책
+Sprint 19-B: DB 기반 Refresh Token 관리 + 탈취 감지
 """
 
+import hashlib
 import logging
 import smtplib
 import time
@@ -28,6 +30,7 @@ from app.models.worker import (
     get_verification_code,
     mark_code_as_verified,
     update_password_hash,
+    get_db_connection,
 )
 
 
@@ -195,6 +198,141 @@ class AuthService:
         except jwt.InvalidTokenError as e:
             logger.warning(f"Invalid refresh token: {e}")
             return None
+
+    # ------------------------------------------------------------------
+    # Sprint 19-B: DB 기반 Refresh Token 관리
+    # ------------------------------------------------------------------
+
+    def _hash_token(self, token: str) -> str:
+        """SHA256 해시 (원본 토큰 저장 안 함)"""
+        return hashlib.sha256(token.encode()).hexdigest()
+
+    def _store_refresh_token(
+        self,
+        worker_id: int,
+        device_id: str,
+        token: str,
+        expires_at: datetime,
+    ) -> None:
+        """Refresh Token 발급 시 DB에 해시 저장 + 동일 (worker, device) 이전 토큰 revoke"""
+        token_hash = self._hash_token(token)
+        try:
+            conn = get_db_connection()
+            with conn:
+                with conn.cursor() as cur:
+                    # 같은 (worker_id, device_id) 이전 활성 토큰 → rotation 처리
+                    cur.execute("""
+                        UPDATE auth.refresh_tokens
+                        SET revoked = TRUE, revoked_reason = 'rotation'
+                        WHERE worker_id = %s AND device_id = %s AND revoked = FALSE
+                    """, (worker_id, device_id))
+                    # 새 토큰 저장
+                    cur.execute("""
+                        INSERT INTO auth.refresh_tokens
+                            (worker_id, device_id, token_hash, expires_at)
+                        VALUES (%s, %s, %s, %s)
+                    """, (worker_id, device_id, token_hash, expires_at))
+            conn.close()
+        except Exception as e:
+            logger.error(f"Failed to store refresh token: worker_id={worker_id}, error={e}")
+
+    def _verify_stored_refresh_token(self, token: str) -> Optional[Dict[str, Any]]:
+        """DB에서 Refresh Token 해시 검증 + 탈취 감지
+
+        Returns:
+            정상: {'worker_id': int, 'device_id': str}
+            탈취 감지(revoked 토큰 재사용): None + 해당 worker 전체 토큰 무효화
+            미등록 토큰(Phase A 이전 발급): None (경고만, 차단 안 함 — 마이그레이션 중)
+        """
+        token_hash = self._hash_token(token)
+        try:
+            conn = get_db_connection()
+            with conn.cursor() as cur:
+                # 해시로 토큰 조회
+                cur.execute("""
+                    SELECT id, worker_id, device_id, revoked, revoked_reason
+                    FROM auth.refresh_tokens
+                    WHERE token_hash = %s
+                """, (token_hash,))
+                row = cur.fetchone()
+
+            if row is None:
+                # DB에 없는 토큰 → Phase A 이전 발급된 토큰이거나 미등록
+                # Phase B 호환: 차단하지 않고 None 반환 (호출측에서 fallback)
+                conn.close()
+                logger.warning("Refresh token not found in DB (pre-migration token?)")
+                return None
+
+            if row['revoked']:
+                # 이미 revoked된 토큰 재사용 → 탈취 감지!
+                worker_id = row['worker_id']
+                logger.warning(
+                    f"SECURITY: Refresh token reuse detected! "
+                    f"worker_id={worker_id}, reason={row['revoked_reason']}"
+                )
+                # 해당 worker의 모든 활성 토큰 무효화
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute("""
+                            UPDATE auth.refresh_tokens
+                            SET revoked = TRUE, revoked_reason = 'theft_detected'
+                            WHERE worker_id = %s AND revoked = FALSE
+                        """, (worker_id,))
+                conn.close()
+                return {'theft_detected': True, 'worker_id': worker_id}
+
+            # 정상 토큰 → last_used_at 업데이트
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE auth.refresh_tokens
+                        SET last_used_at = NOW()
+                        WHERE id = %s
+                    """, (row['id'],))
+            conn.close()
+            return {'worker_id': row['worker_id'], 'device_id': row['device_id']}
+
+        except Exception as e:
+            logger.error(f"Failed to verify stored refresh token: {e}")
+            return None
+
+    def revoke_refresh_token(self, token: str, reason: str = 'logout') -> bool:
+        """특정 Refresh Token 무효화 (로그아웃 등)"""
+        token_hash = self._hash_token(token)
+        try:
+            conn = get_db_connection()
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE auth.refresh_tokens
+                        SET revoked = TRUE, revoked_reason = %s
+                        WHERE token_hash = %s AND revoked = FALSE
+                    """, (reason, token_hash))
+                    updated = cur.rowcount
+            conn.close()
+            return updated > 0
+        except Exception as e:
+            logger.error(f"Failed to revoke refresh token: {e}")
+            return False
+
+    def revoke_all_worker_tokens(self, worker_id: int, reason: str = 'admin') -> int:
+        """특정 worker의 모든 활성 Refresh Token 무효화"""
+        try:
+            conn = get_db_connection()
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE auth.refresh_tokens
+                        SET revoked = TRUE, revoked_reason = %s
+                        WHERE worker_id = %s AND revoked = FALSE
+                    """, (reason, worker_id))
+                    count = cur.rowcount
+            conn.close()
+            logger.info(f"Revoked {count} tokens for worker_id={worker_id}, reason={reason}")
+            return count
+        except Exception as e:
+            logger.error(f"Failed to revoke all tokens: worker_id={worker_id}, error={e}")
+            return 0
 
     # ------------------------------------------------------------------
     # 이메일 발송
@@ -399,7 +537,9 @@ class AuthService:
 
         return response, 201
 
-    def login(self, email: str, password: str) -> Tuple[Dict[str, Any], int]:
+    def login(
+        self, email: str, password: str, device_id: str = 'unknown'
+    ) -> Tuple[Dict[str, Any], int]:
         """
         로그인
 
@@ -409,6 +549,7 @@ class AuthService:
         Args:
             email: 이메일
             password: 비밀번호 (평문)
+            device_id: 기기 고유 ID (Sprint 19-B)
 
         Returns:
             (response dict with access_token + refresh_token, status code)
@@ -467,7 +608,19 @@ class AuthService:
             email=worker.email
         )
 
-        logger.info(f"Login success: worker_id={worker.id}, email={email}, role={worker.role}")
+        # Sprint 19-B: refresh token DB 저장
+        now = datetime.now(timezone.utc)
+        self._store_refresh_token(
+            worker_id=worker.id,
+            device_id=device_id,
+            token=refresh_token,
+            expires_at=now + Config.JWT_REFRESH_TOKEN_EXPIRES,
+        )
+
+        logger.info(
+            f"Login success: worker_id={worker.id}, email={email}, "
+            f"role={worker.role}, device_id={device_id}"
+        )
 
         return {
             'access_token': access_token,
@@ -487,17 +640,22 @@ class AuthService:
 
     def refresh_access_token(
         self,
-        refresh_token: str
+        refresh_token: str,
+        device_id: str = 'unknown',
     ) -> Tuple[Dict[str, Any], int]:
         """
         Refresh Token으로 새 Access Token 발급
 
+        Sprint 19-B: DB 검증 + 탈취 감지 추가
+
         Args:
             refresh_token: 리프레시 토큰 문자열
+            device_id: 기기 고유 ID
 
         Returns:
             (response dict with new access_token, status code)
         """
+        # JWT 서명 검증
         payload = self.verify_refresh_token(refresh_token)
 
         if payload is None:
@@ -505,6 +663,22 @@ class AuthService:
                 'error': 'INVALID_REFRESH_TOKEN',
                 'message': '유효하지 않거나 만료된 리프레시 토큰입니다.'
             }, 401
+
+        # Sprint 19-B: DB 기반 토큰 검증 + 탈취 감지
+        db_result = self._verify_stored_refresh_token(refresh_token)
+
+        if db_result and db_result.get('theft_detected'):
+            logger.warning(
+                f"SECURITY: Token theft detected during refresh! "
+                f"worker_id={db_result['worker_id']}"
+            )
+            return {
+                'error': 'TOKEN_THEFT_DETECTED',
+                'message': '보안 이상이 감지되었습니다. 다시 로그인해주세요.'
+            }, 401
+
+        # db_result가 None이면 DB에 미등록 토큰 (Phase A 이전 발급)
+        # → JWT 서명은 유효하므로 계속 진행 (하위 호환)
 
         worker_id = int(payload['sub'])
         email = payload['email']
@@ -536,7 +710,23 @@ class AuthService:
             email=worker.email
         )
 
-        logger.info(f"Token rotation: worker_id={worker_id}, new refresh_token issued")
+        # Sprint 19-B: 새 refresh token DB 저장
+        now = datetime.now(timezone.utc)
+        effective_device_id = (
+            db_result['device_id'] if db_result and 'device_id' in db_result
+            else device_id
+        )
+        self._store_refresh_token(
+            worker_id=worker.id,
+            device_id=effective_device_id,
+            token=new_refresh_token,
+            expires_at=now + Config.JWT_REFRESH_TOKEN_EXPIRES,
+        )
+
+        logger.info(
+            f"Token rotation: worker_id={worker_id}, "
+            f"device_id={effective_device_id}"
+        )
 
         return {
             'access_token': new_access_token,

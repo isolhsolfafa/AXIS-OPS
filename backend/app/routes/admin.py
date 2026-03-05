@@ -1332,6 +1332,12 @@ def get_settings() -> Tuple[Dict[str, Any], int]:
     result.setdefault('dinner_start', '17:00')
     result.setdefault('dinner_end', '18:00')
     result.setdefault('auto_pause_enabled', True)
+    # Sprint 19-D: 위치 보안 기본값
+    result.setdefault('geo_check_enabled', False)
+    result.setdefault('geo_strict_mode', False)
+    result.setdefault('geo_latitude', 35.1796)
+    result.setdefault('geo_longitude', 129.0756)
+    result.setdefault('geo_radius_meters', 200)
 
     return jsonify(result), 200
 
@@ -1374,6 +1380,12 @@ def update_settings() -> Tuple[Dict[str, Any], int]:
         'dinner_start',
         'dinner_end',
         'auto_pause_enabled',
+        # Sprint 19-D: 위치 보안 설정
+        'geo_check_enabled',
+        'geo_strict_mode',
+        'geo_latitude',
+        'geo_longitude',
+        'geo_radius_meters',
     }
 
     # Sprint 9: HH:MM 형식 검증이 필요한 시간 설정 키

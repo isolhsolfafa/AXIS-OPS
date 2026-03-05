@@ -24,6 +24,20 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
   bool _locationQrRequired = true; // Location QR 필수 여부 (기본: true)
   bool _isLoadingSettings = false;
 
+  // 위치 보안 설정 (Sprint 19-D)
+  bool _geolocationEnabled = false;
+  bool _geoStrictMode = false;
+  String _geoLat = '';
+  String _geoLng = '';
+  double _geoRadiusMeters = 500.0;
+
+  // 위치 반경 옵션 (미터 단위)
+  static const List<double> _radiusOptions = [100, 200, 300, 500, 1000, 2000];
+
+  // lat/lng TextField 컨트롤러
+  final TextEditingController _geoLatController = TextEditingController();
+  final TextEditingController _geoLngController = TextEditingController();
+
   // 근무시간 설정 상태
   bool _autoPauseEnabled = false;
   String _breakMorningStart = '10:00';
@@ -69,6 +83,13 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
     // 협력사 관리자 목록: 첫 번째 company로 기본 필터
     _selectedManagerCompany = _companies.first; // FNI
     _loadAll();
+  }
+
+  @override
+  void dispose() {
+    _geoLatController.dispose();
+    _geoLngController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadAll() async {
@@ -210,6 +231,19 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
           _breakAfternoonEnd = response['break_afternoon_end'] as String? ?? '15:10';
           _dinnerStart = response['dinner_start'] as String? ?? '18:00';
           _dinnerEnd = response['dinner_end'] as String? ?? '19:00';
+          // 위치 보안 설정 (Sprint 19-D)
+          _geolocationEnabled = response['geo_check_enabled'] as bool? ?? false;
+          _geoStrictMode = response['geo_strict_mode'] as bool? ?? false;
+          _geoLat = response['geo_latitude'] as String? ?? '';
+          _geoLng = response['geo_longitude'] as String? ?? '';
+          final rawRadius = response['geo_radius_meters'];
+          if (rawRadius != null) {
+            _geoRadiusMeters = (rawRadius is int)
+                ? rawRadius.toDouble()
+                : (rawRadius as num).toDouble();
+          }
+          _geoLatController.text = _geoLat;
+          _geoLngController.text = _geoLng;
           _isLoadingSettings = false;
         });
       }
@@ -228,7 +262,22 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
           if (key == 'phase_block_enabled') _phaseBlockEnabled = value;
           if (key == 'location_qr_required') _locationQrRequired = value;
           if (key == 'auto_pause_enabled') _autoPauseEnabled = value;
+          if (key == 'geo_check_enabled') _geolocationEnabled = value;
+          if (key == 'geo_strict_mode') _geoStrictMode = value;
         });
+        _showSnack('설정이 저장되었습니다.', isError: false);
+      }
+    } catch (e) {
+      if (mounted) _showSnack('설정 저장에 실패했습니다.', isError: true);
+    }
+  }
+
+  /// 문자열/숫자 설정값 업데이트 (PUT /admin/settings)
+  Future<void> _updateSettingValue(String key, dynamic value) async {
+    try {
+      final apiService = ref.read(apiServiceProvider);
+      await apiService.put('/admin/settings', data: {key: value});
+      if (mounted) {
         _showSnack('설정이 저장되었습니다.', isError: false);
       }
     } catch (e) {
@@ -835,6 +884,82 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
                       ),
               ),
 
+              const SizedBox(height: 24),
+
+              // ===== 섹션 5: 위치 보안 =====
+              _buildSectionHeader(
+                icon: Icons.location_on_outlined,
+                iconBg: GxColors.successBg,
+                iconColor: GxColors.success,
+                title: '위치 보안',
+                subtitle: '출근 시 GPS 위치 검증 설정',
+              ),
+              const SizedBox(height: 10),
+              Container(
+                decoration: GxGlass.cardSm(radius: GxRadius.lg),
+                child: _isLoadingSettings
+                    ? const Padding(
+                        padding: EdgeInsets.all(20),
+                        child: Center(child: CircularProgressIndicator(color: GxColors.accent, strokeWidth: 2)),
+                      )
+                    : Column(
+                        children: [
+                          // 위치 검증 활성화 토글
+                          _buildSettingToggle(
+                            title: 'GPS 위치 검증',
+                            subtitle: '출근 시 GPS 위치 확인 (비활성화 시 위치 무시)',
+                            value: _geolocationEnabled,
+                            onChanged: (v) => _updateSetting('geo_check_enabled', v),
+                            isFirst: true,
+                          ),
+                          // 위치 검증 활성화 시 추가 설정 표시
+                          if (_geolocationEnabled) ...[
+                            const Divider(height: 1, color: GxColors.mist),
+                            _buildSettingToggle(
+                              title: '엄격 모드',
+                              subtitle: 'ON: 위치 미전송 시 출근 거부 / OFF: 위치 없으면 경고만',
+                              value: _geoStrictMode,
+                              onChanged: (v) => _updateSetting('geo_strict_mode', v),
+                            ),
+                            const Divider(height: 1, color: GxColors.mist),
+                            // 기준 위도
+                            _buildTextFieldSetting(
+                              title: '기준 위도 (Latitude)',
+                              controller: _geoLatController,
+                              hintText: '예: 35.123456',
+                              onSaved: (v) {
+                                setState(() => _geoLat = v);
+                                _updateSettingValue('geo_latitude', v);
+                              },
+                            ),
+                            const Divider(height: 1, color: GxColors.mist),
+                            // 기준 경도
+                            _buildTextFieldSetting(
+                              title: '기준 경도 (Longitude)',
+                              controller: _geoLngController,
+                              hintText: '예: 128.654321',
+                              onSaved: (v) {
+                                setState(() => _geoLng = v);
+                                _updateSettingValue('geo_longitude', v);
+                              },
+                            ),
+                            const Divider(height: 1, color: GxColors.mist),
+                            // 허용 반경 드롭다운
+                            _buildDropdownSetting(
+                              title: '허용 반경',
+                              value: _geoRadiusMeters,
+                              options: _radiusOptions,
+                              labelBuilder: (v) => '${v.toInt()}m',
+                              onChanged: (v) {
+                                setState(() => _geoRadiusMeters = v);
+                                _updateSettingValue('geo_radius_meters', v.toInt());
+                              },
+                            ),
+                          ],
+                        ],
+                      ),
+              ),
+
               const SizedBox(height: 32),
             ],
           ),
@@ -1169,6 +1294,117 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
                 borderRadius: BorderRadius.circular(GxRadius.sm),
               ),
               child: const Icon(Icons.check, size: 16, color: GxColors.success),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 텍스트 필드 설정 행 (좌표 입력 등)
+  ///
+  /// 포커스를 잃거나 완료(done) 시 onSaved 호출
+  Widget _buildTextFieldSetting({
+    required String title,
+    required TextEditingController controller,
+    required String hintText,
+    required void Function(String) onSaved,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 2,
+            child: Text(
+              title,
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: GxColors.charcoal),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            flex: 3,
+            child: TextField(
+              controller: controller,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+              textInputAction: TextInputAction.done,
+              style: const TextStyle(fontSize: 13, color: GxColors.charcoal),
+              decoration: InputDecoration(
+                hintText: hintText,
+                hintStyle: const TextStyle(fontSize: 12, color: GxColors.silver),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(GxRadius.sm),
+                  borderSide: const BorderSide(color: GxColors.mist, width: 1.5),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(GxRadius.sm),
+                  borderSide: const BorderSide(color: GxColors.mist, width: 1.5),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(GxRadius.sm),
+                  borderSide: const BorderSide(color: GxColors.accent, width: 1.5),
+                ),
+                isDense: true,
+              ),
+              onSubmitted: (v) => onSaved(v.trim()),
+              onEditingComplete: () => onSaved(controller.text.trim()),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 드롭다운 설정 행 (반경 선택 등)
+  Widget _buildDropdownSetting({
+    required String title,
+    required double value,
+    required List<double> options,
+    required String Function(double) labelBuilder,
+    required void Function(double) onChanged,
+  }) {
+    // 현재 값이 옵션 목록에 없으면 가장 가까운 옵션으로 대체
+    final safeValue = options.contains(value) ? value : options.first;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 2,
+            child: Text(
+              title,
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: GxColors.charcoal),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            flex: 3,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              decoration: BoxDecoration(
+                color: GxColors.cloud,
+                borderRadius: BorderRadius.circular(GxRadius.sm),
+                border: Border.all(color: GxColors.mist, width: 1.5),
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<double>(
+                  value: safeValue,
+                  isExpanded: true,
+                  icon: const Icon(Icons.arrow_drop_down, color: GxColors.steel, size: 20),
+                  style: const TextStyle(fontSize: 13, color: GxColors.charcoal),
+                  items: options.map((opt) {
+                    return DropdownMenuItem<double>(
+                      value: opt,
+                      child: Text(labelBuilder(opt)),
+                    );
+                  }).toList(),
+                  onChanged: (v) {
+                    if (v != null) onChanged(v);
+                  },
+                ),
+              ),
             ),
           ),
         ],

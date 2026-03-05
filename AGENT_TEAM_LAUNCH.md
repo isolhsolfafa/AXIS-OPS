@@ -2226,128 +2226,1206 @@ FE 변경 없으므로 FE teammate 불필요.
 
 ---
 
-## 🔧 BUG-5 핫픽스 프롬프트 — QR 스캔 영역 정사각형 수정 + QR 인식 검증 (Sprint 13 완료 후 사용)
+## ✅ BUG-5 핫픽스 — QR 스캔 영역 정사각형 수정 (완료 2026-03-01)
+
+### 해결 완료
+- ✅ 카메라 위치: `left + width` 명시 방식 (5차 수정)
+- ✅ 스캔 영역: 순수 JS `<script>` 태그 config 주입 (9차 수정)
+- ✅ 스플래시 스크린: G-AXIS 로고 + flutter-first-frame fade-out
+- ✅ 웹 검증: Console 로그 `qrbox=205x205` 정사각형 확인
+
+### 실패한 방법 (6~8차)
+| 차수 | 방법 | 결과 |
+|------|------|------|
+| 6차 | `jsify({'qrbox': qrboxSize})` 정수 | ❌ 직사각형 |
+| 7차 | `newObject()` + `setProperty()` | ❌ 직사각형 (iPad/Android/iOS) |
+| 8차 | `JSON.parse()` + `allowInterop` 콜백 | ❌ 직사각형 |
+
+### 성공한 방법 (9차 — 순수 JavaScript 주입)
+```javascript
+// <script> 태그로 Dart interop 없이 순수 JS에서 config 생성
+window.__qrScanConfig = {
+  fps: 10,
+  qrbox: function(viewfinderWidth, viewfinderHeight) {
+    var size = Math.round(Math.min(viewfinderWidth, viewfinderHeight) * 0.7);
+    size = Math.max(120, Math.min(250, size));
+    return { width: size, height: size };
+  }
+};
+```
+Dart에서는 `js_util.getProperty(globalThis, '__qrScanConfig')`으로 읽기만 함.
+
+### 교훈
+**Dart-to-JS interop의 한계**: `jsify()`, `newObject()+setProperty()`, `JSON.parse()+allowInterop` 모두 html5-qrcode 내부에서 프로퍼티 접근 실패. 서드파티 JS 라이브러리에 config를 전달할 때는 **순수 JavaScript에서 객체를 생성**하고 Dart는 참조만 전달하는 것이 안전.
+
+### 남은 작업
+- [ ] iOS/Android 모바일 기기에서 정사각형 스캔 영역 최종 확인
+- [ ] QR 코드 'DOC_GBWS-6408' 인식 테스트
+- [ ] 인식 후 _onQrDetected → _handleQrCode 플로우 확인
+
+### 테스트 QR 코드
+- 내용: `DOC_GBWS-6408` (Worksheet QR, DOC_ 접두사)
+- 기대: QR 인식 → `[QrScannerWeb] ★ QR DETECTED: DOC_GBWS-6408` 콘솔 출력
+```
+
+---
+
+## 🚀 Sprint 14 프롬프트 — 작업자명 표시 + 휴게시간/작업시간 버그 수정 + QR 카메라 수정
 
 ```
-CLAUDE.md를 처음부터 끝까지 다시 읽고 BUG-5 핫픽스를 시작해줘.
-BACKLOG.md의 BUG-5 항목도 읽어.
+CLAUDE.md를 처음부터 끝까지 다시 읽고 Sprint 14를 시작해줘.
+BACKLOG.md, BACKLOG-ALARM.md도 읽어.
 
-⚠️ BUG-5 현재 상태 (7차 수정 — newObject 방식 적용 완료):
-- ✅ 카메라 위치: 해결됨 (DOM div가 Flutter Container와 정확히 일치)
-- ✅ 카메라 영상: 정상 작동 (후면 카메라 피드 표시됨)
-- ✅ QR 인식 콜백 로그 추가됨 — '[QrScannerWeb] ★ QR DETECTED: ...' 출력
-- ✅ config 객체: js_util.newObject() + setProperty()로 수동 생성 완료 (jsify 제거)
-- ❌ 방법 A 실패: `jsify({'qrbox': qrboxSize})` 정수 방식도 바코드 형태 유지됨
-- ❓ 빌드 + 실제 테스트 필요: newObject 방식으로 정사각형 되는지 검증
+## Sprint 14 목표
+5가지 작업:
+1. Task를 시작한 작업자 이름이 화면에 표시되도록 (협력사 Task Detail + GST 검사 대시보드)
+2. 🔴 휴게시간 자동 일시정지/재개 + 작업시간 계산 버그 수정 (핵심 기능 — 충분한 테스트 필수)
+3. 🔴 Location QR 필수 설정(on/off) 미작동 수정 — on일 때 location QR 미등록 시 작업 시작 차단
+4. QR 카메라 프레임 스크롤 분리 버그 수정
+5. QR 스캔 영역 직사각형 → 정사각형 수정
 
-## 핵심 문제: js_util.jsify()가 html5-qrcode 호환 JS 객체를 만들지 못함
-테스트 결과:
-1. ❌ `jsify({'qrbox': {'width': N, 'height': N}})` — 바코드 형태
-2. ❌ `jsify({'qrbox': qrboxSize})` (정수) — 여전히 바코드 형태
-3. ✅ (현재 적용) `newObject() + setProperty()` — 순수 JS 객체 직접 생성
-
-### 현재 코드 (7차 수정):
-```dart
-final qrboxObj = js_util.newObject();
-js_util.setProperty(qrboxObj, 'width', qrboxSize);
-js_util.setProperty(qrboxObj, 'height', qrboxSize);
-
-final config = js_util.newObject();
-js_util.setProperty(config, 'fps', 10);
-js_util.setProperty(config, 'qrbox', qrboxObj);
-```
-이 방식은 `jsify()`를 완전히 우회하여 html5-qrcode가 인식할 수 있는 순수 JS 객체를 생성.
-config 검증 로그도 추가됨: `config.fps`, `config.qrbox.width`, `config.qrbox.height` 값 출력.
-
-## 기술 스택
-- Flutter Web (PWA): Android Chrome 모바일 환경
-- html5-qrcode v2.3.8 (CDN: unpkg.com/html5-qrcode@2.3.8)
-- DOM 조작: dart:html + dart:js_util
-- 카메라 Container: height 300px, borderRadius 12px
-- Container 위치: SingleChildScrollView > Column 내부 (padding 20px)
-- position: fixed 오버레이 방식
-
-## 변경 대상 FE 파일 (1개)
-1. frontend/lib/services/qr_scanner_web.dart — qrbox 설정 수정 (1곳)
-
-qr_scan_screen.dart는 변경 불필요 (카메라 위치는 이미 해결됨).
-
-## 테스트 QR 코드 데이터
-테스트용 QR 코드 내용: `DOC_GBWS-6408`
-- 형식: Worksheet QR (DOC_ 접두사)
-- 기대 동작: QR 인식 → _onQrDetected → _handleQrCode('DOC_GBWS-6408') → taskNotifier.scanQrCode() 호출
-- 데스크탑에서 화면에 QR 이미지를 띄운 후 모바일 카메라로 스캔하여 테스트
+⚠️ 다중 작업자 알람 고도화(에스컬레이션 타겟 변경 등)는 이번 Sprint 범위 아님.
+BACKLOG-FLOWLOGIC.md 참고만 하고 수정하지 말 것. 추후 별도 Sprint에서 진행.
 
 ## 팀 구성
-2명의 teammate를 생성해줘. 모든 teammate는 Sonnet 모델 사용:
+3명의 teammate를 생성해줘. 모든 teammate는 Sonnet 모델 사용:
 
-1. **FE** (Frontend 담당) - 소유: frontend/**
-2. **TEST** (테스트 담당) - 소유: tests/**
+1. **BE** (Backend 담당) - 소유: backend/**
+2. **FE** (Frontend 담당) - 소유: frontend/**
+3. **TEST** (테스트 담당) - 소유: tests/**
 
-BE 변경 없으므로 BE teammate 불필요.
+---
 
-## FE 작업 순서
-⚠️ 아래 1~3번은 이미 적용 완료됨 — 코드 확인만 하고 4번부터 진행
+## BE 작업 (5개)
 
-1. ✅ (완료) config 객체를 newObject + setProperty로 수동 생성 (jsify 완전 제거)
-   ```dart
-   final qrboxObj = js_util.newObject();
-   js_util.setProperty(qrboxObj, 'width', qrboxSize);
-   js_util.setProperty(qrboxObj, 'height', qrboxSize);
-   final config = js_util.newObject();
-   js_util.setProperty(config, 'fps', 10);
-   js_util.setProperty(config, 'qrbox', qrboxObj);
+### BE-1: Task Detail API + GST API에 작업자 리스트 추가
+현재 `/api/app/tasks/<serial_number>` (work.py)와
+`/api/app/gst/products/<category>` (gst.py)가 각각 `worker_id`, `worker_name` 1명만 반환.
+task를 시작한 작업자 전원의 이름 + 상태를 반환하도록 수정.
+
+**work.py 변경:**
+task list 반환 후 work_start_log + work_completion_log 배치 조회하여 workers 배열 추가:
+```sql
+SELECT
+    wsl.task_id,
+    wsl.worker_id,
+    w.name AS worker_name,
+    wsl.started_at,
+    wcl.completed_at,
+    wcl.duration_minutes,
+    CASE WHEN wcl.id IS NOT NULL THEN 'completed' ELSE 'in_progress' END AS status
+FROM work_start_log wsl
+JOIN workers w ON wsl.worker_id = w.id
+LEFT JOIN work_completion_log wcl
+    ON wsl.task_id = wcl.task_id AND wsl.worker_id = wcl.worker_id
+WHERE wsl.task_id = ANY(%s)
+ORDER BY wsl.task_id, wsl.started_at ASC
+```
+
+⚠️ N+1 쿼리 금지. task_id 배열을 모아서 한 번에 조회 → task_id 기준 그룹핑.
+
+각 task에 추가되는 필드:
+```json
+"workers": [
+  {"worker_id": 10, "worker_name": "김철수", "started_at": "...", "completed_at": "...", "duration_minutes": 30, "status": "completed"},
+  {"worker_id": 11, "worker_name": "이영희", "started_at": "...", "completed_at": null, "duration_minutes": null, "status": "in_progress"}
+]
+```
+
+work_start_log에 기록 없는 레거시 task는 fallback:
+```python
+if not workers_list and task_worker_id:
+    workers_list = [{'worker_id': task_worker_id, 'worker_name': task_worker_name,
+                     'started_at': task_started_at, 'completed_at': task_completed_at,
+                     'duration_minutes': task_duration, 'status': task_status_str}]
+```
+
+**gst.py 변경:** 동일 패턴 적용.
+기존 `LEFT JOIN workers w ON w.id = t.worker_id`는 유지 (하위 호환 worker_name 필드).
+추가로 work_start_log 배치 조회하여 workers 배열 추가.
+
+### BE-2: 🔴 휴게시간 자동 일시정지 전체 점검 + 자동 재개 구현
+파일: `backend/app/services/scheduler_service.py`
+
+**현재 버그 (BUG-7)** — 🚨 휴게시간 알람 자체가 도착하지 않는 현상 보고됨:
+
+**진단 필수 (코드 수정 전 먼저 확인):**
+1. `check_break_time_job()` 실행 여부: 로깅 강화하여 매 분 실행 확인
+   ```python
+   logger.info(f"check_break_time_job: current_time={current_time}, auto_pause_enabled={auto_pause_enabled}")
    ```
-2. ✅ (완료) QR 인식 콜백에 로그 추가됨
-3. ✅ (완료) config 검증 로그 추가됨 (fps, qrbox.width, qrbox.height 값 출력)
-4. `flutter build web --release` 실행하여 빌드 확인
-5. 진단 로그로 스캔 영역 검증:
-   - `[QrScannerWeb] config.fps = 10` 출력되는지
-   - `[QrScannerWeb] config.qrbox.width = N` (N은 120~250) 출력되는지
-   - 스캔 영역이 정사각형 (흰색 브라켓 4개가 정사각형 꼭짓점)인지 확인
-6. 만약 newObject 방식도 안되면 → html5-qrcode의 `qrbox` 콜백 함수 방식 시도:
-   ```dart
-   // qrbox를 함수로 전달 — html5-qrcode가 viewfinder 크기를 인자로 줌
-   final qrboxFn = js_util.allowInterop((int viewfinderWidth, int viewfinderHeight) {
-     final size = (viewfinderHeight * 0.65).clamp(120, 250).toInt();
-     final result = js_util.newObject();
-     js_util.setProperty(result, 'width', size);
-     js_util.setProperty(result, 'height', size);
-     return result;
-   });
-   js_util.setProperty(config, 'qrbox', qrboxFn);
-   ```
-7. QR 인식 테스트: DOC_GBWS-6408 QR을 카메라에 비춰서 콘솔에 '★ QR DETECTED' 출력 확인
+2. `admin_settings` 테이블에 휴게시간 값 존재 여부:
+   - migration 008이 Railway DB에 적용됐는지 확인
+   - `get_setting('lunch_start', None)` 반환값이 `"11:20"`(str)인지 `None`인지
+3. `IntervalTrigger(minutes=1)` 타이밍 이슈:
+   - 매 60초 간격이지만 정각(:00초)에 맞춰지지 않음
+   - 예: 스케줄러가 10:00:45에 시작하면 → 10:01:45, 10:02:45... → "10:00" 윈도우를 놓칠 수 있음
+   - **수정**: `CronTrigger(second=0)` (매 분 정각) 또는 비교 로직을 범위로 변경
+4. `force_pause_all_active_tasks()`: 다중 작업자 task에서 `t.worker_id`(첫 번째만) 기반이라 나머지 작업자에게 알림 안 감
 
-## TEST 작업 (tests/frontend/test_qr_scanner_web_test.dart)
-Dart 단위 테스트 작성 (dart:html mock 사용):
-1. TC-QR-01: ensureScannerDiv() 좌표가 정확히 반영되는지 (left, top, width, height)
-2. TC-QR-02: ensureScannerDiv() containerLeft=null이면 fallback 사이즈 적용
-3. TC-QR-03: updateScannerDivPosition()이 스타일 업데이트하는지
-4. TC-QR-04: removeScannerDiv()가 div + CSS + resizeListener 제거하는지
-5. TC-QR-05: qrbox 크기 계산 검증 — height=300이면 qrbox=195, height=100이면 qrbox=120(clamp)
-6. TC-QR-06: qrbox 크기가 250 초과하지 않는지 (height=500이면 qrbox=250, not 325)
-7. TC-QR-07: 카메라 fallback 순서 검증 (environment → user → cameraId)
-8. TC-QR-08: stopQrScanner() 후 _scanner=null + div 제거 확인
-9. TC-QR-09: QR 코드 인식 콜백 테스트 — 'DOC_GBWS-6408' 문자열이 onResult로 전달되는지
-10. TC-QR-10: window.onResize 리스너 등록/해제 확인
+**수정 ①: IntervalTrigger → CronTrigger 변경** (타이밍 안정화):
+```python
+# 변경 전
+_scheduler.add_job(func=check_break_time_job, trigger=IntervalTrigger(minutes=1), ...)
+# 변경 후
+_scheduler.add_job(func=check_break_time_job, trigger=CronTrigger(second=0), ...)
+```
+
+**수정 ②: 로깅 강화** — 모든 경로에 디버그 로그:
+```python
+def check_break_time_job():
+    logger.info(f"[BREAK_CHECK] Running at {current_time}")
+    for period in BREAK_PERIODS:
+        start_time = get_setting(period['start_key'], None)
+        end_time = get_setting(period['end_key'], None)
+        logger.info(f"[BREAK_CHECK] {period['pause_type']}: start={start_time}, end={end_time}, current={current_time}")
+```
+
+**수정 ③: 자동 재개 (auto-resume) 구현**:
+`send_break_end_notifications()` (644~705행)가 휴게시간 종료 시 **알림만 발송**하고
+`resume_pause()`와 `set_paused(False)`를 호출하지 않음.
+→ 작업이 영구적으로 일시정지 상태에 빠짐.
+→ `work_pause_log.resumed_at`이 NULL로 남아 `pause_duration_minutes`도 계산 안 됨.
+
+**수정 내용**:
+`send_break_end_notifications()` 함수에 자동 재개 로직 추가:
+```python
+def send_break_end_notifications(pause_type: str, message: str) -> None:
+    from app.models.work_pause_log import resume_pause
+    from app.models.task_detail import set_paused
+    # ...기존 쿼리로 resumed_at IS NULL인 pause_log 조회...
+
+    for row in rows:
+        # 1. work_pause_log 재개 처리
+        pause_log_id = row['pause_log_id']  # ← 쿼리에 wpl.id 추가 필요
+        now_kst = datetime.now(Config.KST)
+        updated_pause = resume_pause(pause_log_id, now_kst)
+
+        # 2. pause_duration 계산 → total_pause_minutes 업데이트
+        if updated_pause:
+            pause_duration = updated_pause.pause_duration_minutes or 0
+            # app_task_details.total_pause_minutes 갱신
+            task_detail_id = row['task_detail_id']  # ← 쿼리에 wpl.task_detail_id 추가
+            _update_total_pause(task_detail_id, pause_duration)
+
+        # 3. app_task_details.is_paused = FALSE
+        set_paused(row['task_detail_id'], is_paused=False)
+
+        # 4. 알림 발송 (기존 코드)
+```
+
+⚠️ 쿼리 수정 필요:
+```sql
+SELECT wpl.id AS pause_log_id,
+       wpl.task_detail_id,
+       wpl.worker_id,
+       t.serial_number,
+       t.qr_doc_id,
+       t.task_name,
+       t.total_pause_minutes
+FROM work_pause_log wpl
+JOIN app_task_details t ON wpl.task_detail_id = t.id
+WHERE wpl.pause_type = %s
+  AND wpl.resumed_at IS NULL
+```
+
+`_update_total_pause()` 헬퍼:
+```python
+def _update_total_pause(task_detail_id: int, additional_pause: int) -> None:
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE app_task_details
+        SET total_pause_minutes = COALESCE(total_pause_minutes, 0) + %s,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = %s
+    """, (additional_pause, task_detail_id))
+    conn.commit()
+    conn.close()
+```
+
+### BE-3: 🔴 작업시간(duration) 계산에서 휴게시간 자동 제외
+파일: `backend/app/services/task_service.py`
+
+**현재 버그 (BUG-8)**:
+`_record_completion_log()` (541~601행)에서 개인 작업시간 계산:
+```python
+personal_duration = int((completed_at - row['started_at']).total_seconds() / 60)
+```
+→ 휴게시간(점심, 오전/오후/저녁 휴게)이 포함된 채로 duration 기록됨.
+→ pause 기록이 없어도 (auto_pause가 작동하지 않았어도) 설정된 휴게시간은 제외해야 함.
+
+**수정 내용**:
+`_record_completion_log()`에서 duration 계산 시 admin_settings의 휴게시간 구간을 조회하고,
+작업 시간(started_at ~ completed_at) 구간과 겹치는 휴게시간을 자동 차감:
+
+```python
+def _calculate_working_minutes(started_at: datetime, completed_at: datetime) -> int:
+    """
+    started_at ~ completed_at 사이의 순수 작업시간(분) 계산.
+    admin_settings에 설정된 휴게시간 구간을 자동 차감.
+    """
+    from app.models.admin_settings import get_setting
+
+    total_minutes = int((completed_at - started_at).total_seconds() / 60)
+
+    # 휴게시간 구간 조회
+    break_periods = [
+        ('break_morning_start', 'break_morning_end'),
+        ('lunch_start', 'lunch_end'),
+        ('break_afternoon_start', 'break_afternoon_end'),
+        ('dinner_start', 'dinner_end'),
+    ]
+
+    work_date = started_at.date()
+    overlap_minutes = 0
+
+    for start_key, end_key in break_periods:
+        bs = get_setting(start_key, None)  # "HH:MM" string
+        be = get_setting(end_key, None)
+        if not bs or not be:
+            continue
+
+        # HH:MM → 해당일 KST datetime
+        bh, bm = map(int, bs.split(':'))
+        eh, em = map(int, be.split(':'))
+        break_start = started_at.replace(hour=bh, minute=bm, second=0, microsecond=0)
+        break_end = started_at.replace(hour=eh, minute=em, second=0, microsecond=0)
+
+        # 작업 구간이 여러 날에 걸칠 수 있으므로 날짜별 반복
+        # (대부분 당일이므로 단순화: started_at 날짜 기준 + 필요시 다음날)
+        for day_offset in range(0, max(1, (completed_at.date() - started_at.date()).days + 1)):
+            day_delta = timedelta(days=day_offset)
+            day_break_start = break_start + day_delta
+            day_break_end = break_end + day_delta
+
+            # 겹치는 구간 계산
+            overlap_start = max(started_at, day_break_start)
+            overlap_end = min(completed_at, day_break_end)
+
+            if overlap_start < overlap_end:
+                overlap_minutes += int((overlap_end - overlap_start).total_seconds() / 60)
+
+    return max(0, total_minutes - overlap_minutes)
+```
+
+**적용 위치**:
+1. `_record_completion_log()`: `personal_duration = _calculate_working_minutes(started_at, completed_at)`
+2. `_finalize_task_multi_worker()`: 이미 `total_pause_minutes` 차감하고 있으므로,
+   개별 작업자 duration에서 휴게시간이 미리 제외되면 이중 차감 방지 필요.
+   → **원칙**: `_record_completion_log()`에서 휴게시간 제외된 duration 기록,
+   `_finalize_task_multi_worker()`에서는 수동 pause만 차감 (auto_pause 기록은 별도 구분).
+
+⚠️ 이중 차감 방지 로직:
+- `work_pause_log.pause_type`이 'break_morning', 'lunch', 'break_afternoon', 'dinner'인 건은
+  `_calculate_working_minutes()`에서 이미 제외되므로 `total_pause_minutes`에서 다시 빼면 안 됨.
+- `_finalize_task_multi_worker()`에서 `total_pause_minutes` 조회 시:
+  ```sql
+  SELECT COALESCE(SUM(pause_duration_minutes), 0) AS manual_pause
+  FROM work_pause_log
+  WHERE task_detail_id = %s
+    AND pause_type NOT IN ('break_morning', 'lunch', 'break_afternoon', 'dinner')
+    AND resumed_at IS NOT NULL
+  ```
+  또는 `total_pause_minutes` 컬럼 대신 수동 pause만 집계하도록 변경.
+
+### BE-4: Force-close에서 pause 시간 차감
+파일: `backend/app/routes/admin.py` (1006~1059행)
+
+**현재 버그 (BUG-9)**:
+force-close 시 `duration_minutes` 계산:
+```python
+duration_minutes = existing_duration + pending_duration
+```
+→ `total_pause_minutes`를 차감하지 않음.
+→ 휴게시간 포함된 채 duration 저장됨.
+
+**수정 내용**:
+```python
+# total_pause_minutes 조회
+cur.execute(
+    "SELECT COALESCE(total_pause_minutes, 0) AS total_pause FROM app_task_details WHERE id = %s",
+    (task_id,)
+)
+total_pause = int(cur.fetchone()['total_pause'])
+
+# 휴게시간 자동 제외 (BE-3의 _calculate_working_minutes 사용)
+# + 수동 pause 차감
+duration_minutes = max(0, existing_duration + pending_duration - total_pause)
+```
+
+⚠️ BE-3에서 `_calculate_working_minutes()`로 개인 duration에 이미 휴게시간 제외한 경우,
+force-close의 pending_duration도 동일하게 적용해야 함:
+```python
+for pw in pending_workers:
+    if pw['started_at']:
+        pending_duration += _calculate_working_minutes(pw['started_at'], completed_at)
+```
+
+### BE-5: 🔴 Location QR 필수 설정 미작동 수정 (BUG-11)
+파일: `backend/app/services/task_service.py`, `backend/app/routes/work.py`
+
+**현재 버그**:
+admin_settings의 `location_qr_required=true`여도 qr-doc-id 스캔만으로 Task 작업이 바로 진행됨.
+Location QR을 먼저 스캔해야 한다는 알림/차단이 없음.
+
+**근본 원인**: Location QR 체크가 3곳에서 모두 누락.
+1. `process_validator.py`에서 경고만 생성 (warnings 배열), **차단하지 않음**
+2. `task_service.py`의 `start_work()`에 location_qr 체크 **완전 없음**
+3. FE에서 Worksheet QR 스캔 후 Task 목록으로 **바로 이동** (location QR 검증 없음)
+
+**수정 ①: `task_service.py` — `start_work()` 에 차단 로직 추가:**
+```python
+def start_work(self, worker_id, task_detail_id):
+    # ...기존 task 조회, 적용여부 확인 후에 추가...
+
+    from app.models.admin_settings import get_setting
+
+    location_qr_required = get_setting('location_qr_required', True)
+    if location_qr_required:
+        # product_info에서 location_qr_id 확인
+        from app.models.product_info import get_product_by_qr_doc_id
+        product = get_product_by_qr_doc_id(task.qr_doc_id)
+        if product and not product.location_qr_id:
+            return {
+                'error': 'LOCATION_QR_REQUIRED',
+                'message': 'Location QR이 등록되지 않았습니다. Location QR을 먼저 스캔해주세요.'
+            }, 400
+```
+
+**수정 ②: `process_validator.py` — 경고 → 차단으로 변경:**
+현재 `warnings.append()` → `can_proceed = False`로 변경 (또는 별도 에러 반환).
+단, 기존에 경고만 사용하던 곳이 있으면 영향도 확인 필요.
+
+---
+
+## FE 작업 (5개)
+
+### FE-0: 🔴 Location QR 필수 설정 미작동 — FE 차단 로직 (BUG-11)
+파일: `frontend/lib/screens/qr/qr_scan_screen.dart`, `frontend/lib/screens/task/task_detail_screen.dart`
+
+**수정 ①: QR 스캔 후 Location QR 체크** (`qr_scan_screen.dart`):
+Worksheet QR 스캔 성공 후 Task 목록으로 이동하기 전:
+```dart
+if (success) {
+    final product = ref.read(taskProvider).currentProduct;
+    if (product != null) {
+        // location_qr_required 설정 확인
+        final settings = await apiService.get('/admin/settings');
+        final locationQrRequired = settings['location_qr_required'] as bool? ?? true;
+
+        if (locationQrRequired && (product.locationQrId == null || product.locationQrId!.isEmpty)) {
+            // Location QR 미등록 → 알림 + Location QR 스캔 모드로 전환
+            _showLocationQrRequiredDialog();
+            return;
+        }
+
+        Navigator.pushReplacementNamed(context, '/task-management', ...);
+    }
+}
+```
+
+**수정 ②: Task 시작 버튼 차단** (`task_detail_screen.dart`):
+작업 시작 버튼 클릭 시 BE에서 `LOCATION_QR_REQUIRED` 에러 응답 처리:
+```dart
+final result = await taskNotifier.startWork(taskId: task.id, workerId: workerId);
+if (result['error'] == 'LOCATION_QR_REQUIRED') {
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(result['message']), backgroundColor: Colors.orange)
+    );
+    return;
+}
+```
+
+⚠️ admin settings 조회는 캐싱 권장 (매번 API 호출 부담 감소). Provider에 settings 값 저장.
+
+### FE-1: 협력사 Task Detail — 작업자 정보 섹션 추가
+파일: `frontend/lib/screens/task/task_detail_screen.dart`
+
+현재 화면 구조:
+① Task 상태 → ② Task 정보 → ③ 제품 정보 → ④ 작업 시간 → ⑤ 액션 버튼
+
+**③과 ④ 사이에 "작업자 정보" 섹션 추가:**
+
+단일 작업자:
+```
+┌─────────────────────────────┐
+│ 작업자 정보                  │
+│ 작업자    김철수              │
+└─────────────────────────────┘
+```
+
+다중 작업자:
+```
+┌─────────────────────────────┐
+│ 작업자 정보 (3명)            │
+│ ✅ 김철수   10:00~10:30  30분│
+│ ✅ 이영희   10:05~10:35  30분│
+│ 🔄 박민수   10:10~         │
+└─────────────────────────────┘
+```
+
+BE API `workers` 배열 사용. 빈 배열이면 기존 `workerName` fallback.
+기존 패턴: `_buildSectionTitle()`, `_buildInfoRow()`, `GxGlass.cardSm(radius: GxRadius.lg)`
+
+### FE-2: GST 대시보드 카드 — 작업자명 표시 보완
+파일: `frontend/lib/screens/gst/gst_products_screen.dart`
+
+현재 `worker_name` 표시 코드 있음 (person_outline 아이콘 + 이름).
+workers 배열 기반으로 변경:
+```dart
+final workers = product['workers'] as List?;
+final workerDisplay = (workers != null && workers.isNotEmpty)
+    ? (workers.length > 1
+        ? '${workers.first['worker_name']} 외 ${workers.length - 1}명'
+        : workers.first['worker_name'] as String?)
+    : product['worker_name'] as String?;
+```
+
+### FE-3: QR 카메라 프레임 스크롤 분리 버그 수정 (BUG-10)
+파일: `frontend/lib/services/qr_scanner_web.dart`, `frontend/lib/screens/qr/qr_scan_screen.dart`
+
+**현재 버그**:
+카메라 촬영 프레임(video)과 검은 부모 사각 프레임(scannerDiv)이 따로 움직임.
+화면을 스크롤하면 촬영되는 Frame은 위치가 고정(`position: fixed`)되어 있고,
+Flutter의 Container(검은 배경)는 스크롤에 따라 이동.
+
+**원인**: `qr_scan_screen.dart`에서 카메라 Container가 `SingleChildScrollView` 안에 있음 (293행).
+스크롤하면 Flutter Container는 올라가지만, DOM의 scannerDiv(`position: fixed`)는 그대로.
+
+**해결 방법 (2가지 중 택1):**
+
+방법 A — 스크롤 이벤트 리스너 추가 (권장):
+`qr_scan_screen.dart`에 ScrollController 추가, 스크롤 시 scannerDiv 위치 업데이트:
+```dart
+final _scrollController = ScrollController();
+
+@override
+void initState() {
+  super.initState();
+  _scrollController.addListener(_onScroll);
+}
+
+void _onScroll() {
+  // Container의 현재 화면상 좌표를 재계산
+  final RenderBox? box = _cameraContainerKey.currentContext?.findRenderObject() as RenderBox?;
+  if (box != null) {
+    final position = box.localToGlobal(Offset.zero);
+    QrScannerWeb.updateScannerDivPosition(
+      left: position.dx,
+      top: position.dy,
+      width: box.size.width,
+      height: box.size.height,
+    );
+  }
+}
+```
+
+⚠️ `updateScannerDivPosition()`은 이미 `qr_scanner_web.dart` 178~190행에 구현되어 있음.
+호출만 연결하면 됨.
+
+방법 B — 스크롤 비활성화:
+QR 스캔 화면에서 `SingleChildScrollView`를 `NeverScrollableScrollPhysics()`로 변경하거나,
+카메라 영역을 스크롤 밖으로 분리 (Scaffold body를 Column으로 재구성).
+
+**권장: 방법 A** (기존 `updateScannerDivPosition` 활용, 구조 변경 최소화)
+
+### FE-4: QR 스캔 영역 정사각형 수정 (BUG-5 10차 수정)
+파일: `frontend/lib/services/qr_scanner_web.dart`, `frontend/lib/screens/qr/qr_scan_screen.dart`
+
+**현재 상태**:
+- 9차 수정: 순수 JS `<script>` 태그로 config 생성
+- Console: `qrbox=205x205` 출력됨 (JS 콜백은 정사각형 반환)
+- QR 인식 성공 (DOC_GBWS-6408 스캔 완료 ✅)
+- ❌ 스캔 영역 흰색 브라켓이 여전히 가로로 긴 직사각형
+
+**원인**: html5-qrcode의 viewfinder가 컨테이너 비율(약 390×293 = 가로형)을 따르므로,
+qrbox 콜백이 정사각형을 반환해도 viewfinder 안에서 가로에 맞춰 렌더링됨.
+
+**해결 방법 (순서대로 시도):**
+
+방법 A — qrbox를 순수 JS 정수로 전달 (콜백 대신):
+```javascript
+window.__qrScanConfig = {
+  fps: 10,
+  qrbox: 200  // 정수 하나 = 자동 정사각형, 콜백보다 단순
+};
+```
+이전 6차(Dart jsify 정수)는 실패했지만, 순수 JS 정수는 다를 수 있음.
+⚠️ 콘솔에 `typeof qrbox`로 타입 확인 로그 필수.
+
+방법 B — 카메라 컨테이너를 정사각형으로 변경:
+`qr_scan_screen.dart`의 카메라 Container 수정:
+```dart
+// 현재: height: 300 (width는 Column stretch로 화면폭)
+// 변경: width = height = min(screenWidth - 40, 300)
+Container(
+  width: cameraSize,   // 정사각형
+  height: cameraSize,  // 정사각형
+  ...
+)
+```
+viewfinder가 정사각형 컨테이너에 맞춰지면 qrbox도 자동으로 정사각형.
+`qr_scanner_web.dart`의 `ensureScannerDiv()`도 정사각형 containerWidth=containerHeight 전달.
+
+방법 C — A+B 동시 적용 (가장 확실):
+정사각형 컨테이너 + 정수 qrbox.
+
+**디버깅 로그**:
+config 생성 후 start() 호출 전:
+```javascript
+console.log("[QrScannerWeb] config.qrbox type=" + typeof window.__qrScanConfig.qrbox);
+console.log("[QrScannerWeb] config.qrbox value=" + JSON.stringify(window.__qrScanConfig.qrbox));
+```
+
+start() 성공 후 html5-qrcode가 생성한 DOM 확인:
+```dart
+final scanRegion = html.document.getElementById('qr-shaded-region');
+debugPrint('[QrScannerWeb] scan-region size: ${scanRegion?.style.width} x ${scanRegion?.style.height}');
+```
+
+---
+
+## TEST 작업 (tests/backend/) — 충분한 테스트 필수
+
+⚠️ 공정 진행 task와 시간계산은 핵심 기능. 모든 시나리오를 빠짐없이 테스트할 것.
+협력사(MECH/ELEC/TMS) + GST(PI/QI/SI) 모두 동일 조건.
+
+### test_task_workers_api.py (신규)
+1. TC-WA-01: task detail API에 workers 배열 포함 확인
+2. TC-WA-02: workers에 worker_name, started_at, completed_at, duration_minutes, status 포함
+3. TC-WA-03: 3명 시작 2명 완료 → completed 2건 + in_progress 1건
+4. TC-WA-04: work_start_log 없는 레거시 task → fallback 1건
+5. TC-WA-05: GST API에도 workers 배열 포함
+6. TC-WA-06: 단일 작업자 → workers 1건
+7. TC-WA-07: 아무도 시작 안 한 task → workers 빈 배열
+
+### test_break_time_auto.py (신규) — 🔴 핵심 테스트
+8. TC-BT-01: check_break_time_job() 호출 시 로그 출력 확인 (실행 자체 검증)
+9. TC-BT-02: admin_settings에 break time 설정값이 있으면 → 매칭 시 force_pause 호출
+10. TC-BT-03: admin_settings에 break time 설정값이 없으면(None) → skip (에러 없이)
+11. TC-BT-04: 휴게시간 시작 → 진행 중 task 자동 일시정지 확인
+   - is_paused = TRUE, work_pause_log 생성 확인
+   - BREAK_TIME_PAUSE 알림 발송 확인
+12. TC-BT-05: 휴게시간 종료 → 자동 재개 확인
+   - is_paused = FALSE, work_pause_log.resumed_at 기록 확인
+   - pause_duration_minutes 계산 정확성
+   - total_pause_minutes 업데이트 확인
+   - BREAK_TIME_END 알림 발송 확인
+13. TC-BT-06: 4개 휴게 구간 각각 테스트 (break_morning, lunch, break_afternoon, dinner)
+14. TC-BT-07: auto_pause_enabled = FALSE → 일시정지 안 됨
+15. TC-BT-08: 이미 일시정지된 task → 중복 pause 생성 안 됨
+16. TC-BT-09: 휴게시간 중 task 완료 → 정상 처리 (pause 자동 해제 후 완료)
+17. TC-BT-10: 다중 작업자 task에서 모든 작업자에게 BREAK_TIME_PAUSE 알림 전달 확인
+
+### test_working_hours_calculation.py (신규) — 🔴 핵심 테스트
+14. TC-WH-01: 점심시간(12:00~13:00) 포함 작업 → duration에서 60분 자동 차감
+    - 예: 10:00 시작 ~ 14:00 완료 → 순수 duration = 180분 (240 - 60)
+15. TC-WH-02: 점심시간 겹침 없는 작업 → 차감 0분
+    - 예: 14:00 시작 ~ 16:00 완료 → duration = 120분
+16. TC-WH-03: 부분 겹침 → 겹치는 만큼만 차감
+    - 예: 12:30 시작 ~ 14:00 완료 → lunch 겹침 30분 → duration = 60분
+17. TC-WH-04: 여러 휴게 구간 겹침 → 모두 차감
+    - 예: 10:00 시작 ~ 18:00 완료 → break_morning + lunch + break_afternoon 각각 차감
+18. TC-WH-05: 자정 넘어가는 작업 → 다음날 휴게시간도 차감
+19. TC-WH-06: 다중 작업자 duration 합산 시 각 작업자별 휴게시간 차감 확인
+20. TC-WH-07: 수동 pause + 자동 휴게 제외 → 이중 차감 안 됨
+    - work_pause_log에 lunch 타입 pause 있으면서 _calculate_working_minutes에서도 제외 → 하나만 적용
+21. TC-WH-08: force-close 시 duration에 휴게시간 제외 + pause 차감 확인
+22. TC-WH-09: 설정된 휴게시간이 없는 경우 → 차감 0분 (정상 작동)
+23. TC-WH-10: GST task (PI/QI/SI)도 동일한 휴게시간 제외 로직 적용 확인
+
+### test_location_qr_required.py (신규) — 🔴
+28. TC-LQ-01: location_qr_required=true + location_qr_id=NULL → start_work 400 에러 (LOCATION_QR_REQUIRED)
+29. TC-LQ-02: location_qr_required=true + location_qr_id 존재 → start_work 정상 진행
+30. TC-LQ-03: location_qr_required=false + location_qr_id=NULL → start_work 정상 진행
+31. TC-LQ-04: location_qr_required 설정 미존재(기본값=true) + location_qr_id=NULL → 400 에러
+32. TC-LQ-05: process_validator에서 location QR 미등록 시 can_proceed=false 확인
+
+### test_qr_scanner_logic.py (기존 + 추가)
+33. TC-QR-11: qrbox 정수 config → 정사각형 계산
+34. TC-QR-12: 정사각형 컨테이너(300×300) → viewfinder 비율 1:1
+35. TC-QR-13: 스크롤 시 scannerDiv position 업데이트 확인
+
+---
+
+## 변경 파일
+
+| 파일 | 변경 |
+|------|------|
+| `backend/app/routes/work.py` | task list에 workers 배열 추가 (배치 조회) |
+| `backend/app/routes/gst.py` | GST products에 workers 배열 추가 |
+| `backend/app/services/scheduler_service.py` | send_break_end_notifications()에 auto-resume 추가 |
+| `backend/app/services/task_service.py` | _calculate_working_minutes() 신규 + _record_completion_log 수정 + _finalize 이중차감 방지 |
+| `backend/app/routes/admin.py` | force-close duration에 pause/휴게시간 차감 |
+| `backend/app/services/process_validator.py` | location QR 미등록 시 can_proceed=false |
+| `frontend/lib/screens/task/task_detail_screen.dart` | 작업자 정보 섹션 신규 추가 |
+| `frontend/lib/screens/gst/gst_products_screen.dart` | workers 기반 표시 + "외 N명" |
+| `frontend/lib/services/qr_scanner_web.dart` | qrbox 10차 수정 (정수 or 컨테이너 정사각형) |
+| `frontend/lib/screens/qr/qr_scan_screen.dart` | ScrollController + onScroll → updateScannerDivPosition 연결 + (방법 B 시) 컨테이너 정사각형 |
+| `tests/backend/test_task_workers_api.py` | 작업자 API 테스트 (신규) |
+| `tests/backend/test_break_time_auto.py` | 휴게시간 자동 일시정지/재개 테스트 (신규) |
+| `tests/backend/test_working_hours_calculation.py` | 작업시간 계산 테스트 (신규) |
+| `tests/backend/test_location_qr_required.py` | Location QR 필수 체크 테스트 (신규) |
+| `tests/backend/test_qr_scanner_logic.py` | QR 테스트 추가 |
+
+---
 
 ## 검증 기준
-- [ ] 스캔 영역이 정사각형 (흰색 브라켓 4개가 정사각형 형태)
-- [ ] QR 코드 'DOC_GBWS-6408'을 카메라로 비추면 인식됨
-- [ ] 인식 후 _onQrDetected → _handleQrCode 정상 호출
-- [ ] 바코드도 인식 가능 (html5-qrcode 기본 멀티포맷)
-- [ ] 카메라 시작/중지 정상
-- [ ] 모바일 Chrome + 데스크탑 Chrome 모두 동작
-- [ ] 콘솔에 '[QrScannerWeb] ★ QR DETECTED: DOC_GBWS-6408' 출력
+- [ ] Task Detail API: workers 배열에 작업자별 name/started_at/completed_at/status
+- [ ] GST Products API: workers 배열 포함
+- [ ] 단일 작업자 task: 기존과 동일 (하위 호환)
+- [ ] FE Task Detail: 작업자 정보 섹션에 이름 표시 (다중이면 시간/상태 포함)
+- [ ] FE GST 카드: 작업자명 표시 (다중이면 "외 N명")
+- [ ] 🔴 휴게시간 시작 → 자동 일시정지 (is_paused=TRUE, pause_log 생성)
+- [ ] 🔴 휴게시간 종료 → 자동 재개 (is_paused=FALSE, resumed_at 기록, pause_duration 계산)
+- [ ] 🔴 작업시간에서 설정된 휴게시간 자동 차감 (pause 유무와 무관)
+- [ ] 🔴 이중 차감 안 됨 (auto_pause + _calculate_working_minutes 동시 적용 방지)
+- [ ] 🔴 force-close 시 duration에서 pause + 휴게시간 차감
+- [ ] 🔴 다중 작업자: 각 작업자 개인 duration에서 각각 휴게시간 차감
+- [ ] 🔴 Location QR 필수=true + 미등록 → Task 시작 차단 (BE 400 에러)
+- [ ] 🔴 Location QR 필수=true + 등록됨 → Task 정상 시작
+- [ ] 🔴 Location QR 필수=false + 미등록 → Task 정상 시작
+- [ ] FE QR 스캔 후 location QR 미등록 알림 표시
+- [ ] QR 스크롤 시 카메라 프레임과 컨테이너 동기화
+- [ ] QR 스캔 영역: 정사각형 브라켓 — iPad/Android/iOS 3기기 확인
+- [ ] QR 인식: DOC_GBWS-6408 스캔 성공 유지
+- [ ] Console: qrbox 로그 정상
+- [ ] 테스트 전체 PASSED (35건 이상)
+- [ ] flutter build web --release 에러 0건
+- [ ] 기존 테스트 회귀 0건
 
 ## 규칙
-- html5-qrcode 내부 DOM 요소(video, canvas, img, 자식 div)는 CSS/JS로 절대 수정하지 않음
-- overflow: hidden 외에 container div에 추가 CSS 최소화
-- _forceContainerFit() 같은 자식 요소 강제 스타일 함수 절대 만들지 않음
-- qr_scan_screen.dart의 카메라 위치 계산 로직(localToGlobal) 변경하지 않음 (이미 해결됨)
 - ⚠️ DB 시간: get_db_connection()의 `options="-c timezone=Asia/Seoul"` 절대 삭제 금지
 - .env 파일 절대 커밋 금지
+- N+1 쿼리 금지 — task_id 배치 조회(ANY 사용)
+- html5-qrcode 내부 DOM(video, canvas, 자식 div)은 CSS/JS로 수정 금지
+- _forceContainerFit() 같은 자식 요소 강제 스타일 함수 만들지 않음
+- qr_scan_screen.dart 카메라 위치 계산(localToGlobal)은 변경 금지 (이미 해결)
+- 알람 에스컬레이션 타겟 변경 로직은 수정 금지 (이번 Sprint 범위 아님)
+- 완료 시 PROGRESS.md, BACKLOG.md에 기록 (상세히 — progress 기록은 매우 중요)
+```
+
+---
+
+## 🚀 Sprint 15 프롬프트 — 다중 작업자 시작/종료 + MH 계산 확정
+
+```
+CLAUDE.md를 처음부터 끝까지 다시 읽고 Sprint 15를 시작해줘.
+BACKLOG.md, AXIS-VIEW-QUERY-SPEC.md도 읽어.
+
+## Sprint 15 목표
+4가지 핵심 작업:
+1. 🔴 다중 작업자 시작/종료 FE 차단 해제 (BUG-12) — 작업자2가 이미 진행 중인 task에 참여/완료 가능하도록
+2. 🔴 Location QR 차단 재수정 (BUG-11 미해결) — QR 스캔 직후 팝업 + start_work 에러 핸들링 수정
+3. 🔴 Working Hour 계산 검증 — 휴게시간/식사시간 차감 로직 실데이터 테스트
+4. MH(공수) 계산 방식 B 확정 반영 — duration_minutes = 개인별 SUM (현재 로직 유지, 검증 강화)
+
+⚠️ 위 명시된 기능 외 신규 기능 추가 금지.
+⚠️ BACKLOG-FLOWLOGIC.md 참고만 하고 수정하지 말 것.
+
+## 팀 구성
+3명의 teammate를 생성해줘. 모든 teammate는 Sonnet 모델 사용:
+
+1. **BE** (Backend 담당) - 소유: backend/**
+2. **FE** (Frontend 담당) - 소유: frontend/**
+3. **TEST** (테스트 담당) - 소유: tests/**
+
+---
+
+## BE 작업 (2개)
+
+### BE-1: 🔴 Task Detail API에 "현재 작업자의 참여 상태" 추가
+파일: `backend/app/routes/work.py`
+
+**현재 문제 (BUG-12)**:
+SN1의 UTIL_LINE1을 작업자1이 시작하면, 작업자2는 같은 task에서 시작/종료 버튼을 누를 수 없음.
+
+**근본 원인**:
+- BE는 이미 다중 작업자 지원 (`_worker_has_started_task()`는 같은 작업자 중복만 체크)
+- 하지만 FE `task_item.dart`에서 `startedAt != null`이면 `'in_progress'` 반환
+- FE `task_detail_screen.dart`에서 `in_progress` 상태면 시작 버튼 미표시
+- 즉 작업자1이 시작한 후, 작업자2가 해당 task를 보면 시작 버튼이 없음
+
+**수정**: Task 목록/상세 API 응답에 **요청한 작업자의 참여 상태**를 추가.
+
+`/api/app/tasks/<serial_number>` 응답의 각 task에:
+```json
+{
+  "my_status": "not_started",  // 이 작업자가 이 task에 대해 아직 미시작
+  // 또는
+  "my_status": "in_progress",  // 이 작업자가 시작했지만 미완료
+  // 또는
+  "my_status": "completed"     // 이 작업자가 완료함
+}
+```
+
+**로직**:
+```python
+# 현재 요청자의 worker_id 획득 (JWT에서)
+worker_id = get_jwt_identity()
+
+# work_start_log + work_completion_log에서 이 작업자의 상태 배치 조회
+cur.execute("""
+    SELECT wsl.task_id,
+           CASE
+               WHEN wcl.id IS NOT NULL THEN 'completed'
+               WHEN wsl.id IS NOT NULL THEN 'in_progress'
+               ELSE 'not_started'
+           END AS my_status
+    FROM app_task_details t
+    LEFT JOIN work_start_log wsl
+        ON wsl.task_id = t.id AND wsl.worker_id = %s
+    LEFT JOIN work_completion_log wcl
+        ON wcl.task_id = t.id AND wcl.worker_id = %s
+    WHERE t.serial_number = %s
+""", (worker_id, worker_id, serial_number))
+```
+
+⚠️ N+1 쿼리 금지. task_id 배치 조회(ANY) 후 dict 매핑.
+⚠️ GST API(`gst.py`)에도 동일 패턴 적용.
+
+### BE-3: 🔴 Location QR 차단 디버깅 + 에러 응답 확인 (BUG-11 미해결)
+파일: `backend/app/services/task_service.py`, `backend/app/routes/work.py`
+
+**현재 상태**: Sprint 14 핫픽스에서 BE `start_work()` 98행에 차단 로직 추가했으나,
+사용자 테스트 결과 **아직도 location QR 팝업/차단이 안 됨**.
+
+**진단 포인트 (코드 수정 전 반드시 확인):**
+
+① admin_settings DB에 `location_qr_required` 값이 실제로 `true`인지 확인:
+```python
+# 로그 추가
+logger.info(f"[BUG-11 DEBUG] location_qr_required raw = {_get_admin_setting('location_qr_required', False)}")
+logger.info(f"[BUG-11 DEBUG] task.location_qr_verified = {task.location_qr_verified}")
+```
+⚠️ `get_setting()` 반환값 타입 확인: JSONB `'false'` → Python bool `False`? 아니면 str `"false"`?
+
+② migration 010에서 초기값이 `'false'`로 입력됨 (68행):
+```sql
+('location_qr_required', 'false', ...)
+```
+→ admin 설정에서 `true`로 변경하지 않았으면 당연히 체크 안 됨.
+→ 사용자가 admin에서 `true`로 설정했는데도 안 되는지 확인.
+
+③ admin.py 1324행: defaults에서는 `True` 반환 — 불일치:
+```python
+result.setdefault('location_qr_required', True)  # GET /api/admin/settings defaults
+```
+→ GET 응답은 `true`를 보여주지만 실제 DB에는 `'false'`가 저장되어 있을 수 있음.
+→ **admin settings PUT에서 값이 제대로 저장되는지 확인**.
+
+④ `task.location_qr_verified`가 뭘 보는지:
+```python
+# task_service.py 99행
+if location_qr_required and not task.location_qr_verified:
+```
+→ `location_qr_verified`는 `app_task_details` 컬럼 (기본값 FALSE).
+→ 이 값은 언제 TRUE로 바뀌는가? → Location QR 스캔 성공 시 `update_location_qr()` 호출되면 product_info.location_qr_id만 업데이트하고, **app_task_details.location_qr_verified는 업데이트 안 함**.
+→ 🚨 **이게 두 번째 원인일 수 있음**: product에 location_qr_id가 등록되어도 task의 location_qr_verified는 계속 FALSE.
+
+**수정 방안**:
+task_service.py 99행 조건을 `location_qr_verified` 대신 product의 `location_qr_id` 직접 확인으로 변경:
+```python
+# BUG-11 수정: product_info.location_qr_id 직접 확인
+location_qr_required = _get_admin_setting('location_qr_required', False)
+if location_qr_required:
+    from app.models.product_info import get_product_by_qr_doc_id
+    product = get_product_by_qr_doc_id(task.qr_doc_id)
+    if product and not product.location_qr_id:
+        return {
+            'error': 'LOCATION_QR_REQUIRED',
+            'message': 'Location QR이 등록되지 않았습니다. QR 스캔 화면에서 Location QR을 먼저 스캔해주세요.'
+        }, 400
+```
+
+⚠️ 디버그 로그를 충분히 추가하여 Railway 로그에서 확인 가능하도록.
+
+### BE-4: Working Hour 계산 검증 로그 강화
+파일: `backend/app/services/task_service.py`
+
+Sprint 14 핫픽스에서 `_calculate_working_minutes()` + `_calculate_break_overlap()` 구현됨.
+**실제 운영 환경에서 정상 동작하는지 검증용 로그 추가.**
+
+```python
+def _calculate_working_minutes(started_at, completed_at):
+    # 기존 로직 유지 + 로그 강화
+    logger.info(
+        f"[WORKING_HOURS] started={started_at}, completed={completed_at}, "
+        f"raw_minutes={raw_minutes}, break_overlap={total_break_overlap}, "
+        f"net_working_minutes={max(0, raw_minutes - total_break_overlap)}"
+    )
+```
+
+각 break period 별로도:
+```python
+for start_key, end_key in _BREAK_PERIOD_KEYS:
+    # ...
+    logger.info(f"[WORKING_HOURS] break={start_key}: {break_start_str}~{break_end_str}, overlap={overlap}m")
+```
+
+⚠️ 계산 로직 자체는 수정 금지. 로그만 추가.
+
+### BE-2: MH 계산 방식 확인 및 검증 로그 강화
+파일: `backend/app/services/task_service.py`
+
+**확정 사항** (AXIS-VIEW-QUERY-SPEC.md 참조):
+- `duration_minutes` = 개인별 SUM(방식 B) = **공수 MH (메인 지표)**
+- `elapsed_minutes` = CT (첫시작~마지막완료) = **작업 소요시간**
+- `라인 효율(%)` = duration / (elapsed × worker_count) × 100 = **대시보드 계산 필드**
+
+현재 `_finalize_task_multi_worker()` 코드가 이미 방식 B로 동작 중 (SUM(work_completion_log.duration_minutes) - manual_pause).
+
+**수정**: 로그 강화만 수행 (계산 로직 변경 없음):
+```python
+logger.info(
+    f"_finalize_task_multi_worker: task_id={task_detail_id}, "
+    f"MH(duration)={duration_minutes}m, CT(elapsed)={elapsed_minutes}m, "
+    f"workers={worker_count}, "
+    f"line_efficiency={round(duration_minutes * 100 / max(1, elapsed_minutes * worker_count))}%"
+)
+```
+
+⚠️ _calculate_working_minutes()의 break 차감 로직은 Sprint 14 핫픽스에서 구현 완료. 수정 금지.
+⚠️ _finalize_task_multi_worker()의 manual_pause만 차감 로직도 완료. 수정 금지.
+
+---
+
+## FE 작업 (2개)
+
+### FE-1: 🔴 다중 작업자 — "작업 참여" 버튼 추가 (BUG-12)
+파일: `frontend/lib/models/task_item.dart`, `frontend/lib/screens/task/task_detail_screen.dart`
+
+**현재 문제**:
+`task_item.dart` 174~178행:
+```dart
+String get status {
+    if (completedAt != null) return 'completed';
+    if (startedAt != null) return 'in_progress';
+    return 'pending';
+}
+```
+→ 작업자1이 시작하면 `startedAt != null` → 전체가 `'in_progress'`.
+→ 작업자2도 이 task를 보면 시작 버튼이 안 나옴 (320~327행).
+
+**수정 ①: task_item.dart에 `myStatus` 필드 추가:**
+```dart
+class TaskItem {
+  // ...기존 필드...
+  final String? myStatus; // 'not_started', 'in_progress', 'completed' (BE에서 전달)
+
+  // fromJson에 추가
+  myStatus: json['my_status'] as String?,
+
+  // status getter 수정
+  String get status {
+    if (completedAt != null) return 'completed';
+    if (startedAt != null) return 'in_progress';
+    return 'pending';
+  }
+
+  // 새 getter: 이 작업자 기준 상태
+  String get myWorkStatus => myStatus ?? status;
+}
+```
+
+**수정 ②: task_detail_screen.dart 액션 버튼 로직 수정:**
+```dart
+// 기존 (320~327행)
+else if (task.status == 'pending')
+  _buildStartButton(task.id, workerId)
+else if (task.status == 'in_progress' && task.isPaused)
+  _buildResumeRow(task.id)
+else if (task.status == 'in_progress' && !task.isPaused)
+  _buildInProgressRow(task.id, workerId)
+
+// 변경
+else if (task.status == 'pending')
+  _buildStartButton(task.id, workerId)
+else if (task.status == 'in_progress' && task.myWorkStatus == 'not_started')
+  _buildJoinButton(task.id, workerId)  // ← 신규: "작업 참여" 버튼
+else if (task.status == 'in_progress' && task.isPaused)
+  _buildResumeRow(task.id)
+else if (task.status == 'in_progress' && !task.isPaused)
+  _buildInProgressRow(task.id, workerId)
+else if (task.status == 'in_progress' && task.myWorkStatus == 'completed')
+  _buildMyCompletedBadge()  // ← 신규: "내 작업 완료" 배지
+```
+
+**신규 위젯 _buildJoinButton():**
+```dart
+Widget _buildJoinButton(int taskId, int workerId) {
+  return Container(
+    height: 48,
+    decoration: BoxDecoration(
+      gradient: GxGradients.accentButton,
+      borderRadius: BorderRadius.circular(GxRadius.sm),
+    ),
+    child: Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _handleStartTask(taskId, workerId), // 기존 start_work API 호출
+        borderRadius: BorderRadius.circular(GxRadius.sm),
+        child: Center(child: Row(mainAxisAlignment: MainAxisAlignment.center, children: const [
+          Icon(Icons.group_add, size: 20, color: Colors.white),
+          SizedBox(width: 8),
+          Text('작업 참여', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.white)),
+        ])),
+      ),
+    ),
+  );
+}
+```
+
+⚠️ _handleStartTask()는 기존 start_work API 호출. BE가 이미 다중 작업자 지원하므로 변경 없음.
+⚠️ "작업 참여" 클릭 → BE `/api/app/work/start` → work_start_log에 작업자2 기록 → 성공 시 화면 갱신.
+
+**신규 위젯 _buildMyCompletedBadge():**
+```dart
+Widget _buildMyCompletedBadge() {
+  return Container(
+    height: 48,
+    decoration: BoxDecoration(
+      color: GxColors.successBg,
+      borderRadius: BorderRadius.circular(GxRadius.sm),
+      border: Border.all(color: GxColors.success, width: 1),
+    ),
+    child: Center(child: Row(mainAxisAlignment: MainAxisAlignment.center, children: const [
+      Icon(Icons.check_circle, size: 20, color: GxColors.success),
+      SizedBox(width: 8),
+      Text('내 작업 완료', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: GxColors.success)),
+    ])),
+  );
+}
+```
+
+### FE-2: 🔴 Location QR 차단 — QR 스캔 직후 팝업 + 에러 핸들링 수정 (BUG-11)
+파일: `frontend/lib/screens/qr/qr_scan_screen.dart`, `frontend/lib/screens/task/task_detail_screen.dart`,
+      `frontend/lib/providers/task_provider.dart`
+
+**현재 문제 2가지:**
+
+**문제 A: QR 스캔 후 → task 목록 이동 시 차단 없음**
+`qr_scan_screen.dart` 186~196행에서 Worksheet QR 스캔 성공 → 바로 task-management 이동.
+location_qr_required 체크 없음.
+
+**수정**: 스캔 성공 후 task-management 이동 전에 location QR 체크:
+```dart
+if (tasksSuccess) {
+  // BUG-11: Location QR 체크
+  final settings = await ref.read(taskProvider.notifier).getAdminSettings();
+  final locationQrRequired = settings?['location_qr_required'] == true;
+
+  if (locationQrRequired && (product.locationQrId == null || product.locationQrId!.isEmpty)) {
+    // Location QR 미등록 → 팝업 + Location QR 스캔 모드 전환
+    if (mounted) {
+      setState(() {
+        _scanType = 'location'; // Location QR 스캔 모드로 전환
+        _isProcessing = false;
+      });
+      _showLocationQrRequiredPopup();
+    }
+    return;
+  }
+
+  // Location QR OK → Task 목록으로 이동
+  if (mounted) {
+    Navigator.pushReplacementNamed(context, '/task-management', ...);
+  }
+}
+```
+
+**_showLocationQrRequiredPopup() 신규:**
+```dart
+void _showLocationQrRequiredPopup() {
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) => AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: Row(children: [
+        Icon(Icons.location_on, color: Colors.orange),
+        SizedBox(width: 8),
+        Text('Location QR 필요'),
+      ]),
+      content: Text('이 제품은 Location QR 인증이 필요합니다.\nLocation QR을 먼저 스캔해주세요.'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: Text('확인'),
+        ),
+      ],
+    ),
+  );
+}
+```
+
+⚠️ admin settings 조회: 기존 `getAdminSettings()` 메서드가 있으면 사용, 없으면 신규 추가 (GET /admin/settings).
+⚠️ 이미 location QR 스캔 타입 전환 UI가 있음 (_scanType = 'location'). 다이얼로그 닫으면 자연스럽게 Location QR 스캔 가능.
+
+**문제 B: start_work 에러에서 LOCATION_QR_REQUIRED 문자열 못 찾음**
+`task_detail_screen.dart` 496행: `errorMessage.contains('LOCATION_QR_REQUIRED')` 체크.
+그런데 `task_provider.dart` 211행에서 `e.toString()`으로 저장 — Exception 객체의 toString이라 원본 에러 코드가 포함 안 될 수 있음.
+
+**수정**: task_provider.dart에서 API 에러 응답 body를 파싱하여 저장:
+```dart
+} catch (e) {
+  String errorMsg = e.toString();
+  // DioException이면 response body에서 error 코드 추출
+  if (e is DioException && e.response?.data is Map) {
+    final data = e.response!.data as Map;
+    errorMsg = data['error']?.toString() ?? data['message']?.toString() ?? errorMsg;
+  }
+  state = state.copyWith(
+    isLoading: false,
+    errorMessage: errorMsg,
+  );
+  return false;
+}
+```
+
+⚠️ Dio 사용 시 DioException, http 패키지 사용 시 해당 Exception 타입 확인.
+⚠️ apiService에서 이미 에러를 파싱하고 있을 수 있으니 확인 후 중복 방지.
+
+### FE-3: Task 목록에서 다중 작업자 상태 표시 보완
+파일: `frontend/lib/screens/task/task_management_screen.dart`
+
+task_management_screen.dart의 task 리스트 아이템에서:
+- 내가 시작한 task: 기존 "진행 중" 표시
+- 남이 시작했지만 내가 미참여: "진행 중 (미참여)" 또는 구분 색상
+- 내가 완료했지만 task 미종료: "내 작업 완료"
+
+```dart
+// 기존 status switch 로직 (228~260행) 수정
+String statusText;
+Color statusColor;
+
+if (task.isPaused) {
+  statusText = '일시정지';
+  statusColor = GxColors.warning;
+} else {
+  switch (task.myWorkStatus) { // ← status 대신 myWorkStatus 사용
+    case 'completed':
+      statusText = task.status == 'completed' ? '완료' : '내 작업 완료';
+      statusColor = GxColors.success;
+    case 'in_progress':
+      statusText = '진행 중';
+      statusColor = GxColors.accent;
+    case 'not_started':
+      if (task.status == 'in_progress') {
+        statusText = '참여 가능';
+        statusColor = GxColors.info;
+      } else {
+        statusText = '대기';
+        statusColor = GxColors.slate;
+      }
+    default:
+      statusText = '대기';
+      statusColor = GxColors.slate;
+  }
+}
+```
+
+---
+
+## TEST 작업 (tests/backend/)
+
+### test_multi_worker_join.py (신규) — 🔴 핵심 테스트
+1. TC-MW-01: 작업자1이 task 시작 → 작업자2가 같은 task 시작 → 성공 (work_start_log 2건)
+2. TC-MW-02: 작업자1이 task 시작 → 작업자1이 다시 시작 → 400 TASK_ALREADY_STARTED
+3. TC-MW-03: task detail API 응답에 my_status='not_started' (미참여 작업자)
+4. TC-MW-04: task detail API 응답에 my_status='in_progress' (참여 작업자)
+5. TC-MW-05: task detail API 응답에 my_status='completed' (완료 작업자)
+6. TC-MW-06: 작업자1 완료 + 작업자2 미완료 → task 미종료 (all_workers_completed=false)
+7. TC-MW-07: 작업자1,2 모두 완료 → task 종료 + _finalize_task_multi_worker 실행
+8. TC-MW-08: 3명 시작, 2명 완료, 1명 미완료 → task 미종료
+9. TC-MW-09: GST API에도 my_status 포함 확인
+10. TC-MW-10: 레거시 task (work_start_log 없음) → my_status=null fallback
+
+### test_location_qr_recheck.py (신규) — 🔴 BUG-11 재검증
+11. TC-LQ-R01: admin_settings `location_qr_required=true` + product `location_qr_id=NULL` → start_work 400 반환
+12. TC-LQ-R02: admin_settings `location_qr_required=true` + product `location_qr_id='LOC_BAY1'` → start_work 정상
+13. TC-LQ-R03: admin_settings `location_qr_required=false` + product `location_qr_id=NULL` → start_work 정상
+14. TC-LQ-R04: `get_setting('location_qr_required')` 반환 타입 확인 — bool True/False인지, str "true"/"false"인지
+15. TC-LQ-R05: admin settings PUT으로 `location_qr_required=true` 설정 → GET으로 확인 → start_work 차단 확인 (E2E)
+16. TC-LQ-R06: Location QR 스캔 후 `update_location_qr()` → product.location_qr_id 업데이트 확인 → start_work 통과
+
+### test_working_hours_recheck.py (신규) — 🔴 Working Hour 재검증
+17. TC-WH-R01: 9:00~12:00 작업 + break_morning(10:00~10:20) → net=160분 (180-20)
+18. TC-WH-R02: 9:00~18:00 작업 + 4개 break(morning 20m + lunch 60m + afternoon 20m + dinner 60m) → net=320분 (540-160-수동pause)
+19. TC-WH-R03: 14:00~16:00 작업 + break_afternoon(15:00~15:20) → net=100분 (120-20)
+20. TC-WH-R04: 18:30~20:00 작업 (모든 break 시간 외) → net=90분 (차감 0)
+21. TC-WH-R05: admin_settings에 break 시간이 NULL인 경우 → 차감 없이 정상 작동
+22. TC-WH-R06: 다중 작업자 2명 동시 작업(9~12) → 각각 break 차감 → finalize SUM 확인
+23. TC-WH-R07: force-close 시 _calculate_working_minutes 적용 확인
+
+### test_mh_calculation_method_b.py (신규) — MH 계산 검증
+11. TC-MH-01: 2명 동시 시작/동시 완료(3h) → duration=2×(3h-break) = 방식B MH 확인
+12. TC-MH-02: 2명 시작 시간 다름(1: 9~11, 2: 9~12) → CT=3h, MH=1h40m+2h40m=4h20m
+13. TC-MH-03: 1명 작업 → duration=elapsed(CT), MH=CT (방식A=방식B)
+14. TC-MH-04: _finalize_task_multi_worker 결과에서 라인효율 계산 확인
+    - efficiency = duration_minutes / (elapsed_minutes × worker_count) × 100
+15. TC-MH-05: break 4개 구간 모두 포함된 장시간 작업(9~18) → 정확한 차감
+
+---
+
+## 변경 파일
+
+| 파일 | 변경 |
+|------|------|
+| `backend/app/routes/work.py` | my_status 필드 추가 (배치 조회) |
+| `backend/app/routes/gst.py` | my_status 필드 추가 (배치 조회) |
+| `backend/app/services/task_service.py` | BUG-11 location_qr 조건 수정(product.location_qr_id 직접 확인) + _finalize 로그 강화 + working hours 로그 강화 |
+| `frontend/lib/models/task_item.dart` | myStatus 필드 + myWorkStatus getter |
+| `frontend/lib/screens/task/task_detail_screen.dart` | _buildJoinButton + _buildMyCompletedBadge + 조건 분기 수정 |
+| `frontend/lib/screens/task/task_management_screen.dart` | myWorkStatus 기반 상태 표시 |
+| `frontend/lib/screens/qr/qr_scan_screen.dart` | BUG-11 Location QR 체크 + 팝업 + 스캔 모드 전환 |
+| `frontend/lib/providers/task_provider.dart` | API 에러 응답 파싱 개선 (error 코드 추출) |
+| `tests/backend/test_multi_worker_join.py` | 다중 작업자 참여 테스트 (신규) |
+| `tests/backend/test_location_qr_recheck.py` | Location QR 재검증 테스트 (신규) |
+| `tests/backend/test_working_hours_recheck.py` | Working Hour 재검증 테스트 (신규) |
+| `tests/backend/test_mh_calculation_method_b.py` | MH 계산 검증 테스트 (신규) |
+
+---
+
+## 검증 기준
+### 다중 작업자 (BUG-12)
+- [ ] 🔴 작업자1 task 시작 후 → 작업자2가 같은 task에서 "작업 참여" 버튼 표시
+- [ ] 🔴 작업자2 "작업 참여" 클릭 → BE start_work 성공 → work_start_log에 2번째 레코드
+- [ ] 🔴 작업자2 참여 후 → 일시정지/작업완료 버튼 정상 표시
+- [ ] 🔴 작업자1 완료 + 작업자2 미완료 → task 미종료, 작업자1은 "내 작업 완료" 배지
+- [ ] 🔴 작업자1,2 모두 완료 → task 종료 + duration = 개인SUM(방식B)
+- [ ] task 목록에서 미참여 task는 "참여 가능" 표시
+- [ ] my_status API 필드 정상 반환 (not_started / in_progress / completed)
+- [ ] 단일 작업자 task: 기존과 동일 동작 (하위 호환)
+
+### Location QR (BUG-11 재수정)
+- [ ] 🔴 admin에서 location_qr_required=true 설정 → Worksheet QR 스캔 직후 팝업 알림 표시
+- [ ] 🔴 팝업 후 Location QR 스캔 모드로 자동 전환
+- [ ] 🔴 Location QR 스캔 완료 → task-management 이동 정상
+- [ ] 🔴 start_work API 400 에러 시 FE에서 LOCATION_QR_REQUIRED 에러 코드 인식 → 다이얼로그 표시
+- [ ] location_qr_required=false → 체크 없이 정상 진행
+- [ ] get_setting() 반환 타입 로그로 확인 (bool vs str)
+
+### Working Hour 계산
+- [ ] 🔴 9:00~12:00 작업 → break_morning(10:00~10:20) 20분 차감 → net 160분
+- [ ] 🔴 9:00~18:00 장시간 작업 → 4개 break 모두 차감
+- [ ] 🔴 break 시간 외 작업 → 차감 0분
+- [ ] 🔴 다중 작업자 각각 개별 break 차감 후 SUM
+- [ ] 라인효율 로그 출력 확인
+
+### 공통
+- [ ] 테스트 전체 PASSED (28건 이상)
+- [ ] flutter build web --release 에러 0건
+- [ ] 기존 테스트 회귀 0건
+
+## 규칙
+- ⚠️ DB 시간: get_db_connection()의 `options="-c timezone=Asia/Seoul"` 절대 삭제 금지
+- ⚠️ _calculate_working_minutes() break 차감 로직 수정 금지 (Sprint 14 핫픽스 완료)
+- ⚠️ _finalize_task_multi_worker() manual_pause만 차감 로직 수정 금지
+- .env 파일 절대 커밋 금지
+- N+1 쿼리 금지 — task_id 배치 조회(ANY 사용)
+- ⚠️ FE API 경로에 '/api' 접두사 넣지 말 것 (apiBaseUrl에 이미 /api 포함)
 - 완료 시 PROGRESS.md, BACKLOG.md에 기록
 ```
 
@@ -2394,3 +3472,1985 @@ claude
 ```
 
 AXIS-OPS 코드 파일은 전부 보존됩니다. Agent Teams 세션만 새로 시작하면 됩니다.
+
+---
+
+## Sprint 16 프롬프트 (BUG-13/14/15 수정 + Admin 로그인 간소화)
+
+### 목표
+1. **BUG-13**: Location QR 블록 로직이 일반 작업자 계정에서 미작동 — FE 에러 핸들링 안전모드 적용
+2. **BUG-14**: 다중 작업자(2명+) 시작 시 작업자 정보 미표시 — BE/FE 디버깅 + 수정
+3. **BUG-15**: QR 스캔 화면에서 에러/Location QR 팝업이 카메라 프레임에 가려짐 — 이미 수정 완료, 배포만
+4. **FEAT-1**: Admin 로그인 간소화 — 이메일 prefix만으로 로그인 가능 (예: `admin` 입력 → `admin@gst` 매칭)
+5. 빌드 + 배포 (FE: Netlify, BE: Railway)
+
+### ⚠️ 중요: 이미 코드에 반영된 변경사항 (절대 되돌리지 말 것)
+
+아래 변경사항은 Cowork 세션에서 이미 반영 완료. 빌드+배포만 필요.
+
+#### ✅ 반영 완료 1: `/api/app/settings` 엔드포인트 (BUG-13 부분 수정)
+- **`backend/app/routes/work.py`** — `get_app_settings()` 함수 (약 line 30-62)
+  - `@work_bp.route("/settings", methods=["GET"])` + `@jwt_required` (admin_required 없음)
+  - `get_all_settings()`로 전체 설정 반환, 기본값 보장
+  - import: `from app.models.admin_settings import get_all_settings`
+- **`frontend/lib/services/task_service.dart`** — `getAdminSettings()` (약 line 257)
+  - `/admin/settings` → `/app/settings` 변경됨
+- **`frontend/lib/screens/admin/admin_options_screen.dart`** — 변경 없음 (기존 `/admin/settings` 유지)
+
+#### ✅ 반영 완료 2: 카메라 DOM hide/show (BUG-15)
+- **`frontend/lib/services/qr_scanner_web.dart`** — `hideScannerDiv()`, `showScannerDiv()` 추가
+- **`frontend/lib/services/qr_scanner_service.dart`** — `hide()`, `show()` public API 추가
+- **`frontend/lib/services/qr_scanner_stub.dart`** — stub 함수 추가
+- **`frontend/lib/screens/qr/qr_scan_screen.dart`** — `_showLocationQrRequiredPopup()`, `_showErrorDialog()` 모두 다이얼로그 전 `_qrScannerService.hide()`, 닫은 후 `_qrScannerService.show()` 호출
+
+---
+
+### BE-1: Admin 로그인 간소화 (이메일 prefix 매칭)
+
+**파일: `backend/app/models/worker.py`**
+
+`get_worker_by_email()` 함수 아래에 새 함수 추가:
+
+```python
+def get_admin_by_email_prefix(prefix: str) -> Optional[Worker]:
+    """
+    이메일 prefix로 admin 작업자 조회 (간소화 로그인용)
+
+    예: 'admin' → email이 'admin@%'인 is_admin=True 작업자 반환
+    prefix에 @가 없을 때만 호출됨.
+    매칭되는 admin이 정확히 1명일 때만 반환, 0명 또는 2명+ 이면 None.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT * FROM workers WHERE email LIKE %s AND is_admin = true",
+            (f"{prefix}@%",)
+        )
+        rows = cur.fetchall()
+        if len(rows) == 1:
+            return Worker.from_db_row(rows[0])
+        return None
+    except PsycopgError as e:
+        logger.error(f"Failed to get admin by prefix '{prefix}': {e}")
+        return None
+    finally:
+        if conn:
+            conn.close()
+```
+
+**파일: `backend/app/services/auth_service.py`**
+
+`login()` 메서드의 사용자 조회 부분 수정 (약 line 413-420):
+
+```python
+# 기존 line 414:
+# worker = get_worker_by_email(email)
+
+# 수정:
+if '@' in email:
+    worker = get_worker_by_email(email)
+else:
+    # Admin 간소화 로그인: prefix만으로 조회 (is_admin=True만 대상)
+    worker = get_admin_by_email_prefix(email)
+    if worker is None:
+        # prefix 매칭 실패 → 정확한 이메일로 재시도 (fallback)
+        worker = get_worker_by_email(email)
+```
+
+import 추가 (파일 상단, 기존 import 근처):
+```python
+from app.models.worker import get_admin_by_email_prefix
+```
+
+### BE-2: BUG-13 FE 에러 핸들링 안전모드
+
+**문제**: `getAdminSettings()` API 에러 시 빈 `{}` 반환 → `location_qr_required`가 null → 블록 로직 스킵
+
+**파일: `frontend/lib/services/task_service.dart`** (약 line 252-267)
+
+```dart
+  /// 앱 설정 조회 (일반 작업자 접근 가능)
+  ///
+  /// API 에러 시 안전모드: location_qr_required = true (블록 활성)
+  ///
+  /// API: GET /api/app/settings (jwt_required만, admin_required 없음)
+  Future<Map<String, dynamic>> getAdminSettings() async {
+    try {
+      final response = await _apiService.get('/app/settings');
+      if (response is Map<String, dynamic>) {
+        return response;
+      }
+      // 응답이 Map이 아닌 경우 안전모드 반환
+      return {'location_qr_required': true};
+    } catch (e) {
+      // API 에러 시 안전모드 반환 (location_qr 체크 활성)
+      debugPrint('[TaskService] getAdminSettings error: $e — using safe defaults');
+      return {'location_qr_required': true};
+    }
+  }
+```
+
+핵심: **에러 시 빈 `{}` 대신 `{'location_qr_required': true}` 반환** — 실패해도 안전한 쪽으로
+
+### BE-3: BUG-14 다중 작업자 표시 디버깅
+
+**현상**: 1명 작업 시작 → 작업자 정보 표시됨. 2명 시작 → 작업자 미표시.
+**BE는 정상으로 보이나 실 데이터 확인 필요.**
+
+**파일: `backend/app/routes/work.py`** — workers 조회 쿼리에 로깅 추가 (약 line 293):
+
+```python
+# 기존 line 293:
+# for row in cur.fetchall():
+# 수정:
+rows = cur.fetchall()
+logger.info(f"[BUG-14] workers query: task_ids={task_db_ids}, returned {len(rows)} rows")
+for row in rows:
+    tid = row['task_id']
+    logger.info(f"[BUG-14] worker: task_id={tid}, worker_id={row['worker_id']}, name={row['worker_name']}")
+    if tid in workers_by_task:
+        workers_by_task[tid].append({
+            'worker_id': row['worker_id'],
+            'worker_name': row['worker_name'],
+            'started_at': row['started_at'].isoformat() if row['started_at'] else None,
+            'completed_at': row['completed_at'].isoformat() if row['completed_at'] else None,
+            'duration_minutes': row['duration_minutes'],
+            'status': row['status'],
+        })
+```
+
+**파일: `backend/app/routes/gst.py`** — 동일한 로깅 추가
+
+**FE 디버깅: `frontend/lib/models/task_item.dart`** — fromJson workers 파싱 로그:
+
+```dart
+// workers 파싱 부분에 임시 디버그 추가:
+workers: json['workers'] != null
+    ? (() {
+        final parsed = List<Map<String, dynamic>>.from(
+            (json['workers'] as List).map((w) => Map<String, dynamic>.from(w as Map)),
+        );
+        if (parsed.length > 1) {
+          debugPrint('[BUG-14] task ${json['id']} has ${parsed.length} workers: '
+              '${parsed.map((w) => w['worker_name']).toList()}');
+        }
+        return parsed;
+      })()
+    : const [],
+```
+
+**핵심 확인사항**:
+1. BE 로그에서 2명이 반환되는지 확인
+2. FE 파싱 로그에서 2명이 파싱되는지 확인
+3. `_buildWorkerInfoSection()` (task_detail_screen.dart line 649-732)의 로직은 정상 — workers가 비어있지 않으면 모두 표시
+
+### FE-1: 로그인 화면 admin 안내 텍스트
+
+**파일: `frontend/lib/screens/auth/login_screen.dart`**
+
+이메일 입력 필드 하단에 안내 텍스트 추가:
+```dart
+// 이메일 TextFormField 바로 아래에 추가
+const SizedBox(height: 4),
+const Text(
+  'Admin은 이메일 앞부분만 입력 가능',
+  style: TextStyle(fontSize: 11, color: GxColors.silver),
+),
+```
+
+---
+
+### 테스트 파일
+
+#### `tests/backend/test_sprint16_admin_login.py`
+```python
+"""Sprint 16: Admin 로그인 간소화 테스트"""
+import pytest
+
+class TestAdminPrefixLogin:
+    """Admin 이메일 prefix 로그인"""
+
+    def test_admin_login_full_email(self, client):
+        """TC-AL-01: 기존 full email 로그인 정상"""
+        resp = client.post('/api/auth/login', json={
+            'email': 'dkkim1@gst-in.com',
+            'password': 'test_admin_pw'
+        })
+        # 테스트 환경 비밀번호에 따라 200 또는 401
+        assert resp.status_code in [200, 401]
+
+    def test_admin_login_prefix_only(self, client):
+        """TC-AL-02: admin prefix만으로 로그인 (핵심)"""
+        resp = client.post('/api/auth/login', json={
+            'email': 'admin',
+            'password': '93830979'
+        })
+        # admin@gst 계정 존재 시 200
+        assert resp.status_code in [200, 401]
+        if resp.status_code == 200:
+            data = resp.get_json()
+            assert 'access_token' in data
+
+    def test_normal_user_prefix_rejected(self, client):
+        """TC-AL-03: 일반 사용자는 prefix 로그인 불가 (is_admin=False)"""
+        resp = client.post('/api/auth/login', json={
+            'email': 'kdky311',
+            'password': '93830979'
+        })
+        assert resp.status_code == 401
+
+    def test_prefix_with_at_uses_exact_match(self, client):
+        """TC-AL-04: @가 포함되면 정확 매칭"""
+        resp = client.post('/api/auth/login', json={
+            'email': 'admin@gst',
+            'password': '93830979'
+        })
+        assert resp.status_code in [200, 401]
+```
+
+#### `tests/backend/test_sprint16_app_settings.py`
+```python
+"""Sprint 16: /api/app/settings 일반 사용자 접근 테스트"""
+import pytest
+
+class TestAppSettings:
+    """일반 작업자용 앱 설정 엔드포인트"""
+
+    def test_admin_access(self, client, admin_token):
+        """TC-AS-01: admin 접근 가능"""
+        resp = client.get('/api/app/settings', headers={
+            'Authorization': f'Bearer {admin_token}'
+        })
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert 'location_qr_required' in data
+
+    def test_worker_access(self, client, worker_token):
+        """TC-AS-02: 일반 작업자 접근 가능 (핵심!)"""
+        resp = client.get('/api/app/settings', headers={
+            'Authorization': f'Bearer {worker_token}'
+        })
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert 'location_qr_required' in data
+
+    def test_unauthenticated_rejected(self, client):
+        """TC-AS-03: 미인증 요청 거부"""
+        resp = client.get('/api/app/settings')
+        assert resp.status_code == 401
+
+    def test_old_admin_endpoint_still_restricted(self, client, worker_token):
+        """TC-AS-04: 기존 /api/admin/settings는 admin만"""
+        resp = client.get('/api/admin/settings', headers={
+            'Authorization': f'Bearer {worker_token}'
+        })
+        assert resp.status_code == 403
+```
+
+---
+
+### 실행 순서
+
+```
+1. BE 수정 (BE-1: prefix login, BE-2: safe defaults, BE-3: debug logs)
+2. FE 수정 (FE-1: login hint)
+3. 테스트 실행: pytest tests/backend/test_sprint16*.py -v
+4. flutter build web --release
+5. git add + commit + push
+6. 배포 확인 (Netlify auto-deploy + Railway auto-deploy)
+```
+
+### 검증 체크리스트
+
+- [ ] `admin` + 비밀번호로 로그인 성공 (prefix 매칭)
+- [ ] `admin@gst` + 비밀번호로 로그인 성공 (full email)
+- [ ] 일반 사용자 `kdky311` prefix 로그인 → 실패 (401)
+- [ ] 일반 사용자 `/api/app/settings` → 200 (location_qr_required 포함)
+- [ ] 일반 사용자 `/api/admin/settings` → 403 (기존 동작 유지)
+- [ ] Location QR 블록: 일반 계정으로 worksheet QR 스캔 → 팝업 + 블록 정상
+- [ ] Location QR 팝업: 카메라에 가려지지 않고 표시됨
+- [ ] 에러 팝업: 카메라에 가려지지 않고 표시됨
+- [ ] 2명 작업 시작: task detail에서 작업자 2명 이름+시간 표시됨
+- [ ] 기존 기능 회귀 없음
+
+---
+
+## Sprint 16.1 프롬프트 (버전 관리 + System Online + LOC 형식 정리)
+
+### 목표
+1. **버전 관리 시스템**: 중앙 버전 파일에서 관리, splash 화면 + 향후 API 버전 헤더에 사용
+2. **System Online 실제 연동**: 목업 → BE `/health` API 실시간 체크로 변경
+3. **Location QR 형식 정리**: hint/에러 메시지 `LOC_01` 형식으로 통일 (이미 Cowork에서 반영 완료)
+4. 빌드 + 배포 → 버전 `v1.1.0` (Sprint 16.1은 새 기능 포함이므로 MINOR 업)
+
+### ⚠️ 이미 코드에 반영된 변경사항 (절대 되돌리지 말 것)
+
+- **`frontend/lib/screens/qr/qr_scan_screen.dart`**: `LOC_ASSY_01` → `LOC_01`로 모두 변경됨 (hint, 에러 메시지, 주석)
+- **Sprint 16에서 반영한 모든 변경사항**: `/api/app/settings`, 카메라 hide/show, admin prefix login, MutationObserver 정사각형 등
+- **`backend/app/__init__.py`**: CORS 설정에 `/health` 경로 추가 완료 (BUG-16 수정)
+- **`frontend/lib/services/qr_scanner_web.dart`**: `hideScannerDiv()` → Observer disconnect 후 hide, `showScannerDiv()` → show 후 Observer 재활성화 (BUG-17 수정)
+
+---
+
+### BE-1: 버전 파일 생성
+
+**파일: `backend/version.py`** (신규)
+```python
+"""AXIS-OPS 버전 정보 — 단일 소스"""
+VERSION = "1.1.0"
+BUILD_DATE = "2026-03-03"
+```
+
+**파일: `backend/app/__init__.py`** — health 엔드포인트에 버전 추가:
+
+```python
+from version import VERSION, BUILD_DATE
+
+@app.route("/health", methods=["GET"])
+def health_check():
+    """헬스 체크 + 버전 정보"""
+    return jsonify({
+        "status": "ok",
+        "version": VERSION,
+        "build_date": BUILD_DATE,
+    }), 200
+```
+
+### FE-1: 버전 중앙 관리
+
+**파일: `frontend/lib/utils/app_version.dart`** (신규)
+```dart
+/// AXIS-OPS 앱 버전 — 단일 소스
+class AppVersion {
+  static const String version = '1.1.0';
+  static const String buildDate = '2026-03-03';
+  static String get display => 'G-AXIS OPS v$version';
+}
+```
+
+**파일: `frontend/lib/screens/auth/splash_screen.dart`** — 하드코딩 제거:
+
+```dart
+// 기존 line 243:
+// 'G-AXIS OPS v1.0.0'
+
+// 수정:
+import '../../utils/app_version.dart';
+// ...
+AppVersion.display,  // → 'G-AXIS OPS v1.1.0'
+```
+
+### FE-2: System Online → 실제 API 헬스 체크
+
+**파일: `frontend/lib/screens/auth/splash_screen.dart`**
+
+splash 화면 초기화 시 `/health` 호출하여 실제 서버 상태 확인:
+
+```dart
+class _SplashScreenState extends ConsumerState<SplashScreen> {
+  bool _isSystemOnline = false;  // 기본값: offline
+  bool _healthChecked = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkSystemHealth();
+    // 기존 초기화 로직...
+  }
+
+  Future<void> _checkSystemHealth() async {
+    try {
+      final apiService = ApiService();
+      // /health는 인증 불필요
+      final response = await apiService.getPublic('/health');
+      if (mounted) {
+        setState(() {
+          _isSystemOnline = response != null && response['status'] == 'ok';
+          _healthChecked = true;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isSystemOnline = false;
+          _healthChecked = true;
+        });
+      }
+    }
+  }
+```
+
+ApiService에 인증 없는 GET 메서드 필요:
+
+**파일: `frontend/lib/services/api_service.dart`** — `getPublic()` 추가:
+
+```dart
+/// 인증 없이 GET 요청 (health check 등)
+Future<Map<String, dynamic>?> getPublic(String path) async {
+  try {
+    final response = await http.get(
+      Uri.parse('$baseUrl$path'),
+      headers: {'Content-Type': 'application/json'},
+    );
+    if (response.statusCode == 200) {
+      return json.decode(response.body) as Map<String, dynamic>;
+    }
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+```
+
+System Online 인디케이터 UI 수정 (splash_screen.dart 약 line 201-238):
+
+```dart
+// 기존: 항상 초록색 + 'System Online'
+// 수정: _isSystemOnline에 따라 색상 + 텍스트 변경
+
+Container(
+  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+  decoration: BoxDecoration(
+    color: Colors.white.withValues(alpha: 0.35),
+    borderRadius: BorderRadius.circular(20),
+    border: Border.all(color: GxGlass.borderColor, width: 1),
+  ),
+  child: Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Container(
+        width: 6,
+        height: 6,
+        decoration: BoxDecoration(
+          color: !_healthChecked
+              ? GxColors.silver          // 체크 중: 회색
+              : _isSystemOnline
+                  ? GxColors.success     // 온라인: 초록
+                  : GxColors.danger,     // 오프라인: 빨강
+          shape: BoxShape.circle,
+          boxShadow: [
+            BoxShadow(
+              color: (_isSystemOnline ? GxColors.success : GxColors.danger).withValues(alpha: 0.4),
+              blurRadius: 4,
+              spreadRadius: 1,
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(width: 6),
+      Text(
+        !_healthChecked
+            ? 'Connecting...'
+            : _isSystemOnline
+                ? 'System Online'
+                : 'System Offline',
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w500,
+          color: Colors.white.withValues(alpha: 0.6),
+        ),
+      ),
+    ],
+  ),
+),
+```
+
+---
+
+### 실행 순서
+
+```
+1. BE-1: version.py + health 엔드포인트 수정
+2. FE-1: app_version.dart + splash 버전 변경
+3. FE-2: health check + System Online 실연동
+4. flutter build web --release
+5. git add + commit + push (커밋 메시지에 v1.1.0 포함)
+6. 배포 확인
+```
+
+### 검증 체크리스트
+
+- [ ] `/health` 응답에 version, build_date 포함
+- [ ] splash 화면에 'G-AXIS OPS v1.1.0' 표시
+- [ ] 서버 정상 시 'System Online' (초록)
+- [ ] 서버 다운 시 'System Offline' (빨강)
+- [ ] Location QR hint가 'LOC_01' 형식
+- [ ] Location QR 팝업 확인 버튼 정상 클릭 (깜빡임 없음)
+- [ ] 기존 기능 회귀 없음
+
+---
+
+### BUG-16: System Offline 표시 버그 (Cowork 반영 완료)
+
+**증상**: Railway `/health` 200 정상 반환하지만 FE splash에서 `System Offline` 출력
+**원인**: `backend/app/__init__.py` CORS 설정이 `/api/*`에만 적용 → `/health`는 CORS 미허용 → 브라우저 preflight 거부 → catch → offline
+**수정**: CORS에 `/health` 경로 추가
+
+```python
+# 수정 전
+CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+# 수정 후
+CORS(app, resources={
+    r"/api/*": {"origins": "*"},
+    r"/health": {"origins": "*"},
+})
+```
+
+**파일**: `backend/app/__init__.py` (line 40-44)
+
+---
+
+### BUG-17: Location QR 팝업 깜빡임 + 확인 버튼 미작동 (Cowork 반영 완료)
+
+**증상**: Location QR 차단 팝업이 뜨지만 깜빡거리면서 확인 버튼 클릭 불가
+**원인**: `MutationObserver`가 `attributes`+`style` 변경을 감시 중 → `hideScannerDiv()`의 `display:none` 설정을 감지 → 스타일 재적용으로 `display` 복원 → hide↔show 무한 루프
+**수정**: hide 시 Observer disconnect, show 시 Observer 재활성화
+
+```dart
+// hideScannerDiv() — Observer 먼저 해제
+void hideScannerDiv() {
+  if (_scannerDiv == null) return;
+  _squareObserver?.disconnect();  // ★ 추가
+  _scannerDiv!.style.display = 'none';
+}
+
+// showScannerDiv() — show 후 Observer 재활성화
+void showScannerDiv() {
+  if (_scannerDiv == null) return;
+  _scannerDiv!.style.display = 'block';
+  _forceSquareAfterCameraStart();  // ★ 추가: 정사각형 + Observer 재활성화
+}
+```
+
+**파일**: `frontend/lib/services/qr_scanner_web.dart` (line 173-245)
+
+---
+
+## Sprint 16.2 프롬프트 (담당공정 설정 이동 + BUG-16/17 배포)
+
+### 목표
+1. **담당공정 설정 이동**: 홈 화면 프로필 카드의 "활성 역할" → 개인설정(ProfileScreen)으로 이동
+2. **BUG-16 배포**: CORS `/health` 추가 (이미 코드 반영 완료)
+3. **BUG-17 배포**: MutationObserver hide/show 깜빡임 수정 (이미 코드 반영 완료)
+4. 빌드 + 배포
+
+### ⚠️ 이미 코드에 반영된 변경사항 (절대 되돌리지 말 것)
+
+- **`backend/app/__init__.py`**: CORS에 `/health` 경로 추가 완료 (BUG-16)
+- **`frontend/lib/services/qr_scanner_web.dart`**: `hideScannerDiv()` Observer disconnect + `showScannerDiv()` Observer 재활성화 (BUG-17)
+- **Sprint 16 / 16.1에서 반영한 모든 변경사항**: `/api/app/settings`, 카메라 hide/show, admin prefix login, MutationObserver 정사각형, LOC_01 형식, 버전 관리 등
+
+---
+
+### FE-1: 홈 화면에서 "활성 역할" UI 제거
+
+**파일: `frontend/lib/screens/home/home_screen.dart`**
+
+홈 화면 프로필 카드에서 활성 역할 영역(약 line 606-652)을 제거한다.
+
+삭제 대상 코드:
+```dart
+// ★ 아래 블록 전체 삭제 (line 606~652)
+// GST 작업자 active_role 표시
+if (worker?.company == 'GST' || worker?.isAdmin == true) ...[
+  const SizedBox(height: 10),
+  const Divider(color: GxColors.mist, height: 1),
+  const SizedBox(height: 10),
+  InkWell(
+    onTap: () => _showActiveRoleDialog(context, ref, worker?.activeRole),
+    // ... (전체 InkWell 블록)
+  ),
+],
+```
+
+또한 `_showActiveRoleDialog()`, `_getActiveRoleLabel()`, `_getRoleColor()` 메서드가 홈 화면에서만 사용되면 함께 삭제. ProfileScreen으로 이동할 것이므로 중복 방지.
+
+---
+
+### FE-2: 개인설정(ProfileScreen)에 "담당공정" 섹션 추가
+
+**파일: `frontend/lib/screens/settings/profile_screen.dart`**
+
+"PIN 설정" 섹션 위(line 134 부근)에 "담당공정" 섹션을 추가한다. GST 소속 또는 관리자만 표시.
+
+**용어 변경**: "활성 역할" → "담당공정" (현장 작업자가 이해하기 쉬운 용어)
+
+```dart
+// --- PIN 설정 섹션 위에 추가 ---
+// 담당공정 설정 (GST 작업자 또는 관리자만 표시)
+if (worker?.company == 'GST' || worker?.isAdmin == true) ...[
+  _buildSectionHeader('담당공정'),
+  const SizedBox(height: 8),
+  Container(
+    decoration: GxGlass.cardSm(radius: GxRadius.lg),
+    child: Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _showActiveRoleDialog(context, ref, worker?.activeRole),
+        borderRadius: BorderRadius.circular(GxRadius.lg),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: _getRoleColor(worker?.activeRole).withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(GxRadius.md),
+                ),
+                child: Icon(Icons.swap_horiz, size: 18, color: _getRoleColor(worker?.activeRole)),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '담당공정 변경',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: GxColors.graphite,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      worker?.activeRole != null
+                          ? _getActiveRoleLabel(worker?.activeRole)
+                          : '미설정',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: worker?.activeRole != null
+                            ? _getRoleColor(worker?.activeRole)
+                            : GxColors.silver,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: GxColors.accentSoft,
+                  borderRadius: BorderRadius.circular(GxRadius.sm),
+                ),
+                child: const Text(
+                  '변경하기',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: GxColors.accent),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  ),
+  const SizedBox(height: 24),
+],
+```
+
+**헬퍼 메서드 추가** (ProfileScreen 클래스에):
+
+```dart
+/// 담당공정 한국어 레이블
+String _getActiveRoleLabel(String? role) {
+  switch (role) {
+    case 'PI': return 'PI 가압검사';
+    case 'QI': return 'QI 공정검사';
+    case 'SI': return 'SI 마무리공정';
+    default: return role ?? '미설정';
+  }
+}
+
+/// 담당공정 색상
+Color _getRoleColor(String? role) {
+  switch (role) {
+    case 'PI': return GxColors.success;
+    case 'QI': return const Color(0xFF7C3AED);
+    case 'SI': return GxColors.accent;
+    default: return GxColors.steel;
+  }
+}
+
+/// 담당공정 선택 다이얼로그
+Future<void> _showActiveRoleDialog(BuildContext context, WidgetRef ref, String? currentRole) async {
+  final roles = [
+    {'code': 'PI', 'label': 'PI 가압검사', 'icon': Icons.compress, 'color': GxColors.success},
+    {'code': 'QI', 'label': 'QI 공정검사', 'icon': Icons.verified, 'color': const Color(0xFF7C3AED)},
+    {'code': 'SI', 'label': 'SI 마무리공정', 'icon': Icons.local_shipping, 'color': GxColors.accent},
+  ];
+
+  await showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.lg)),
+      title: const Text(
+        '담당공정 선택',
+        style: TextStyle(color: GxColors.charcoal, fontWeight: FontWeight.w600, fontSize: 15),
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: roles.map((r) {
+          final isSelected = currentRole == r['code'];
+          final color = r['color'] as Color;
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: InkWell(
+              onTap: () async {
+                Navigator.of(ctx).pop();
+                await ref.read(authProvider.notifier).changeActiveRole(r['code'] as String);
+                if (mounted) setState(() {});  // UI 갱신
+              },
+              borderRadius: BorderRadius.circular(GxRadius.md),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: isSelected ? color.withValues(alpha: 0.1) : GxColors.cloud,
+                  borderRadius: BorderRadius.circular(GxRadius.md),
+                  border: Border.all(
+                    color: isSelected ? color : GxColors.mist,
+                    width: isSelected ? 1.5 : 1,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(r['icon'] as IconData, size: 18, color: color),
+                    const SizedBox(width: 10),
+                    Text(
+                      r['label'] as String,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                        color: isSelected ? color : GxColors.graphite,
+                      ),
+                    ),
+                    if (isSelected) ...[
+                      const Spacer(),
+                      Icon(Icons.check_circle, size: 16, color: color),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(),
+          child: const Text('닫기', style: TextStyle(color: GxColors.slate)),
+        ),
+      ],
+    ),
+  );
+}
+```
+
+**import 추가** (profile_screen.dart 상단):
+```dart
+import '../../providers/auth_provider.dart';  // 이미 있으면 skip
+```
+
+---
+
+### 실행 순서
+
+```
+1. FE-1: 홈 화면에서 활성 역할 UI + 관련 메서드 삭제
+2. FE-2: ProfileScreen에 담당공정 섹션 + 헬퍼 메서드 추가
+3. flutter build web --release
+4. git add + commit + push (v1.1.1 — BUG-16/17 + 담당공정 설정 이동)
+5. 배포 확인 (BE: CORS /health, FE: Netlify)
+```
+
+### 검증 체크리스트
+
+- [ ] 홈 화면 프로필 카드에 "활성 역할" 영역이 없음
+- [ ] 개인설정 화면에 "담당공정" 섹션 표시 (GST 계정만)
+- [ ] 담당공정 변경 시 PI/QI/SI 선택 다이얼로그 정상 작동
+- [ ] 변경 후 개인설정 화면에 선택된 공정 즉시 반영
+- [ ] 변경 후 홈 화면 공정 task 목록이 변경된 역할에 맞게 필터링
+- [ ] 비GST 계정 (협력사)에는 담당공정 섹션 미표시
+- [ ] System Online 정상 표시 (BUG-16 CORS 수정 확인)
+- [ ] Location QR 팝업 확인 버튼 정상 클릭 + 깜빡임 없음 (BUG-17 수정 확인)
+- [ ] 기존 기능 회귀 없음
+
+---
+
+## Sprint 17 프롬프트 (출퇴근 분류 체계 — work_site + product_line)
+
+> 참고 문서: `AXIS-OPS/AXIS_VIEW_ROADMAP.md` Phase 1 > 출퇴근 분류 체계 (2026-03-04 확정)
+> 버전: v1.1.1 → v1.2.0 (신규 기능 추가이므로 MINOR 업)
+
+### 배경
+
+협력사 출퇴근 기록에 근무지(work_site)와 제품군(product_line) 분류를 추가한다.
+CHI(칠러) 제조기술부 통합 대비 + ELEC 협력사 변동 대응.
+
+### 변경 대상 파일
+
+```
+BE:
+├── backend/migrations/017_add_attendance_classification.sql  (신규)
+├── backend/app/routes/hr.py                                  (수정)
+
+FE:
+├── frontend/lib/screens/home/home_screen.dart                (수정)
+
+TEST:
+├── tests/backend/test_attendance.py                          (수정)
+```
+
+---
+
+### BE 작업
+
+**Phase A: 마이그레이션 (신규 파일)**
+
+`backend/migrations/017_add_attendance_classification.sql`:
+
+```sql
+-- Sprint 17: 출퇴근 분류 체계 추가 (work_site + product_line)
+-- VARCHAR + CHECK constraint 방식 (ENUM 아님 — 확장성)
+-- 기존 데이터는 DEFAULT 값 자동 적용 (GST + SCR)
+
+ALTER TABLE hr.partner_attendance
+  ADD COLUMN work_site VARCHAR(10) NOT NULL DEFAULT 'GST',
+  ADD COLUMN product_line VARCHAR(10) NOT NULL DEFAULT 'SCR';
+
+ALTER TABLE hr.partner_attendance
+  ADD CONSTRAINT chk_work_site CHECK (work_site IN ('GST', 'HQ')),
+  ADD CONSTRAINT chk_product_line CHECK (product_line IN ('SCR', 'CHI'));
+
+CREATE INDEX IF NOT EXISTS idx_partner_att_site_line
+  ON hr.partner_attendance(work_site, product_line);
+```
+
+**Phase B: hr.py 수정**
+
+1. `attendance_check()` 수정:
+
+```python
+# Request Body 파싱 추가 (check_type 파싱 아래):
+work_site = data.get('work_site', 'GST').strip().upper()
+product_line = data.get('product_line', 'SCR').strip().upper()
+
+# check_type == 'out' 일 때: FE 값 무시, 마지막 IN에서 복사
+if check_type == 'out':
+    # 기존 today_records 조회 결과에서 마지막 IN 레코드 찾기
+    last_in = None
+    for r in reversed(today_records):
+        if r['check_type'] == 'in':
+            last_in = r
+            break
+    if last_in:
+        work_site = last_in.get('work_site', 'GST')
+        product_line = last_in.get('product_line', 'SCR')
+
+# Validation (in일 때만):
+if check_type == 'in':
+    if work_site not in ('GST', 'HQ'):
+        return jsonify({'error': 'INVALID_WORK_SITE', 'message': "work_site는 'GST' 또는 'HQ'"}), 400
+    if product_line not in ('SCR', 'CHI'):
+        return jsonify({'error': 'INVALID_PRODUCT_LINE', 'message': "product_line은 'SCR' 또는 'CHI'"}), 400
+
+# INSERT 수정:
+cur.execute("""
+    INSERT INTO hr.partner_attendance
+        (worker_id, check_type, check_time, method, note, work_site, product_line)
+    VALUES (%s, %s, %s, 'button', %s, %s, %s)
+    RETURNING id, worker_id, check_type, check_time, method, note, work_site, product_line
+""", (worker_id, check_type, now_utc, note, work_site, product_line))
+
+# Response에 work_site, product_line 추가:
+'record': {
+    ...기존 필드...,
+    'work_site': record['work_site'],
+    'product_line': record['product_line'],
+}
+```
+
+2. `attendance_today()` SELECT + Response에 work_site, product_line 추가:
+
+```python
+# SELECT 수정:
+SELECT id, check_type, check_time, method, note, work_site, product_line
+FROM hr.partner_attendance ...
+
+# Response records에 추가:
+{
+    ...기존 필드...,
+    'work_site': r.get('work_site', 'GST'),
+    'product_line': r.get('product_line', 'SCR'),
+}
+```
+
+3. 기존 today_records 조회 (중복체크인 로직용)에도 work_site, product_line SELECT 추가:
+
+```python
+# attendance_check() 내부, line 97~104 영역:
+SELECT id, check_type, check_time, work_site, product_line
+FROM hr.partner_attendance
+WHERE worker_id = %s ...
+```
+
+---
+
+### FE 작업
+
+**home_screen.dart 수정**
+
+1. 출퇴근 상태에 work_site/product_line 필드 추가:
+
+```dart
+// 클래스 상단 변수 추가:
+String _selectedWorkSite = 'GST';
+String _selectedProductLine = 'SCR';
+```
+
+2. `_buildAttendanceCard()` 수정 — 출근 상태(notCheckedIn)일 때 드롭다운 표시:
+
+```dart
+// 협력사 작업자만 (company != 'GST') 드롭다운 표시
+// 드롭다운 옵션 4개:
+// - GST 공장 (SCR) → work_site='GST', product_line='SCR'  ← default
+// - GST 공장 (CHI) → work_site='GST', product_line='CHI'
+// - 협력사 본사 (SCR) → work_site='HQ', product_line='SCR'
+// - 협력사 본사 (CHI) → work_site='HQ', product_line='CHI'
+
+// 퇴근 상태(checkedIn)일 때: 드롭다운 미표시 (BE에서 자동 복사)
+// 퇴근 완료(checkedOut)일 때: 드롭다운 미표시
+```
+
+3. `_handleAttendance()` 수정 — 출근 시 work_site/product_line 전송:
+
+```dart
+final checkType = _attendanceStatus == AttendanceStatus.notCheckedIn ? 'in' : 'out';
+final Map<String, dynamic> body = {'check_type': checkType};
+
+// 출근일 때만 work_site/product_line 전송
+if (checkType == 'in') {
+  body['work_site'] = _selectedWorkSite;
+  body['product_line'] = _selectedProductLine;
+}
+
+await apiService.post('/hr/attendance/check', data: body);
+```
+
+4. `_fetchAttendanceStatus()` 수정 — response에서 work_site/product_line 읽기:
+
+```dart
+// 마지막 IN 레코드의 work_site/product_line을 현재 선택값으로 세팅
+// (이전 출근 기록이 있으면 다음 출근 시 같은 값이 기본 선택됨)
+```
+
+---
+
+### TEST 작업
+
+**test_attendance.py 수정**
+
+```python
+# 기존 테스트: 변경 불필요 (work_site/product_line 미전송 시 default 적용)
+# 아래 테스트 케이스 추가:
+
+# ⚠️ 기존 TC-ATT-01 ~ TC-ATT-08 사용 중 (TC-ATT-08 = test_get_today_attendance_not_checked)
+# 신규 테스트는 TC-ATT-09부터 시작:
+
+# TC-ATT-09: 출근 시 work_site + product_line 전달 → DB 정상 저장
+# TC-ATT-10: 퇴근 시 work_site/product_line 미전달 → 마지막 IN 값 자동 복사
+# TC-ATT-11: 잘못된 work_site 전달 → 400 INVALID_WORK_SITE
+# TC-ATT-12: 잘못된 product_line 전달 → 400 INVALID_PRODUCT_LINE
+# TC-ATT-13: today 조회 시 work_site/product_line 포함 확인
+```
+
+---
+
+### 실행 순서
+
+```
+1. BE: 마이그레이션 SQL 생성 (017_add_attendance_classification.sql)
+2. BE: hr.py attendance_check() 수정
+3. BE: hr.py attendance_today() 수정
+4. TEST: 신규 테스트 케이스 추가 + 기존 테스트 통과 확인
+5. FE: home_screen.dart 드롭다운 UI + 상태 관리 추가
+6. flutter build web --release
+7. git add + commit + push (v1.2.0 — 출퇴근 분류 체계)
+8. Railway 배포 시 마이그레이션 실행: psql $DATABASE_URL -f backend/migrations/017_add_attendance_classification.sql
+9. 배포 확인
+```
+
+### 검증 체크리스트
+
+- [ ] 마이그레이션: ALTER TABLE 성공, 기존 데이터에 GST/SCR 기본값 적용됨
+- [ ] 출근(IN): work_site + product_line DB 정상 저장
+- [ ] 퇴근(OUT): 마지막 IN 레코드의 work_site/product_line 자동 복사됨
+- [ ] FE: 협력사 작업자 → 출근 시 드롭다운 4개 옵션 표시
+- [ ] FE: GST 작업자(PI/QI/SI) → 드롭다운 미표시
+- [ ] FE: 퇴근 시 드롭다운 미표시
+- [ ] FE: 기본값 GST 공장(SCR) 선택 상태
+- [ ] API: /hr/attendance/today 응답에 work_site/product_line 포함
+- [ ] 기존 테스트 전부 통과 (기존 API 호출은 default 적용으로 호환)
+- [ ] 기존 기능 회귀 없음
+
+---
+
+## Sprint 18 프롬프트 (협력사별 S/N 작업 진행률 뷰)
+
+> **목적**: 협력사 관리자가 자사 담당 S/N들의 작업 진행률을 종합적으로 조회할 수 있는 API + FE 화면 구현
+> **설계 원칙**: AXIS-VIEW(React 대시보드)에서도 동일 API를 재사용할 수 있도록 범용적으로 설계
+> **버전**: v1.3.0 (신규 기능 추가이므로 MINOR 업)
+
+### 배경
+
+현재 협력사 관리자는 QR 태깅할 때마다 개별 task 진행을 볼 수 있지만, 자사가 담당하는 **전체 S/N의 종합 진행률**은 확인할 수 없다.
+
+**요구사항**:
+1. 협력사별로 담당 S/N만 필터링해서 진행률 표시
+2. 100% 완료된 S/N은 `all_completed_at` 기준 **1일 후** 목록에서 사라짐
+3. GST 계정은 전체 S/N 조회 가능
+4. AXIS-VIEW에서 동일 API 재사용 가능한 구조
+
+### 협력사별 S/N 필터링 규칙
+
+| 협력사 | 필터 조건 | 보이는 공정 |
+|--------|----------|------------|
+| FNI, BAT, TMS(M) | `mech_partner` 또는 `module_outsourcing` 일치 | MM (+ TM for TMS) |
+| TMS(E), P&S, C&A | `elec_partner` 일치 | EE |
+| GST (is_admin) | 전체 | 전체 |
+
+> **참고**: 기존 `filter_tasks_for_worker()` 로직(`backend/app/services/task_seed.py` L457-491)의 회사별 카테고리 매핑을 참고하되, 진행률 API는 **카테고리별 완료율**을 반환하므로 FE에서 해당 공정만 하이라이트 처리
+
+### 변경 대상 파일
+
+```
+BE:
+├── backend/app/routes/product.py                  (수정 — 신규 엔드포인트 추가)
+├── backend/app/services/progress_service.py       (신규 — 진행률 계산 서비스)
+
+FE:
+├── frontend/lib/screens/home/home_screen.dart     (수정 — 진행현황 카드 추가)
+├── frontend/lib/services/progress_service.dart    (신규 — 진행률 API 호출)
+├── frontend/lib/screens/progress/sn_progress_screen.dart  (신규 — 전체 목록 화면)
+
+TEST:
+├── tests/backend/test_sn_progress.py              (신규)
+```
+
+---
+
+### BE 작업
+
+**Phase A: 진행률 계산 서비스 (신규 파일)**
+
+`backend/app/services/progress_service.py`:
+
+```python
+"""
+협력사별 S/N 진행률 계산 서비스
+- AXIS-OPS FE + AXIS-VIEW 공용 API
+"""
+
+def get_partner_sn_progress(worker_company: str, worker_role: str,
+                             is_admin: bool = False,
+                             include_completed_within_days: int = 1) -> list:
+    """
+    협력사별 담당 S/N 진행률 조회
+
+    Returns: [
+        {
+            "serial_number": "SCR-001",
+            "model": "SCR-1200",
+            "mech_partner": "FNI",
+            "elec_partner": "TMS(E)",
+            "progress": {
+                "MM": {"total": 8, "done": 5, "percent": 62.5},
+                "EE": {"total": 6, "done": 6, "percent": 100.0},
+                "TM": {"total": 3, "done": 0, "percent": 0.0},
+                "PI": {"total": 4, "done": 2, "percent": 50.0},
+                "QI": {"total": 4, "done": 0, "percent": 0.0},
+                "SI": {"total": 3, "done": 0, "percent": 0.0}
+            },
+            "overall_percent": 43.3,
+            "all_completed": false,
+            "all_completed_at": null,
+            "mech_start": "2026-03-01",
+            "ship_plan_date": "2026-04-15"
+        },
+        ...
+    ]
+    """
+    # Step 1: 협력사별 S/N 필터링
+    # GST admin → 전체
+    # FNI/BAT → WHERE mech_partner = company
+    # TMS(M) → WHERE mech_partner = 'TMS' OR module_outsourcing = 'TMS'
+    # TMS(E)/P&S/C&A → WHERE elec_partner = company
+
+    # Step 2: 완료 필터링
+    # WHERE cs.all_completed = false
+    #    OR cs.all_completed_at > NOW() - INTERVAL '{days} days'
+
+    # Step 3: 카테고리별 진행률 계산
+    # JOIN app_task_details → GROUP BY serial_number, task_category
+    # COUNT(*) as total, SUM(completed_at IS NOT NULL) as done
+
+    # Step 4: overall_percent 계산
+    # 전체 applicable tasks 중 completed 비율
+```
+
+**핵심 SQL 쿼리 패턴**:
+
+```sql
+-- 협력사 S/N 목록 + 완료상태 (예: FNI)
+SELECT pi.serial_number, pi.model, pi.mech_partner, pi.elec_partner,
+       pi.mech_start, pi.ship_plan_date,
+       cs.all_completed, cs.all_completed_at
+FROM plan.product_info pi
+LEFT JOIN completion_status cs ON cs.serial_number = pi.serial_number
+WHERE pi.mech_partner = %(company)s
+  AND (cs.all_completed IS NULL
+       OR cs.all_completed = false
+       OR cs.all_completed_at > NOW() - INTERVAL '1 day')
+ORDER BY pi.mech_start NULLS LAST;
+
+-- 카테고리별 진행률 (위 S/N들에 대해)
+SELECT td.serial_number, td.task_category,
+       COUNT(*) FILTER (WHERE td.is_applicable = true) as total,
+       COUNT(*) FILTER (WHERE td.is_applicable = true AND td.completed_at IS NOT NULL) as done
+FROM app_task_details td
+WHERE td.serial_number = ANY(%(serial_numbers)s)
+GROUP BY td.serial_number, td.task_category;
+```
+
+> **주의**: `completion_status` 컬럼명은 `mm_completed`, `ee_completed` (mech/elec 아님)
+
+**Phase B: API 엔드포인트 추가**
+
+`backend/app/routes/product.py`에 추가:
+
+```python
+@product_bp.route('/progress', methods=['GET'])
+@jwt_required()
+def get_sn_progress():
+    """
+    협력사별 S/N 진행률 조회
+
+    Query params:
+      - company: (optional) 특정 협력사 필터 (admin용)
+      - include_completed: (optional) 완료 포함 일수, default=1
+
+    Response: { "products": [...], "summary": { "total": 15, "in_progress": 12, "completed_recent": 3 } }
+    """
+    worker = get_current_worker()  # JWT에서 worker 추출
+
+    # admin이면 company 파라미터 허용, 아니면 자기 회사만
+    company = request.args.get('company', worker.company)
+    if not worker.is_admin and company != worker.company:
+        return jsonify({'error': 'FORBIDDEN'}), 403
+
+    include_days = int(request.args.get('include_completed', 1))
+
+    result = get_partner_sn_progress(
+        worker_company=company,
+        worker_role=worker.role,
+        is_admin=worker.is_admin,
+        include_completed_within_days=include_days
+    )
+
+    return jsonify({
+        'products': result,
+        'summary': {
+            'total': len(result),
+            'in_progress': sum(1 for r in result if not r['all_completed']),
+            'completed_recent': sum(1 for r in result if r['all_completed'])
+        }
+    })
+```
+
+> **AXIS-VIEW 재사용**: 동일 JWT 인증 + `?company=FNI` 파라미터로 admin이 특정 협력사 조회 가능
+
+---
+
+### FE 작업
+
+**Phase A: 진행률 서비스 (신규)**
+
+`frontend/lib/services/progress_service.dart`:
+
+```dart
+class ProgressService {
+  final ApiService _api;
+
+  Future<Map<String, dynamic>> getSnProgress({String? company}) async {
+    final params = company != null ? '?company=$company' : '';
+    return await _api.getPrivate('/app/product/progress$params');
+  }
+}
+```
+
+**Phase B: 홈 화면 진행현황 카드**
+
+`frontend/lib/screens/home/home_screen.dart` 수정:
+
+```dart
+// 홈 화면 기존 카드(출퇴근, 작업관리) 아래에 추가
+// 협력사 계정(company != 'GST')일 때만 표시
+
+// "작업 진행현황" 카드:
+// - 상단: "진행 중 12건 / 최근 완료 3건" 요약
+// - 하단: 상위 5개 S/N의 미니 진행바 (overall_percent)
+// - 탭하면 sn_progress_screen.dart로 이동
+
+// GST 계정: 같은 카드, but "전사 작업 진행현황"으로 표시
+```
+
+**Phase C: S/N 진행률 전체 목록 화면 (신규)**
+
+`frontend/lib/screens/progress/sn_progress_screen.dart`:
+
+```dart
+// 전체 S/N 목록 — ListView
+// 각 아이템:
+//   [S/N] [모델명]
+//   [전체 진행바 43%]
+//   [MM ██░░ 62%] [EE ████ 100%] [TM ░░░░ 0%]   ← 자사 담당 공정만 강조색
+//   [PI ██░░ 50%] [QI ░░░░ 0%] [SI ░░░░ 0%]
+//   [납기: 2026-04-15]
+
+// 100% 완료 아이템: 초록 배경 + "(완료)" 뱃지
+// 정렬: 납기(ship_plan_date) 오름차순 (급한 것 위로)
+
+// Pull-to-refresh 지원
+// 자동 갱신: 30초 (Timer)
+```
+
+---
+
+### TEST 작업
+
+> ⚠️ **프로덕션 데이터 보호 — 절대 준수**
+> - `workers` 테이블에 **실제 유저가 등록되어 있음** — 테스트 중 DELETE/TRUNCATE 금지
+> - `plan.product_info`, `qr_registry`, `app_task_details`, `completion_status`도 실데이터 있을 수 있음
+> - 테스트는 반드시 **별도 테스트 DB** 또는 **트랜잭션 롤백 패턴** 사용
+> - fixture에서 테스트용 worker INSERT 시 **고유한 테스트 전용 ID/이름** 사용 (예: `test_worker_prog_01`)
+> - teardown에서 테스트가 INSERT한 데이터**만** 정리 (WHERE 조건 명시)
+> - `DROP TABLE`, `TRUNCATE`, `DELETE FROM workers` 같은 전체 삭제 **절대 금지**
+
+`tests/backend/test_sn_progress.py`:
+
+```python
+# ⚠️ 테스트 격리: 기존 workers/product_info 데이터 절대 삭제하지 않음
+# setup: 테스트 전용 worker + product + task 데이터 INSERT (고유 prefix: TEST_PROG_)
+# teardown: TEST_PROG_ prefix 데이터만 DELETE
+
+# TC-PROG-01: 협력사(FNI) 로그인 → mech_partner='FNI'인 S/N만 반환
+# TC-PROG-02: 협력사(TMS(E)) 로그인 → elec_partner='TMS'인 S/N만 반환
+# TC-PROG-03: GST admin 로그인 → 전체 S/N 반환
+# TC-PROG-04: 진행률 계산 정확도 (8개 task 중 5개 완료 → 62.5%)
+# TC-PROG-05: 100% 완료 + 1일 경과 → 목록에서 제외
+# TC-PROG-06: 100% 완료 + 12시간 경과 → 목록에 포함 (아직 1일 미경과)
+# TC-PROG-07: admin의 ?company=FNI 파라미터 → FNI S/N만 반환
+# TC-PROG-08: 비admin의 ?company=FNI (자기 회사 아닌) → 403 FORBIDDEN
+# TC-PROG-09: task 없는 S/N → progress 빈 dict, overall_percent 0
+# TC-PROG-10: is_applicable=false 태스크는 진행률 계산에서 제외
+```
+
+---
+
+### 실행 순서
+
+```
+⚠️ 프로덕션 DB에 실제 workers 데이터 존재 — 테스트 시 기존 데이터 삭제 금지
+
+1. BE: progress_service.py 신규 생성
+2. BE: product.py에 /progress 엔드포인트 추가
+3. TEST: test_sn_progress.py 작성 + 실행 (트랜잭션 롤백 or 테스트 전용 데이터만 사용)
+4. FE: progress_service.dart 신규 생성
+5. FE: home_screen.dart에 진행현황 카드 추가
+6. FE: sn_progress_screen.dart 신규 생성
+7. flutter build web --release
+8. git add + commit + push (v1.3.0 — 협력사 S/N 진행률)
+9. 배포 확인
+```
+
+### 검증 체크리스트
+
+- [ ] BE: /api/app/product/progress 엔드포인트 정상 응답
+- [ ] BE: 협력사별 S/N 필터링 정확 (mech_partner/elec_partner 기준)
+- [ ] BE: 100% 완료 후 1일 경과 시 목록 제외
+- [ ] BE: 100% 완료 후 1일 미경과 시 목록 포함
+- [ ] BE: GST admin → 전체 S/N 조회 가능
+- [ ] BE: admin → ?company=FNI 파라미터로 특정 협력사 조회 가능
+- [ ] BE: 비admin → 타사 조회 시 403 반환
+- [ ] BE: is_applicable=false 태스크 진행률 계산 제외
+- [ ] FE: 협력사 홈 화면에 진행현황 카드 표시
+- [ ] FE: 카드 탭 → S/N 전체 목록 화면 이동
+- [ ] FE: 자사 담당 공정 강조 표시
+- [ ] FE: 납기 기준 정렬 (급한 것 위로)
+- [ ] FE: Pull-to-refresh 동작
+- [ ] TEST: 10개 테스트 케이스 전부 통과
+- [ ] TEST: 기존 workers 테이블 데이터 보존 확인 (테스트 전후 COUNT 비교)
+- [ ] 기존 기능 회귀 없음
+
+### AXIS-VIEW 연동 메모
+
+이 API는 AXIS-VIEW(React)에서 그대로 재사용된다:
+```
+AXIS-VIEW → GET /api/app/product/progress?company=FNI
+          → Authorization: Bearer {admin_jwt}
+          → 동일 응답 포맷
+```
+
+AXIS-VIEW에서는 추가로:
+- 전체 협력사 비교 대시보드 (company별 반복 호출 또는 추후 batch API)
+- 차트/그래프 시각화 (Chart.js)
+- WebSocket 실시간 갱신 (작업 완료 이벤트 시)
+
+---
+
+## 보안 Sprint 19-A: Refresh Token Rotation + Device ID (BE 전용)
+
+> **영향 범위**: AXIS-OPS BE만 수정. 양쪽 FE(OPS + VIEW) 수정 불필요 확인 완료.
+> **선행 조건**: 없음 (독립 실행 가능)
+> **AXIS-VIEW Sprint 2에서 Phase A 완료 가정하고 진행**
+
+### 배경
+
+현재 `/api/auth/refresh`는 `access_token`만 반환한다 (`auth_service.py` 533~535번째 줄).
+동일 `refresh_token`을 30일간 재사용하므로 탈취 시 30일간 악용 가능.
+
+### Phase A: Rotation 최소 구현 (BE 코드 수정만)
+
+**수정 파일**: `backend/app/services/auth_service.py` — `refresh_access_token()` 메서드
+
+**현재 코드 (533~535번째 줄):**
+```python
+return {
+    'access_token': new_access_token,
+}, 200
+```
+
+**변경:**
+```python
+new_refresh_token = self.create_refresh_token(
+    worker_id=worker.id,
+    email=worker.email
+)
+
+logger.info(f"Token rotation: worker_id={worker_id}, new refresh_token issued")
+
+return {
+    'access_token': new_access_token,
+    'refresh_token': new_refresh_token,
+}, 200
+```
+
+**효과**: 토큰 탈취 창이 30일 → 2시간으로 축소. FE는 양쪽 모두 수정 불필요:
+- AXIS-OPS FE: `auth_service.dart` 251~254번째 줄에 `if (response['refresh_token'] != null)` 이미 있음
+- AXIS-VIEW FE: `client.ts` 72~76번째 줄에 동일 패턴 있음
+
+### Phase B: Device ID 수집
+
+**목적**: 다중 기기 로그인 구분 + 추후 Phase C에서 기기별 토큰 관리
+
+**B-1. AXIS-OPS FE (Flutter PWA) — device_id 생성**
+
+`frontend/lib/services/auth_service.dart` 수정:
+
+```dart
+import 'package:uuid/uuid.dart';
+import 'dart:html' as html;
+
+/// 기기 고유 ID 생성 (브라우저 localStorage 기반)
+/// PWA 환경에서는 하드웨어 ID 접근 불가 → UUID를 최초 생성 후 재사용
+String getDeviceId() {
+  const key = 'axis_device_id';
+  var id = html.window.localStorage[key];
+  if (id == null || id.isEmpty) {
+    id = const Uuid().v4();
+    html.window.localStorage[key] = id;
+  }
+  return id;
+}
+```
+
+**B-2. 로그인/refresh 요청에 device_id 포함**
+
+`auth_service.dart` — `login()` 수정:
+```dart
+final response = await _apiService.post(
+  authLoginEndpoint,
+  data: {
+    'email': email,
+    'password': password,
+    'device_id': getDeviceId(),  // ← 추가
+  },
+);
+```
+
+`auth_service.dart` — `refreshToken()` 수정:
+```dart
+final response = await _apiService.post(
+  authRefreshEndpoint,
+  data: {
+    'refresh_token': storedRefreshToken,
+    'device_id': getDeviceId(),  // ← 추가
+  },
+);
+```
+
+PIN 로그인 (`auth.py` 680번째 줄 근처)도 동일하게 `device_id` 수신.
+
+**B-3. BE — device_id 수신 (저장은 Phase C)**
+
+`auth_service.py` — `login()`, `refresh_access_token()`:
+```python
+# request body에서 device_id 읽기 (optional, 없으면 'unknown')
+device_id = data.get('device_id', 'unknown')
+# Phase A에서는 로그만 남김, Phase C에서 DB 저장
+logger.info(f"Login: worker_id={worker.id}, device_id={device_id}")
+```
+
+**B-4. AXIS-VIEW FE (React)**
+
+`src/lib/client.ts` 또는 `src/stores/auth.ts`:
+```ts
+function getDeviceId(): string {
+  const key = 'axis_device_id';
+  let id = localStorage.getItem(key);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(key, id);
+  }
+  return id;
+}
+
+// login 요청에 추가
+const response = await client.post('/api/auth/login', {
+  email, password,
+  device_id: getDeviceId(),
+});
+
+// refresh 요청에 추가
+const response = await client.post('/api/auth/refresh', {
+  refresh_token: storedToken,
+  device_id: getDeviceId(),
+});
+```
+
+> ⚠️ `uuid` 패키지 설치 필요 (OPS): `flutter pub add uuid`
+> AXIS-VIEW는 `crypto.randomUUID()` 네이티브 사용 (패키지 불필요)
+
+---
+
+### 보안 Sprint 19-A 변경 대상 파일
+
+```
+BE (AXIS-OPS):
+├── backend/app/services/auth_service.py        (수정 — Phase A: rotation 반환)
+├── backend/app/routes/auth.py                  (수정 — Phase B: device_id 수신/로깅)
+
+FE (AXIS-OPS):
+├── frontend/lib/services/auth_service.dart     (수정 — Phase B: device_id 생성+전송)
+├── frontend/pubspec.yaml                       (수정 — uuid 패키지 추가)
+
+FE (AXIS-VIEW):
+├── src/lib/client.ts 또는 src/stores/auth.ts   (수정 — Phase B: device_id 생성+전송)
+
+TEST:
+├── tests/backend/test_auth_rotation.py         (신규)
+```
+
+### 보안 Sprint 19-A 테스트
+
+```python
+# TC-ROT-01: /auth/refresh 호출 → 응답에 access_token + refresh_token 둘 다 포함
+# TC-ROT-02: 새 refresh_token으로 다시 refresh → 성공
+# TC-ROT-03: 이전(교체된) refresh_token으로 refresh → 현재는 성공 (Phase C에서 차단 예정)
+# TC-ROT-04: login 요청에 device_id 포함 → 로그에 device_id 기록됨
+# TC-ROT-05: device_id 미전송 → 'unknown'으로 기본 처리 (에러 아님)
+# TC-ROT-06: PIN 로그인 → refresh_token 발급 정상 + rotation 동일 적용
+```
+
+> ⚠️ 기존 workers 테이블 데이터 보존 — DELETE/TRUNCATE 금지 (Sprint 18 동일 규칙)
+
+### 보안 Sprint 19-A 검증 체크리스트
+
+- [ ] BE: /auth/refresh 응답에 refresh_token 필드 추가됨
+- [ ] BE: 새 refresh_token으로 재차 refresh 성공
+- [ ] BE: login/refresh 로그에 device_id 기록
+- [ ] OPS FE: 로그인 후 access_token 만료 → 자동 갱신 → 새 refresh_token 저장됨
+- [ ] OPS FE: 갱신 후 정상 API 호출 가능
+- [ ] VIEW FE: 동일 동작 확인 (AXIS-VIEW Sprint 2 완료 후)
+- [ ] PIN 로그인: rotation 동일 적용
+- [ ] 기존 기능 회귀 없음
+- [ ] 기존 workers 데이터 보존
+
+---
+
+## 보안 Sprint 19-B: DB 토큰 관리 + Geolocation (BE + FE)
+
+> **선행 조건**: 보안 Sprint 19-A 완료
+> **영향 범위**: BE 마이그레이션 + BE 로직 + 양쪽 FE (위치 전송)
+
+### Phase C: DB 기반 토큰 관리 + 탈취 감지
+
+**C-1. 마이그레이션 (신규)**
+
+`backend/migrations/018_auth_refresh_tokens.sql`:
+
+```sql
+-- 보안 Sprint 19-B: Refresh Token DB 관리
+CREATE SCHEMA IF NOT EXISTS auth;
+
+CREATE TABLE auth.refresh_tokens (
+    id SERIAL PRIMARY KEY,
+    worker_id INTEGER NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+    device_id VARCHAR(100) NOT NULL DEFAULT 'unknown',
+    token_hash VARCHAR(64) NOT NULL,     -- SHA256 해시 (원본 저장 안 함)
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked BOOLEAN DEFAULT FALSE,
+    revoked_reason VARCHAR(50),          -- 'rotation' | 'logout' | 'theft_detected' | 'admin'
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    last_used_at TIMESTAMPTZ
+);
+
+CREATE INDEX idx_refresh_tokens_worker ON auth.refresh_tokens(worker_id, revoked);
+CREATE INDEX idx_refresh_tokens_hash ON auth.refresh_tokens(token_hash);
+```
+
+**C-2. auth_service.py 수정 — 토큰 발급 시 DB 저장**
+
+```python
+import hashlib
+
+def _hash_token(self, token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+def _store_refresh_token(self, worker_id: int, device_id: str,
+                          token: str, expires_at: datetime):
+    token_hash = self._hash_token(token)
+    # INSERT into auth.refresh_tokens
+    # 같은 (worker_id, device_id)의 이전 토큰은 revoked=TRUE, revoked_reason='rotation'
+
+def _verify_stored_refresh_token(self, token: str) -> bool:
+    token_hash = self._hash_token(token)
+    # SELECT from auth.refresh_tokens WHERE token_hash = %s AND revoked = FALSE
+    # 있으면 True + last_used_at 업데이트
+    # 없으면 → 탈취 감지: 해당 worker의 모든 토큰 무효화
+```
+
+**C-3. 탈취 감지 로직**
+
+```
+[정상 흐름]
+  refresh_token_v1으로 refresh → v1 revoked, v2 발급 → v2로 refresh → v2 revoked, v3 발급 ...
+
+[탈취 감지]
+  공격자가 v1(이미 revoked)으로 refresh 시도
+  → DB에서 v1 hash 조회 → revoked=TRUE 발견
+  → "이미 교체된 토큰 재사용" = 탈취 의심
+  → 해당 worker의 모든 refresh_token 무효화 (revoked=TRUE, reason='theft_detected')
+  → 모든 기기에서 재로그인 필요
+  → 로그 경고: "SECURITY: Refresh token reuse detected for worker_id=X"
+```
+
+**C-4. 로그아웃 시 토큰 무효화**
+
+현재 로그아웃 API가 없으므로 추가:
+
+```python
+@auth_bp.route("/logout", methods=["POST"])
+@jwt_required
+def logout():
+    """현재 기기의 refresh_token 무효화"""
+    data = request.get_json()
+    refresh_token = data.get('refresh_token')
+    if refresh_token:
+        auth_service.revoke_refresh_token(refresh_token, reason='logout')
+    return jsonify({'message': '로그아웃 완료'}), 200
+```
+
+양쪽 FE에서 로그아웃 시 이 API 호출 추가.
+
+---
+
+### Phase D: Geolocation 접속 보안
+
+## 팀 구성
+2명의 teammate를 생성해줘. Sonnet 모델 사용:
+
+1. **BE** (Backend 담당) - 소유: backend/**
+   - D-1: 마이그레이션 019_geolocation_settings.sql 작성 + 실행
+   - D-2: geo_service.py 신규 작성 (haversine + check_attendance_location)
+   - D-3: hr.py attendance_check()에 위치 검증 적용
+   - admin.py: geolocation 키 validation 추가
+   - admin_settings.py: geolocation 키 default 추가
+
+2. **FE** (Frontend 담당) - 소유: frontend/**
+   - D-4: home_screen.dart — getCurrentLocation() + 출근 체크 시 lat/lng 전송
+   - D-5: admin_options_screen.dart — Section 5 "위치 보안" 설정 UI 추가
+     - _buildTextFieldSetting (신규 위젯), _buildDropdownSetting (신규 위젯)
+     - 기존 _buildSettingToggle, _buildSectionHeader 패턴 참고
+
+⚠️ **의존 관계**: BE의 마이그레이션 019 + admin.py validation이 먼저 완료되어야 FE Section 5에서 설정 읽기/저장이 동작함.
+⚠️ **기존 workers 테이블 데이터 보존 — DELETE/TRUNCATE 금지**
+
+---
+
+> **핵심 설계 원칙:**
+> 1. **work_site 기반 예외**: GST 현장 출근만 위치 검증. 협력사 본사(HQ) 근무는 검증 스킵.
+> 2. **반경 1km**: 웹 GPS 오차(실내 300~500m) + 공장 부지/부대시설 고려.
+> 3. **soft/strict 모드**: 초기 2~4주 soft 모드(경고만) → 데이터 확인 후 strict 전환.
+>
+> **예외 대상:**
+> - ELEC 협력사 작업자 → 협력사 본사 근무 빈번 (work_site ≠ 'GST')
+> - MECH 협력사 → 추후 협력사 본사 근무 가능성 있음
+> - work_site가 'GST'가 아니면 위치 검증 자동 스킵
+
+**D-1. Admin 설정 테이블 확장**
+
+`backend/migrations/019_geolocation_settings.sql`:
+
+```sql
+-- 보안 Sprint 19-B: Geolocation 접속 보안
+-- admin.app_settings에 위치 설정 추가 (key-value 방식 기존 패턴 재사용)
+-- 설정 키:
+--   geolocation_enabled: true/false (전체 ON/OFF)
+--   geolocation_mode: soft/strict (soft=경고만, strict=차단)
+--   allowed_lat: GST 공장 위도 (예: 36.xxxxx)
+--   allowed_lng: GST 공장 경도 (예: 127.xxxxx)
+--   allowed_radius_m: 허용 반경 (미터, 기본 1000 = 1km)
+--   geolocation_check_points: 체크 시점 (예: 'attendance')
+
+INSERT INTO admin.app_settings (key, value) VALUES
+  ('geolocation_enabled', 'false'),
+  ('geolocation_mode', 'soft'),
+  ('allowed_lat', '0'),
+  ('allowed_lng', '0'),
+  ('allowed_radius_m', '1000'),
+  ('geolocation_check_points', 'attendance')
+ON CONFLICT (key) DO NOTHING;
+```
+
+> ⚠️ **GST 공장 GPS 좌표 사전 확인 필요** — 배포 전 실측
+> ⚠️ **배포 후 2~4주간 `geolocation_mode=soft` 유지** — 오차 데이터 수집 후 strict 전환
+
+**D-2. BE — 위치 검증 유틸**
+
+`backend/app/services/geo_service.py` (신규):
+
+```python
+import math
+import logging
+
+logger = logging.getLogger(__name__)
+
+def haversine_distance(lat1, lon1, lat2, lon2) -> float:
+    """두 좌표 간 거리 (미터) — Haversine 공식"""
+    R = 6371000  # 지구 반경 (m)
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+
+def check_attendance_location(work_site: str, user_lat: float = None,
+                               user_lng: float = None, worker_id: int = None) -> dict:
+    """
+    출퇴근 위치 검증 (work_site 기반 예외 처리 포함)
+
+    예외 조건:
+    - work_site != 'GST' → 협력사 본사 근무 등 → 위치 검증 스킵
+    - geolocation_enabled=false → 전체 스킵
+    - lat/lng 미전송 → 경고 로그만 (차단 안 함, GPS 권한 미허용 대응)
+
+    모드:
+    - soft: 범위 밖이어도 허용 + 경고 로그 (초기 운영용, 오차 데이터 수집)
+    - strict: 범위 밖이면 차단 (403)
+    """
+    # 1. 전체 비활성화 체크
+    enabled = get_setting('geolocation_enabled', 'false')
+    if enabled != 'true':
+        return {'allowed': True, 'reason': 'geolocation_disabled'}
+
+    # 2. work_site 기반 예외 — GST 현장이 아니면 스킵
+    if work_site and work_site.upper() != 'GST':
+        logger.info(f"GEO_SKIP: worker_id={worker_id}, work_site={work_site} (non-GST, 검증 스킵)")
+        return {'allowed': True, 'reason': 'non_gst_site', 'work_site': work_site}
+
+    # 3. 좌표 미전송 — 경고만 (GPS 권한 거부 대응)
+    if user_lat is None or user_lng is None:
+        logger.warning(f"GEO_NO_COORDS: worker_id={worker_id}, work_site={work_site} (좌표 미전송)")
+        return {'allowed': True, 'reason': 'no_coordinates'}
+
+    # 4. 거리 계산
+    allowed_lat = float(get_setting('allowed_lat', '0'))
+    allowed_lng = float(get_setting('allowed_lng', '0'))
+    allowed_radius = float(get_setting('allowed_radius_m', '1000'))  # 기본 1km
+    mode = get_setting('geolocation_mode', 'soft')  # 'soft' | 'strict'
+
+    distance = haversine_distance(user_lat, user_lng, allowed_lat, allowed_lng)
+
+    # 5. 범위 내 → 허용
+    if distance <= allowed_radius:
+        logger.info(f"GEO_OK: worker_id={worker_id}, distance={round(distance)}m (반경 {allowed_radius}m 이내)")
+        return {'allowed': True, 'distance_m': round(distance)}
+
+    # 6. 범위 밖 → 모드에 따라 분기
+    if mode == 'soft':
+        # soft 모드: 허용하되 경고 로그 (오차 데이터 수집용)
+        logger.warning(
+            f"GEO_SOFT_WARN: worker_id={worker_id}, distance={round(distance)}m, "
+            f"radius={allowed_radius}m, lat={user_lat}, lng={user_lng} (범위 밖이지만 soft 모드로 허용)"
+        )
+        return {
+            'allowed': True,
+            'reason': 'soft_mode',
+            'distance_m': round(distance),
+            'radius_m': int(allowed_radius)
+        }
+    else:
+        # strict 모드: 차단
+        logger.warning(
+            f"GEO_BLOCKED: worker_id={worker_id}, distance={round(distance)}m, "
+            f"radius={allowed_radius}m, lat={user_lat}, lng={user_lng}"
+        )
+        return {
+            'allowed': False,
+            'distance_m': round(distance),
+            'radius_m': int(allowed_radius)
+        }
+```
+
+**D-3. 적용 시점 — 출퇴근 체크에만 우선 적용**
+
+`backend/app/routes/hr.py` — `attendance_check()` 수정:
+
+```python
+from app.services.geo_service import check_attendance_location
+
+# 출근 시 위치 검증
+lat = data.get('lat')
+lng = data.get('lng')
+work_site = data.get('work_site', '')
+
+geo_result = check_attendance_location(
+    work_site=work_site,
+    user_lat=float(lat) if lat else None,
+    user_lng=float(lng) if lng else None,
+    worker_id=worker.id
+)
+
+if not geo_result['allowed']:
+    return jsonify({
+        'error': 'LOCATION_OUT_OF_RANGE',
+        'message': f"GST 공장 허용 범위({geo_result['radius_m']}m) 밖입니다. "
+                   f"현재 거리: {geo_result['distance_m']}m",
+        'distance_m': geo_result['distance_m'],
+        'radius_m': geo_result['radius_m']
+    }), 403
+```
+
+> **위치 검증 흐름 요약:**
+> ```
+> 출퇴근 체크 요청
+>   ├─ geolocation_enabled=false → 검증 스킵 ✅
+>   ├─ work_site ≠ 'GST' (협력사 본사 등) → 검증 스킵 ✅
+>   ├─ lat/lng 미전송 (GPS 권한 거부) → 경고 로그 + 허용 ✅
+>   ├─ 거리 ≤ 1km → 허용 ✅
+>   ├─ 거리 > 1km + soft 모드 → 경고 로그 + 허용 ✅ (데이터 수집)
+>   └─ 거리 > 1km + strict 모드 → 차단 ❌ (403)
+> ```
+
+**D-4. AXIS-OPS FE — 위치 전송**
+
+`frontend/lib/services/auth_service.dart` 또는 `home_screen.dart`:
+
+```dart
+import 'dart:html' as html;
+
+Future<Map<String, double>?> getCurrentLocation() async {
+  try {
+    final position = await html.window.navigator.geolocation
+        .getCurrentPosition(enableHighAccuracy: true, timeout: Duration(seconds: 10));
+    return {
+      'lat': position.coords!.latitude!.toDouble(),
+      'lng': position.coords!.longitude!.toDouble(),
+    };
+  } catch (e) {
+    debugPrint('Geolocation error: $e');
+    return null;  // 위치 권한 거부 시 null → BE에서 경고 로그만
+  }
+}
+
+// 출근 체크 시
+final location = await getCurrentLocation();
+final body = {'check_type': 'in', 'work_site': _selectedWorkSite, 'product_line': _selectedProductLine};
+if (location != null) {
+  body['lat'] = location['lat'].toString();
+  body['lng'] = location['lng'].toString();
+}
+await apiService.post('/hr/attendance/check', data: body);
+```
+
+**D-5. AXIS-OPS Admin 설정 — Geolocation 섹션 추가 (Sprint 19-B 포함)**
+
+> **기존 OPS admin 설정 페이지에 Section 5로 추가.**
+> - FE: `admin_options_screen.dart` — 기존 Section 0~4 뒤에 Section 5 "위치 보안" 추가
+> - BE: `GET/PUT /api/admin/settings` — **이미 존재**, 새 API 불필요. 마이그레이션 019에서 키만 추가하면 됨
+> - DB: `admin_settings` 테이블 key-value JSONB 방식 그대로 사용
+
+**admin_options_screen.dart — Section 5: 위치 보안 설정 추가:**
+
+```dart
+// Section 5: 위치 보안 설정
+// 기존 패턴과 동일하게 _buildSectionHeader + _buildSettingToggle 재사용
+
+// 상태 변수 추가
+bool _geolocationEnabled = false;
+String _geolocationMode = 'soft';  // 'soft' | 'strict'
+String _allowedLat = '0';
+String _allowedLng = '0';
+int _allowedRadiusM = 1000;
+
+// Section 5 UI
+_buildSectionHeader('위치 보안', Icons.location_on),
+_buildSettingToggle(
+  '위치 검증',
+  '출근 체크 시 GPS 위치 확인 (GST 현장만 적용, 협력사 본사 근무는 자동 스킵)',
+  _geolocationEnabled,
+  (val) => _updateSetting('geolocation_enabled', val),
+),
+// geolocation_enabled=true일 때만 표시
+if (_geolocationEnabled) ...[
+  _buildSettingToggle(
+    '차단 모드 (strict)',
+    'OFF: 범위 밖 경고만 (soft) / ON: 범위 밖 출근 차단 (strict)',
+    _geolocationMode == 'strict',
+    (val) => _updateSetting('geolocation_mode', val ? 'strict' : 'soft'),
+  ),
+  // GST 공장 좌표 입력 (Number Input)
+  _buildTextFieldSetting('GST 공장 위도', _allowedLat, (val) => _updateSetting('allowed_lat', val)),
+  _buildTextFieldSetting('GST 공장 경도', _allowedLng, (val) => _updateSetting('allowed_lng', val)),
+  // 허용 반경 선택
+  _buildDropdownSetting('허용 반경', _allowedRadiusM, {
+    500: '500m',
+    1000: '1km (권장)',
+    2000: '2km',
+  }, (val) => _updateSetting('allowed_radius_m', val)),
+],
+```
+
+> **⚠️ `_buildTextFieldSetting`과 `_buildDropdownSetting`은 신규 위젯 메서드.**
+> 기존 `_buildSettingToggle`, `_buildBreakTimeRow` 패턴을 참고하여 구현.
+> BE는 기존 `PUT /api/admin/settings` 그대로 사용 — 새 키(geolocation_*)만 추가됨.
+
+**BE 변경 사항:**
+- `admin.py` `PUT /api/admin/settings` — geolocation 키에 대한 validation 추가 (좌표 범위, radius 허용값)
+- `admin_settings.py` — geolocation 키의 default 값 추가 (기존 패턴 동일)
+- 마이그레이션 019에서 키 INSERT 처리 완료 (D-1에 이미 포함)
+
+---
+
+### 보안 Sprint 19-B 변경 대상 파일
+
+```
+BE (AXIS-OPS):
+├── backend/migrations/018_auth_refresh_tokens.sql   (신규 — Phase C)
+├── backend/migrations/019_geolocation_settings.sql  (신규 — Phase D)
+├── backend/app/services/auth_service.py             (수정 — Phase C: DB 저장/검증)
+├── backend/app/services/geo_service.py              (신규 — Phase D: 위치 검증)
+├── backend/app/routes/auth.py                       (수정 — Phase C: logout 추가)
+├── backend/app/routes/hr.py                         (수정 — Phase D: 위치 검증 적용)
+
+FE (AXIS-OPS):
+├── frontend/lib/screens/home/home_screen.dart       (수정 — Phase D: 출근 시 위치 전송)
+├── frontend/lib/screens/admin/admin_options_screen.dart (수정 — Phase D: Section 5 위치 보안 추가)
+├── frontend/lib/services/auth_service.dart          (수정 — Phase C: 로그아웃 시 토큰 무효화 API 호출)
+
+BE (AXIS-OPS):
+├── backend/app/routes/admin.py                       (수정 — Phase D: geolocation 키 validation 추가)
+├── backend/app/models/admin_settings.py              (수정 — Phase D: geolocation 키 default 추가)
+
+FE (AXIS-VIEW):
+├── src/stores/auth.ts 또는 src/lib/client.ts        (수정 — Phase C: 로그아웃 시 토큰 무효화)
+
+TEST:
+├── tests/backend/test_refresh_token_db.py           (신규 — Phase C)
+├── tests/backend/test_geolocation.py                (신규 — Phase D)
+```
+
+### 보안 Sprint 19-B 테스트
+
+```python
+# Phase C 테스트:
+# TC-RTD-01: 로그인 → auth.refresh_tokens에 행 INSERT됨
+# TC-RTD-02: refresh → 이전 토큰 revoked=TRUE(reason='rotation'), 새 토큰 INSERT
+# TC-RTD-03: revoked 토큰으로 refresh → 403 + 해당 worker 전체 토큰 무효화 (탈취 감지)
+# TC-RTD-04: logout → 해당 토큰 revoked=TRUE(reason='logout')
+# TC-RTD-05: 다중 기기 (device_id 2개) → 각각 독립 토큰, 한쪽 로그아웃 시 다른 쪽 유지
+# TC-RTD-06: PIN 로그인 → DB에 토큰 저장 + rotation 동일 적용
+
+# Phase D 테스트:
+# TC-GEO-01: geolocation_enabled=false → 위치 검증 스킵, 출근 성공
+# TC-GEO-02: geolocation_enabled=true + work_site='GST' + 범위 내(1km) 좌표 → 출근 성공
+# TC-GEO-03: geolocation_enabled=true + work_site='GST' + 범위 밖 좌표 + strict 모드 → 403 LOCATION_OUT_OF_RANGE
+# TC-GEO-04: geolocation_enabled=true + work_site='GST' + 범위 밖 좌표 + soft 모드 → 경고 로그 + 출근 허용
+# TC-GEO-05: geolocation_enabled=true + work_site='HQ' (협력사 본사) → 위치 검증 스킵, 출근 성공
+# TC-GEO-06: geolocation_enabled=true + work_site='GST' + 좌표 미전송 → 경고 로그만, 출근 허용
+# TC-GEO-07: haversine_distance 정확도 검증 (알려진 좌표 쌍으로 계산)
+# TC-GEO-08: work_site가 빈 문자열 또는 None → GST로 간주하고 검증 진행
+```
+
+> ⚠️ 기존 workers 테이블 데이터 보존 — DELETE/TRUNCATE 금지
+
+### 보안 Sprint 19-B 검증 체크리스트
+
+- [ ] 마이그레이션 018, 019 정상 실행
+- [ ] 로그인/PIN 로그인 → auth.refresh_tokens에 행 생성됨
+- [ ] refresh → 이전 토큰 revoked, 새 토큰 생성
+- [ ] revoked 토큰 재사용 → 전체 무효화 (탈취 감지)
+- [ ] logout API → 토큰 무효화
+- [ ] 다중 기기 독립 관리 (device_id별)
+- [ ] geolocation_enabled=false → 영향 없음
+- [ ] geolocation_enabled=true + work_site='GST' + 범위 내(1km) → 출근 성공
+- [ ] geolocation_enabled=true + work_site='GST' + 범위 밖 + strict → 403
+- [ ] geolocation_enabled=true + work_site='GST' + 범위 밖 + soft → 경고 로그 + 허용
+- [ ] geolocation_enabled=true + work_site='HQ' (협력사 본사) → 검증 스킵
+- [ ] 좌표 미전송 → 경고 로그만 (허용)
+- [ ] OPS admin 설정 Section 5: 위치 보안 토글/모드/좌표/반경 UI 표시
+- [ ] OPS admin 설정 Section 5: 설정 변경 → PUT /api/admin/settings → DB 반영 확인
+- [ ] OPS admin 설정: geolocation_enabled=false일 때 하위 설정 숨김 처리
+- [ ] 기존 기능 회귀 없음
+- [ ] 기존 workers 데이터 보존
+
+---
+
+### 보안 스프린트 실행 순서 요약
+
+```
+보안 Sprint 19-A (Rotation + Device ID):
+  1. BE: auth_service.py refresh → 새 refresh_token 반환 (Phase A)
+  2. OPS FE: uuid 패키지 + device_id 생성 + login/refresh에 전송 (Phase B)
+  3. VIEW FE: device_id 생성 + login/refresh에 전송 (Phase B)
+  4. TEST: test_auth_rotation.py (6개 TC)
+  5. 배포 + 검증
+
+보안 Sprint 19-B (DB 관리 + Geolocation):
+  ⚠️ 선행: Sprint 19-A 완료
+  1. BE: 마이그레이션 018, 019 실행
+  2. BE: auth_service.py DB 저장/검증 + logout API (Phase C)
+  3. BE: geo_service.py (work_site 예외 + soft/strict 모드) + hr.py 위치 검증 (Phase D)
+  4. BE: admin.py geolocation 키 validation + admin_settings.py default 추가 (Phase D)
+  5. OPS FE: admin_options_screen.dart Section 5 위치 보안 + 출근 시 위치 전송 (Phase D)
+  6. OPS FE: 로그아웃 토큰 무효화 (Phase C)
+  7. VIEW FE: 로그아웃 토큰 무효화 (Phase C)
+  8. TEST: test_refresh_token_db.py + test_geolocation.py (14개 TC)
+  9. GST 공장 GPS 좌표 실측 → OPS admin 설정에서 입력
+  8. 배포 (geolocation_mode=soft) → 2~4주 데이터 수집 → strict 전환
+```

@@ -117,17 +117,14 @@ def login() -> Tuple[Dict[str, Any], int]:
             'message': '이메일과 비밀번호가 필요합니다.'
         }), 400
 
-    # Sprint 19-A Phase B: device_id 수신 (로깅 전용, DB 저장은 Phase C)
+    # Sprint 19-B: device_id를 auth_service.login에 전달 (DB 저장)
     device_id = data.get('device_id', 'unknown')
 
-    # auth_service.login 호출
     response, status_code = auth_service.login(
         email=data['email'],
-        password=data['password']
+        password=data['password'],
+        device_id=device_id,
     )
-
-    if status_code == 200:
-        logger.info(f"Login device_id={device_id}, email={data['email']}")
 
     return jsonify(response), status_code
 
@@ -373,17 +370,51 @@ def refresh() -> Tuple[Dict[str, Any], int]:
             'message': 'refresh_token 필드가 필요합니다.'
         }), 400
 
-    # Sprint 19-A Phase B: device_id 로깅
+    # Sprint 19-B: device_id를 auth_service에 전달 (DB 저장)
     device_id = data.get('device_id', 'unknown')
 
     response, status_code = auth_service.refresh_access_token(
-        refresh_token=data['refresh_token']
+        refresh_token=data['refresh_token'],
+        device_id=device_id,
     )
 
-    if status_code == 200:
-        logger.info(f"Token refresh device_id={device_id}")
-
     return jsonify(response), status_code
+
+
+# ──────────────────────────────────────────────────────────────────
+# Sprint 19-B: 로그아웃 (토큰 무효화)
+# ──────────────────────────────────────────────────────────────────
+
+@auth_bp.route("/logout", methods=["POST"])
+@jwt_required
+def logout() -> Tuple[Dict[str, Any], int]:
+    """
+    로그아웃 — 현재 refresh_token DB에서 무효화
+
+    Headers:
+        Authorization: Bearer {token}
+
+    Request Body:
+        {
+            "refresh_token": str  # optional — 무효화할 refresh_token
+        }
+
+    Response:
+        200: {"message": "로그아웃 완료"}
+    """
+    data = request.get_json() or {}
+    refresh_token = data.get('refresh_token')
+
+    if refresh_token:
+        auth_service.revoke_refresh_token(refresh_token, reason='logout')
+        logger.info(f"Logout with token revocation: worker_id={get_current_worker_id()}")
+    else:
+        # refresh_token 미전송 시 해당 worker 전체 토큰 무효화
+        worker_id = get_current_worker_id()
+        auth_service.revoke_all_worker_tokens(worker_id, reason='logout')
+        logger.info(f"Logout all tokens: worker_id={worker_id}")
+
+    return jsonify({'message': '로그아웃 완료'}), 200
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -696,8 +727,15 @@ def pin_login() -> Tuple[Dict[str, Any], int]:
         email=worker_row['email']
     )
 
-    # Sprint 19-A Phase B: device_id 로깅
+    # Sprint 19-B: refresh token DB 저장
     device_id = data.get('device_id', 'unknown')
+    now = datetime.now(timezone.utc)
+    auth_service._store_refresh_token(
+        worker_id=worker_row['id'],
+        device_id=device_id,
+        token=refresh_token,
+        expires_at=now + timedelta(days=30),
+    )
     logger.info(f"PIN login success: worker_id={worker_id}, device_id={device_id}")
     return jsonify({
         'access_token': access_token,

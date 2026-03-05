@@ -1,3 +1,7 @@
+// ignore_for_file: avoid_web_libraries_in_flutter
+import 'dart:async';
+import 'dart:html' as html;
+import 'dart:js_util' as js_util;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/auth_provider.dart';
@@ -149,6 +153,56 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     }
   }
 
+  /// 현재 GPS 위치 조회 (Web Geolocation API — js_util 기반)
+  ///
+  /// 위치 권한 허용 시 {lat, lng} 반환, 거부 또는 오류 시 null 반환
+  Future<Map<String, double>?> _getCurrentLocation() async {
+    try {
+      final geo = js_util.getProperty(
+        js_util.getProperty(js_util.globalThis, 'navigator'),
+        'geolocation',
+      );
+      if (geo == null) {
+        debugPrint('[HomeScreen] Geolocation API not supported');
+        return null;
+      }
+
+      final completer = Completer<Map<String, double>?>();
+
+      final successCallback = js_util.allowInterop((dynamic pos) {
+        if (completer.isCompleted) return;
+        try {
+          final coords = js_util.getProperty(pos as Object, 'coords');
+          final lat = (js_util.getProperty(coords as Object, 'latitude') as num).toDouble();
+          final lng = (js_util.getProperty(coords, 'longitude') as num).toDouble();
+          completer.complete({'lat': lat, 'lng': lng});
+        } catch (e) {
+          completer.complete(null);
+        }
+      });
+
+      final errorCallback = js_util.allowInterop((dynamic err) {
+        if (completer.isCompleted) return;
+        final code = js_util.getProperty(err as Object, 'code');
+        final msg = js_util.getProperty(err, 'message');
+        debugPrint('[HomeScreen] Geolocation error: $msg (code=$code)');
+        completer.complete(null);
+      });
+
+      final options = js_util.jsify({'timeout': 10000, 'enableHighAccuracy': false});
+      js_util.callMethod(geo as Object, 'getCurrentPosition', [successCallback, errorCallback, options]);
+
+      // 12초 안에 응답 없으면 null 반환 (timeout 방어)
+      return await completer.future.timeout(
+        const Duration(seconds: 12),
+        onTimeout: () => null,
+      );
+    } catch (e) {
+      debugPrint('[HomeScreen] _getCurrentLocation exception: $e');
+      return null;
+    }
+  }
+
   /// 출근/퇴근 처리
   Future<void> _handleAttendance() async {
     setState(() => _attendanceLoading = true);
@@ -160,19 +214,39 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       if (checkType == 'in') {
         body['work_site'] = _selectedWorkSite;
         body['product_line'] = _selectedProductLine;
+        // GPS 위치 조회 → latitude/longitude 추가 (권한 거부 시 서버가 geo_strict_mode에 따라 처리)
+        final location = await _getCurrentLocation();
+        if (location != null) {
+          body['latitude'] = location['lat'];
+          body['longitude'] = location['lng'];
+        }
       }
       await apiService.post('/hr/attendance/check', data: body);
       await _fetchAttendanceStatus();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('처리 실패: ${e.toString().replaceFirst('Exception: ', '')}'),
-            backgroundColor: GxColors.danger,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.sm)),
-          ),
-        );
+        final errMsg = e.toString().replaceFirst('Exception: ', '');
+        // 위치 범위 벗어남 에러 처리
+        if (errMsg.contains('OUT_OF_RANGE')) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('출근 불가: 허용된 위치 범위를 벗어났습니다.\n관리자에게 문의하세요.'),
+              backgroundColor: GxColors.danger,
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 5),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.sm)),
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('처리 실패: $errMsg'),
+              backgroundColor: GxColors.danger,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.sm)),
+            ),
+          );
+        }
       }
     } finally {
       if (mounted) setState(() => _attendanceLoading = false);

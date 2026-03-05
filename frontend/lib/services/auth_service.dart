@@ -188,9 +188,22 @@ class AuthService {
 
   /// 로그아웃
   ///
-  /// 로컬 저장된 토큰 및 사용자 데이터 삭제
+  /// Sprint 19-B: 서버에 refresh_token 무효화 요청 후 로컬 데이터 삭제
   Future<void> logout() async {
     try {
+      // 서버에 로그아웃 요청 (refresh_token 무효화)
+      final storedRefreshToken = await _secureStorage.read(key: _refreshTokenKey);
+      try {
+        await _apiService.post(
+          authLogoutEndpoint,
+          data: {
+            if (storedRefreshToken != null) 'refresh_token': storedRefreshToken,
+          },
+        );
+      } catch (_) {
+        // 서버 요청 실패해도 로컬 로그아웃은 계속 진행
+      }
+
       _apiService.clearToken();
 
       await _secureStorage.delete(key: _tokenKey);

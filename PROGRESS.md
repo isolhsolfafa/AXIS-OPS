@@ -3,7 +3,7 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v1.3.0 (Sprint 18, 2026-03-04)
+> **현재 버전**: v1.3.0 (Sprint 19-D, 2026-03-06)
 
 ---
 
@@ -2259,3 +2259,126 @@ Sprint 14 배포 후 현장 테스트에서 추가 버그 5건 발견.
 - [x] git commit & push (`0f527c1`)
 - [x] Railway 자동 배포 (GitHub push)
 - [x] flutter build web → Netlify 배포 (https://gaxis-ops.netlify.app)
+
+---
+
+## Sprint 19-B: DB 기반 Refresh Token 관리 + 탈취 감지 (2026-03-06) ✅
+
+### 목표
+1. Refresh Token을 DB(auth 스키마)에 해시 저장 — 토큰 무효화(revoke) 가능
+2. 탈취 감지: revoked 토큰 재사용 시 해당 worker 전체 토큰 자동 무효화
+3. 로그아웃 API 구현 (토큰 DB 무효화)
+4. Device별 토큰 관리 (동일 worker+device → 이전 토큰 rotation revoke)
+
+### BE 완료 내역
+- **`backend/migrations/018_auth_refresh_tokens.sql`** (신규)
+  - `auth` 스키마 생성
+  - `auth.refresh_tokens` 테이블: worker_id, device_id, token_hash(SHA256), expires_at, revoked, revoked_reason
+  - 인덱스 2개: `idx_refresh_tokens_worker`, `idx_refresh_tokens_hash`
+- **`backend/app/services/auth_service.py`** — 4개 메서드 추가
+  - `_store_refresh_token()`: 로그인/refresh 시 DB에 해시 저장 + 동일 (worker, device) 이전 토큰 revoke
+  - `_validate_refresh_token_db()`: DB 검증 + 탈취 감지 (revoked 토큰 재사용 → 전체 무효화)
+  - `revoke_refresh_token()`: 단일 토큰 무효화 (로그아웃)
+  - `revoke_all_worker_tokens()`: worker 전체 토큰 무효화 (탈취 감지/관리자)
+- **`backend/app/routes/auth.py`** — `POST /api/auth/logout` 엔드포인트 추가
+  - refresh_token 전송 시 해당 토큰 revoke, 미전송 시 worker 전체 토큰 revoke
+
+### TEST 완료 내역 (10개 신규)
+| TC | 테스트 | 설명 |
+|----|--------|------|
+| TC-TDB-01 | `test_login_stores_token_in_db` | 로그인 시 auth.refresh_tokens에 해시 저장 |
+| TC-TDB-02 | `test_refresh_rotates_token_in_db` | refresh 시 이전 토큰 revoked + 새 토큰 저장 |
+| TC-TDB-03 | `test_theft_detection_revokes_all` | revoked 토큰 재사용 → 전체 토큰 무효화 |
+| TC-TDB-04 | `test_logout_revokes_token` | 로그아웃 시 토큰 DB 무효화 |
+| TC-TDB-05 | `test_logout_token_cannot_refresh` | 로그아웃된 토큰으로 refresh 불가 |
+| TC-TDB-06 | `test_logout_without_token_revokes_all` | 토큰 미전송 로그아웃 → 전체 무효화 |
+| TC-TDB-07 | `test_rotation_per_device` | 동일 device에서 refresh 시 이전만 revoke |
+| TC-TDB-08 | `test_token_hash_format` | SHA256 해시 64자 형식 검증 |
+| TC-TDB-09 | `test_pin_login_stores_token` | PIN 로그인도 DB 토큰 저장 |
+| TC-TDB-10 | `test_logout_requires_auth` | JWT 없이 로그아웃 → 401 |
+
+---
+
+## Sprint 19-D: Geolocation 기반 출퇴근 위치 보안 (2026-03-06) ✅
+
+### 목표
+1. 협력사 출퇴근 시 GPS 좌표 검증 — 허용 반경 밖이면 차단
+2. Admin 설정으로 기준점(위도/경도) + 반경(m) + on/off 제어
+3. soft/strict 모드: soft=위치 미전송 시 경고만, strict=거부
+4. work_site='HQ'(협력사 본사) → GPS 검증 면제
+
+### BE 완료 내역
+- **`backend/migrations/019_geolocation_settings.sql`** (신규)
+  - admin_settings에 5개 키 추가: `geo_check_enabled`, `geo_latitude`, `geo_longitude`, `geo_radius_meters`, `geo_strict_mode`
+  - 기본값: 비활성(false), GST 공장 좌표(37.4028, 127.1060), 반경 500m, soft 모드
+- **`backend/app/services/geo_service.py`** (신규)
+  - `verify_location(lat, lon)` → Haversine 공식으로 거리 계산, (allowed, distance) 반환
+  - `is_geo_check_enabled()` → admin_settings 조회
+  - `is_geo_strict_mode()` → 엄격 모드 여부 조회
+  - `get_geo_config()` → 전체 설정 딕셔너리 반환
+- **`backend/app/routes/hr.py`** — `attendance_check()` 수정
+  - GPS 검증 조건: `is_geo_check_enabled() and work_site == 'GST'` (HQ 면제)
+  - soft 모드: 좌표 미전송 → 경고 로그만, 출근 허용
+  - strict 모드: 좌표 미전송 → 400 LOCATION_REQUIRED 거부
+  - 좌표 전송 시: 거리 검증 → 403 OUT_OF_RANGE
+- **`backend/app/routes/admin.py`** — `geo_strict_mode` 추가 (defaults + ALLOWED_KEYS)
+
+### FE 완료 내역
+- **`frontend/lib/screens/admin/admin_options_screen.dart`** — 위치 보안 섹션 추가
+  - 위치 보안 on/off 토글, 위도/경도/반경 입력 필드
+  - BE 키명 정합: `geo_check_enabled`, `geo_latitude`, `geo_longitude`
+- **`frontend/lib/screens/home/home_screen.dart`** — 출퇴근 시 GPS 좌표 전송
+  - `navigator.geolocation.getCurrentPosition()` → `latitude`/`longitude` 키로 전송
+  - 403 OUT_OF_RANGE 에러 시 사용자 안내 메시지
+
+### BE/FE 키명 정합 수정 (리드 세션)
+에이전트 구현 후 발견된 BE↔FE 키 불일치 6건 수정:
+| FE (수정 전) | BE (정답) | 수정 파일 |
+|---|---|---|
+| `geolocation_enabled` | `geo_check_enabled` | admin_options_screen.dart |
+| `geo_lat` | `geo_latitude` | admin_options_screen.dart |
+| `geo_lng` | `geo_longitude` | admin_options_screen.dart |
+| `body['lat']` | `body['latitude']` | home_screen.dart |
+| `body['lng']` | `body['longitude']` | home_screen.dart |
+| `LOCATION_OUT_OF_RANGE` | `OUT_OF_RANGE` | home_screen.dart |
+
+추가 누락 구현:
+- BE `geo_strict_mode` 설정 키 추가 (migration + geo_service + admin.py)
+- BE `work_site='HQ'` GPS 검증 면제 로직 (hr.py)
+- BE soft/strict 모드 분기 (hr.py)
+
+### TEST 완료 내역 (11개 신규)
+| TC | 테스트 | 설명 |
+|----|--------|------|
+| TC-GEO-01 | `test_geo_disabled_allows_checkin` | geo 비활성 → 좌표 없이 출근 성공 |
+| TC-GEO-02 | `test_geo_soft_mode_no_coords_allows` | soft 모드 + 좌표 미전송 → 201 허용 |
+| TC-GEO-03 | `test_geo_enabled_valid_location_allows` | 허용 범위 내 좌표 → 출근 성공 |
+| TC-GEO-04 | `test_geo_enabled_out_of_range_blocks` | 범위 밖 좌표 → 403 OUT_OF_RANGE |
+| TC-GEO-05 | `test_geo_enabled_invalid_coords_rejected` | 잘못된 좌표 형식 → 400 |
+| TC-GEO-06 | `test_geo_custom_radius_allows` | 커스텀 반경 설정 → 범위 판정 정확 |
+| TC-GEO-07 | `test_admin_get_geo_settings` | GET admin settings → 5개 geo 키 포함 |
+| TC-GEO-08 | `test_geo_checkout_skips_validation` | 퇴근(OUT)은 GPS 검증 스킵 |
+| TC-GEO-09 | `test_geo_strict_mode_no_coords_blocks` | strict 모드 + 좌표 미전송 → 400 |
+| TC-GEO-10 | `test_hq_work_site_bypasses_geo` | HQ 근무지 → GPS 검증 면제 |
+| TC-GEO-11 | `test_admin_update_geo_strict_mode` | admin settings → geo_strict_mode 업데이트 |
+
+### 테스트 결과
+- `test_geolocation.py`: **11 passed** (113s)
+- `test_token_db.py`: **10 passed**
+- 전체 회귀: **526 passed, 23 failed (기존), 11 skipped, 14 errors** — 신규 regression 0건
+- FE 빌드: `flutter build web --release` — 에러 0건
+
+### 생성/수정 파일
+```
+backend/migrations/018_auth_refresh_tokens.sql           # 신규 (19-B)
+backend/migrations/019_geolocation_settings.sql          # 신규 (19-D)
+backend/app/services/auth_service.py                     # 수정 (19-B: DB 토큰 메서드 4개)
+backend/app/services/geo_service.py                      # 신규 (19-D)
+backend/app/routes/auth.py                               # 수정 (19-B: logout 엔드포인트)
+backend/app/routes/hr.py                                 # 수정 (19-D: GPS 검증 + soft/strict + HQ 면제)
+backend/app/routes/admin.py                              # 수정 (19-D: geo_strict_mode)
+frontend/lib/screens/admin/admin_options_screen.dart      # 수정 (19-D: 위치 보안 UI + 키명 정합)
+frontend/lib/screens/home/home_screen.dart                # 수정 (19-D: GPS 좌표 전송 + 키명 정합)
+tests/backend/test_token_db.py                           # 신규 (19-B: 10 tests)
+tests/backend/test_geolocation.py                        # 신규 (19-D: 11 tests)
+```

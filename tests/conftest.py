@@ -176,6 +176,7 @@ def db_schema():
 
             # 기존 스키마 정리 (재실행 대비) - Sprint 6 + Sprint 11 + Sprint 12 테이블 포함
             drop_stmts = [
+                "DROP SCHEMA IF EXISTS auth CASCADE",
                 "DROP SCHEMA IF EXISTS checklist CASCADE",
                 "DROP SCHEMA IF EXISTS hr CASCADE",
                 "DROP TABLE IF EXISTS location_history CASCADE",
@@ -215,6 +216,8 @@ def db_schema():
                 '009_sprint11_gst_tasks.sql',
                 '010_sprint12_hr_schema.sql',
                 '017_add_attendance_classification.sql',
+                '018_auth_refresh_tokens.sql',
+                '019_geolocation_settings.sql',
             ]
 
             for filename in migration_files:

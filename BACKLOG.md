@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-03-05 (Sprint 19-A 완료 — Rotation + Device ID)
+> 마지막 업데이트: 2026-03-06 (Sprint 19-B/D 완료 — DB 토큰 관리 + Geolocation)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -122,20 +122,12 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 - **참고**: ETL_MODULE_GUIDE.md 참조
 - **시기**: 미정
 
-### Geolocation 기반 접속 보안 (2차 보안)
-- **내용**: 사용자 위치정보(GPS)를 확인하여 허용 범위 내에서만 앱 사용 가능
-- **배경**: 1차 보안으로 IP 화이트리스트(내부망 제한) 예정, 2차 보안으로 위치정보 검증 추가
-- **구현 방안**:
-  1. FE: `navigator.geolocation.getCurrentPosition()` → 출근/QR스캔/Task 시작 시 위치 좌표 전송
-  2. BE: 허용 좌표 기준점 + 반경(m) 비교 → 범위 밖이면 차단
-  3. Admin 설정 화면: 허용 위치 기준점(위도/경도) + 허용 반경(m) 설정 가능
-- **필요 작업**:
-  - `admin.app_settings` 또는 별도 테이블에 `allowed_lat`, `allowed_lng`, `allowed_radius_m` 컬럼
-  - Admin Settings UI에 지도 기반 위치 선택 or 좌표 직접 입력
-  - FE 미들웨어: 위치 권한 요청 + 주기적 위치 확인
-  - BE API: 위치 검증 엔드포인트 or 기존 API에 위치 파라미터 추가
-- **참고**: 공장 GPS 좌표 사전 확인 필요, 실내 GPS 정확도 한계 고려 (Wi-Fi 기반 보완 가능)
-- **시기**: IP 화이트리스트 구축 후
+### ~~Geolocation 기반 접속 보안 (2차 보안)~~ → ✅ Sprint 19-D 완료
+- Sprint 19-D에서 구현 완료
+- admin_settings 5개 키 (geo_check_enabled, geo_latitude, geo_longitude, geo_radius_meters, geo_strict_mode)
+- FE: 출퇴근 시 GPS 좌표 전송, Admin UI 위치 보안 설정
+- BE: Haversine 거리 검증, soft/strict 모드, HQ 면제
+- 11 tests passed
 
 ### defect 스키마
 - **내용**: 불량 분석, 추적, 리포트 (QMS 연동)
@@ -182,4 +174,5 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 | 17 | 출퇴근 분류 체계 (work_site + product_line) v1.2.0 | 13 PASSED, 배포 완료 |
 | 18 | 협력사별 S/N 진행률 뷰 v1.3.0 | 10 PASSED, 배포 완료 |
 | 19-A | 보안: Refresh Token Rotation + Device ID | 6 PASSED + 28 회귀, 배포 완료 |
-| 19-B | 보안: DB 토큰 관리 + Geolocation | 대기 (선행: 19-A 완료) |
+| 19-B | 보안: DB 기반 Refresh Token 관리 + 탈취 감지 | 10 PASSED, 배포 완료 |
+| 19-D | 보안: Geolocation GPS 위치 검증 (출퇴근) | 11 PASSED, 배포 완료 |
