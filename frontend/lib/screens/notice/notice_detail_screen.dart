@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/auth_provider.dart';
+import '../../services/api_service.dart';
 import '../../services/notice_service.dart';
 import '../../utils/design_system.dart';
 
@@ -15,13 +16,15 @@ class NoticeDetailScreen extends ConsumerStatefulWidget {
 }
 
 class _NoticeDetailScreenState extends ConsumerState<NoticeDetailScreen> {
-  final NoticeService _noticeService = NoticeService();
+  late final NoticeService _noticeService;
   Map<String, dynamic>? _notice;
   bool _loading = true;
 
   @override
   void initState() {
     super.initState();
+    final apiService = ref.read(apiServiceProvider);
+    _noticeService = NoticeService(apiService: apiService);
     _loadDetail();
   }
 

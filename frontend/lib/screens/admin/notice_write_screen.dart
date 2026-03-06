@@ -1,23 +1,32 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../providers/auth_provider.dart';
 import '../../services/notice_service.dart';
 import '../../utils/design_system.dart';
 
 /// Admin 공지 작성 화면
 /// Sprint 20-B
-class NoticeWriteScreen extends StatefulWidget {
+class NoticeWriteScreen extends ConsumerStatefulWidget {
   const NoticeWriteScreen({super.key});
 
   @override
-  State<NoticeWriteScreen> createState() => _NoticeWriteScreenState();
+  ConsumerState<NoticeWriteScreen> createState() => _NoticeWriteScreenState();
 }
 
-class _NoticeWriteScreenState extends State<NoticeWriteScreen> {
-  final NoticeService _noticeService = NoticeService();
+class _NoticeWriteScreenState extends ConsumerState<NoticeWriteScreen> {
+  late final NoticeService _noticeService;
   final _titleController = TextEditingController();
   final _contentController = TextEditingController();
   final _versionController = TextEditingController();
   bool _isPinned = false;
   bool _submitting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final apiService = ref.read(apiServiceProvider);
+    _noticeService = NoticeService(apiService: apiService);
+  }
 
   @override
   void dispose() {

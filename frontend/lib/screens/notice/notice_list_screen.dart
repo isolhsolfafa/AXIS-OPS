@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../providers/auth_provider.dart';
+import '../../services/api_service.dart';
 import '../../services/notice_service.dart';
 import '../../utils/design_system.dart';
 import 'notice_detail_screen.dart';
@@ -16,7 +17,7 @@ class NoticeListScreen extends ConsumerStatefulWidget {
 }
 
 class _NoticeListScreenState extends ConsumerState<NoticeListScreen> {
-  final NoticeService _noticeService = NoticeService();
+  late final NoticeService _noticeService;
   List<Map<String, dynamic>> _notices = [];
   bool _loading = true;
   int _total = 0;
@@ -26,6 +27,9 @@ class _NoticeListScreenState extends ConsumerState<NoticeListScreen> {
   @override
   void initState() {
     super.initState();
+    // 토큰이 설정된 공유 ApiService 사용 (MISSING_TOKEN 방지)
+    final apiService = ref.read(apiServiceProvider);
+    _noticeService = NoticeService(apiService: apiService);
     _loadNotices();
   }
 
