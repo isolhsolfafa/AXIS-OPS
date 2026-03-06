@@ -18,12 +18,27 @@ from datetime import datetime, timezone
 # ============================================================
 @pytest.fixture(autouse=True)
 def cleanup_hr_attendance(db_conn):
-    """각 테스트 후 hr.partner_attendance 정리"""
-    yield
+    """각 테스트 후 테스트가 생성한 worker의 hr.partner_attendance만 정리
+    (기존 운영 데이터는 보존)"""
+    # 테스트 시작 전 시점 기록
+    test_start = None
     if db_conn and not db_conn.closed:
         try:
             cursor = db_conn.cursor()
-            cursor.execute("DELETE FROM hr.partner_attendance WHERE 1=1")
+            cursor.execute("SELECT NOW()")
+            test_start = cursor.fetchone()[0]
+            cursor.close()
+        except Exception:
+            pass
+    yield
+    # 테스트 시작 이후에 생성된 레코드만 삭제 (운영 데이터 보존)
+    if db_conn and not db_conn.closed and test_start:
+        try:
+            cursor = db_conn.cursor()
+            cursor.execute(
+                "DELETE FROM hr.partner_attendance WHERE created_at >= %s",
+                (test_start,)
+            )
             db_conn.commit()
             cursor.close()
         except Exception:

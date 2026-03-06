@@ -153,6 +153,7 @@ def db_schema():
             # ── 기존 worker 데이터 백업 (실서비스 계정 보존) ──
             backed_up_workers = []
             backed_up_auth_settings = []
+            backed_up_attendance = []
             try:
                 cursor.execute(
                     "SELECT id, name, email, password_hash, role::text, "
@@ -171,6 +172,15 @@ def db_schema():
                 )
                 backed_up_auth_settings = cursor.fetchall()
                 print(f"[db_schema] Backed up {len(backed_up_auth_settings)} auth settings")
+
+                # hr.partner_attendance 백업 (출퇴근 기록 보존)
+                cursor.execute(
+                    "SELECT id, worker_id, check_type, check_time, method, note, "
+                    "created_at, work_site, product_line "
+                    "FROM hr.partner_attendance"
+                )
+                backed_up_attendance = cursor.fetchall()
+                print(f"[db_schema] Backed up {len(backed_up_attendance)} attendance records")
             except Exception as backup_err:
                 print(f"[db_schema] Worker backup skipped (table may not exist): {backup_err}")
 
@@ -291,6 +301,31 @@ def db_schema():
                     except Exception as auth_err:
                         print(f"[db_schema] Auth settings restore failed: {auth_err}")
                 print(f"[db_schema] Restored {restored_auth}/{len(backed_up_auth_settings)} auth settings")
+
+            # hr.partner_attendance 복원
+            if backed_up_attendance:
+                restored_att = 0
+                for row in backed_up_attendance:
+                    try:
+                        cursor.execute(
+                            """
+                            INSERT INTO hr.partner_attendance
+                                (id, worker_id, check_type, check_time, method, note,
+                                 created_at, work_site, product_line)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (id) DO NOTHING
+                            """,
+                            row
+                        )
+                        restored_att += 1
+                    except Exception as att_err:
+                        print(f"[db_schema] Attendance restore failed: {att_err}")
+                # id 시퀀스 조정
+                cursor.execute(
+                    "SELECT setval('hr.partner_attendance_id_seq', "
+                    "COALESCE((SELECT MAX(id) FROM hr.partner_attendance), 1))"
+                )
+                print(f"[db_schema] Restored {restored_att}/{len(backed_up_attendance)} attendance records")
 
         finally:
             cursor.close()
