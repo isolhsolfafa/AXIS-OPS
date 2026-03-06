@@ -3,7 +3,7 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v1.4.0 (Sprint 19-B/D, 2026-03-06)
+> **현재 버전**: v1.4.0 (Sprint 20-A, 2026-03-06)
 
 ---
 
@@ -2438,4 +2438,40 @@ VIEW Sprint 3 (실 데이터 연결)의 선행 작업.
 ```
 backend/app/routes/admin.py                # 수정 (3개 엔드포인트 + 공통 함수)
 tests/backend/test_admin_attendance.py     # 신규 (8 tests)
+```
+
+---
+
+## Sprint 20-A: 신규 가입 시 Admin 이메일 알림 (2026-03-06) ✅
+
+### 목표
+작업자가 회원가입하면 DB의 `is_admin=true` 사용자 전원에게 이메일 자동 발송.
+가입 사실을 즉시 인지하고 승인/거부 판단 가능.
+
+### BE 완료 내역
+- **`backend/app/services/email_service.py`** (신규)
+  - `get_admin_emails()` — DB에서 is_admin=true 사용자 이메일 목록 조회
+  - `_send_email()` — smtplib SMTP 발송 (auth_service.py와 동일 패턴)
+  - `render_register_notification()` — 신규 가입 알림 HTML 템플릿 (이름, 이메일, 역할, 협력사, 가입일시)
+  - `send_register_notification()` — Admin 전원에게 알림 발송 (best-effort)
+- **`backend/app/routes/auth.py`** — register 성공(201) 시 알림 호출 추가
+  - try-catch best-effort: 이메일 실패해도 가입 정상 완료
+
+### TEST 완료 내역 (5개 신규)
+| TC | 테스트 | 설명 |
+|----|--------|------|
+| MAIL-01 | `test_mail01_register_triggers_admin_notification` | 가입 → send_register_notification 호출 확인 |
+| MAIL-02 | `test_mail02_smtp_not_configured_register_succeeds` | SMTP 미설정 → 가입 성공 |
+| MAIL-03 | `test_mail03_smtp_failure_register_succeeds` | SMTP 실패 → 가입 성공 |
+| MAIL-04 | `test_mail04_notification_contains_worker_info` | 이메일 내용에 가입자 정보 포함 |
+| MAIL-05 | `test_mail05_multiple_admins_each_receive` | Admin 여러 명 → 각각 개별 발송 |
+
+### 테스트 결과
+- `test_admin_email_notification.py`: **5 passed** (34s)
+
+### 생성/수정 파일
+```
+backend/app/services/email_service.py              # 신규
+backend/app/routes/auth.py                         # 수정 (register에 알림 호출)
+tests/backend/test_admin_email_notification.py     # 신규 (5 tests)
 ```

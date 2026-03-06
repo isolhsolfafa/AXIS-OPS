@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-03-06 (Sprint 19-E 완료 — VIEW용 Admin 출퇴근 API)
+> 마지막 업데이트: 2026-03-06 (Sprint 20-A 완료 — 신규 가입 Admin 이메일 알림)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -141,13 +141,11 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 - BE: Haversine 거리 검증, soft/strict 모드, HQ 면제
 - 11 tests passed
 
-### 신규 가입 시 Admin 이메일 알림
-- **내용**: 작업자가 회원가입하면 Admin에게 이메일 발송 (가입자 정보 + 승인 링크)
-- **현재**: 가입 후 Admin이 직접 확인해야 함
-- **필요 작업**: BE에서 가입 완료 시 admin 이메일로 알림 전송 (Flask-Mail 또는 SMTP)
-- **고려사항**: 이메일 서비스 설정 (SMTP 서버), 알림 내용 (이름, 역할, 협력사, 가입일시)
-- **시기**: 미정
-- **등록일**: 2026-03-06
+### ~~신규 가입 시 Admin 이메일 알림~~ → ✅ Sprint 20-A 완료
+- Sprint 20-A에서 구현 완료
+- email_service.py 신규: get_admin_emails() + send_register_notification()
+- auth.py register 성공 시 Admin 전원 이메일 발송 (best-effort)
+- 5 tests passed
 
 ### 공지사항 탭 (앱 내 업데이트 노트)
 - **내용**: 앱 내 공지사항/업데이트 탭 — 버전 업데이트마다 사용자에게 필요한 변경사항만 요약 게시
@@ -207,3 +205,4 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 | 19-B | 보안: DB 기반 Refresh Token 관리 + 탈취 감지 | 10 PASSED, 배포 완료 |
 | 19-D | 보안: Geolocation GPS 위치 검증 (출퇴근) | 11 PASSED, 배포 완료 |
 | 19-E | VIEW용 Admin 출퇴근 API 3개 (BE) | 8 PASSED |
+| 20-A | 신규 가입 시 Admin 이메일 알림 | 5 PASSED |
