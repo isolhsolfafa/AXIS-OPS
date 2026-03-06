@@ -62,18 +62,26 @@ def register() -> Tuple[Dict[str, Any], int]:
         company=data.get('company')  # optional
     )
 
-    # Sprint 20-A: 가입 성공 시 Admin 이메일 알림 (best-effort)
+    # Sprint 20-A: 가입 성공 시 Admin 이메일 알림 (best-effort, 백그라운드 스레드)
     if status_code == 201:
         try:
+            import threading
             from app.services.email_service import send_register_notification
-            send_register_notification(
-                name=data['name'],
-                email=data['email'],
-                role=data['role'],
-                company=data.get('company'),
-            )
+
+            def _send_email_background():
+                try:
+                    send_register_notification(
+                        name=data['name'],
+                        email=data['email'],
+                        role=data['role'],
+                        company=data.get('company'),
+                    )
+                except Exception as e:
+                    logger.error(f"가입 알림 이메일 발송 실패: {e}")
+
+            threading.Thread(target=_send_email_background, daemon=True).start()
         except Exception as e:
-            logger.error(f"가입 알림 이메일 발송 실패: {e}")
+            logger.error(f"이메일 스레드 생성 실패: {e}")
 
     return jsonify(response), status_code
 
