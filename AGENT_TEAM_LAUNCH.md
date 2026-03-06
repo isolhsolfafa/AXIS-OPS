@@ -5454,3 +5454,149 @@ TEST:
   9. GST 공장 GPS 좌표 실측 → OPS admin 설정에서 입력
   8. 배포 (geolocation_mode=soft) → 2~4주 데이터 수집 → strict 전환
 ```
+
+---
+
+## Sprint 20 (예정) — 알림 + 공지사항
+
+> 스프린트 번호 및 시기 미정. 아래는 프롬프트 초안.
+
+---
+
+### Sprint 20-A: 신규 가입 시 Admin 이메일 알림
+
+**목표**: 작업자가 회원가입하면 Admin에게 이메일 자동 발송 — 가입 사실을 즉시 인지하고 승인/거부 판단 가능
+
+**배경**:
+- 현재 가입 후 Admin이 직접 사용자 목록에서 확인해야 함
+- 현장 관리자가 신규 가입을 놓칠 수 있음
+
+#### Phase A: BE — 이메일 발송 서비스
+
+**파일 목록**:
+```
+backend/app/services/email_service.py    — SMTP 이메일 발송 유틸리티 (신규)
+backend/app/routes/auth.py               — register 엔드포인트에 알림 호출 추가
+backend/config.py                        — SMTP 설정 (환경변수)
+```
+
+**구현 내용**:
+1. `email_service.py` 생성:
+   - `send_admin_notification(subject, body, to_email)` 함수
+   - Flask-Mail 또는 `smtplib` 사용 (환경변수: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, ADMIN_EMAIL)
+   - HTML 템플릿: 가입자 이름, 역할(role), 협력사(company), 가입일시
+2. `auth.py` register 성공 후:
+   ```python
+   # 가입 완료 후 Admin 알림
+   send_admin_notification(
+       subject=f"[AXIS-OPS] 신규 가입: {name} ({company})",
+       body=render_register_notification(worker),
+       to_email=os.getenv('ADMIN_EMAIL')
+   )
+   ```
+3. 이메일 발송 실패 시 가입 자체는 정상 완료 (알림은 best-effort)
+
+**config.py 환경변수**:
+```python
+SMTP_HOST = os.getenv('SMTP_HOST', 'smtp.gmail.com')
+SMTP_PORT = int(os.getenv('SMTP_PORT', 587))
+SMTP_USER = os.getenv('SMTP_USER', '')
+SMTP_PASSWORD = os.getenv('SMTP_PASSWORD', '')
+ADMIN_EMAIL = os.getenv('ADMIN_EMAIL', '')
+```
+
+**테스트 케이스** (4개):
+| TC | 설명 |
+|----|------|
+| MAIL-01 | 정상 가입 → Admin 이메일 발송 확인 (mock SMTP) |
+| MAIL-02 | SMTP 설정 없음 → 가입 성공, 이메일 스킵 (에러 로그만) |
+| MAIL-03 | SMTP 연결 실패 → 가입 성공, 이메일 실패 로그 |
+| MAIL-04 | 이메일 내용에 가입자 정보 (이름, 역할, 협력사) 포함 확인 |
+
+**체크리스트**:
+- [ ] email_service.py 생성 + send_admin_notification 함수
+- [ ] auth.py register에 알림 호출 추가
+- [ ] config.py SMTP 환경변수 추가
+- [ ] 이메일 실패 시 가입 정상 완료 확인
+- [ ] Railway 환경변수 설정 (SMTP_*, ADMIN_EMAIL)
+
+---
+
+### Sprint 20-B: 공지사항 탭 (앱 내 업데이트 노트)
+
+**목표**: 앱 내 공지사항 기능 — 버전 업데이트마다 사용자에게 필요한 변경사항만 요약 게시
+
+**배경**:
+- 앱 업데이트 시 작업자가 변경사항을 알 방법이 없음
+- 개발 용어 없이 사용자 관점에서 "무엇이 바뀌었는지" 전달 필요
+- Admin이 직접 공지 작성/관리
+
+#### Phase B-1: BE — notices 테이블 + API
+
+**파일 목록**:
+```
+backend/migrations/020_create_notices.sql  — notices 테이블 생성
+backend/app/routes/notices.py              — 공지사항 CRUD API (신규)
+backend/app/__init__.py                    — Blueprint 등록
+```
+
+**DB 스키마**:
+```sql
+CREATE TABLE IF NOT EXISTS notices (
+    id SERIAL PRIMARY KEY,
+    title VARCHAR(200) NOT NULL,
+    content TEXT NOT NULL,
+    version VARCHAR(20),                    -- 연관 앱 버전 (예: '1.4.0')
+    is_pinned BOOLEAN DEFAULT FALSE,        -- 상단 고정
+    created_by INTEGER REFERENCES workers(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+**API 엔드포인트**:
+```
+GET  /api/notices                — 공지 목록 (최신순, 페이지네이션)
+GET  /api/notices/<id>           — 공지 상세
+POST /api/admin/notices          — 공지 작성 (Admin only)
+PUT  /api/admin/notices/<id>     — 공지 수정 (Admin only)
+DELETE /api/admin/notices/<id>   — 공지 삭제 (Admin only)
+```
+
+#### Phase B-2: OPS FE — 공지사항 화면
+
+**파일 목록**:
+```
+frontend/lib/screens/notice/notice_list_screen.dart   — 공지 목록 화면 (신규)
+frontend/lib/screens/notice/notice_detail_screen.dart  — 공지 상세 화면 (신규)
+frontend/lib/services/notice_service.dart              — 공지 API 호출 (신규)
+frontend/lib/screens/home_screen.dart                  — 사이드메뉴에 공지사항 탭 추가
+frontend/lib/screens/admin/notice_write_screen.dart    — Admin 공지 작성 화면 (신규)
+```
+
+**FE 구현**:
+1. 홈 사이드메뉴에 "공지사항" 항목 추가 (Icons.campaign)
+2. 안 읽은 공지 뱃지 표시 (SharedPreferences에 마지막 확인 공지 ID 저장)
+3. 공지 목록: 제목 + 날짜 + 버전 태그 + 고정 아이콘
+4. Admin 역할일 때만 "공지 작성" 버튼 표시
+5. 공지 상세: title + content (마크다운 또는 plain text) + 작성일
+
+**테스트 케이스** (6개):
+| TC | 설명 |
+|----|------|
+| NTC-01 | 공지 작성 (Admin) → 목록에 표시 |
+| NTC-02 | 일반 작업자 → 작성 API 403 |
+| NTC-03 | 공지 목록 페이지네이션 (10개 단위) |
+| NTC-04 | 고정 공지 상단 표시 |
+| NTC-05 | 공지 수정/삭제 (Admin) |
+| NTC-06 | 버전 필터 (특정 버전 공지만 조회) |
+
+**체크리스트**:
+- [ ] 마이그레이션 020 실행 — notices 테이블 생성
+- [ ] notices.py Blueprint + 5개 API 엔드포인트
+- [ ] notice_list_screen.dart — 목록 + 뱃지
+- [ ] notice_detail_screen.dart — 상세 보기
+- [ ] notice_write_screen.dart — Admin 작성 화면
+- [ ] home_screen.dart 사이드메뉴에 공지사항 추가
+- [ ] 안 읽은 공지 뱃지 로직 (SharedPreferences)
+- [ ] 테스트 6개 통과

@@ -34,6 +34,17 @@
 
 보류해둔 항목. 다음 Sprint 기획 시 우선 검토.
 
+### RV-4: Flaky 테스트 안정화 (중간 리스크 3건)
+- **배경**: Sprint 19 회귀 테스트에서 23건 실패 — 모두 기존 flaky 테스트 (신규 코드 결함 아님)
+- **중간 리스크 그룹**:
+  1. **test_pause_resume** — 타이밍 의존성 (`sleep` 기반 검증). 운영 기능은 정상이나 CI에서 간헐적 실패. 재현 불안정하여 디버깅 어려움
+  2. **test_scheduler_integration** — APScheduler 초기화 타이밍 + DB 상태 간섭. 스케줄러 자체는 production에서 정상 동작하나, 테스트 격리 부족으로 실행 순서에 따라 실패
+  3. **test_pin_auth** — 테스트 간 DB 상태 공유로 인한 실행 순서 의존성. PIN 인증 기능 자체는 정상
+- **낮은 리스크 그룹** (기록만): test_product_api, test_task_seed, test_sprint10_fixes — DB fixture 간섭이 원인, 운영 리스크 없음
+- **권장 조치**: 테스트 격리 개선 (각 테스트 전후 DB 롤백), 타이밍 기반 → 이벤트 기반 검증으로 리팩터링
+- **우선순위**: 중 (CI/CD 구축 전에 해결 권장)
+- **등록일**: 2026-03-06
+
 ### RV-1: checklist 스키마 vs 실제 Excel 양식 불일치
 - **배경**: `출하 어플용의 사본.xlsx` (sheet=DB) 분석 결과, 현재 checklist_master 스키마(단순 item_name 기반)와 실제 데이터 구조가 다름
 - **현재 스키마**: product_code + category + item_name
@@ -128,6 +139,24 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 - FE: 출퇴근 시 GPS 좌표 전송, Admin UI 위치 보안 설정
 - BE: Haversine 거리 검증, soft/strict 모드, HQ 면제
 - 11 tests passed
+
+### 신규 가입 시 Admin 이메일 알림
+- **내용**: 작업자가 회원가입하면 Admin에게 이메일 발송 (가입자 정보 + 승인 링크)
+- **현재**: 가입 후 Admin이 직접 확인해야 함
+- **필요 작업**: BE에서 가입 완료 시 admin 이메일로 알림 전송 (Flask-Mail 또는 SMTP)
+- **고려사항**: 이메일 서비스 설정 (SMTP 서버), 알림 내용 (이름, 역할, 협력사, 가입일시)
+- **시기**: 미정
+- **등록일**: 2026-03-06
+
+### 공지사항 탭 (앱 내 업데이트 노트)
+- **내용**: 앱 내 공지사항/업데이트 탭 — 버전 업데이트마다 사용자에게 필요한 변경사항만 요약 게시
+- **목적**: 작업자가 앱 변경사항을 쉽게 확인 (개발 용어 없이 사용자 관점으로)
+- **구현 방향**:
+  - BE: notices 테이블 (title, content, version, created_at, is_pinned)
+  - BE: GET /api/notices (목록), POST /api/admin/notices (Admin 작성)
+  - FE: 홈 화면 또는 사이드메뉴에 공지사항 탭 + 안 읽은 공지 뱃지
+- **시기**: 미정
+- **등록일**: 2026-03-06
 
 ### defect 스키마
 - **내용**: 불량 분석, 추적, 리포트 (QMS 연동)

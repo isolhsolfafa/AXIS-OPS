@@ -707,6 +707,7 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
               const SizedBox(height: 10),
 
               Container(
+                constraints: const BoxConstraints(maxHeight: 300),
                 decoration: GxGlass.cardSm(radius: GxRadius.lg),
                 child: _isLoadingManagers
                     ? const Padding(
@@ -720,18 +721,16 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
                               child: Text('작업자가 없습니다.', style: TextStyle(fontSize: 13, color: GxColors.steel)),
                             ),
                           )
-                        : Column(
-                            children: _managers.asMap().entries.map((entry) {
-                              final idx = entry.key;
-                              final worker = entry.value;
-                              final isLast = idx == _managers.length - 1;
-                              return Column(
-                                children: [
-                                  _buildManagerRow(worker),
-                                  if (!isLast) const Divider(height: 1, color: GxColors.mist),
-                                ],
-                              );
-                            }).toList(),
+                        : Scrollbar(
+                            thumbVisibility: true,
+                            child: ListView.separated(
+                              shrinkWrap: true,
+                              itemCount: _managers.length,
+                              separatorBuilder: (_, __) => const Divider(height: 1, color: GxColors.mist),
+                              itemBuilder: (context, idx) {
+                                return _buildManagerRow(_managers[idx]);
+                              },
+                            ),
                           ),
               ),
               const SizedBox(height: 24),
