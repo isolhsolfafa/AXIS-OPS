@@ -2395,3 +2395,47 @@ tests/backend/test_geolocation.py                        # 신규 (19-D: 11 test
 
 ### 배포
 - Netlify: https://gaxis-ops.netlify.app (production deploy 완료)
+
+---
+
+## Sprint 19-E: VIEW용 Admin 출퇴근 API (2026-03-06) ✅
+
+### 목표
+AXIS-VIEW 대시보드가 실 데이터를 조회할 수 있도록 Admin 전용 출퇴근 API 3개 추가.
+VIEW Sprint 3 (실 데이터 연결)의 선행 작업.
+
+### BE 완료 내역
+- **`backend/app/routes/admin.py`** — 3개 엔드포인트 + 공통 함수 추가
+  - `GET /api/admin/hr/attendance/today` — 오늘 전체 출퇴근 현황 (KST 기준)
+  - `GET /api/admin/hr/attendance?date=YYYY-MM-DD` — 날짜별 출퇴근 현황 조회
+  - `GET /api/admin/hr/attendance/summary` — 회사별 출퇴근 요약
+  - `_kst_date_range()` — KST 기준 날짜 범위 계산 헬퍼
+  - `_get_attendance_data()` — 출퇴근 데이터 조회 공통 함수 (records + summary 반환)
+- **핵심 로직**:
+  - KST 기준 날짜 범위 계산 (UTC 이슈 방지)
+  - IN/OUT 피봇 SQL (LEFT JOIN + CASE WHEN + GROUP BY)
+  - status 계산: not_checked / working / left
+  - company != 'GST' 필터 (협력사만)
+  - approval_status = 'approved' 필터 (미승인 제외)
+  - ISO8601 KST 문자열 변환
+
+### TEST 완료 내역 (8개 신규)
+| TC | 테스트 | 설명 |
+|----|--------|------|
+| ATT-01 | `test_att01_empty_data` | 출퇴근 기록 없음 → 전부 not_checked |
+| ATT-02 | `test_att02_checked_in_only` | 출근만 → status='working' |
+| ATT-03 | `test_att03_checked_in_and_out` | 출근+퇴근 → status='left' |
+| ATT-04 | `test_att04_not_checked` | 미출근 → status='not_checked' |
+| ATT-05 | `test_att05_date_param` | 날짜 파라미터 정상 동작 |
+| ATT-06 | `test_att06_invalid_date` | 잘못된 날짜 → 400 에러 |
+| ATT-07 | `test_att07_company_summary` | 회사별 집계 정확성 |
+| ATT-08 | `test_att08_non_admin_forbidden` | 비관리자 → 403 |
+
+### 테스트 결과
+- `test_admin_attendance.py`: **8 passed** (160s)
+
+### 생성/수정 파일
+```
+backend/app/routes/admin.py                # 수정 (3개 엔드포인트 + 공통 함수)
+tests/backend/test_admin_attendance.py     # 신규 (8 tests)
+```

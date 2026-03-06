@@ -3,13 +3,15 @@
 엔드포인트: /api/admin/*
 Sprint 4: 관리자 전용 API (승인, 대시보드, 작업 수정)
 Sprint 6 Phase C: PUT /api/admin/tasks/{task_id}/force-close 추가
+Sprint 19-E: VIEW용 Admin 출퇴근 API 3개 추가
 """
 
 import logging
 import re
 from flask import Blueprint, request, jsonify, g
 from typing import Tuple, Dict, Any, List
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+from collections import defaultdict
 
 from app.config import Config
 from app.middleware.jwt_auth import jwt_required, admin_required, manager_or_admin_required
@@ -1580,3 +1582,249 @@ def get_pending_tasks() -> Tuple[Dict[str, Any], int]:
     finally:
         if conn:
             conn.close()
+
+
+# ============================================================
+# Sprint 19-E: VIEW용 Admin 출퇴근 API
+# ============================================================
+
+_KST = timezone(timedelta(hours=9))
+
+
+def _kst_date_range(target_date=None):
+    """KST 기준 날짜의 시작/끝 범위 반환 (target_date=None이면 오늘)"""
+    if target_date is None:
+        now_kst = datetime.now(_KST)
+        target_date = now_kst.date()
+    start = datetime(target_date.year, target_date.month, target_date.day, tzinfo=_KST)
+    end = start + timedelta(days=1)
+    return start, end
+
+
+def _get_attendance_data(target_start_kst, target_end_kst):
+    """출퇴근 데이터 조회 공통 함수 — records + summary 반환"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT
+              w.id AS worker_id,
+              w.name AS worker_name,
+              w.company,
+              w.role,
+              MAX(CASE WHEN pa.check_type = 'in'  THEN pa.check_time END) AS check_in_time,
+              MAX(CASE WHEN pa.check_type = 'out' THEN pa.check_time END) AS check_out_time,
+              MAX(CASE WHEN pa.check_type = 'in'  THEN pa.work_site END) AS work_site,
+              MAX(CASE WHEN pa.check_type = 'in'  THEN pa.product_line END) AS product_line
+            FROM workers w
+            LEFT JOIN hr.partner_attendance pa
+              ON w.id = pa.worker_id
+              AND pa.check_time >= %s
+              AND pa.check_time <  %s
+            WHERE w.company != 'GST'
+              AND w.approval_status = 'approved'
+            GROUP BY w.id, w.name, w.company, w.role
+            ORDER BY w.company, w.name
+        """, (target_start_kst, target_end_kst))
+
+        rows = cur.fetchall()
+
+        records = []
+        summary = {
+            'total_registered': 0,
+            'checked_in': 0,
+            'checked_out': 0,
+            'currently_working': 0,
+            'not_checked': 0,
+        }
+
+        for row in rows:
+            check_in = row['check_in_time']
+            check_out = row['check_out_time']
+
+            if check_in is None:
+                status = 'not_checked'
+            elif check_out is None:
+                status = 'working'
+            else:
+                status = 'left'
+
+            records.append({
+                'worker_id': row['worker_id'],
+                'worker_name': row['worker_name'],
+                'company': row['company'],
+                'role': row['role'],
+                'check_in_time': check_in.isoformat() if check_in else None,
+                'check_out_time': check_out.isoformat() if check_out else None,
+                'status': status,
+                'work_site': row['work_site'],
+                'product_line': row['product_line'],
+            })
+
+            summary['total_registered'] += 1
+            if status == 'not_checked':
+                summary['not_checked'] += 1
+            else:
+                summary['checked_in'] += 1
+                if status == 'left':
+                    summary['checked_out'] += 1
+                else:
+                    summary['currently_working'] += 1
+
+        return records, summary
+
+    finally:
+        if conn:
+            conn.close()
+
+
+@admin_bp.route("/hr/attendance/today", methods=["GET"])
+@jwt_required
+@admin_required
+def get_attendance_today() -> Tuple[Dict[str, Any], int]:
+    """
+    오늘 전체 출퇴근 현황 (KST 기준)
+
+    Headers:
+        Authorization: Bearer {token}
+
+    Returns:
+        200: {"date": str, "records": [...], "summary": {...}}
+    """
+    try:
+        start, end = _kst_date_range()
+        records, summary = _get_attendance_data(start, end)
+
+        return jsonify({
+            'date': datetime.now(_KST).strftime('%Y-%m-%d'),
+            'records': records,
+            'summary': summary,
+        }), 200
+    except Exception as e:
+        logger.error(f"Failed to get today attendance: {e}")
+        return jsonify({
+            'error': 'INTERNAL_SERVER_ERROR',
+            'message': '오늘 출퇴근 현황 조회에 실패했습니다.'
+        }), 500
+
+
+@admin_bp.route("/hr/attendance", methods=["GET"])
+@jwt_required
+@admin_required
+def get_attendance_by_date() -> Tuple[Dict[str, Any], int]:
+    """
+    날짜별 출퇴근 현황 조회
+
+    Query Parameters:
+        date: str (YYYY-MM-DD, optional — 없으면 오늘)
+
+    Headers:
+        Authorization: Bearer {token}
+
+    Returns:
+        200: {"date": str, "records": [...], "summary": {...}}
+        400: {"error": "INVALID_DATE", "message": "..."}
+    """
+    date_str = request.args.get('date')
+
+    if date_str:
+        try:
+            target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        except ValueError:
+            return jsonify({
+                'error': 'INVALID_DATE',
+                'message': 'date 형식: YYYY-MM-DD'
+            }), 400
+    else:
+        target_date = datetime.now(_KST).date()
+
+    try:
+        start, end = _kst_date_range(target_date)
+        records, summary = _get_attendance_data(start, end)
+
+        return jsonify({
+            'date': target_date.strftime('%Y-%m-%d'),
+            'records': records,
+            'summary': summary,
+        }), 200
+    except Exception as e:
+        logger.error(f"Failed to get attendance by date: {e}")
+        return jsonify({
+            'error': 'INTERNAL_SERVER_ERROR',
+            'message': '출퇴근 현황 조회에 실패했습니다.'
+        }), 500
+
+
+@admin_bp.route("/hr/attendance/summary", methods=["GET"])
+@jwt_required
+@admin_required
+def get_attendance_summary() -> Tuple[Dict[str, Any], int]:
+    """
+    회사별 출퇴근 요약
+
+    Query Parameters:
+        date: str (YYYY-MM-DD, optional — 없으면 오늘)
+
+    Headers:
+        Authorization: Bearer {token}
+
+    Returns:
+        200: {"date": str, "by_company": [...]}
+        400: {"error": "INVALID_DATE", "message": "..."}
+    """
+    date_str = request.args.get('date')
+
+    if date_str:
+        try:
+            target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        except ValueError:
+            return jsonify({
+                'error': 'INVALID_DATE',
+                'message': 'date 형식: YYYY-MM-DD'
+            }), 400
+    else:
+        target_date = datetime.now(_KST).date()
+
+    try:
+        start, end = _kst_date_range(target_date)
+        records, _ = _get_attendance_data(start, end)
+
+        # company별 그룹핑
+        company_data = defaultdict(lambda: {
+            'total_workers': 0,
+            'checked_in': 0,
+            'checked_out': 0,
+            'currently_working': 0,
+            'not_checked': 0,
+        })
+
+        for r in records:
+            company = r['company'] or 'UNKNOWN'
+            cd = company_data[company]
+            cd['total_workers'] += 1
+            if r['status'] == 'not_checked':
+                cd['not_checked'] += 1
+            elif r['status'] == 'working':
+                cd['checked_in'] += 1
+                cd['currently_working'] += 1
+            else:  # left
+                cd['checked_in'] += 1
+                cd['checked_out'] += 1
+
+        by_company = [
+            {'company': company, **stats}
+            for company, stats in sorted(company_data.items())
+        ]
+
+        return jsonify({
+            'date': target_date.strftime('%Y-%m-%d'),
+            'by_company': by_company,
+        }), 200
+    except Exception as e:
+        logger.error(f"Failed to get attendance summary: {e}")
+        return jsonify({
+            'error': 'INTERNAL_SERVER_ERROR',
+            'message': '출퇴근 요약 조회에 실패했습니다.'
+        }), 500

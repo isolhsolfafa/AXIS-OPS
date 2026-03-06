@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-03-06 (Sprint 19-B/D 완료 — DB 토큰 관리 + Geolocation)
+> 마지막 업데이트: 2026-03-06 (Sprint 19-E 완료 — VIEW용 Admin 출퇴근 API)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -101,7 +101,8 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 ### Phase B 잔여: Admin 출퇴근 대시보드
 - **내용**: 협력사 출퇴근 현황 조회 (당일 + 월간 집계)
 - **결정**: App에서 제외 → AXIS-VIEW (React 대시보드)에서 구현
-- **필요 API**: GET /api/admin/hr/attendance/dashboard, /monthly
+- **BE API**: ✅ Sprint 19-E 완료 — `/api/admin/hr/attendance/today`, `/attendance?date=`, `/attendance/summary`
+- **남은 작업**: 월간 집계 API (GET /api/admin/hr/attendance/monthly) 추후 필요 시 추가
 - **의존성**: hr.partner_attendance 테이블 (Sprint 12에서 생성)
 
 ### Phase B 잔여: GST 근태 확장
@@ -205,3 +206,4 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 | 19-A | 보안: Refresh Token Rotation + Device ID | 6 PASSED + 28 회귀, 배포 완료 |
 | 19-B | 보안: DB 기반 Refresh Token 관리 + 탈취 감지 | 10 PASSED, 배포 완료 |
 | 19-D | 보안: Geolocation GPS 위치 검증 (출퇴근) | 11 PASSED, 배포 완료 |
+| 19-E | VIEW용 Admin 출퇴근 API 3개 (BE) | 8 PASSED |

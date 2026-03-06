@@ -5457,6 +5457,290 @@ TEST:
 
 ---
 
+## Sprint 19-E: VIEW용 Admin 출퇴근 API (BE)
+
+> 사전 조건: Sprint 19-A/B/D ✅
+> 목적: AXIS-VIEW 대시보드가 실 데이터를 조회할 수 있도록 Admin 전용 출퇴근 API 3개 추가
+> VIEW Sprint 3 (실 데이터 연결)의 선행 작업
+
+---
+
+### 🚀 Sprint 19-E 프롬프트 (복사해서 사용)
+
+```
+AXIS-VIEW 대시보드용 Admin 출퇴근 API 3개를 추가합니다.
+기존 admin.py Blueprint에 추가하며, hr.partner_attendance 테이블을 조회합니다.
+
+⚠️ 반드시 읽어야 할 파일:
+- CLAUDE.md (프로젝트 컨텍스트, DB 스키마)
+- backend/app/routes/admin.py (기존 Admin 엔드포인트 패턴 참고)
+- backend/app/routes/hr.py (partner_attendance 테이블 사용 패턴 참고)
+
+## 팀 구성
+단독 진행 (BE만)
+
+---
+
+## Task 1: GET /api/admin/hr/attendance/today — 오늘 전체 출퇴근 현황
+
+### 위치: backend/app/routes/admin.py (기존 admin_bp에 추가)
+
+### 라우트 정의:
+@admin_bp.route("/hr/attendance/today", methods=["GET"])
+@jwt_required
+@admin_required
+
+### 핵심 SQL (IN/OUT 피봇, KST 기준):
+
+⚠️ 반드시 KST 기준으로 날짜 범위를 계산할 것. `check_time::date = CURRENT_DATE`는 UTC 이슈 발생.
+
+```python
+from datetime import datetime, timezone, timedelta
+KST = timezone(timedelta(hours=9))
+now_kst = datetime.now(KST)
+today_start_kst = now_kst.replace(hour=0, minute=0, second=0, microsecond=0)
+tomorrow_start_kst = today_start_kst + timedelta(days=1)
+```
+
+```sql
+SELECT
+  w.id AS worker_id,
+  w.name AS worker_name,
+  w.company,
+  w.role,
+  MAX(CASE WHEN pa.check_type = 'in'  THEN pa.check_time END) AS check_in_time,
+  MAX(CASE WHEN pa.check_type = 'out' THEN pa.check_time END) AS check_out_time,
+  MAX(CASE WHEN pa.check_type = 'in'  THEN pa.work_site END) AS work_site,
+  MAX(CASE WHEN pa.check_type = 'in'  THEN pa.product_line END) AS product_line
+FROM workers w
+LEFT JOIN hr.partner_attendance pa
+  ON w.id = pa.worker_id
+  AND pa.check_time >= %s   -- today_start_kst
+  AND pa.check_time <  %s   -- tomorrow_start_kst
+WHERE w.company != 'GST'
+  AND w.approval_status = 'approved'
+GROUP BY w.id, w.name, w.company, w.role
+ORDER BY w.company, w.name
+```
+
+### status 계산 (Python):
+```python
+if check_in_time is None:
+    status = 'not_checked'
+elif check_out_time is None:
+    status = 'working'
+else:
+    status = 'left'
+```
+
+### summary 계산:
+records 루프 돌면서 집계:
+- total_registered: 전체 records 수
+- checked_in: status != 'not_checked' 수
+- checked_out: status == 'left' 수
+- currently_working: status == 'working' 수
+- not_checked: status == 'not_checked' 수
+
+### 응답 형식:
+```json
+{
+  "date": "2026-03-06",
+  "records": [
+    {
+      "worker_id": 5,
+      "worker_name": "탁재훈",
+      "company": "C&A",
+      "role": "ELEC",
+      "check_in_time": "2026-03-06T08:15:00+09:00",
+      "check_out_time": "2026-03-06T17:30:00+09:00",
+      "status": "left",
+      "work_site": "GST",
+      "product_line": "SCR"
+    }
+  ],
+  "summary": {
+    "total_registered": 98,
+    "checked_in": 86,
+    "checked_out": 34,
+    "currently_working": 52,
+    "not_checked": 12
+  }
+}
+```
+
+⚠️ check_in_time, check_out_time은 ISO8601 KST (+09:00) 문자열로 변환.
+None인 경우 null 반환.
+
+---
+
+## Task 2: GET /api/admin/hr/attendance?date=YYYY-MM-DD — 날짜별 조회
+
+### 위치: admin.py 동일
+
+### 라우트 정의:
+@admin_bp.route("/hr/attendance", methods=["GET"])
+@jwt_required
+@admin_required
+
+### 구현:
+- query parameter: `date` (YYYY-MM-DD 형식)
+- date 없으면 오늘 날짜 사용 (Task 1과 동일)
+- date 있으면 해당 날짜의 KST 00:00 ~ 다음날 KST 00:00 범위로 조회
+- SQL과 응답 형식은 Task 1과 동일
+- date 파싱 실패 시 400 에러
+
+```python
+date_str = request.args.get('date')
+if date_str:
+    try:
+        target_date = datetime.strptime(date_str, '%Y-%m-%d')
+    except ValueError:
+        return jsonify({'error': 'INVALID_DATE', 'message': 'date 형식: YYYY-MM-DD'}), 400
+    target_start_kst = target_date.replace(tzinfo=KST)
+    target_end_kst = target_start_kst + timedelta(days=1)
+else:
+    target_start_kst = today_start_kst
+    target_end_kst = tomorrow_start_kst
+```
+
+### 응답: Task 1과 동일 구조 (date 필드만 요청 날짜로 변경)
+
+---
+
+## Task 3: GET /api/admin/hr/attendance/summary — 회사별 출퇴근 요약
+
+### 위치: admin.py 동일
+
+### 라우트 정의:
+@admin_bp.route("/hr/attendance/summary", methods=["GET"])
+@jwt_required
+@admin_required
+
+### 구현:
+- query parameter: `date` (옵션, 없으면 오늘)
+- 회사별(company) 그룹핑으로 집계
+
+### SQL:
+Task 1/2의 쿼리 결과를 Python에서 company별로 그룹핑하거나,
+별도 SQL로 직접 집계:
+
+```sql
+SELECT
+  w.company,
+  COUNT(*) AS total_workers,
+  COUNT(CASE WHEN pa_in.check_time IS NOT NULL THEN 1 END) AS checked_in,
+  COUNT(CASE WHEN pa_out.check_time IS NOT NULL THEN 1 END) AS checked_out
+FROM workers w
+LEFT JOIN (
+  SELECT worker_id, MAX(check_time) AS check_time
+  FROM hr.partner_attendance
+  WHERE check_type = 'in'
+    AND check_time >= %s AND check_time < %s
+  GROUP BY worker_id
+) pa_in ON w.id = pa_in.worker_id
+LEFT JOIN (
+  SELECT worker_id, MAX(check_time) AS check_time
+  FROM hr.partner_attendance
+  WHERE check_type = 'out'
+    AND check_time >= %s AND check_time < %s
+  GROUP BY worker_id
+) pa_out ON w.id = pa_out.worker_id
+WHERE w.company != 'GST'
+  AND w.approval_status = 'approved'
+GROUP BY w.company
+ORDER BY w.company
+```
+
+또는 간단하게: Task 1/2 내부 함수를 재활용하여 records → company별 집계
+
+### 응답 형식:
+```json
+{
+  "date": "2026-03-06",
+  "by_company": [
+    {
+      "company": "C&A",
+      "total_workers": 22,
+      "checked_in": 17,
+      "checked_out": 7,
+      "currently_working": 10,
+      "not_checked": 5
+    }
+  ]
+}
+```
+
+### 계산:
+- currently_working = checked_in - checked_out
+- not_checked = total_workers - checked_in
+
+---
+
+## Task 4: 공통 함수 추출 (리팩터링)
+
+Task 1~3에서 중복되는 로직을 내부 함수로 추출:
+
+```python
+def _get_attendance_data(target_start_kst, target_end_kst):
+    """출퇴근 데이터 조회 공통 함수 — records + summary 반환"""
+    # SQL 실행 → records 리스트 생성 → summary 계산
+    # Task 1/2/3에서 재사용
+    ...
+    return records, summary
+```
+
+- Task 1: `_get_attendance_data(today_start_kst, tomorrow_start_kst)`
+- Task 2: `_get_attendance_data(target_start_kst, target_end_kst)`
+- Task 3: `_get_attendance_data()` 결과를 company별 그룹핑
+
+---
+
+## Task 5: 테스트
+
+### 테스트 파일: tests/backend/test_admin_attendance.py (신규)
+
+### 테스트 케이스 (8개):
+
+| TC | 설명 |
+|----|------|
+| ATT-01 | /hr/attendance/today — 빈 데이터 (출퇴근 기록 없음) → records=[], summary 전부 0 |
+| ATT-02 | /hr/attendance/today — 출근만 한 작업자 → status='working' |
+| ATT-03 | /hr/attendance/today — 출근+퇴근 완료 → status='left' |
+| ATT-04 | /hr/attendance/today — 미출근 작업자 → status='not_checked' |
+| ATT-05 | /hr/attendance?date=2026-03-05 — 날짜 파라미터 정상 |
+| ATT-06 | /hr/attendance?date=invalid — 400 에러 |
+| ATT-07 | /hr/attendance/summary — 회사별 집계 정확성 |
+| ATT-08 | 비관리자 접근 → 403 |
+
+### 테스트 데이터 셋업:
+```python
+# conftest.py fixture 활용
+# workers 3명: company='C&A' 2명, company='FNI' 1명
+# partner_attendance: C&A worker1 in/out, C&A worker2 in만, FNI worker3 없음
+```
+
+---
+
+## 체크리스트
+
+- [ ] admin.py에 3개 엔드포인트 추가
+- [ ] _get_attendance_data 공통 함수 추출
+- [ ] KST 기준 날짜 범위 계산 (UTC 이슈 방지)
+- [ ] check_time → ISO8601 KST 문자열 변환
+- [ ] approval_status='approved' 필터 (미승인 작업자 제외)
+- [ ] company != 'GST' 필터 (GST 직원 제외 — 협력사만)
+- [ ] test_admin_attendance.py 8개 TC 통과
+- [ ] 기존 테스트 회귀 없음
+
+## ⚠️ 금지 사항
+- hr.py 기존 엔드포인트 수정 금지 (개인용 API는 그대로 유지)
+- workers 테이블 스키마 변경 금지
+- partner_attendance 테이블 스키마 변경 금지
+- FE 코드 수정 금지 (BE만 작업)
+```
+
+---
+
 ## Sprint 20 (예정) — 알림 + 공지사항
 
 > 스프린트 번호 및 시기 미정. 아래는 프롬프트 초안.
