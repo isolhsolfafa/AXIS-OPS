@@ -5743,17 +5743,27 @@ def _get_attendance_data(target_start_kst, target_end_kst):
 
 ## Sprint 20 (예정) — 알림 + 공지사항
 
-> 스프린트 번호 및 시기 미정. 아래는 프롬프트 초안.
 
 ---
 
 ### Sprint 20-A: 신규 가입 시 Admin 이메일 알림
 
-**목표**: 작업자가 회원가입하면 Admin에게 이메일 자동 발송 — 가입 사실을 즉시 인지하고 승인/거부 판단 가능
+**목표**: 작업자가 회원가입하면 DB의 `is_admin=true` 사용자 전원에게 이메일 자동 발송 — 가입 사실을 즉시 인지하고 승인/거부 판단 가능
 
 **배경**:
 - 현재 가입 후 Admin이 직접 사용자 목록에서 확인해야 함
 - 현장 관리자가 신규 가입을 놓칠 수 있음
+
+**수신자 규칙**:
+- DB `workers` 테이블에서 `is_admin=true`인 사용자의 `email` 조회
+- 환경변수 `ADMIN_EMAIL`이 아닌 **DB 기반** (Admin이 추가/변경되면 자동 반영)
+- Admin이 여러 명이면 각각에게 개별 발송
+
+**테스트 제한**:
+- ⚠️ 테스트 단계에서는 수신자를 `dkkim1@gst-in.com`으로만 하드코딩하여 테스트
+- 프로덕션 전환 시 DB 조회 방식으로 변경
+
+**Teammate**: 불필요 (파일 3~4개, BE만 작업)
 
 #### Phase A: BE — 이메일 발송 서비스
 
@@ -5766,43 +5776,80 @@ backend/config.py                        — SMTP 설정 (환경변수)
 
 **구현 내용**:
 1. `email_service.py` 생성:
-   - `send_admin_notification(subject, body, to_email)` 함수
-   - Flask-Mail 또는 `smtplib` 사용 (환경변수: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, ADMIN_EMAIL)
-   - HTML 템플릿: 가입자 이름, 역할(role), 협력사(company), 가입일시
+   - `get_admin_emails()` 함수: DB에서 `is_admin=true` workers의 email 목록 조회
+     ```python
+     def get_admin_emails():
+         """DB에서 is_admin=true인 사용자 이메일 목록 조회"""
+         conn = get_db_connection()
+         try:
+             cur = conn.cursor()
+             cur.execute("SELECT email FROM workers WHERE is_admin = true AND email IS NOT NULL")
+             return [row[0] for row in cur.fetchall()]
+         finally:
+             conn.close()
+     ```
+   - `send_admin_notification(subject, html_body)` 함수: admin 전원에게 발송
+     ```python
+     def send_admin_notification(subject, html_body):
+         """is_admin=true 사용자 전원에게 이메일 발송 (best-effort)"""
+         admin_emails = get_admin_emails()
+         if not admin_emails:
+             logger.warning("Admin 이메일 수신자 없음 (is_admin=true 사용자 없음)")
+             return
+
+         for email in admin_emails:
+             try:
+                 _send_email(to_email=email, subject=subject, html_body=html_body)
+                 logger.info(f"Admin 알림 발송 성공: {email}")
+             except Exception as e:
+                 logger.error(f"Admin 알림 발송 실패: {email} — {e}")
+     ```
+   - `_send_email(to_email, subject, html_body)` 내부 함수: smtplib SMTP 발송
+   - `render_register_notification(worker)` 함수: HTML 템플릿 생성
+     - 포함 정보: 가입자 이름, 역할(role), 협력사(company), 가입일시
+   - Flask-Mail 사용하지 않음 → `smtplib` + `email.mime` 직접 사용 (의존성 최소화)
+
 2. `auth.py` register 성공 후:
    ```python
-   # 가입 완료 후 Admin 알림
-   send_admin_notification(
-       subject=f"[AXIS-OPS] 신규 가입: {name} ({company})",
-       body=render_register_notification(worker),
-       to_email=os.getenv('ADMIN_EMAIL')
-   )
+   # 가입 완료 후 Admin 알림 (best-effort — 실패해도 가입은 정상)
+   try:
+       from app.services.email_service import send_admin_notification, render_register_notification
+       send_admin_notification(
+           subject=f"[AXIS-OPS] 신규 가입: {worker['name']} ({worker['company']})",
+           html_body=render_register_notification(worker)
+       )
+   except Exception as e:
+       logger.error(f"가입 알림 이메일 발송 실패: {e}")
    ```
+
 3. 이메일 발송 실패 시 가입 자체는 정상 완료 (알림은 best-effort)
 
-**config.py 환경변수**:
+**config.py 환경변수** (SMTP 설정만 — 수신자는 DB 조회):
 ```python
 SMTP_HOST = os.getenv('SMTP_HOST', 'smtp.gmail.com')
 SMTP_PORT = int(os.getenv('SMTP_PORT', 587))
 SMTP_USER = os.getenv('SMTP_USER', '')
 SMTP_PASSWORD = os.getenv('SMTP_PASSWORD', '')
-ADMIN_EMAIL = os.getenv('ADMIN_EMAIL', '')
+# ADMIN_EMAIL 환경변수 불필요 — DB에서 is_admin=true 사용자 조회
 ```
 
-**테스트 케이스** (4개):
+**테스트 케이스** (5개):
 | TC | 설명 |
 |----|------|
-| MAIL-01 | 정상 가입 → Admin 이메일 발송 확인 (mock SMTP) |
+| MAIL-01 | 정상 가입 → DB에서 admin 이메일 조회 → 발송 확인 (mock SMTP, 수신자: `dkkim1@gst-in.com`) |
 | MAIL-02 | SMTP 설정 없음 → 가입 성공, 이메일 스킵 (에러 로그만) |
 | MAIL-03 | SMTP 연결 실패 → 가입 성공, 이메일 실패 로그 |
-| MAIL-04 | 이메일 내용에 가입자 정보 (이름, 역할, 협력사) 포함 확인 |
+| MAIL-04 | 이메일 내용에 가입자 정보 (이름, 역할, 협력사, 가입일시) 포함 확인 |
+| MAIL-05 | Admin이 여러 명 → 각각에게 개별 발송 확인 (테스트 단계에서는 `dkkim1@gst-in.com`만) |
 
 **체크리스트**:
-- [ ] email_service.py 생성 + send_admin_notification 함수
-- [ ] auth.py register에 알림 호출 추가
-- [ ] config.py SMTP 환경변수 추가
+- [ ] email_service.py 생성 (get_admin_emails, send_admin_notification, _send_email, render_register_notification)
+- [ ] auth.py register에 알림 호출 추가 (try-catch best-effort)
+- [ ] config.py SMTP 환경변수 추가 (ADMIN_EMAIL 환경변수 불필요)
 - [ ] 이메일 실패 시 가입 정상 완료 확인
-- [ ] Railway 환경변수 설정 (SMTP_*, ADMIN_EMAIL)
+- [ ] 테스트 수신자: `dkkim1@gst-in.com`으로 제한
+- [ ] Railway 환경변수 설정 (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD)
+- [ ] 기존 테스트 회귀 없음
 
 ---
 
