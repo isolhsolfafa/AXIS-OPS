@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-03-06 (Sprint 20-A 완료 — 신규 가입 Admin 이메일 알림)
+> 마지막 업데이트: 2026-03-06 (Sprint 20-B 완료 — 공지사항 탭)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -147,15 +147,11 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 - auth.py register 성공 시 Admin 전원 이메일 발송 (best-effort)
 - 5 tests passed
 
-### 공지사항 탭 (앱 내 업데이트 노트)
-- **내용**: 앱 내 공지사항/업데이트 탭 — 버전 업데이트마다 사용자에게 필요한 변경사항만 요약 게시
-- **목적**: 작업자가 앱 변경사항을 쉽게 확인 (개발 용어 없이 사용자 관점으로)
-- **구현 방향**:
-  - BE: notices 테이블 (title, content, version, created_at, is_pinned)
-  - BE: GET /api/notices (목록), POST /api/admin/notices (Admin 작성)
-  - FE: 홈 화면 또는 사이드메뉴에 공지사항 탭 + 안 읽은 공지 뱃지
-- **시기**: 미정
-- **등록일**: 2026-03-06
+### ~~공지사항 탭 (앱 내 업데이트 노트)~~ → ✅ Sprint 20-B 완료
+- Sprint 20-B에서 구현 완료
+- BE: notices 테이블 + 5개 CRUD API
+- FE: 공지 목록/상세/작성 화면, 홈 메뉴 카드 추가
+- 6 tests passed
 
 ### defect 스키마
 - **내용**: 불량 분석, 추적, 리포트 (QMS 연동)
@@ -206,3 +202,4 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 | 19-D | 보안: Geolocation GPS 위치 검증 (출퇴근) | 11 PASSED, 배포 완료 |
 | 19-E | VIEW용 Admin 출퇴근 API 3개 (BE) | 8 PASSED |
 | 20-A | 신규 가입 시 Admin 이메일 알림 | 5 PASSED |
+| 20-B | 공지사항 탭 (BE+FE) | 6 PASSED |

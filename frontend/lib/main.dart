@@ -17,6 +17,8 @@ import 'screens/checklist/checklist_screen.dart';
 import 'screens/settings/profile_screen.dart';
 import 'screens/settings/pin_settings_screen.dart';
 import 'screens/progress/sn_progress_screen.dart';
+import 'screens/notice/notice_list_screen.dart';
+import 'screens/admin/notice_write_screen.dart';
 import 'utils/design_system.dart';
 
 void main() {
@@ -36,6 +38,7 @@ const _saveableRoutes = {
   '/alerts',
   '/gst-products',
   '/sn-progress',
+  '/notices',
 };
 
 /// G-AXIS 앱 메인 클래스
@@ -136,6 +139,8 @@ class GAxisApp extends ConsumerWidget {
         '/profile': (context) => const ProfileScreen(),
         '/pin-settings': (context) => const PinSettingsScreen(),
         '/pin-login': (context) => const PinLoginScreen(),
+        '/notices': (context) => const NoticeListScreen(),
+        '/notice-write': (context) => const NoticeWriteScreen(),
         '/reset-password': (context) {
           final args = ModalRoute.of(context)?.settings.arguments;
           final email = args is Map<String, dynamic>

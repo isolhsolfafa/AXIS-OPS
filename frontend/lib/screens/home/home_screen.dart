@@ -750,6 +750,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             ),
             const SizedBox(height: 8),
 
+            _buildFeatureCard(
+              icon: Icons.campaign,
+              iconBg: const Color(0xFFFEF3C7),
+              iconColor: const Color(0xFFD97706),
+              title: '공지사항',
+              subtitle: '앱 업데이트 및 공지 확인',
+              onTap: () => Navigator.pushNamed(context, '/notices'),
+            ),
+            const SizedBox(height: 8),
+
             // GST 작업자 / Admin 전용: PI/QI/SI 메뉴
             if (worker?.company == 'GST' || worker?.isAdmin == true) ...[
               _buildFeatureCard(

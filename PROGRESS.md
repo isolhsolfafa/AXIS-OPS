@@ -3,7 +3,7 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v1.4.0 (Sprint 20-A, 2026-03-06)
+> **현재 버전**: v1.4.0 (Sprint 20-B, 2026-03-06)
 
 ---
 
@@ -2474,4 +2474,65 @@ tests/backend/test_admin_attendance.py     # 신규 (8 tests)
 backend/app/services/email_service.py              # 신규
 backend/app/routes/auth.py                         # 수정 (register에 알림 호출)
 tests/backend/test_admin_email_notification.py     # 신규 (5 tests)
+```
+
+---
+
+## Sprint 20-B: 공지사항 탭 (앱 내 업데이트 노트) (2026-03-06) ✅
+
+### 목표
+앱 내 공지사항 기능 — 버전 업데이트마다 사용자에게 변경사항을 요약 게시.
+Admin이 직접 공지 작성/수정/삭제.
+
+### BE 완료 내역
+- **`backend/migrations/020_create_notices.sql`** (신규)
+  - `notices` 테이블 생성 (title, content, version, is_pinned, created_by)
+  - `updated_at` 자동 갱신 트리거
+- **`backend/app/routes/notices.py`** (신규) — 5개 엔드포인트
+  - `GET /api/notices` — 공지 목록 (고정 상단, 최신순, 페이지네이션, 버전 필터)
+  - `GET /api/notices/<id>` — 공지 상세
+  - `POST /api/admin/notices` — 공지 작성 (Admin only)
+  - `PUT /api/admin/notices/<id>` — 공지 수정 (Admin only)
+  - `DELETE /api/admin/notices/<id>` — 공지 삭제 (Admin only)
+- **`backend/app/__init__.py`** — `notices_bp` Blueprint 등록
+
+### FE 완료 내역
+- **`frontend/lib/services/notice_service.dart`** (신규) — API 호출 서비스
+- **`frontend/lib/screens/notice/notice_list_screen.dart`** (신규) — 공지 목록 화면
+  - 고정 공지 핀 아이콘, 버전 태그, 더 보기 페이지네이션
+  - SharedPreferences로 마지막 확인 공지 ID 저장
+- **`frontend/lib/screens/notice/notice_detail_screen.dart`** (신규) — 공지 상세 화면
+  - 제목, 본문, 작성자, 날짜, 버전 태그, 고정 아이콘
+  - Admin: 삭제 버튼
+- **`frontend/lib/screens/admin/notice_write_screen.dart`** (신규) — Admin 공지 작성 화면
+  - 제목, 내용, 버전(선택), 상단 고정 토글
+- **`frontend/lib/screens/home/home_screen.dart`** — 공지사항 메뉴 카드 추가
+- **`frontend/lib/main.dart`** — `/notices`, `/notice-write` 라우트 등록
+- FE 빌드: `flutter build web --release` 에러 0건
+
+### TEST 완료 내역 (6개 신규)
+| TC | 테스트 | 설명 |
+|----|--------|------|
+| NTC-01 | `test_ntc01_admin_create_notice` | Admin 공지 작성 → 목록 표시 |
+| NTC-02 | `test_ntc02_non_admin_create_forbidden` | 일반 작업자 → 403 |
+| NTC-03 | `test_ntc03_pagination` | 페이지네이션 (10개 단위) |
+| NTC-04 | `test_ntc04_pinned_on_top` | 고정 공지 상단 표시 |
+| NTC-05 | `test_ntc05_update_and_delete` | 수정/삭제 |
+| NTC-06 | `test_ntc06_version_filter` | 버전 필터 |
+
+### 테스트 결과
+- `test_notices_api.py`: **6 passed** (80s)
+
+### 생성/수정 파일
+```
+backend/migrations/020_create_notices.sql                          # 신규
+backend/app/routes/notices.py                                      # 신규 (5 endpoints)
+backend/app/__init__.py                                            # 수정 (Blueprint 등록)
+frontend/lib/services/notice_service.dart                          # 신규
+frontend/lib/screens/notice/notice_list_screen.dart                # 신규
+frontend/lib/screens/notice/notice_detail_screen.dart              # 신규
+frontend/lib/screens/admin/notice_write_screen.dart                # 신규
+frontend/lib/screens/home/home_screen.dart                         # 수정 (메뉴 추가)
+frontend/lib/main.dart                                             # 수정 (라우트 등록)
+tests/backend/test_notices_api.py                                  # 신규 (6 tests)
 ```
