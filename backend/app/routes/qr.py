@@ -79,13 +79,13 @@ def get_qr_list() -> Tuple[Dict[str, Any], int]:
 
         # COUNT 쿼리
         count_sql = f"""
-            SELECT COUNT(*)
+            SELECT COUNT(*) AS cnt
             FROM public.qr_registry qr
             JOIN plan.product_info p ON qr.serial_number = p.serial_number
             {where_clause}
         """
         cursor.execute(count_sql, params)
-        total = cursor.fetchone()[0]
+        total = cursor.fetchone()['cnt']
 
         # 데이터 쿼리
         offset = (page - 1) * per_page
@@ -121,7 +121,7 @@ def get_qr_list() -> Tuple[Dict[str, Any], int]:
             JOIN plan.product_info p ON qr.serial_number = p.serial_number
             ORDER BY p.model
         """)
-        models = [row[0] for row in cursor.fetchall() if row[0]]
+        models = [row['model'] for row in cursor.fetchall() if row['model']]
 
         # 통계
         cursor.execute("""
@@ -139,20 +139,20 @@ def get_qr_list() -> Tuple[Dict[str, Any], int]:
         items = []
         for row in rows:
             items.append({
-                "qr_id": row[0],
-                "qr_doc_id": row[1],
-                "serial_number": row[2],
-                "status": row[3],
-                "qr_created_at": row[4].isoformat() if row[4] else None,
-                "model": row[5],
-                "sales_order": row[6],
-                "customer": row[7],
-                "mech_partner": row[8],
-                "elec_partner": row[9],
-                "mech_start": row[10].isoformat() if row[10] else None,
-                "module_start": row[11].isoformat() if row[11] else None,
-                "ship_plan_date": row[12].isoformat() if row[12] else None,
-                "prod_date": row[13].isoformat() if row[13] else None,
+                "qr_id": row['qr_id'],
+                "qr_doc_id": row['qr_doc_id'],
+                "serial_number": row['serial_number'],
+                "status": row['status'],
+                "qr_created_at": row['qr_created_at'].isoformat() if row['qr_created_at'] else None,
+                "model": row['model'],
+                "sales_order": row['sales_order'],
+                "customer": row['customer'],
+                "mech_partner": row['mech_partner'],
+                "elec_partner": row['elec_partner'],
+                "mech_start": row['mech_start'].isoformat() if row['mech_start'] else None,
+                "module_start": row['module_start'].isoformat() if row['module_start'] else None,
+                "ship_plan_date": row['ship_plan_date'].isoformat() if row['ship_plan_date'] else None,
+                "prod_date": row['prod_date'].isoformat() if row['prod_date'] else None,
             })
 
         total_pages = (total + per_page - 1) // per_page
@@ -165,9 +165,9 @@ def get_qr_list() -> Tuple[Dict[str, Any], int]:
             "total_pages": total_pages,
             "models": models,
             "stats": {
-                "total": stats_row[0],
-                "active": stats_row[1],
-                "revoked": stats_row[2],
+                "total": stats_row['total'],
+                "active": stats_row['active_count'],
+                "revoked": stats_row['revoked_count'],
             },
         }), 200
 
