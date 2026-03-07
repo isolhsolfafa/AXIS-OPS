@@ -239,4 +239,42 @@ python3 etl_main.py --start 2026-01-01 --end 2026-01-10 --field mech_start
 | 파일 | 경로 | 설명 |
 |------|------|------|
 | ETL 결과 JSON | `/Users/kdkyu311/dev/my_app/test_server/output/etl_result.json` | 적재 결과 요약 |
-| QR 이미지 | `/Users/kdkyu311/dev/my_app/test_server/output/qr_labels/*.png` | QR 코드 이미지 |
+| QR 이미지 | `/Users/kdkyu311/dev/my_app/test_server/output/qr_labels/*.png` | QR 코드 이미지 (로컬 전용, 라벨프린터 출력) |
+
+---
+
+## GitHub Actions 자동화 (2026-03-07)
+
+### 변경 사항
+- **QR 이미지**: 라벨프린터로 현장에서 직접 출력 → R2 클라우드 저장 불필요
+- **CI 실행 범위**: Step 1 (Extract) + Step 2 (Load)만 실행, Step 3 (QR Generate) 제외
+- **의존성 정리**: SCR-Schedule 모듈을 `lib/`로 복사하여 독립 실행 가능하게 변경
+
+### CI/CD 리포 구조
+
+```
+etl-pipeline/ (독립 리포)
+├── .github/workflows/etl-production.yml
+├── etl_main.py
+├── step1_extract.py
+├── step2_load.py
+├── step3_qr_generate.py  ← CI에서 미실행 (로컬 전용)
+├── lib/
+│   ├── teams_auth.py      ← SCR-Schedule/src/shared/teams_auth.py 복사
+│   ├── excel_loader.py    ← SCR-Schedule/src/data_loader/excel_loader.py 경량화
+│   └── sn_parser.py       ← SCR-Schedule/src/utils/sn_parser.py 복사
+├── requirements.txt
+└── README.md
+```
+
+### Cron 스케줄
+- **매일 08:00 KST (월~금)**: `cron: '0 23 * * 0-4'` (UTC)
+- **수동 실행**: `workflow_dispatch` (date-range 모드 지원)
+
+### Secrets 목록
+| Secret | 출처 |
+|--------|------|
+| `DATABASE_URL` | Railway 대시보드 |
+| `TEAMS_CLIENT_ID` / `TEAMS_CLIENT_SECRET` / `TEAMS_TENANT_ID` | Azure AD 앱 등록 |
+| `TEAMS_SITE_ID` / `TEAMS_DRIVE_ID` | SCR-Schedule `.env` 파일 |
+| `SLACK_WEBHOOK_URL` | Slack App 설정 |

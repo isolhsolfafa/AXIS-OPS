@@ -39,6 +39,9 @@ def get_qr_list() -> Tuple[Dict[str, Any], int]:
         search = request.args.get("search", "").strip()
         model_filter = request.args.get("model", "").strip()
         status_filter = request.args.get("status", "").strip()
+        date_field = request.args.get("date_field", "").strip()
+        date_from = request.args.get("date_from", "").strip()
+        date_to = request.args.get("date_to", "").strip()
         page = max(1, int(request.args.get("page", 1)))
         per_page = min(200, max(1, int(request.args.get("per_page", 50))))
         sort_by = request.args.get("sort_by", "qr.created_at")
@@ -74,6 +77,17 @@ def get_qr_list() -> Tuple[Dict[str, Any], int]:
         if status_filter in ("active", "revoked"):
             conditions.append("qr.status = %s")
             params.append(status_filter)
+
+        # 날짜 범위 필터
+        allowed_date_fields = {"mech_start": "p.mech_start", "module_start": "p.module_start"}
+        if date_field in allowed_date_fields:
+            col = allowed_date_fields[date_field]
+            if date_from:
+                conditions.append(f"{col} >= %s")
+                params.append(date_from)
+            if date_to:
+                conditions.append(f"{col} <= %s")
+                params.append(date_to)
 
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
