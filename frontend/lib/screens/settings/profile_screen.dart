@@ -369,6 +369,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       {'code': 'PI', 'label': 'PI 가압검사', 'icon': Icons.compress, 'color': GxColors.success},
       {'code': 'QI', 'label': 'QI 공정검사', 'icon': Icons.verified, 'color': const Color(0xFF7C3AED)},
       {'code': 'SI', 'label': 'SI 마무리공정', 'icon': Icons.local_shipping, 'color': GxColors.accent},
+      {'code': 'PM', 'label': 'PM 생산관리', 'icon': Icons.supervisor_account, 'color': const Color(0xFFEA580C)},
     ];
 
     await showDialog<void>(

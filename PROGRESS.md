@@ -3,7 +3,7 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v1.5.1 (Sprint 21-ETL, 2026-03-08)
+> **현재 버전**: v1.5.0 (Sprint 21, 2026-03-09)
 
 ---
 
@@ -2559,57 +2559,10 @@ backend/app/routes/qr.py                                            # 신규 (1 
 backend/app/__init__.py                                              # 수정 (Blueprint 등록)
 ```
 
-## Sprint 21-ETL: ETL 파이프라인 + GitHub Actions (2026-03-08) 🔧
+## ETL 파이프라인 → axis-core-etl repo 분리 (2026-03-09)
 
-### 목표
-ETL 파이프라인을 AXIS-OPS repo로 이관 + GitHub Actions cron 자동화 구축.
-Graph API 통합 프롬프트 작성 (로컬 SCR-Schedule 의존성 제거 준비).
-
-### 완료 내역
-
-#### ETL 파이프라인 이관
-- **`etl/etl_main.py`** (신규) — ETL 오케스트레이터
-  - `run_etl(date, start, end, date_field)` — Extract → Load → Summary JSON
-  - CLI: `--date`, `--start/--end`, `--all`, `--field`
-  - `DATABASE_URL` 환경변수 기반 (하드코딩 제거)
-- **`etl/step1_extract.py`** (이관) — dev/my_app에서 복사
-  - ExcelDataLoader + sn_parser 기반 (로컬 SCR-Schedule 의존)
-  - 17개 COLUMN_MAPPING + 2개 EXTRA_COLUMNS
-- **`etl/step2_load.py`** (신규) — PostgreSQL 적재
-  - `get_db_url()` — DATABASE_URL 환경변수에서 읽기
-  - `load_to_postgres()` — plan.product_info + public.qr_registry INSERT
-  - 중복 체크 (qr_registry duplicate skip)
-- **`etl/requirements.txt`** — psycopg2-binary, openpyxl, pandas
-- **`etl/.gitignore`** — output/, *.pyc, __pycache__/, .env
-
-#### GitHub Actions 워크플로우
-- **`.github/workflows/etl-metadata-sync.yml`** (신규)
-  - Triggers: workflow_dispatch (manual) + schedule (매주 월 09:00 KST)
-  - Steps: checkout → Python 3.10 → pip install → run ETL → upload artifact
-  - Secrets: DATABASE_URL
-  - 참고: step1 로컬 의존성 → Graph API 전환 후 완전 자동화 가능
-
-#### Graph API 통합 프롬프트
-- **`etl/PROMPT_step1_graph_api.md`** (신규) — VSCode용 구현 프롬프트
-  - MSAL Client Credentials Flow 인증 코드
-  - Excel 다운로드 2가지 방법: OneDrive ID (Primary) + Teams 폴더 탐색 (Fallback)
-  - SOURCE_DOC_ID 등 환경변수화 (파일 교체 대응)
-  - 404 감지 → 자동 fallback 전환 로직
-  - pandas 파싱, S/N split, 컬럼 매핑 (17+2개)
-  - GitHub Secrets 7개 설정 가이드
-  - 참고: Autolink 프로젝트 기존 Graph API 패턴 활용
-
-### TODO (출근 후 확인)
-- [ ] Teams 폴더/파일 패턴 확인 (W{N}_일정관리, SCR 일정관리_W{week})
-- [ ] 마무리계획일 컬럼명 확인 → COLUMN_MAPPING + DB 스키마 추가 (협력사 평가지수, 실적관리 활용)
-
-### 생성/수정 파일
-```
-etl/etl_main.py                                                     # 신규 (오케스트레이터)
-etl/step1_extract.py                                                # 이관 (dev/my_app에서)
-etl/step2_load.py                                                   # 신규 (DB 적재)
-etl/requirements.txt                                                # 신규
-etl/.gitignore                                                      # 신규
-etl/PROMPT_step1_graph_api.md                                       # 신규 (Graph API 프롬프트)
-.github/workflows/etl-metadata-sync.yml                             # 신규 (GitHub Actions)
-```
+> ETL 코드가 별도 repo(`axis-core-etl`)로 분리되었습니다.
+> 이후 ETL 관련 진행 상황은 `AXIS-CORE/CORE-ETL/PROGRESS.md`에서 관리.
+>
+> **repo**: axis-core-etl
+> **관계**: axis-core-etl → AXIS-OPS DB 직접 적재 (DATABASE_URL)

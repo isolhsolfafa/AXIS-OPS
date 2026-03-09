@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-03-08 (Sprint 21-ETL — ETL 이관 + Graph API 프롬프트)
+> 마지막 업데이트: 2026-03-09 (ETL → axis-core-etl repo 분리)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -119,22 +119,9 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 - Sprint 13에서 flask-sock(raw WS) 마이그레이션으로 해결
 - FE `web_socket_channel`과 BE `/ws` 엔드포인트 정합성 확보
 
-### ~~QR ETL 자동화 파이프라인~~ → 🔧 Sprint 21-ETL 진행 중
-- **내용**: ETL 파이프라인을 Git 기반 Cron으로 자동 실행 → DB 적재
-- **완료 사항** (2026-03-08):
-  - ✅ ETL 파이프라인 AXIS-OPS repo 이관 (`etl/` 디렉토리)
-  - ✅ GitHub Actions 워크플로우 생성 (workflow_dispatch + 매주 월 09:00 KST)
-  - ✅ DB URL 환경변수화 (하드코딩 제거)
-  - ✅ QR 이미지 생성 제거 (라벨기에서 자동 생성)
-  - ✅ Graph API 통합 프롬프트 작성 (`etl/PROMPT_step1_graph_api.md`)
-- **남은 작업**:
-  1. 🔲 Graph API 통합: step1_extract.py에서 로컬 SCR-Schedule 의존성 제거 → MSAL + Graph API로 Excel 다운로드
-  2. 🔲 Teams 폴더/파일 패턴 확인 (fallback용)
-  3. 🔲 마무리계획일 컬럼 추가 (협력사 평가지수 + 실적관리 활용)
-  4. 🔲 GitHub Secrets 등록 (DATABASE_URL + Graph API 키 7개)
-  5. 🔲 push + 워크플로우 실행 테스트
+### ~~QR ETL 자동화 파이프라인~~ → axis-core-etl repo로 분리 완료 (2026-03-09)
+- **상태**: 별도 repo(`axis-core-etl`)에서 관리 → `AXIS-CORE/CORE-ETL/BACKLOG.md` 참조
 - **QR 라벨 관리 페이지**: 별도 검토 (라벨기 자동생성으로 우선순위 낮아짐)
-- **시기**: Graph API 통합 후 push
 
 ### ~~Geolocation 기반 접속 보안 (2차 보안)~~ → ✅ Sprint 19-D 완료
 - Sprint 19-D에서 구현 완료
@@ -205,5 +192,5 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 | 19-E | VIEW용 Admin 출퇴근 API 3개 (BE) | 8 PASSED |
 | 20-A | 신규 가입 시 Admin 이메일 알림 | 5 PASSED |
 | 20-B | 공지사항 탭 (BE+FE) | 6 PASSED |
-| 21 | QR Registry 목록 API (BE) | — |
-| 21-ETL | ETL 이관 + GitHub Actions + Graph API 프롬프트 | 🔧 진행 중 |
+| 21 | QR Registry 목록 API (BE) + 날짜 필터 | ✅ |
+| 21-ETL | ETL → axis-core-etl repo 분리 | ✅ 분리 완료 |

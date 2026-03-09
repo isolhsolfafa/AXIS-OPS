@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 # 유효한 역할 목록 (ADMIN은 DB Seed 전용 — 일반 회원가입 불가)
 # Sprint 6: MM→MECH, EE→ELEC 네이밍 변경
-VALID_ROLES = {'MECH', 'ELEC', 'TM', 'PI', 'QI', 'SI'}
+VALID_ROLES = {'MECH', 'ELEC', 'TM', 'PI', 'QI', 'SI', 'PM'}
 
 # 회사 ↔ 역할 매핑 (회원가입 시 company↔role 검증용)
 COMPANY_ROLE_MAP: Dict[str, set] = {
@@ -48,7 +48,7 @@ COMPANY_ROLE_MAP: Dict[str, set] = {
     'TMS(E)': {'ELEC'},
     'P&S':    {'ELEC'},
     'C&A':    {'ELEC'},
-    'GST':    {'PI', 'QI', 'SI', 'ADMIN'},
+    'GST':    {'PI', 'QI', 'SI', 'PM', 'ADMIN'},
 }
 
 # 이메일 발송 Rate Limiter (DoS 방지)

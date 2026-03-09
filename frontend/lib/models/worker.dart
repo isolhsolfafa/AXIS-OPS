@@ -147,6 +147,8 @@ class Worker {
         return '공정검사';
       case 'SI':
         return '출하검사';
+      case 'PM':
+        return '생산관리';
       case 'ADMIN':
         return '마스터 관리자';
       default:

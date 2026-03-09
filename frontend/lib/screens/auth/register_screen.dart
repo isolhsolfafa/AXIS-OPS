@@ -63,6 +63,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
       {'code': 'PI', 'name': 'PI - Pressure Inspection'},
       {'code': 'QI', 'name': 'QI - Process Inspection'},
       {'code': 'SI', 'name': 'SI - Shipping Inspection'},
+      {'code': 'PM', 'name': 'PM - Production Manager'},
     ],
   };
 

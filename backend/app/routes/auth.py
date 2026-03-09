@@ -331,7 +331,7 @@ def update_active_role_endpoint() -> Tuple[Dict[str, Any], int]:
     new_active_role = data['active_role']
 
     # 유효한 역할 확인
-    valid_roles = {'PI', 'QI', 'SI', 'ADMIN'}
+    valid_roles = {'PI', 'QI', 'SI', 'PM', 'ADMIN'}
     if new_active_role not in valid_roles:
         return jsonify({
             'error': 'INVALID_ROLE',
