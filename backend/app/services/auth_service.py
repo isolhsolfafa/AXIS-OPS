@@ -376,7 +376,7 @@ class AuthService:
             plain_body = (
                 f"G-AXIS 이메일 인증 코드\n\n"
                 f"인증 코드: {code}\n\n"
-                f"이 코드는 10분 후 만료됩니다.\n"
+                f"이 코드는 3분 후 만료됩니다.\n"
                 f"본인이 요청하지 않은 경우 이 메일을 무시하세요."
             )
 
@@ -395,7 +395,7 @@ class AuthService:
                 background: #f0f4ff; border-radius: 8px; margin-bottom: 24px;">
       {code}
     </div>
-    <p style="color: #888; font-size: 13px;">이 코드는 <strong>10분</strong> 후 만료됩니다.</p>
+    <p style="color: #888; font-size: 13px;">이 코드는 <strong>3분</strong> 후 만료됩니다.</p>
     <p style="color: #888; font-size: 13px;">본인이 요청하지 않은 경우 이 메일을 무시하세요.</p>
   </div>
 </body>

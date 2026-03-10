@@ -393,7 +393,7 @@ def update_email_verified(worker_id: int) -> bool:
 
 def create_verification_code(worker_id: int) -> Optional[str]:
     """
-    이메일 인증 코드 생성 (6자리 숫자, 10분 만료)
+    이메일 인증 코드 생성 (6자리 숫자, 3분 만료)
 
     Args:
         worker_id: 작업자 ID
@@ -411,8 +411,8 @@ def create_verification_code(worker_id: int) -> Optional[str]:
             conn = get_db_connection()
             cur = conn.cursor()
 
-            # 만료 시간: 현재 시각(KST) + 10분
-            expires_at = datetime.now(Config.KST) + timedelta(minutes=10)
+            # 만료 시간: 현재 시각(KST) + 3분
+            expires_at = datetime.now(Config.KST) + timedelta(minutes=3)
 
             cur.execute(
                 """
