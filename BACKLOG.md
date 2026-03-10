@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-03-10 (Sprint 22 계획 추가)
+> 마지막 업데이트: 2026-03-10 (Sprint 22-C 완료)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -37,19 +37,29 @@
 ### SEC-3: ✅ GPS enableHighAccuracy: true — 완료
 ### SEC-4: ✅ DMS→Decimal 변환 헬퍼 — 완료
 
-### DB-1: DB 백업 정책 수립
+### DB-1: DB 보호 정책
 - **배경**: HR 테이블(출퇴근, 근무자)은 운영 데이터 — 손실 불가
 - **보호 대상**: `workers`, `partner_attendance`, `qr_registry`
-- **규칙**: ALTER TABLE 실행 전 반드시 pg_dump 백업
-- **방안**:
-  1. Railway Pro 자동 스냅샷 확인
-  2. 수동 pg_dump: `pg_dump $DATABASE_URL --no-owner --format=custom -f backup_$(date +%Y%m%d).dump`
-  3. GitHub Actions 정기 백업 (추후)
-- **BE 코드 push는 DB에 영향 없음** — Railway는 코드와 DB 분리
+- **현재 Railway 환경**: 테스트 DB = 운영 DB (동일 인스턴스)
+  - Railway Pro 자동 일일 백업 + 7일 보관 ✅
+  - BE 코드 push는 DB에 영향 없음 (코드와 DB 분리)
+- **conftest.py 백업/복원 현황**:
+  - ✅ `workers` — backup/restore 구현됨
+  - ✅ `hr.worker_auth_settings` — backup/restore 구현됨
+  - ✅ `hr.partner_attendance` — backup/restore 구현됨
+  - ⚠️ `qr_registry` — **백업 누락** → conftest.py에 backup/restore 추가 필요
+- **운영 규칙**: ALTER TABLE 실행 전 반드시 수동 pg_dump
+- **최종 목표**: 사내 WAS DB로 마이그레이션 → production 분리 운영
 
-### PM-1: PM Role push 대기
-- 코드 완료 (auth_service, auth, register_screen, worker, profile_screen)
-- DB: `ALTER TYPE role_enum ADD VALUE IF NOT EXISTS 'PM';` Railway에서 실행 필요
+### PM-1: ✅ PM Role push + Manager 권한 위임 구조 — 완료 (Sprint 22-C, v1.6.2)
+
+**PM Role**: ✅ 완료 (코드 + Railway DB enum 추가)
+
+**Manager 권한 위임**: ✅ 완료 (Sprint 22-C)
+- `toggle_manager()`: `@admin_required` → `@manager_or_admin_required` 변경
+- Manager: 같은 company 소속만 is_manager 부여/해제 가능
+- Admin 보호: Manager → Admin 권한 변경 시 403
+- 테스트 5/5 통과 (기존 5개 + 신규 5개 = 10개 전체 통과)
 
 ---
 
@@ -217,6 +227,7 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 | 20-B | 공지사항 탭 (BE+FE) | 6 PASSED |
 | 21 | QR Registry 목록 API (BE) + 날짜 필터 | ✅ |
 | 21-ETL | ETL → axis-core-etl repo 분리 | ✅ 분리 완료 |
-| 22-A | Email Verification 개선 (Admin 알림 시점 + 재전송 API) | 예정 |
-| 22-B | GPS enableHighAccuracy + DMS 변환 헬퍼 | 예정 |
-| 22-C | DB 백업 정책 + PM Role push | 예정 |
+| 22-A | Email Verification 개선 (Admin 알림 시점 + 재전송 API) | ✅ |
+| 22-A보완 | 인증 3분 만료, FE 연동, 승인필터, PM role | ✅ v1.6.1 |
+| 22-B | GPS enableHighAccuracy + DMS 변환 헬퍼 | ✅ |
+| 22-C | Manager 권한 위임 (같은 회사 is_manager 부여) | ✅ v1.6.2 |

@@ -3,7 +3,7 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v1.6.1 (Sprint 22-A 보완, 2026-03-10)
+> **현재 버전**: v1.6.2 (Sprint 22-C, 2026-03-10)
 
 ---
 
@@ -2647,15 +2647,29 @@ backend/version.py                                      # v1.6.1
 frontend/lib/utils/app_version.dart                     # v1.6.1
 ```
 
-### Sprint 22-C: DB 백업 정책 + PM Role
+## Sprint 22-C: 권한 체계 정리 + Manager 권한 위임 (v1.6.2, 완료)
 
-#### 목표
-- HR 테이블 보호를 위한 백업 절차 수립
-- PM Role DB enum 추가 + 코드 push
+> **마지막 업데이트**: 2026-03-10
 
-#### 작업 내역 (예정)
-- ALTER TABLE 전 `pg_dump` 필수 실행 절차
-- HR 테이블(workers, partner_attendance, qr_registry) 보호 대상 지정
-- Railway DB `ALTER TYPE worker_role ADD VALUE IF NOT EXISTS 'pm'`
-- PM Role 관련 코드 push (이미 완성)
-> **관계**: axis-core-etl → AXIS-OPS DB 직접 적재 (DATABASE_URL)
+### 변경 내역
+- **toggle_manager() 권한 위임**: `@admin_required` → `@manager_or_admin_required` 데코레이터 변경
+- **Manager 같은 회사 검증**: 협력사 Manager는 같은 company 소속 작업자만 is_manager 부여/해제 가능
+- **Admin 보호**: Manager가 Admin(is_admin=true) 권한 변경 시도 시 403 거부
+- **Admin 제한 없음**: 기존과 동일하게 전체 작업자 is_manager 변경 가능
+
+### 수정된 파일
+```
+backend/app/routes/admin.py                             # toggle_manager() 데코레이터 + company/admin 검증
+tests/backend/test_admin_options_api.py                 # TestManagerDelegation 5개 테스트 추가
+backend/version.py                                      # v1.6.2
+frontend/lib/utils/app_version.dart                     # v1.6.2
+```
+
+### 테스트: 5/5 PASSED (기존 5개 + 신규 5개 = 10개 전체 통과)
+| TC | 설명 | 결과 |
+|----|------|------|
+| MGR-01 | Admin → 아무 작업자 manager 부여 성공 | ✅ |
+| MGR-02 | 협력사 Manager → 같은 회사 작업자 manager 부여 성공 | ✅ |
+| MGR-03 | 협력사 Manager → 다른 회사 작업자 → 403 | ✅ |
+| MGR-04 | 협력사 Manager → Admin 권한 변경 → 403 | ✅ |
+| MGR-05 | 일반 작업자 → manager 부여 시도 → 403 | ✅ |

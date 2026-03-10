@@ -1224,10 +1224,15 @@ def get_managers() -> Tuple[Dict[str, Any], int]:
 
 @admin_bp.route("/workers/<int:worker_id>/manager", methods=["PUT"])
 @jwt_required
-@admin_required
+@manager_or_admin_required
 def toggle_manager(worker_id: int) -> Tuple[Dict[str, Any], int]:
     """
     작업자의 is_manager 토글
+
+    - Admin: 전체 작업자 is_manager 부여/해제 (제한 없음)
+    - Manager: 같은 회사(company) 소속 작업자만 is_manager 부여/해제
+      - Admin 권한 변경 불가 (상위 권한 보호)
+      - 다른 회사 작업자 변경 불가
 
     Path Parameters:
         worker_id: int
@@ -1241,6 +1246,7 @@ def toggle_manager(worker_id: int) -> Tuple[Dict[str, Any], int]:
     Returns:
         200: {"message": str, "worker_id": int, "is_manager": bool}
         400: {"error": "INVALID_REQUEST", "message": "..."}
+        403: {"error": "FORBIDDEN", "message": "..."}
         404: {"error": "WORKER_NOT_FOUND", "message": "..."}
         500: {"error": "INTERNAL_SERVER_ERROR", "message": "..."}
     """
@@ -1253,12 +1259,32 @@ def toggle_manager(worker_id: int) -> Tuple[Dict[str, Any], int]:
             'message': 'is_manager 필드(bool)가 필요합니다.'
         }), 400
 
-    worker = get_worker_by_id(worker_id)
-    if not worker:
+    # 대상 작업자 조회
+    target_worker = get_worker_by_id(worker_id)
+    if not target_worker:
         return jsonify({
             'error': 'WORKER_NOT_FOUND',
             'message': '작업자를 찾을 수 없습니다.'
         }), 404
+
+    # 요청자 정보 조회 (Manager 권한 검증용)
+    requester = get_worker_by_id(g.worker_id)
+
+    # Manager인 경우 추가 검증 (Admin이 아닌 경우)
+    if not requester.is_admin:
+        # Admin 권한 변경 불가 (상위 권한 보호)
+        if target_worker.is_admin:
+            return jsonify({
+                'error': 'FORBIDDEN',
+                'message': 'Admin 계정의 권한은 변경할 수 없습니다.'
+            }), 403
+
+        # 같은 회사 소속만 변경 가능
+        if requester.company != target_worker.company:
+            return jsonify({
+                'error': 'FORBIDDEN',
+                'message': '같은 회사 소속 작업자만 관리자 지정/해제할 수 있습니다.'
+            }), 403
 
     conn = None
     try:
@@ -1276,7 +1302,7 @@ def toggle_manager(worker_id: int) -> Tuple[Dict[str, Any], int]:
         conn.commit()
 
         action = '관리자 지정' if is_manager else '관리자 해제'
-        logger.info(f"Worker manager toggled: worker_id={worker_id}, is_manager={is_manager}, by_admin={g.worker_id}")
+        logger.info(f"Worker manager toggled: worker_id={worker_id}, is_manager={is_manager}, by={g.worker_id}")
 
         return jsonify({
             'message': f'{action} 완료',

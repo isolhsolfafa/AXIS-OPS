@@ -363,6 +363,217 @@ class TestToggleManager:
 
 
 # ============================================================
+# TestManagerDelegation: Manager 권한 위임 (Sprint 22-C)
+# ============================================================
+
+class TestManagerDelegation:
+    """협력사 Manager가 같은 회사 소속 작업자에게 is_manager 권한 부여/해제"""
+
+    def test_admin_toggle_any_worker(
+        self, client, create_test_worker, options_admin
+    ):
+        """
+        MGR-01: Admin → 아무 작업자 manager 부여 성공
+
+        Expected:
+        - Status 200
+        - is_manager == True
+        """
+        worker_id = create_test_worker(
+            email='mgr01_target@admin_options_test.com',
+            password='Test123!',
+            name='MGR01 Target',
+            role='MECH',
+            company='FNI',
+            approval_status='approved',
+            is_manager=False
+        )
+
+        response = client.put(
+            f'/api/admin/workers/{worker_id}/manager',
+            json={'is_manager': True},
+            headers={'Authorization': f'Bearer {options_admin["token"]}'}
+        )
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['is_manager'] is True
+
+    def test_manager_toggle_same_company(
+        self, client, create_test_worker, get_auth_token
+    ):
+        """
+        MGR-02: 협력사 Manager → 같은 회사 작업자 manager 부여 성공
+
+        Expected:
+        - Status 200
+        - is_manager == True
+        """
+        # 요청자: FNI Manager
+        manager_id = create_test_worker(
+            email='mgr02_requester@admin_options_test.com',
+            password='Test123!',
+            name='FNI Manager',
+            role='MECH',
+            company='FNI',
+            approval_status='approved',
+            is_manager=True
+        )
+
+        # 대상: FNI 일반 작업자
+        target_id = create_test_worker(
+            email='mgr02_target@admin_options_test.com',
+            password='Test123!',
+            name='FNI Worker',
+            role='MECH',
+            company='FNI',
+            approval_status='approved',
+            is_manager=False
+        )
+
+        token = get_auth_token(manager_id, role='MECH')
+
+        response = client.put(
+            f'/api/admin/workers/{target_id}/manager',
+            json={'is_manager': True},
+            headers={'Authorization': f'Bearer {token}'}
+        )
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['is_manager'] is True
+
+    def test_manager_toggle_different_company_forbidden(
+        self, client, create_test_worker, get_auth_token
+    ):
+        """
+        MGR-03: 협력사 Manager → 다른 회사 작업자 → 403
+
+        Expected:
+        - Status 403
+        - error == FORBIDDEN
+        """
+        # 요청자: FNI Manager
+        manager_id = create_test_worker(
+            email='mgr03_requester@admin_options_test.com',
+            password='Test123!',
+            name='FNI Manager',
+            role='MECH',
+            company='FNI',
+            approval_status='approved',
+            is_manager=True
+        )
+
+        # 대상: BAT 작업자 (다른 회사)
+        target_id = create_test_worker(
+            email='mgr03_target@admin_options_test.com',
+            password='Test123!',
+            name='BAT Worker',
+            role='MECH',
+            company='BAT',
+            approval_status='approved',
+            is_manager=False
+        )
+
+        token = get_auth_token(manager_id, role='MECH')
+
+        response = client.put(
+            f'/api/admin/workers/{target_id}/manager',
+            json={'is_manager': True},
+            headers={'Authorization': f'Bearer {token}'}
+        )
+
+        assert response.status_code == 403
+        data = response.get_json()
+        assert data['error'] == 'FORBIDDEN'
+
+    def test_manager_cannot_toggle_admin(
+        self, client, create_test_worker, get_auth_token
+    ):
+        """
+        MGR-04: 협력사 Manager → Admin 권한 변경 → 403
+
+        Expected:
+        - Status 403
+        - error == FORBIDDEN
+        """
+        # 요청자: GST Manager (is_admin=False)
+        manager_id = create_test_worker(
+            email='mgr04_requester@admin_options_test.com',
+            password='Test123!',
+            name='GST Manager',
+            role='QI',
+            company='GST',
+            approval_status='approved',
+            is_manager=True
+        )
+
+        # 대상: GST Admin (같은 회사지만 is_admin=True)
+        admin_id = create_test_worker(
+            email='mgr04_admin_target@admin_options_test.com',
+            password='Test123!',
+            name='GST Admin Target',
+            role='ADMIN',
+            company='GST',
+            approval_status='approved',
+            is_admin=True,
+            is_manager=True
+        )
+
+        token = get_auth_token(manager_id, role='QI')
+
+        response = client.put(
+            f'/api/admin/workers/{admin_id}/manager',
+            json={'is_manager': False},
+            headers={'Authorization': f'Bearer {token}'}
+        )
+
+        assert response.status_code == 403
+        data = response.get_json()
+        assert data['error'] == 'FORBIDDEN'
+
+    def test_regular_worker_cannot_toggle(
+        self, client, create_test_worker, get_auth_token
+    ):
+        """
+        MGR-05: 일반 작업자 → manager 부여 시도 → 403
+
+        Expected:
+        - Status 403 (manager_or_admin_required 데코레이터에서 거부)
+        """
+        # 요청자: 일반 작업자 (is_manager=False, is_admin=False)
+        worker_id = create_test_worker(
+            email='mgr05_requester@admin_options_test.com',
+            password='Test123!',
+            name='Regular Worker',
+            role='MECH',
+            company='FNI',
+            approval_status='approved',
+            is_manager=False
+        )
+
+        target_id = create_test_worker(
+            email='mgr05_target@admin_options_test.com',
+            password='Test123!',
+            name='Target Worker',
+            role='MECH',
+            company='FNI',
+            approval_status='approved',
+            is_manager=False
+        )
+
+        token = get_auth_token(worker_id, role='MECH')
+
+        response = client.put(
+            f'/api/admin/workers/{target_id}/manager',
+            json={'is_manager': True},
+            headers={'Authorization': f'Bearer {token}'}
+        )
+
+        assert response.status_code == 403
+
+
+# ============================================================
 # TestAdminSettings: GET/PUT /api/admin/settings
 # ============================================================
 
