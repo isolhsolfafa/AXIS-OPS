@@ -143,6 +143,7 @@ def get_pending_workers() -> Tuple[Dict[str, Any], int]:
             SELECT id, name, email, role, company, is_manager, created_at
             FROM workers
             WHERE approval_status = 'pending'
+              AND email_verified = TRUE
             ORDER BY created_at DESC
             LIMIT %s
             """,
