@@ -4,6 +4,7 @@ import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/notice_service.dart';
 import '../../utils/design_system.dart';
+import '../admin/notice_write_screen.dart';
 
 /// 공지사항 상세 화면
 /// Sprint 20-B
@@ -42,6 +43,18 @@ class _NoticeDetailScreenState extends ConsumerState<NoticeDetailScreen> {
           SnackBar(content: Text('공지사항을 불러올 수 없습니다: $e')),
         );
       }
+    }
+  }
+
+  Future<void> _editNotice() async {
+    final result = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => NoticeWriteScreen(existingNotice: _notice),
+      ),
+    );
+    if (result == true) {
+      _loadDetail(); // 수정 후 상세 새로고침
     }
   }
 
@@ -89,6 +102,10 @@ class _NoticeDetailScreenState extends ConsumerState<NoticeDetailScreen> {
         iconTheme: const IconThemeData(color: GxColors.charcoal),
         actions: isAdmin && _notice != null
             ? [
+                IconButton(
+                  icon: const Icon(Icons.edit_outlined, color: GxColors.accent),
+                  onPressed: _editNotice,
+                ),
                 IconButton(
                   icon: const Icon(Icons.delete_outline, color: GxColors.danger),
                   onPressed: _deleteNotice,

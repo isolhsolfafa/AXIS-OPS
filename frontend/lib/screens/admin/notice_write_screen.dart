@@ -4,10 +4,15 @@ import '../../providers/auth_provider.dart';
 import '../../services/notice_service.dart';
 import '../../utils/design_system.dart';
 
-/// Admin 공지 작성 화면
-/// Sprint 20-B
+/// Admin 공지 작성/수정 화면
+/// Sprint 20-B (작성), Sprint 22-C (수정 모드 추가)
 class NoticeWriteScreen extends ConsumerStatefulWidget {
-  const NoticeWriteScreen({super.key});
+  /// 수정 모드일 때 기존 공지 데이터 전달
+  final Map<String, dynamic>? existingNotice;
+
+  const NoticeWriteScreen({super.key, this.existingNotice});
+
+  bool get isEditMode => existingNotice != null;
 
   @override
   ConsumerState<NoticeWriteScreen> createState() => _NoticeWriteScreenState();
@@ -26,6 +31,15 @@ class _NoticeWriteScreenState extends ConsumerState<NoticeWriteScreen> {
     super.initState();
     final apiService = ref.read(apiServiceProvider);
     _noticeService = NoticeService(apiService: apiService);
+
+    // 수정 모드: 기존 데이터 채우기
+    if (widget.isEditMode) {
+      final n = widget.existingNotice!;
+      _titleController.text = n['title'] ?? '';
+      _contentController.text = n['content'] ?? '';
+      _versionController.text = n['version'] ?? '';
+      _isPinned = n['is_pinned'] == true;
+    }
   }
 
   @override
@@ -55,15 +69,28 @@ class _NoticeWriteScreenState extends ConsumerState<NoticeWriteScreen> {
 
     setState(() => _submitting = true);
     try {
-      await _noticeService.createNotice(
-        title: title,
-        content: content,
-        version: _versionController.text.trim().isEmpty ? null : _versionController.text.trim(),
-        isPinned: _isPinned,
-      );
+      final versionText = _versionController.text.trim().isEmpty ? null : _versionController.text.trim();
+
+      if (widget.isEditMode) {
+        await _noticeService.updateNotice(
+          widget.existingNotice!['id'],
+          title: title,
+          content: content,
+          version: versionText,
+          isPinned: _isPinned,
+        );
+      } else {
+        await _noticeService.createNotice(
+          title: title,
+          content: content,
+          version: versionText,
+          isPinned: _isPinned,
+        );
+      }
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('공지사항이 등록되었습니다.')),
+          SnackBar(content: Text(widget.isEditMode ? '공지사항이 수정되었습니다.' : '공지사항이 등록되었습니다.')),
         );
         Navigator.pop(context, true);
       }
@@ -71,7 +98,7 @@ class _NoticeWriteScreenState extends ConsumerState<NoticeWriteScreen> {
       setState(() => _submitting = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('등록 실패: $e')),
+          SnackBar(content: Text('${widget.isEditMode ? '수정' : '등록'} 실패: $e')),
         );
       }
     }
@@ -82,7 +109,7 @@ class _NoticeWriteScreenState extends ConsumerState<NoticeWriteScreen> {
     return Scaffold(
       backgroundColor: GxColors.cloud,
       appBar: AppBar(
-        title: const Text('공지 작성', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: GxColors.charcoal)),
+        title: Text(widget.isEditMode ? '공지 수정' : '공지 작성', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: GxColors.charcoal)),
         backgroundColor: Colors.white,
         elevation: 0,
         iconTheme: const IconThemeData(color: GxColors.charcoal),
@@ -148,7 +175,7 @@ class _NoticeWriteScreenState extends ConsumerState<NoticeWriteScreen> {
                   ),
                   child: _submitting
                       ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                      : const Text('등록', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.white)),
+                      : Text(widget.isEditMode ? '수정' : '등록', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.white)),
                 ),
               ),
             ],
