@@ -1855,3 +1855,118 @@ def get_attendance_summary() -> Tuple[Dict[str, Any], int]:
             'error': 'INTERNAL_SERVER_ERROR',
             'message': '출퇴근 요약 조회에 실패했습니다.'
         }), 500
+
+
+# ============================================================
+# ETL Change Log: GET /api/admin/etl/changes
+# Sprint 2 (CORE-ETL) — Task 4: 변경 이력 조회 API
+# ============================================================
+
+# 필드명 → 한글 라벨 매핑
+_FIELD_LABELS = {
+    'sales_order': '판매오더',
+    'ship_plan_date': '출하예정',
+    'mech_start': '기구시작',
+    'mech_partner': '기구외주',
+    'elec_partner': '전장외주',
+}
+
+
+@admin_bp.route("/etl/changes", methods=["GET"])
+@jwt_required
+@manager_or_admin_required
+def get_etl_changes() -> Tuple[Dict[str, Any], int]:
+    """
+    ETL 변경 이력 조회
+
+    Query Parameters:
+        days: int — 최근 N일 (기본 7)
+        field: string — 특정 필드만 필터 (sales_order, ship_plan_date, mech_start, mech_partner, elec_partner)
+        serial_number: string — 특정 S/N만
+        limit: int — 최대 건수 (기본 100)
+
+    Returns:
+        200: {"changes": [...], "summary": {"total_changes": int, "by_field": {...}}}
+    """
+    days = request.args.get('days', 7, type=int)
+    field = request.args.get('field', '', type=str).strip()
+    serial_number = request.args.get('serial_number', '', type=str).strip()
+    limit = request.args.get('limit', 100, type=int)
+
+    # 입력값 범위 제한
+    days = max(1, min(days, 365))
+    limit = max(1, min(limit, 500))
+
+    # 허용된 필드명 검증
+    valid_fields = set(_FIELD_LABELS.keys())
+    if field and field not in valid_fields:
+        return jsonify({
+            'error': 'INVALID_FIELD',
+            'message': f'허용된 필드: {", ".join(sorted(valid_fields))}'
+        }), 400
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # 동적 WHERE 절 구성
+        conditions = ["cl.changed_at >= NOW() - INTERVAL '%s days'"]
+        params: list = [days]
+
+        if field:
+            conditions.append("cl.field_name = %s")
+            params.append(field)
+
+        if serial_number:
+            conditions.append("cl.serial_number ILIKE %s")
+            params.append(f'%{serial_number}%')
+
+        where_clause = " AND ".join(conditions)
+
+        # 변경 이력 조회 (product_info JOIN으로 model 포함)
+        cur.execute(f"""
+            SELECT cl.id, cl.serial_number, pi.model,
+                   cl.field_name, cl.old_value, cl.new_value, cl.changed_at
+            FROM etl.change_log cl
+            LEFT JOIN plan.product_info pi ON cl.serial_number = pi.serial_number
+            WHERE {where_clause}
+            ORDER BY cl.changed_at DESC
+            LIMIT %s
+        """, tuple(params) + (limit,))
+
+        rows = cur.fetchall()
+
+        changes = []
+        by_field: dict = {}
+        for row in rows:
+            field_name = row[3]
+            changes.append({
+                'id': row[0],
+                'serial_number': row[1],
+                'model': row[2],
+                'field_name': field_name,
+                'field_label': _FIELD_LABELS.get(field_name, field_name),
+                'old_value': row[4],
+                'new_value': row[5],
+                'changed_at': row[6].isoformat() if row[6] else None,
+            })
+            by_field[field_name] = by_field.get(field_name, 0) + 1
+
+        return jsonify({
+            'changes': changes,
+            'summary': {
+                'total_changes': len(changes),
+                'by_field': by_field,
+            }
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Failed to get ETL change log: {e}")
+        return jsonify({
+            'error': 'INTERNAL_SERVER_ERROR',
+            'message': 'ETL 변경 이력 조회에 실패했습니다.'
+        }), 500
+    finally:
+        if conn:
+            conn.close()
