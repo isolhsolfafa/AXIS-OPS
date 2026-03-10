@@ -186,6 +186,25 @@ class AuthService {
     }
   }
 
+  /// 이메일 인증 코드 재전송 (Sprint 22-A)
+  ///
+  /// [email]: 사용자 이메일
+  ///
+  /// Returns: 성공 시 response map, 실패 시 Exception
+  Future<Map<String, dynamic>> resendVerification({
+    required String email,
+  }) async {
+    try {
+      final response = await _apiService.post(
+        authResendVerificationEndpoint,
+        data: {'email': email},
+      );
+      return response;
+    } catch (e) {
+      rethrow;
+    }
+  }
+
   /// 로그아웃
   ///
   /// Sprint 19-B: 서버에 refresh_token 무효화 요청 후 로컬 데이터 삭제

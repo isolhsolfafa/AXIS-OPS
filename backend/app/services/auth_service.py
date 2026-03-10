@@ -499,11 +499,18 @@ class AuthService:
             company=company
         )
 
-        # 중복 이메일 체크
+        # 생성 실패 (중복 이메일 또는 DB 제약조건 위반)
         if worker_id is None:
+            # 이메일 중복 여부 직접 확인
+            existing = get_worker_by_email(email)
+            if existing:
+                return {
+                    'error': 'DUPLICATE_EMAIL',
+                    'message': '이미 사용 중인 이메일입니다.'
+                }, 400
             return {
-                'error': 'DUPLICATE_EMAIL',
-                'message': '이미 사용 중인 이메일입니다.'
+                'error': 'REGISTRATION_FAILED',
+                'message': '회원가입 처리 중 오류가 발생했습니다. 입력 정보를 확인해주세요.'
             }, 400
 
         # 이메일 인증 코드 생성

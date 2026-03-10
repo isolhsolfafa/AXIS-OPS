@@ -5,6 +5,7 @@ import '../../utils/validators.dart';
 import '../../utils/design_system.dart';
 import 'approval_pending_screen.dart';
 import 'forgot_password_screen.dart';
+import 'verify_email_screen.dart';
 
 /// 로그인 화면
 ///
@@ -45,11 +46,18 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       // 로그인 성공 시 AuthGate가 자동으로 홈 화면으로 전환
       Navigator.of(context).popUntil((route) => route.isFirst);
     } else {
-      // 에러 코드 분기: 승인 대기/거부 시 전용 화면으로 이동
+      // 에러 코드 분기
       final errorMsg = ref.read(authProvider).errorMessage ?? '';
       if (errorMsg.contains('APPROVAL_PENDING')) {
         Navigator.of(context).push(
           MaterialPageRoute(builder: (_) => const ApprovalPendingScreen()),
+        );
+      } else if (errorMsg.contains('EMAIL_NOT_VERIFIED')) {
+        // 이메일 미인증 → 인증 화면으로 이동 (재전송 가능)
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => VerifyEmailScreen(email: _emailController.text.trim()),
+          ),
         );
       }
     }

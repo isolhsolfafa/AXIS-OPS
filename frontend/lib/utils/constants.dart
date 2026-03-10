@@ -11,6 +11,7 @@ const String authRegisterEndpoint = '/auth/register';
 const String authVerifyEmailEndpoint = '/auth/verify-email';
 const String authLogoutEndpoint = '/auth/logout';
 const String authRefreshEndpoint = '/auth/refresh';
+const String authResendVerificationEndpoint = '/auth/resend-verification';
 const String authForgotPasswordEndpoint = '/auth/forgot-password';
 const String authResetPasswordEndpoint = '/auth/reset-password';
 

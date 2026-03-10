@@ -194,7 +194,11 @@ def create_worker(
     except psycopg2.IntegrityError as e:
         if conn:
             conn.rollback()
-        logger.warning(f"Worker creation failed (duplicate email?): {e}")
+        error_msg = str(e)
+        if 'email' in error_msg:
+            logger.warning(f"Worker creation failed (duplicate email): {e}")
+        else:
+            logger.error(f"Worker creation failed (integrity error): {e}")
         return None
     except PsycopgError as e:
         if conn:
