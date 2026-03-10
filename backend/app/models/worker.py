@@ -280,11 +280,11 @@ def get_admin_by_email_prefix(prefix: str) -> Optional[Worker]:
     """
     이메일 prefix로 관리자 조회 (Admin 간편 로그인용)
 
-    'admin' 입력 시 'admin@gst-in.com' 매칭.
+    'admin' 입력 시 'admin1234@gst-in.com' 또는 'admin@gst-in.com' 매칭.
     매칭 결과가 정확히 1명일 때만 반환, 0명/2명+ → None.
 
     Args:
-        prefix: 이메일 @ 앞부분 (예: 'dkkim1', 'admin')
+        prefix: 이메일 @ 앞부분 또는 시작 문자열 (예: 'dkkim1', 'admin')
 
     Returns:
         Worker 객체 (매칭 1명), 없거나 2명+ 시 None
@@ -294,10 +294,19 @@ def get_admin_by_email_prefix(prefix: str) -> Optional[Worker]:
         conn = get_db_connection()
         cur = conn.cursor()
 
+        # 1차: 정확한 prefix@% 매칭 시도
         cur.execute(
             "SELECT * FROM workers WHERE email LIKE %s AND is_admin = TRUE",
             (prefix + '@%',)
         )
+        rows = cur.fetchall()
+
+        # 2차: 0건이면 prefix% 로 확장 매칭 (admin → admin1234@...)
+        if len(rows) == 0:
+            cur.execute(
+                "SELECT * FROM workers WHERE email LIKE %s AND is_admin = TRUE",
+                (prefix + '%',)
+            )
 
         rows = cur.fetchall()
         if len(rows) == 1:
