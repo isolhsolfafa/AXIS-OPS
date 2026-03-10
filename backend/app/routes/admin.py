@@ -1940,16 +1940,17 @@ def get_etl_changes() -> Tuple[Dict[str, Any], int]:
         changes = []
         by_field: dict = {}
         for row in rows:
-            field_name = row[3]
+            field_name = row['field_name']
+            changed_at = row['changed_at']
             changes.append({
-                'id': row[0],
-                'serial_number': row[1],
-                'model': row[2],
+                'id': row['id'],
+                'serial_number': row['serial_number'],
+                'model': row['model'],
                 'field_name': field_name,
                 'field_label': _FIELD_LABELS.get(field_name, field_name),
-                'old_value': row[4],
-                'new_value': row[5],
-                'changed_at': row[6].isoformat() if row[6] else None,
+                'old_value': row['old_value'],
+                'new_value': row['new_value'],
+                'changed_at': changed_at.isoformat() if changed_at else None,
             })
             by_field[field_name] = by_field.get(field_name, 0) + 1
 
