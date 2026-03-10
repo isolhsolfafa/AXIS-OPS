@@ -189,12 +189,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         completer.complete(null);
       });
 
-      final options = js_util.jsify({'timeout': 10000, 'enableHighAccuracy': false});
+      // Sprint 22-B: enableHighAccuracy: true (GPS 위성 기반 정확한 위치)
+      final options = js_util.jsify({'timeout': 15000, 'enableHighAccuracy': true});
       js_util.callMethod(geo as Object, 'getCurrentPosition', [successCallback, errorCallback, options]);
 
-      // 12초 안에 응답 없으면 null 반환 (timeout 방어)
+      // 18초 안에 응답 없으면 null 반환 (GPS 탐색 시간 + 여유)
       return await completer.future.timeout(
-        const Duration(seconds: 12),
+        const Duration(seconds: 18),
         onTimeout: () => null,
       );
     } catch (e) {

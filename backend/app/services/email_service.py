@@ -69,10 +69,17 @@ def _send_email(to_email: str, subject: str, html_body: str) -> bool:
         return False
 
 
-def render_register_notification(name: str, email: str, role: str, company: str = None) -> str:
+def render_register_notification(
+    name: str, email: str, role: str, company: str = None, email_verified: bool = False
+) -> str:
     """신규 가입 알림 HTML 템플릿 생성"""
     now_kst = datetime.now(_KST).strftime('%Y-%m-%d %H:%M')
     company_display = company or '-'
+    verified_badge = (
+        '<span style="color: #16a34a; font-weight: bold;">이메일 인증 완료</span>'
+        if email_verified
+        else '<span style="color: #dc2626;">이메일 미인증</span>'
+    )
 
     return f"""
 <!DOCTYPE html>
@@ -82,7 +89,7 @@ def render_register_notification(name: str, email: str, role: str, company: str 
   <div style="max-width: 480px; margin: 0 auto; background: #ffffff;
               border-radius: 8px; padding: 32px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
     <h2 style="color: #1a1a2e; margin-bottom: 8px;">AXIS-OPS 신규 가입 알림</h2>
-    <p style="color: #555; margin-bottom: 24px;">새로운 작업자가 가입했습니다. 승인 여부를 확인해주세요.</p>
+    <p style="color: #555; margin-bottom: 24px;">새로운 작업자가 이메일 인증을 완료했습니다. 승인 여부를 확인해주세요.</p>
     <table style="width: 100%; border-collapse: collapse; margin-bottom: 24px;">
       <tr>
         <td style="padding: 8px 12px; color: #888; border-bottom: 1px solid #eee;">이름</td>
@@ -101,7 +108,11 @@ def render_register_notification(name: str, email: str, role: str, company: str 
         <td style="padding: 8px 12px; border-bottom: 1px solid #eee;">{company_display}</td>
       </tr>
       <tr>
-        <td style="padding: 8px 12px; color: #888;">가입일시</td>
+        <td style="padding: 8px 12px; color: #888; border-bottom: 1px solid #eee;">인증 상태</td>
+        <td style="padding: 8px 12px; border-bottom: 1px solid #eee;">{verified_badge}</td>
+      </tr>
+      <tr>
+        <td style="padding: 8px 12px; color: #888;">인증일시</td>
         <td style="padding: 8px 12px;">{now_kst}</td>
       </tr>
     </table>
@@ -112,15 +123,17 @@ def render_register_notification(name: str, email: str, role: str, company: str 
 """
 
 
-def send_register_notification(name: str, email: str, role: str, company: str = None):
-    """신규 가입 시 Admin 전원에게 알림 이메일 발송 (best-effort)"""
+def send_register_notification(
+    name: str, email: str, role: str, company: str = None, email_verified: bool = False
+):
+    """이메일 인증 완료 시 Admin 전원에게 알림 이메일 발송 (best-effort)"""
     admin_emails = get_admin_emails()
     if not admin_emails:
         logger.warning("Admin 이메일 수신자 없음 (is_admin=true 사용자 없음)")
         return
 
     subject = f"[AXIS-OPS] 신규 가입: {name} ({company or role})"
-    html_body = render_register_notification(name, email, role, company)
+    html_body = render_register_notification(name, email, role, company, email_verified)
 
     for admin_email in admin_emails:
         try:

@@ -62,26 +62,8 @@ def register() -> Tuple[Dict[str, Any], int]:
         company=data.get('company')  # optional
     )
 
-    # Sprint 20-A: 가입 성공 시 Admin 이메일 알림 (best-effort, 백그라운드 스레드)
-    if status_code == 201:
-        try:
-            import threading
-            from app.services.email_service import send_register_notification
-
-            def _send_email_background():
-                try:
-                    send_register_notification(
-                        name=data['name'],
-                        email=data['email'],
-                        role=data['role'],
-                        company=data.get('company'),
-                    )
-                except Exception as e:
-                    logger.error(f"가입 알림 이메일 발송 실패: {e}")
-
-            threading.Thread(target=_send_email_background, daemon=True).start()
-        except Exception as e:
-            logger.error(f"이메일 스레드 생성 실패: {e}")
+    # Sprint 22-A: Admin 알림은 이메일 인증 완료 시 발송 (verify-email 핸들러에서 처리)
+    # 가입 시점에는 아직 이메일 미인증 상태이므로 Admin 알림 미발송
 
     return jsonify(response), status_code
 
@@ -111,6 +93,64 @@ def verify_email() -> Tuple[Dict[str, Any], int]:
 
     # auth_service.verify_email 호출
     response, status_code = auth_service.verify_email(code=data['code'])
+
+    # Sprint 22-A: 이메일 인증 성공 시 Admin 알림 발송 (best-effort, 백그라운드 스레드)
+    if status_code == 200:
+        try:
+            import threading
+            from app.services.email_service import send_register_notification
+
+            worker_info = response.get('_worker_info', {})
+
+            def _send_admin_notification():
+                try:
+                    send_register_notification(
+                        name=worker_info.get('name', ''),
+                        email=worker_info.get('email', ''),
+                        role=worker_info.get('role', ''),
+                        company=worker_info.get('company'),
+                        email_verified=True,
+                    )
+                except Exception as e:
+                    logger.error(f"이메일 인증 후 Admin 알림 발송 실패: {e}")
+
+            threading.Thread(target=_send_admin_notification, daemon=True).start()
+
+            # _worker_info는 내부용이므로 응답에서 제거
+            response.pop('_worker_info', None)
+        except Exception as e:
+            logger.error(f"Admin 알림 스레드 생성 실패: {e}")
+
+    return jsonify(response), status_code
+
+
+@auth_bp.route("/resend-verification", methods=["POST"])
+def resend_verification() -> Tuple[Dict[str, Any], int]:
+    """
+    이메일 인증 코드 재전송 (Sprint 22-A)
+
+    Request Body:
+        {
+            "email": str
+        }
+
+    Response:
+        200: {"message": "인증 코드가 재전송되었습니다."}
+        400: {"error": "ALREADY_VERIFIED", "message": "..."}
+        404: {"error": "USER_NOT_FOUND", "message": "..."}
+        429: {"error": "RATE_LIMITED", "message": "..."}
+    """
+    data = request.get_json()
+
+    if not data or 'email' not in data:
+        return jsonify({
+            'error': 'INVALID_REQUEST',
+            'message': '이메일이 필요합니다.'
+        }), 400
+
+    response, status_code = auth_service.resend_verification_email(
+        email=data['email']
+    )
     return jsonify(response), status_code
 
 

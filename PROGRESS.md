@@ -2565,4 +2565,69 @@ backend/app/__init__.py                                              # 수정 (B
 > 이후 ETL 관련 진행 상황은 `AXIS-CORE/CORE-ETL/PROGRESS.md`에서 관리.
 >
 > **repo**: axis-core-etl
+
+---
+
+## Sprint 22-A: Email Verification 개선 (완료)
+
+> **마지막 업데이트**: 2026-03-10
+
+### Phase A: email_verified 후 Admin 알림
+- `auth.py` — register에서 Admin 알림 호출 제거 (가입 시점 = 미인증 상태)
+- `auth.py` — verify-email 성공 시 `send_register_notification()` 호출 (백그라운드 스레드)
+- `auth_service.py` — `verify_email()`에서 `_worker_info`를 내부 응답에 포함 → route에서 Admin 알림 후 제거
+- `email_service.py` — `render_register_notification`에 `email_verified` 파라미터 추가, 인증 상태 배지 표시
+
+### Phase B: 이메일 재전송 API
+- `auth.py` — `POST /api/auth/resend-verification` 엔드포인트 추가
+- `auth_service.py` — `resend_verification_email()` 메서드 추가
+  - 미가입 이메일 → 404 (USER_NOT_FOUND)
+  - 이미 인증 완료 → 400 (ALREADY_VERIFIED)
+  - 60초 내 재전송 → 429 (RATE_LIMITED)
+  - 새 verification_code 생성 + 이메일 발송
+
+### 테스트: 기존 auth 8/8 PASSED (regression 없음)
+
+### 수정된 파일
+```
+backend/app/routes/auth.py                    # verify-email Admin 알림 + resend-verification
+backend/app/services/auth_service.py          # resend_verification_email() + verify_email _worker_info
+backend/app/services/email_service.py         # email_verified 파라미터 + 인증 상태 배지
+```
+
+---
+
+## Sprint 22-B: GPS 위치 보안 개선 (완료)
+
+> **마지막 업데이트**: 2026-03-10
+
+### Phase A: enableHighAccuracy 변경
+- `home_screen.dart` — `enableHighAccuracy: false → true` (GPS 위성 기반)
+- timeout: `10000ms → 15000ms`, Dart 방어 timeout: `12초 → 18초`
+
+### Phase B: DMS → Decimal 변환 헬퍼
+- `admin_options_screen.dart` — DMS 입력 필드 (도°, 분', 초") + 변환 버튼
+- 변환 공식: `decimal = degrees + minutes/60 + seconds/3600`
+- 유효 범위 검증: lat (-90~90), lng (-180~180)
+- 변환 결과 → 기존 lat/lng 필드에 자동 적용 + admin_settings DB 저장
+
+### 빌드: flutter build web --release 성공
+
+### 수정된 파일
+```
+frontend/lib/screens/home/home_screen.dart              # enableHighAccuracy: true, timeout 15s
+frontend/lib/screens/admin/admin_options_screen.dart     # DMS 변환 헬퍼 UI + 로직
+```
+
+### Sprint 22-C: DB 백업 정책 + PM Role
+
+#### 목표
+- HR 테이블 보호를 위한 백업 절차 수립
+- PM Role DB enum 추가 + 코드 push
+
+#### 작업 내역 (예정)
+- ALTER TABLE 전 `pg_dump` 필수 실행 절차
+- HR 테이블(workers, partner_attendance, qr_registry) 보호 대상 지정
+- Railway DB `ALTER TYPE worker_role ADD VALUE IF NOT EXISTS 'pm'`
+- PM Role 관련 코드 push (이미 완성)
 > **관계**: axis-core-etl → AXIS-OPS DB 직접 적재 (DATABASE_URL)

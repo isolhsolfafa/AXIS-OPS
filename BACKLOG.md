@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-03-09 (ETL → axis-core-etl repo 분리)
+> 마지막 업데이트: 2026-03-10 (Sprint 22 계획 추가)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -27,6 +27,29 @@
 | BUG-15 | QR 카메라 div가 dialog overlay 시 가려짐 | ✅ Sprint 15.5 수정 완료 | `hideScannerDiv()`/`showScannerDiv()` 추가. dialog 열릴 때 DOM div 숨김 처리 |
 | BUG-16 | System Offline 표시 (서버 정상인데) | ✅ Sprint 16.1 수정 완료 | CORS가 `/api/*`에만 적용 → `/health`는 브라우저 preflight 거부. `__init__.py` CORS에 `/health` 경로 추가 |
 | BUG-17 | Location QR 팝업 깜빡임 + 확인 버튼 미작동 | ✅ Sprint 16.1 수정 완료 | MutationObserver가 `display:none` 감지 → hide↔show 무한루프. `hideScannerDiv()`에서 Observer disconnect, `showScannerDiv()`에서 재활성화 |
+
+---
+
+## ✅ Sprint 22-A/B 완료 (2026-03-10)
+
+### SEC-1: ✅ email_verified 완료 시 Admin 승인 알림 — 완료
+### SEC-2: ✅ 이메일 재인증(재전송) 엔드포인트 — 완료 (BE만, FE 연동은 별도)
+### SEC-3: ✅ GPS enableHighAccuracy: true — 완료
+### SEC-4: ✅ DMS→Decimal 변환 헬퍼 — 완료
+
+### DB-1: DB 백업 정책 수립
+- **배경**: HR 테이블(출퇴근, 근무자)은 운영 데이터 — 손실 불가
+- **보호 대상**: `workers`, `partner_attendance`, `qr_registry`
+- **규칙**: ALTER TABLE 실행 전 반드시 pg_dump 백업
+- **방안**:
+  1. Railway Pro 자동 스냅샷 확인
+  2. 수동 pg_dump: `pg_dump $DATABASE_URL --no-owner --format=custom -f backup_$(date +%Y%m%d).dump`
+  3. GitHub Actions 정기 백업 (추후)
+- **BE 코드 push는 DB에 영향 없음** — Railway는 코드와 DB 분리
+
+### PM-1: PM Role push 대기
+- 코드 완료 (auth_service, auth, register_screen, worker, profile_screen)
+- DB: `ALTER TYPE role_enum ADD VALUE IF NOT EXISTS 'PM';` Railway에서 실행 필요
 
 ---
 
@@ -194,3 +217,6 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 | 20-B | 공지사항 탭 (BE+FE) | 6 PASSED |
 | 21 | QR Registry 목록 API (BE) + 날짜 필터 | ✅ |
 | 21-ETL | ETL → axis-core-etl repo 분리 | ✅ 분리 완료 |
+| 22-A | Email Verification 개선 (Admin 알림 시점 + 재전송 API) | 예정 |
+| 22-B | GPS enableHighAccuracy + DMS 변환 헬퍼 | 예정 |
+| 22-C | DB 백업 정책 + PM Role push | 예정 |

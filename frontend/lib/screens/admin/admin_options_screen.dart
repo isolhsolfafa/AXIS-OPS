@@ -38,6 +38,14 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
   final TextEditingController _geoLatController = TextEditingController();
   final TextEditingController _geoLngController = TextEditingController();
 
+  // DMS 입력 컨트롤러 (Sprint 22-B)
+  final TextEditingController _dmsLatDeg = TextEditingController();
+  final TextEditingController _dmsLatMin = TextEditingController();
+  final TextEditingController _dmsLatSec = TextEditingController();
+  final TextEditingController _dmsLngDeg = TextEditingController();
+  final TextEditingController _dmsLngMin = TextEditingController();
+  final TextEditingController _dmsLngSec = TextEditingController();
+
   // 근무시간 설정 상태
   bool _autoPauseEnabled = false;
   String _breakMorningStart = '10:00';
@@ -89,6 +97,12 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
   void dispose() {
     _geoLatController.dispose();
     _geoLngController.dispose();
+    _dmsLatDeg.dispose();
+    _dmsLatMin.dispose();
+    _dmsLatSec.dispose();
+    _dmsLngDeg.dispose();
+    _dmsLngMin.dispose();
+    _dmsLngSec.dispose();
     super.dispose();
   }
 
@@ -943,6 +957,9 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
                               },
                             ),
                             const Divider(height: 1, color: GxColors.mist),
+                            // Sprint 22-B: DMS → Decimal 변환 헬퍼
+                            _buildDmsConverter(),
+                            const Divider(height: 1, color: GxColors.mist),
                             // 허용 반경 드롭다운
                             _buildDropdownSetting(
                               title: '허용 반경',
@@ -1407,6 +1424,182 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Sprint 22-B: DMS → Decimal 변환 (degrees + minutes/60 + seconds/3600)
+  double? _dmsToDecimal(String degStr, String minStr, String secStr) {
+    final deg = double.tryParse(degStr);
+    final min = double.tryParse(minStr);
+    final sec = double.tryParse(secStr);
+    if (deg == null) return null;
+    final m = min ?? 0;
+    final s = sec ?? 0;
+    if (m < 0 || m >= 60 || s < 0 || s >= 60) return null;
+    final result = deg.abs() + m / 60 + s / 3600;
+    return deg < 0 ? -result : result;
+  }
+
+  /// Sprint 22-B: DMS 입력 → Decimal 자동 변환 UI
+  Widget _buildDmsConverter() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'DMS → Decimal 변환',
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: GxColors.charcoal),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            '도(°) 분(\') 초(") 입력 → 위도/경도 자동 변환',
+            style: TextStyle(fontSize: 11, color: GxColors.steel),
+          ),
+          const SizedBox(height: 10),
+          // 위도 DMS 입력
+          Row(
+            children: [
+              const Text('위도 ', style: TextStyle(fontSize: 12, color: GxColors.graphite)),
+              _buildDmsField(_dmsLatDeg, '도', 40),
+              const Text('° ', style: TextStyle(fontSize: 12, color: GxColors.steel)),
+              _buildDmsField(_dmsLatMin, '분', 36),
+              const Text('\' ', style: TextStyle(fontSize: 12, color: GxColors.steel)),
+              _buildDmsField(_dmsLatSec, '초', 44),
+              const Text('" ', style: TextStyle(fontSize: 12, color: GxColors.steel)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          // 경도 DMS 입력
+          Row(
+            children: [
+              const Text('경도 ', style: TextStyle(fontSize: 12, color: GxColors.graphite)),
+              _buildDmsField(_dmsLngDeg, '도', 40),
+              const Text('° ', style: TextStyle(fontSize: 12, color: GxColors.steel)),
+              _buildDmsField(_dmsLngMin, '분', 36),
+              const Text('\' ', style: TextStyle(fontSize: 12, color: GxColors.steel)),
+              _buildDmsField(_dmsLngSec, '초', 44),
+              const Text('" ', style: TextStyle(fontSize: 12, color: GxColors.steel)),
+            ],
+          ),
+          const SizedBox(height: 10),
+          // 변환 버튼
+          SizedBox(
+            width: double.infinity,
+            height: 34,
+            child: ElevatedButton.icon(
+              icon: const Icon(Icons.swap_vert, size: 16),
+              label: const Text('변환 후 적용', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: GxColors.accent,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.sm)),
+                elevation: 0,
+              ),
+              onPressed: _applyDmsConversion,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// DMS 개별 필드 위젯
+  Widget _buildDmsField(TextEditingController controller, String hint, double width) {
+    return SizedBox(
+      width: width,
+      child: TextField(
+        controller: controller,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        textAlign: TextAlign.center,
+        style: const TextStyle(fontSize: 12, color: GxColors.charcoal),
+        decoration: InputDecoration(
+          hintText: hint,
+          hintStyle: const TextStyle(fontSize: 11, color: GxColors.silver),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(GxRadius.sm),
+            borderSide: const BorderSide(color: GxColors.mist, width: 1),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(GxRadius.sm),
+            borderSide: const BorderSide(color: GxColors.mist, width: 1),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(GxRadius.sm),
+            borderSide: const BorderSide(color: GxColors.accent, width: 1.5),
+          ),
+          isDense: true,
+        ),
+      ),
+    );
+  }
+
+  /// DMS → Decimal 변환 후 lat/lng 필드에 적용
+  void _applyDmsConversion() {
+    final lat = _dmsToDecimal(_dmsLatDeg.text, _dmsLatMin.text, _dmsLatSec.text);
+    final lng = _dmsToDecimal(_dmsLngDeg.text, _dmsLngMin.text, _dmsLngSec.text);
+
+    if (lat == null && lng == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('도(°) 값을 입력해주세요.'),
+          backgroundColor: GxColors.warning,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.sm)),
+        ),
+      );
+      return;
+    }
+
+    // 유효 범위 검증
+    if (lat != null && (lat < -90 || lat > 90)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('위도는 -90 ~ 90 범위여야 합니다.'),
+          backgroundColor: GxColors.danger,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.sm)),
+        ),
+      );
+      return;
+    }
+    if (lng != null && (lng < -180 || lng > 180)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('경도는 -180 ~ 180 범위여야 합니다.'),
+          backgroundColor: GxColors.danger,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.sm)),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      if (lat != null) {
+        final latStr = lat.toStringAsFixed(6);
+        _geoLat = latStr;
+        _geoLatController.text = latStr;
+        _updateSettingValue('geo_latitude', latStr);
+      }
+      if (lng != null) {
+        final lngStr = lng.toStringAsFixed(6);
+        _geoLng = lngStr;
+        _geoLngController.text = lngStr;
+        _updateSettingValue('geo_longitude', lngStr);
+      }
+    });
+
+    final latDisplay = lat != null ? lat.toStringAsFixed(4) : '-';
+    final lngDisplay = lng != null ? lng.toStringAsFixed(4) : '-';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('변환 완료: 위도 $latDisplay, 경도 $lngDisplay'),
+        backgroundColor: GxColors.success,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.sm)),
       ),
     );
   }

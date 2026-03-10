@@ -770,9 +770,111 @@ class AuthService:
 
         logger.info(f"Email verified successfully: worker_id={worker_id}")
 
+        # Sprint 22-A: 인증 완료된 작업자 정보를 route에 전달 (Admin 알림용)
+        from app.models.worker import get_worker_by_id
+        worker = get_worker_by_id(worker_id)
+        worker_info = {}
+        if worker:
+            worker_info = {
+                'name': worker.name,
+                'email': worker.email,
+                'role': worker.role,
+                'company': worker.company,
+            }
+
         return {
-            'message': '이메일 인증이 완료되었습니다. 관리자 승인 후 로그인 가능합니다.'
+            'message': '이메일 인증이 완료되었습니다. 관리자 승인 후 로그인 가능합니다.',
+            '_worker_info': worker_info,
         }, 200
+
+    # ------------------------------------------------------------------
+    # Sprint 22-A: 이메일 재전송
+    # ------------------------------------------------------------------
+
+    def resend_verification_email(self, email: str) -> Tuple[Dict[str, Any], int]:
+        """
+        이메일 인증 코드 재전송
+
+        1. 이메일로 작업자 조회 → 미가입 시 404
+        2. 이미 인증 완료 → 400 (ALREADY_VERIFIED)
+        3. 마지막 발송 후 60초 미만 → 429 (rate limit)
+        4. 새 verification_code 생성 + 이메일 발송
+
+        Args:
+            email: 가입된 이메일 주소
+
+        Returns:
+            (response dict, status code)
+        """
+        worker = get_worker_by_email(email)
+
+        if worker is None:
+            return {
+                'error': 'USER_NOT_FOUND',
+                'message': '해당 이메일로 가입된 사용자를 찾을 수 없습니다.'
+            }, 404
+
+        if worker.email_verified:
+            return {
+                'error': 'ALREADY_VERIFIED',
+                'message': '이미 이메일 인증이 완료된 사용자입니다.'
+            }, 400
+
+        # 60초 rate limiting — 마지막 인증코드 생성 시간 확인
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT created_at FROM email_verification
+                    WHERE worker_id = %s
+                    ORDER BY created_at DESC LIMIT 1
+                    """,
+                    (worker.id,)
+                )
+                last_row = cur.fetchone()
+        finally:
+            conn.close()
+
+        if last_row and last_row['created_at']:
+            from datetime import timezone as tz
+            last_created = last_row['created_at']
+            if last_created.tzinfo is None:
+                last_created = last_created.replace(tzinfo=tz.utc)
+            elapsed = (datetime.now(tz.utc) - last_created).total_seconds()
+            if elapsed < 60:
+                remaining = int(60 - elapsed)
+                return {
+                    'error': 'RATE_LIMITED',
+                    'message': f'{remaining}초 후에 다시 시도해주세요.'
+                }, 429
+
+        # 새 인증 코드 생성
+        verification_code = create_verification_code(worker.id)
+        if verification_code is None:
+            return {
+                'error': 'RESEND_FAILED',
+                'message': '인증 코드 생성 중 오류가 발생했습니다.'
+            }, 500
+
+        # 이메일 발송
+        email_sent = self.send_verification_email(email, verification_code)
+        if not email_sent:
+            logger.warning(
+                f"Resend verification email failed: worker_id={worker.id}, "
+                f"email={email}. Code: {verification_code}"
+            )
+
+        response: Dict[str, Any] = {
+            'message': '인증 코드가 재전송되었습니다. 이메일을 확인해주세요.'
+        }
+
+        # 개발 환경(SMTP 미설정)에서만 코드 노출
+        if not Config.SMTP_USER:
+            response['verification_code'] = verification_code
+
+        logger.info(f"Verification code resent: worker_id={worker.id}, email={email}")
+        return response, 200
 
     def send_password_reset_email(self, to_email: str, code: str) -> bool:
         """
