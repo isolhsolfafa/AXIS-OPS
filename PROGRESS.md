@@ -3,7 +3,7 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v1.6.2 (Sprint 22-C, 2026-03-10)
+> **현재 버전**: v1.6.3 (Sprint 22-D, 2026-03-11)
 
 ---
 
@@ -2673,3 +2673,24 @@ frontend/lib/utils/app_version.dart                     # v1.6.2
 | MGR-03 | 협력사 Manager → 다른 회사 작업자 → 403 | ✅ |
 | MGR-04 | 협력사 Manager → Admin 권한 변경 → 403 | ✅ |
 | MGR-05 | 일반 작업자 → manager 부여 시도 → 403 | ✅ |
+
+---
+
+## Sprint 22-D: 공지수정 + Admin 간편로그인 + ETL API (v1.6.3, 완료)
+
+> **마지막 업데이트**: 2026-03-11
+
+### 변경 내역
+- **공지사항 수정 기능**: `NoticeWriteScreen` 수정 모드 지원 (existingNotice 파라미터), `NoticeDetailScreen`에 수정 아이콘 추가
+- **Admin 간편 로그인 개선**: `get_admin_by_email_prefix()` 2단계 매칭 — 1차 `prefix@%`, 2차 `prefix%` (admin → admin1234@... 매칭)
+- **ETL 변경 이력 API**: `GET /api/admin/etl/changes` (CORE-ETL Sprint 2 Task 4) — days/field/serial_number/limit 쿼리, change_log + product_info JOIN, summary 포함
+
+### 수정된 파일
+```
+frontend/lib/screens/admin/notice_write_screen.dart     # 수정 모드 (existingNotice, updateNotice 호출)
+frontend/lib/screens/notice/notice_detail_screen.dart   # 수정 버튼 추가 (Admin)
+backend/app/models/worker.py                            # admin prefix 2단계 매칭
+backend/app/routes/admin.py                             # GET /api/admin/etl/changes 엔드포인트
+backend/version.py                                      # v1.6.3
+frontend/lib/utils/app_version.dart                     # v1.6.3
+```

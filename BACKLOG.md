@@ -231,3 +231,4 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 | 22-A보완 | 인증 3분 만료, FE 연동, 승인필터, PM role | ✅ v1.6.1 |
 | 22-B | GPS enableHighAccuracy + DMS 변환 헬퍼 | ✅ |
 | 22-C | Manager 권한 위임 (같은 회사 is_manager 부여) | ✅ v1.6.2 |
+| 22-D | 공지수정 UI + Admin 간편로그인 + ETL 변경이력 API | ✅ v1.6.3 |
