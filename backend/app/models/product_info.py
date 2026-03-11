@@ -144,13 +144,14 @@ _BASE_JOIN_QUERY = """
 """
 
 
-def get_product_by_qr_doc_id(qr_doc_id: str) -> Optional[ProductInfo]:
+def get_product_by_qr_doc_id(qr_doc_id: str, include_shipped: bool = False) -> Optional[ProductInfo]:
     """
     QR 문서 ID로 제품 조회
     qr_registry → plan.product_info JOIN
 
     Args:
         qr_doc_id: QR 문서 ID (예: DOC_GBWS-6408)
+        include_shipped: True면 shipped 상태도 포함 (Admin용)
 
     Returns:
         ProductInfo 객체, 없으면 None
@@ -160,8 +161,13 @@ def get_product_by_qr_doc_id(qr_doc_id: str) -> Optional[ProductInfo]:
         conn = get_db_connection()
         cur = conn.cursor()
 
+        if include_shipped:
+            status_filter = "qr.status IN ('active', 'shipped')"
+        else:
+            status_filter = "qr.status = 'active'"
+
         cur.execute(
-            _BASE_JOIN_QUERY + " WHERE qr.qr_doc_id = %s AND qr.status = 'active'",
+            _BASE_JOIN_QUERY + " WHERE qr.qr_doc_id = %s AND " + status_filter,
             (qr_doc_id,)
         )
 
