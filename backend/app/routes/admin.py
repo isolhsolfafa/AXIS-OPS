@@ -183,7 +183,7 @@ def get_pending_workers() -> Tuple[Dict[str, Any], int]:
 
 @admin_bp.route("/workers", methods=["GET"])
 @jwt_required
-@admin_required
+@manager_or_admin_required
 def get_workers() -> Tuple[Dict[str, Any], int]:
     """
     작업자 목록 조회 (필터링 지원)
@@ -225,6 +225,12 @@ def get_workers() -> Tuple[Dict[str, Any], int]:
         where_clauses = []
         params: List[Any] = []
 
+        # Manager: 자사 소속만 필터
+        current_worker = get_worker_by_id(g.worker_id)
+        if current_worker and current_worker.is_manager and not current_worker.is_admin:
+            where_clauses.append("company = %s")
+            params.append(current_worker.company)
+
         if approval_status:
             where_clauses.append("approval_status = %s")
             params.append(approval_status)
@@ -237,7 +243,7 @@ def get_workers() -> Tuple[Dict[str, Any], int]:
         params.append(limit)
 
         query = f"""
-            SELECT id, name, email, role, approval_status,
+            SELECT id, name, email, role, company, approval_status,
                    email_verified, is_manager, is_admin, created_at
             FROM workers
             WHERE {where_sql}
@@ -254,6 +260,7 @@ def get_workers() -> Tuple[Dict[str, Any], int]:
                 'name': row['name'],
                 'email': row['email'],
                 'role': row['role'],
+                'company': row.get('company'),
                 'approval_status': row['approval_status'],
                 'email_verified': row['email_verified'],
                 'is_manager': row['is_manager'],
