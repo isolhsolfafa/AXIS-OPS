@@ -82,7 +82,7 @@ def get_qr_list() -> Tuple[Dict[str, Any], int]:
             conditions.append("p.model = %s")
             params.append(model_filter)
 
-        if status_filter in ("active", "revoked"):
+        if status_filter in ("active", "shipped", "revoked"):
             conditions.append("qr.status = %s")
             params.append(status_filter)
 
@@ -146,14 +146,24 @@ def get_qr_list() -> Tuple[Dict[str, Any], int]:
         """)
         models = [row['model'] for row in cursor.fetchall() if row['model']]
 
-        # 통계
-        cursor.execute("""
+        # 통계 (Manager: 자사 필터 적용)
+        stats_conditions = []
+        stats_params = []
+        if current_worker and current_worker.is_manager and not current_worker.is_admin:
+            stats_conditions.append("(p.mech_partner = %s OR p.elec_partner = %s)")
+            stats_params.extend([manager_company, manager_company])
+        stats_where = f"WHERE {' AND '.join(stats_conditions)}" if stats_conditions else ""
+
+        cursor.execute(f"""
             SELECT
                 COUNT(*) AS total,
-                COUNT(*) FILTER (WHERE status = 'active') AS active_count,
-                COUNT(*) FILTER (WHERE status = 'revoked') AS revoked_count
-            FROM public.qr_registry
-        """)
+                COUNT(*) FILTER (WHERE qr.status = 'active') AS active_count,
+                COUNT(*) FILTER (WHERE qr.status = 'shipped') AS shipped_count,
+                COUNT(*) FILTER (WHERE qr.status = 'revoked') AS revoked_count
+            FROM public.qr_registry qr
+            JOIN plan.product_info p ON qr.serial_number = p.serial_number
+            {stats_where}
+        """, stats_params)
         stats_row = cursor.fetchone()
 
         conn.close()
@@ -191,6 +201,7 @@ def get_qr_list() -> Tuple[Dict[str, Any], int]:
             "stats": {
                 "total": stats_row['total'],
                 "active": stats_row['active_count'],
+                "shipped": stats_row['shipped_count'],
                 "revoked": stats_row['revoked_count'],
             },
         }), 200
