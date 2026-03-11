@@ -3,7 +3,7 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v1.7.1 (Sprint 24, 2026-03-11)
+> **현재 버전**: v1.7.1 (Sprint 24 + 핫픽스, 2026-03-11)
 
 ---
 
@@ -2752,4 +2752,34 @@ frontend/lib/providers/task_provider.dart # ProductShippedException rethrow
 frontend/lib/screens/qr/qr_scan_screen.dart # shipped 다이얼로그 (S/N, 모델 표시)
 backend/version.py             # v1.7.1
 frontend/lib/utils/app_version.dart  # v1.7.1
+```
+
+---
+
+## Sprint 24 핫픽스: GST 출퇴근 + 비밀번호 찾기 (2026-03-11)
+
+### BUG-18: GST Manager 출퇴근 데이터 미표시 ✅ 수정 완료
+- **증상**: GST 소속 is_manager=true 계정으로 VIEW 대시보드 접속 시 출퇴근 데이터 0건
+- **계정**: `kdkyu311@naver.com` (id=2399, role=PM, company=GST, is_manager=true, is_admin=false)
+- **원인**: `_get_manager_company_filter()` 가 GST manager에게 `'GST'` 반환 → `_get_attendance_data()` SQL에서 `WHERE w.company != 'GST' AND w.company = 'GST'` 모순 조건 → 0건
+- **수정**: `_get_manager_company_filter()`에서 `worker.company == 'GST'`이면 `None` 반환 (Admin과 동일하게 전체 협력사 데이터 접근)
+- **파일**: `backend/app/routes/admin.py` (L1741-1748)
+
+### BUG-19: 비밀번호 찾기 — 없는 이메일도 인증 화면 이동 ✅ 수정 완료
+- **증상**: 비밀번호 찾기에서 존재하지 않는 이메일 입력 → 에러 없이 재설정 코드 입력 화면으로 이동
+- **원인**: BE `send_password_reset_code()`가 보안 관행(이메일 열거 공격 방지)으로 이메일 존재 여부와 무관하게 항상 200 반환
+- **수정**: 내부 시스템이므로 편의성 우선 — 미존재 이메일 시 `404 EMAIL_NOT_FOUND` 반환. FE는 catch에서 에러 메시지 표시 (수정 불필요)
+- **파일**: `backend/app/services/auth_service.py` (L992-999)
+
+### 이전 수정 (Sprint 24 세션 내)
+- **PM role 등록 실패**: DB `role_enum`에 'PM' 누락 → `ALTER TYPE role_enum ADD VALUE 'PM'` 실행 + migration 추가
+- **VIEW GST 접근 차단**: `auth.ts`, `ProtectedRoute.tsx`, `Sidebar.tsx`에 `company === 'GST'` 체크 추가
+- **Workers 목록 잘림**: 기본 LIMIT 50 → 200 변경, VIEW에서 limit=500 전송
+- **Admin shipped QR 스캔**: Admin도 shipped 제품 스캔 시 출고 완료 다이얼로그 표시
+
+### 수정된 파일
+```
+backend/app/routes/admin.py              # _get_manager_company_filter() GST 예외
+backend/app/services/auth_service.py     # forgot-password 404 반환
+backend/migrations/021_add_pm_role.sql   # PM role enum 추가
 ```

@@ -231,7 +231,7 @@ class ApiService {
           final errorCode = error.response?.data?['error'] ?? '';
           return Exception('[$errorCode] $message');
         } else if (statusCode == 404) {
-          return Exception('찾을 수 없음: 요청한 리소스가 없습니다.');
+          return Exception(message);
         } else if (statusCode == 500) {
           return Exception('서버 오류: $message');
         }
