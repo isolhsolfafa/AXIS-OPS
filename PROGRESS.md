@@ -2737,10 +2737,19 @@ frontend/lib/utils/app_version.dart                     # v1.7.0
 - **출퇴근 API 자사 필터**: `_get_attendance_data()` + `_get_manager_company_filter()` — Manager는 자사 소속만 조회
 - **버전**: v1.7.0 → v1.7.1
 
+### 추가 변경 (Sprint 24 후속)
+- **QR 목록 shipped 필터/카운트**: status 필터에 `shipped` 허용, 통계에 `shipped_count` 추가, Manager 통계도 자사 필터 적용
+- **Shipped 제품 QR 스캔**: 모든 사용자(Admin 포함)에게 "출고 완료" 다이얼로그 표시 + S/N, 모델 정보 포함
+- **GET /api/admin/workers 권한 완화**: `@admin_required` → `@manager_or_admin_required` + Manager 자사 필터 + company 필드 응답 추가
+
 ### 수정된 파일
 ```
-backend/app/routes/qr.py      # actual_ship_date SELECT + manager company 필터
-backend/app/routes/admin.py    # attendance 3개 데코레이터 + company 필터
+backend/app/routes/qr.py       # actual_ship_date + manager 필터 + shipped 카운트
+backend/app/routes/admin.py    # attendance 데코레이터 + workers 권한 완화 + company 필터
+backend/app/routes/product.py  # shipped 제품 전 사용자 PRODUCT_SHIPPED 응답
+frontend/lib/services/task_service.dart   # ProductShippedException (S/N, model 포함)
+frontend/lib/providers/task_provider.dart # ProductShippedException rethrow
+frontend/lib/screens/qr/qr_scan_screen.dart # shipped 다이얼로그 (S/N, 모델 표시)
 backend/version.py             # v1.7.1
 frontend/lib/utils/app_version.dart  # v1.7.1
 ```
