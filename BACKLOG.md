@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-03-10 (Sprint 22-C 완료)
+> 마지막 업데이트: 2026-03-11 (Sprint 22-D 완료, ETL Sprint 2 전체 완료)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -27,6 +27,21 @@
 | BUG-15 | QR 카메라 div가 dialog overlay 시 가려짐 | ✅ Sprint 15.5 수정 완료 | `hideScannerDiv()`/`showScannerDiv()` 추가. dialog 열릴 때 DOM div 숨김 처리 |
 | BUG-16 | System Offline 표시 (서버 정상인데) | ✅ Sprint 16.1 수정 완료 | CORS가 `/api/*`에만 적용 → `/health`는 브라우저 preflight 거부. `__init__.py` CORS에 `/health` 경로 추가 |
 | BUG-17 | Location QR 팝업 깜빡임 + 확인 버튼 미작동 | ✅ Sprint 16.1 수정 완료 | MutationObserver가 `display:none` 감지 → hide↔show 무한루프. `hideScannerDiv()`에서 Observer disconnect, `showScannerDiv()`에서 재활성화 |
+
+---
+
+## ✅ Sprint 23 완료 (v1.7.0, 2026-03-11)
+
+### OPS-1: ✅ is_manager 로그인 시 권한 부여 메뉴 표시 — 완료
+### OPS-2: ✅ 관리자 옵션 메뉴 위치 이동 (공지사항 위) — 완료
+
+### VIEW-1: ETL 변경이력 알림 뱃지 (Header + 사이드바) — 예정 (VIEW 프로젝트)
+- `/api/admin/etl/changes?days=1` → total_changes - last_seen = unread count
+- Header.tsx 알림 아이콘 + 사이드바 "변경이력" 뱃지
+
+### VIEW-2: Admin 간편 로그인 (prefix 매칭) — 예정 (VIEW 프로젝트)
+- BE `get_admin_by_email_prefix()` 이미 구현됨
+- VIEW LoginPage.tsx에서 `@` 미포함 시 prefix 로그인 호출
 
 ---
 
@@ -187,6 +202,7 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 - **PWA → Native 전환**: 현재 Flutter Web(PWA) 코드는 Native 전환 시 비즈니스 로직 그대로 재사용 가능. 플랫폼 의존 코드(html5-qrcode → mobile_scanner, secure storage 등)만 조건부 import 처리.
 - **공용 태블릿 시나리오**: 공장 현장 공용 기기 사용 시 로그아웃 시 localStorage 클리어 로직 필요 (현재는 미구현, 필요 시 추가)
 - **model_config 조회/수정**: CLAUDE.md에 "추후"로 기록됨. Admin이 모델별 설정(has_docking, is_tms 등) 수정 가능한 UI.
+- **Sprint 완료 시 자동 공지사항 등록**: 버전 업데이트(version.py) 시 유저 체감 기능 변경사항만 골라서 `POST /api/admin/notices`로 자동 등록. notices 테이블에 `version` 필드 이미 존재. 시스템 변경(리팩터링, 테스트 등)은 제외하고 사용자 관점 기능만 포함. 방식: A) CLAUDE.md 버전 업데이트 절차에 공지 생성 단계 추가 (즉시 가능) / B) 배포 스크립트에 API 호출 자동화 / C) CI/CD hook (추후)
 
 ---
 
@@ -232,3 +248,4 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 | 22-B | GPS enableHighAccuracy + DMS 변환 헬퍼 | ✅ |
 | 22-C | Manager 권한 위임 (같은 회사 is_manager 부여) | ✅ v1.6.2 |
 | 22-D | 공지수정 UI + Admin 간편로그인 + ETL 변경이력 API | ✅ v1.6.3 |
+| 23 | Manager 권한 위임 화면 + 홈 메뉴 재구성 | ✅ v1.7.0 |
