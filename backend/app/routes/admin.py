@@ -1142,13 +1142,16 @@ def manual_check_unfinished_tasks() -> Tuple[Dict[str, Any], int]:
 
 @admin_bp.route("/managers", methods=["GET"])
 @jwt_required
-@admin_required
+@manager_or_admin_required
 def get_managers() -> Tuple[Dict[str, Any], int]:
     """
-    승인된 작업자 목록 조회 (협력사 관리자 지정/해제용)
+    승인된 작업자 목록 조회 (관리자 권한 부여용)
+
+    - Admin: 전체 작업자 목록 (company 파라미터로 필터 가능)
+    - Manager: 같은 회사 소속만 자동 필터 (company 파라미터 무시)
 
     Query Parameters:
-        company: str (optional, 협력사 필터: FNI, BAT, TMS(M), TMS(E), P&S, C&A, GST)
+        company: str (optional, Admin만 사용 가능)
 
     Headers:
         Authorization: Bearer {token}
@@ -1168,7 +1171,13 @@ def get_managers() -> Tuple[Dict[str, Any], int]:
             "total": int
         }
     """
-    company = request.args.get('company')
+    requester = get_worker_by_id(g.worker_id)
+
+    # Manager는 같은 회사만 자동 필터, Admin은 파라미터 사용 가능
+    if requester and not requester.is_admin:
+        company = requester.company
+    else:
+        company = request.args.get('company')
 
     conn = None
     try:

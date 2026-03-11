@@ -19,6 +19,7 @@ import 'screens/settings/pin_settings_screen.dart';
 import 'screens/progress/sn_progress_screen.dart';
 import 'screens/notice/notice_list_screen.dart';
 import 'screens/admin/notice_write_screen.dart';
+import 'screens/admin/manager_delegation_screen.dart';
 import 'utils/design_system.dart';
 
 void main() {
@@ -141,6 +142,7 @@ class GAxisApp extends ConsumerWidget {
         '/pin-login': (context) => const PinLoginScreen(),
         '/notices': (context) => const NoticeListScreen(),
         '/notice-write': (context) => const NoticeWriteScreen(),
+        '/manager-delegation': (context) => const ManagerDelegationScreen(),
         '/reset-password': (context) {
           final args = ModalRoute.of(context)?.settings.arguments;
           final email = args is Map<String, dynamic>

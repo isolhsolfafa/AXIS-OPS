@@ -714,19 +714,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             ),
             const SizedBox(height: 8),
 
-            // 관리자 전용: 관리자 옵션
-            if (worker?.isAdmin == true) ...[
-              _buildFeatureCard(
-                icon: Icons.admin_panel_settings,
-                iconBg: GxColors.warningBg,
-                iconColor: GxColors.warning,
-                title: '관리자 옵션',
-                subtitle: '설정, 협력사 관리자, 미종료 작업 처리',
-                onTap: () => Navigator.pushNamed(context, '/admin-options'),
-              ),
-              const SizedBox(height: 8),
-            ],
-
             // 협력사 관리자 전용: 미종료 작업 (admin이 아닌 manager만)
             if (worker?.isManager == true && worker?.isAdmin != true) ...[
               _buildFeatureCard(
@@ -790,6 +777,32 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   '/gst-products',
                   arguments: {'category': 'SI'},
                 ),
+              ),
+              const SizedBox(height: 8),
+            ],
+
+            // 관리자 전용: 관리자 옵션 (공지사항 위)
+            if (worker?.isAdmin == true) ...[
+              _buildFeatureCard(
+                icon: Icons.admin_panel_settings,
+                iconBg: GxColors.warningBg,
+                iconColor: GxColors.warning,
+                title: '관리자 옵션',
+                subtitle: '설정, 협력사 관리자, 미종료 작업 처리',
+                onTap: () => Navigator.pushNamed(context, '/admin-options'),
+              ),
+              const SizedBox(height: 8),
+            ],
+
+            // Manager/Admin: 관리자 권한 부여 (Sprint 23)
+            if (worker?.isManager == true || worker?.isAdmin == true) ...[
+              _buildFeatureCard(
+                icon: Icons.supervisor_account,
+                iconBg: const Color(0xFFEDE9FE),
+                iconColor: const Color(0xFF7C3AED),
+                title: '관리자 권한 부여',
+                subtitle: '${worker?.company ?? ''} 소속 작업자 Manager 권한 관리',
+                onTap: () => Navigator.pushNamed(context, '/manager-delegation'),
               ),
               const SizedBox(height: 8),
             ],
