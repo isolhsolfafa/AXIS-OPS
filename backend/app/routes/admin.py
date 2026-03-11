@@ -214,7 +214,7 @@ def get_workers() -> Tuple[Dict[str, Any], int]:
     """
     approval_status = request.args.get('approval_status')
     role = request.args.get('role')
-    limit = request.args.get('limit', 50, type=int)
+    limit = min(500, request.args.get('limit', 200, type=int))
 
     conn = None
     try:
