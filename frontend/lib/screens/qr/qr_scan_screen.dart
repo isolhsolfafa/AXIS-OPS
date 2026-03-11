@@ -174,19 +174,14 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
         bool success;
         try {
           success = await taskNotifier.scanQrCode(qrCode.toUpperCase());
-        } on ProductShippedException {
-          _showShippedDialog();
+        } on ProductShippedException catch (e) {
+          _showShippedDialog(serialNumber: e.serialNumber, model: e.model);
           setState(() => _isProcessing = false);
           return;
         }
         if (!success) {
           final errorMessage = ref.read(taskProvider).errorMessage;
-          // 출고 완료 메시지면 안내 다이얼로그 표시
-          if (errorMessage != null && errorMessage.contains('출고 완료')) {
-            _showShippedDialog();
-          } else {
-            _showErrorDialog(errorMessage ?? '제품 조회에 실패했습니다.');
-          }
+          _showErrorDialog(errorMessage ?? '제품 조회에 실패했습니다.');
         } else {
           // 성공: Task 목록 조회
           final product = ref.read(taskProvider).currentProduct;
@@ -325,7 +320,7 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
     );
   }
 
-  void _showShippedDialog() {
+  void _showShippedDialog({String? serialNumber, String? model}) {
     _qrScannerService.hide();
     showDialog(
       context: context,
@@ -351,9 +346,36 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
             ),
           ],
         ),
-        content: const Text(
-          '출고 완료된 제품입니다.\n해당 제품은 더 이상 작업할 수 없습니다.',
-          style: TextStyle(fontSize: 14, color: GxColors.slate, height: 1.5),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '출고 완료된 제품입니다.\n해당 제품은 더 이상 작업할 수 없습니다.',
+              style: TextStyle(fontSize: 14, color: GxColors.slate, height: 1.5),
+            ),
+            if (serialNumber != null || model != null) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: GxColors.cloud,
+                  borderRadius: BorderRadius.circular(GxRadius.sm),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (serialNumber != null)
+                      Text('S/N: $serialNumber', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: GxColors.charcoal)),
+                    if (model != null) ...[
+                      const SizedBox(height: 4),
+                      Text('모델: $model', style: const TextStyle(fontSize: 13, color: GxColors.slate)),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ],
         ),
         actions: [
           TextButton(

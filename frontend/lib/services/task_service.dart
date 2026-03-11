@@ -5,7 +5,9 @@ import '../models/task_item.dart';
 /// 출고 완료 제품 예외
 class ProductShippedException implements Exception {
   final String message;
-  ProductShippedException(this.message);
+  final String? serialNumber;
+  final String? model;
+  ProductShippedException(this.message, {this.serialNumber, this.model});
 
   @override
   String toString() => message;
@@ -33,7 +35,11 @@ class TaskService {
       final response = await _apiService.get('/app/product/$qrDocId');
       // shipped 제품 응답 처리
       if (response is Map && response['error'] == 'PRODUCT_SHIPPED') {
-        throw ProductShippedException(response['message'] ?? '출고 완료된 제품입니다.');
+        throw ProductShippedException(
+          response['message'] ?? '출고 완료된 제품입니다.',
+          serialNumber: response['serial_number'],
+          model: response['model'],
+        );
       }
       return ProductInfo.fromJson(response);
     } catch (e) {

@@ -87,19 +87,18 @@ def get_product(qr_doc_id: str) -> Tuple[Dict[str, Any], int]:
         }
         404: {"error": "PRODUCT_NOT_FOUND", "message": "..."}
     """
-    # 제품 조회 (Admin/Manager는 shipped 상태도 조회 가능)
-    worker = get_worker_by_id(get_current_worker_id())
-    include_shipped = worker and (worker.is_admin or worker.is_manager)
-    product = get_product_by_qr_doc_id(qr_doc_id, include_shipped=include_shipped)
+    # 제품 조회 (active 상태만)
+    product = get_product_by_qr_doc_id(qr_doc_id, include_shipped=False)
     if not product:
-        # 일반 작업자: shipped 제품이면 출고 완료 안내
-        if not include_shipped:
-            shipped_product = get_product_by_qr_doc_id(qr_doc_id, include_shipped=True)
-            if shipped_product:
-                return jsonify({
-                    'error': 'PRODUCT_SHIPPED',
-                    'message': '출고 완료된 제품입니다.'
-                }), 200
+        # active에서 못 찾으면 shipped 확인 (모든 사용자 공통)
+        shipped_product = get_product_by_qr_doc_id(qr_doc_id, include_shipped=True)
+        if shipped_product:
+            return jsonify({
+                'error': 'PRODUCT_SHIPPED',
+                'message': '출고 완료된 제품입니다.',
+                'serial_number': shipped_product.serial_number,
+                'model': shipped_product.model,
+            }), 200
         return jsonify({
             'error': 'PRODUCT_NOT_FOUND',
             'message': '제품을 찾을 수 없습니다.'

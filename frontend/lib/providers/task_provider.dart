@@ -116,6 +116,9 @@ class TaskNotifier extends StateNotifier<TaskState> {
         currentProduct: product,
       );
       return true;
+    } on ProductShippedException {
+      state = state.copyWith(isLoading: false);
+      rethrow;
     } catch (e) {
       state = state.copyWith(
         isLoading: false,
