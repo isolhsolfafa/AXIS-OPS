@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-03-11 (Sprint 24 + 핫픽스 — GST 출퇴근 + 비밀번호 찾기 + PM role + VIEW GST 접근)
+> 마지막 업데이트: 2026-03-12 (BUG-22 Logout Storm 등록 — OPS FE 수정 필요)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -29,6 +29,9 @@
 | BUG-17 | Location QR 팝업 깜빡임 + 확인 버튼 미작동 | ✅ Sprint 16.1 수정 완료 | MutationObserver가 `display:none` 감지 → hide↔show 무한루프. `hideScannerDiv()`에서 Observer disconnect, `showScannerDiv()`에서 재활성화 |
 | BUG-18 | GST Manager 출퇴근 데이터 미표시 | ✅ Sprint 24 핫픽스 수정 완료 | `_get_manager_company_filter()` GST manager → `'GST'` 반환 vs `WHERE w.company != 'GST'` 모순. GST이면 None 반환(전체 접근)으로 수정 |
 | BUG-19 | 비밀번호 찾기 — 없는 이메일도 인증 화면 이동 | ✅ Sprint 24 핫픽스 수정 완료 | 보안 관행(항상 200) → 내부 시스템이므로 404 EMAIL_NOT_FOUND 반환으로 변경 |
+| BUG-20 | 로그인 에러 메시지 불명확 (계정 미존재 vs 비밀번호 오류) | ✅ Sprint 24 핫픽스 수정 완료 | 동일 INVALID_CREDENTIALS → 404 ACCOUNT_NOT_FOUND + 401 INVALID_PASSWORD 분리 |
+| BUG-21 | FE 404 에러 메시지 하드코딩 | ✅ Sprint 24 핫픽스 수정 완료 | "요청한 리소스가 없습니다" → 서버 메시지 그대로 표시 |
+| BUG-22 | Logout Storm — 401 무한 루프 | 🔍 분석 완료 | Railway HTTP 로그에서 `/api/auth/logout` 401이 10회+ 반복. OPS FE에서 refresh 실패 시 다중 logout 호출 발생. 동시접속 로그인 실패 원인. VIEW 측 동일 패턴은 수정 완료 (`client.ts` AUTH_SKIP_URLS + forceLogout 싱글턴, `authStore.ts` logoutRef + 3s timeout). **OPS FE(Flutter) 동일 패턴 확인 및 수정 필요** |
 
 ---
 

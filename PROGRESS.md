@@ -2768,8 +2768,22 @@ frontend/lib/utils/app_version.dart  # v1.7.1
 ### BUG-19: 비밀번호 찾기 — 없는 이메일도 인증 화면 이동 ✅ 수정 완료
 - **증상**: 비밀번호 찾기에서 존재하지 않는 이메일 입력 → 에러 없이 재설정 코드 입력 화면으로 이동
 - **원인**: BE `send_password_reset_code()`가 보안 관행(이메일 열거 공격 방지)으로 이메일 존재 여부와 무관하게 항상 200 반환
-- **수정**: 내부 시스템이므로 편의성 우선 — 미존재 이메일 시 `404 EMAIL_NOT_FOUND` 반환. FE는 catch에서 에러 메시지 표시 (수정 불필요)
+- **수정**: 내부 시스템이므로 편의성 우선 — 미존재 이메일 시 `404 EMAIL_NOT_FOUND "등록되지 않은 이메일입니다."` 반환
 - **파일**: `backend/app/services/auth_service.py` (L992-999)
+
+### BUG-20: 로그인 에러 메시지 불명확 ✅ 수정 완료
+- **증상**: 없는 아이디로 로그인 시 "이메일 또는 비밀번호가 잘못되었습니다." — 계정 미존재인지 비밀번호 오류인지 구분 불가
+- **원인**: 보안 관행으로 계정 미존재 / 비밀번호 오류를 동일한 `401 INVALID_CREDENTIALS`로 처리
+- **수정**: 내부 시스템이므로 편의성 우선 — 에러를 분리:
+  - 계정 미존재: `404 ACCOUNT_NOT_FOUND "등록되지 않은 계정입니다."`
+  - 비밀번호 오류: `401 INVALID_PASSWORD "비밀번호가 잘못되었습니다."`
+- **파일**: `backend/app/services/auth_service.py` (L572-583)
+
+### BUG-21: FE 404 에러 메시지 하드코딩 ✅ 수정 완료
+- **증상**: BE가 404로 구체적 메시지("등록되지 않은 이메일입니다.")를 보내도 FE에서 "요청한 리소스가 없습니다."로 표시
+- **원인**: `api_service.dart` `_handleError()`에서 404는 서버 메시지를 무시하고 하드코딩된 문자열 반환
+- **수정**: 404도 서버 응답의 `message` 필드를 그대로 사용
+- **파일**: `frontend/lib/services/api_service.dart` (L233-234)
 
 ### 이전 수정 (Sprint 24 세션 내)
 - **PM role 등록 실패**: DB `role_enum`에 'PM' 누락 → `ALTER TYPE role_enum ADD VALUE 'PM'` 실행 + migration 추가
@@ -2780,6 +2794,7 @@ frontend/lib/utils/app_version.dart  # v1.7.1
 ### 수정된 파일
 ```
 backend/app/routes/admin.py              # _get_manager_company_filter() GST 예외
-backend/app/services/auth_service.py     # forgot-password 404 반환
+backend/app/services/auth_service.py     # forgot-password 404 + 로그인 에러 분리
+frontend/lib/services/api_service.dart   # 404 서버 메시지 사용
 backend/migrations/021_add_pm_role.sql   # PM role enum 추가
 ```
