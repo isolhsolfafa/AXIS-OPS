@@ -3,7 +3,7 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v1.7.0 (Sprint 23, 2026-03-11)
+> **현재 버전**: v1.7.1 (Sprint 24, 2026-03-11)
 
 ---
 
@@ -2724,4 +2724,23 @@ frontend/lib/services/task_service.dart                 # ProductShippedExceptio
 frontend/lib/screens/qr/qr_scan_screen.dart             # shipped 안내 다이얼로그 추가
 backend/version.py                                      # v1.7.0
 frontend/lib/utils/app_version.dart                     # v1.7.0
+```
+
+## Sprint 24: QR 목록 actual_ship_date + Manager 자사 필터 (v1.7.1, 완료)
+
+> **마지막 업데이트**: 2026-03-11
+
+### 변경 내역
+- **QR 목록 actual_ship_date 추가**: `GET /api/admin/qr/list` SELECT절 + 응답에 `actual_ship_date` 필드 포함
+- **QR 목록 Manager 자사 필터**: `is_manager && !is_admin` → `mech_partner OR elec_partner = company` 조건 자동 적용
+- **출퇴근 API Manager 접근 허용**: 3개 엔드포인트 `@admin_required` → `@manager_or_admin_required` 변경
+- **출퇴근 API 자사 필터**: `_get_attendance_data()` + `_get_manager_company_filter()` — Manager는 자사 소속만 조회
+- **버전**: v1.7.0 → v1.7.1
+
+### 수정된 파일
+```
+backend/app/routes/qr.py      # actual_ship_date SELECT + manager company 필터
+backend/app/routes/admin.py    # attendance 3개 데코레이터 + company 필터
+backend/version.py             # v1.7.1
+frontend/lib/utils/app_version.dart  # v1.7.1
 ```

@@ -1637,14 +1637,20 @@ def _kst_date_range(target_date=None):
     return start, end
 
 
-def _get_attendance_data(target_start_kst, target_end_kst):
-    """출퇴근 데이터 조회 공통 함수 — records + summary 반환"""
+def _get_attendance_data(target_start_kst, target_end_kst, company_filter=None):
+    """출퇴근 데이터 조회 공통 함수 — records + summary 반환
+
+    Args:
+        target_start_kst: KST 기준 조회 시작 시간
+        target_end_kst: KST 기준 조회 종료 시간
+        company_filter: Manager 자사 필터 (None이면 전체)
+    """
     conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor()
 
-        cur.execute("""
+        query = """
             SELECT
               w.id AS worker_id,
               w.name AS worker_name,
@@ -1661,9 +1667,18 @@ def _get_attendance_data(target_start_kst, target_end_kst):
               AND pa.check_time <  %s
             WHERE w.company != 'GST'
               AND w.approval_status = 'approved'
+        """
+        params = [target_start_kst, target_end_kst]
+
+        if company_filter:
+            query += " AND w.company = %s"
+            params.append(company_filter)
+
+        query += """
             GROUP BY w.id, w.name, w.company, w.role
             ORDER BY w.company, w.name
-        """, (target_start_kst, target_end_kst))
+        """
+        cur.execute(query, params)
 
         rows = cur.fetchall()
 
@@ -1716,9 +1731,17 @@ def _get_attendance_data(target_start_kst, target_end_kst):
             conn.close()
 
 
+def _get_manager_company_filter():
+    """Manager인 경우 자사 company 반환, Admin이면 None (전체)"""
+    worker = get_worker_by_id(g.worker_id)
+    if worker and worker.is_manager and not worker.is_admin:
+        return worker.company
+    return None
+
+
 @admin_bp.route("/hr/attendance/today", methods=["GET"])
 @jwt_required
-@admin_required
+@manager_or_admin_required
 def get_attendance_today() -> Tuple[Dict[str, Any], int]:
     """
     오늘 전체 출퇴근 현황 (KST 기준)
@@ -1731,7 +1754,8 @@ def get_attendance_today() -> Tuple[Dict[str, Any], int]:
     """
     try:
         start, end = _kst_date_range()
-        records, summary = _get_attendance_data(start, end)
+        company_filter = _get_manager_company_filter()
+        records, summary = _get_attendance_data(start, end, company_filter=company_filter)
 
         return jsonify({
             'date': datetime.now(_KST).strftime('%Y-%m-%d'),
@@ -1748,7 +1772,7 @@ def get_attendance_today() -> Tuple[Dict[str, Any], int]:
 
 @admin_bp.route("/hr/attendance", methods=["GET"])
 @jwt_required
-@admin_required
+@manager_or_admin_required
 def get_attendance_by_date() -> Tuple[Dict[str, Any], int]:
     """
     날짜별 출퇴근 현황 조회
@@ -1778,7 +1802,8 @@ def get_attendance_by_date() -> Tuple[Dict[str, Any], int]:
 
     try:
         start, end = _kst_date_range(target_date)
-        records, summary = _get_attendance_data(start, end)
+        company_filter = _get_manager_company_filter()
+        records, summary = _get_attendance_data(start, end, company_filter=company_filter)
 
         return jsonify({
             'date': target_date.strftime('%Y-%m-%d'),
@@ -1795,7 +1820,7 @@ def get_attendance_by_date() -> Tuple[Dict[str, Any], int]:
 
 @admin_bp.route("/hr/attendance/summary", methods=["GET"])
 @jwt_required
-@admin_required
+@manager_or_admin_required
 def get_attendance_summary() -> Tuple[Dict[str, Any], int]:
     """
     회사별 출퇴근 요약
@@ -1825,7 +1850,8 @@ def get_attendance_summary() -> Tuple[Dict[str, Any], int]:
 
     try:
         start, end = _kst_date_range(target_date)
-        records, _ = _get_attendance_data(start, end)
+        company_filter = _get_manager_company_filter()
+        records, _ = _get_attendance_data(start, end, company_filter=company_filter)
 
         # company별 그룹핑
         company_data = defaultdict(lambda: {

@@ -8,8 +8,9 @@ import logging
 from flask import Blueprint, request, jsonify
 from typing import Tuple, Dict, Any
 
+from flask import g
 from app.middleware.jwt_auth import jwt_required, manager_or_admin_required
-from app.models.worker import get_db_connection
+from app.models.worker import get_db_connection, get_worker_by_id
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,13 @@ def get_qr_list() -> Tuple[Dict[str, Any], int]:
         conditions = []
         params = []
 
+        # Manager: 자사 제품만 필터
+        current_worker = get_worker_by_id(g.worker_id)
+        if current_worker and current_worker.is_manager and not current_worker.is_admin:
+            manager_company = current_worker.company
+            conditions.append("(p.mech_partner = %s OR p.elec_partner = %s)")
+            params.extend([manager_company, manager_company])
+
         if search:
             conditions.append("(p.serial_number ILIKE %s OR qr.qr_doc_id ILIKE %s)")
             params.extend([f"%{search}%", f"%{search}%"])
@@ -118,7 +126,8 @@ def get_qr_list() -> Tuple[Dict[str, Any], int]:
                 p.mech_start,
                 p.module_start,
                 p.ship_plan_date,
-                p.prod_date
+                p.prod_date,
+                p.actual_ship_date
             FROM public.qr_registry qr
             JOIN plan.product_info p ON qr.serial_number = p.serial_number
             {where_clause}
@@ -167,6 +176,7 @@ def get_qr_list() -> Tuple[Dict[str, Any], int]:
                 "module_start": row['module_start'].isoformat() if row['module_start'] else None,
                 "ship_plan_date": row['ship_plan_date'].isoformat() if row['ship_plan_date'] else None,
                 "prod_date": row['prod_date'].isoformat() if row['prod_date'] else None,
+                "actual_ship_date": row['actual_ship_date'].isoformat() if row.get('actual_ship_date') else None,
             })
 
         total_pages = (total + per_page - 1) // per_page

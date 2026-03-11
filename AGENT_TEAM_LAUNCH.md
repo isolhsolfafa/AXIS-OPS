@@ -6469,12 +6469,12 @@ backend/app/version.py       — 1.7.0 → 1.7.1 (수정)
 ```
 
 **체크리스트**:
-- [ ] qr.py SELECT에 `p.actual_ship_date` 추가 (Task 1)
-- [ ] qr.py에 manager company 필터 추가 (Task 2)
-- [ ] admin.py attendance 3개 → `@manager_or_admin_required` 변경 (Task 3)
-- [ ] admin.py `_get_attendance_data()`에 company 필터 추가 (Task 3)
+- [x] qr.py SELECT에 `p.actual_ship_date` 추가 (Task 1)
+- [x] qr.py에 manager company 필터 추가 (Task 2)
+- [x] admin.py attendance 3개 → `@manager_or_admin_required` 변경 (Task 3)
+- [x] admin.py `_get_attendance_data()`에 company 필터 추가 (Task 3)
 - [ ] Manager 로그인 → QR 자사만 반환 테스트
 - [ ] Manager 로그인 → 출퇴근 자사만 반환 테스트
 - [ ] Admin 로그인 → 전체 데이터 반환 (회귀 확인)
 - [ ] pytest 전체 통과
-- [ ] version.py → 1.7.1
+- [x] version.py → 1.7.1

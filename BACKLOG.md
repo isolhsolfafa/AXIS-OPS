@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-03-11 (Sprint 22-D 완료, ETL Sprint 2 전체 완료)
+> 마지막 업데이트: 2026-03-11 (Sprint 24 완료 — QR actual_ship_date + Manager 자사 필터)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
