@@ -992,11 +992,11 @@ class AuthService:
         worker = get_worker_by_email(email)
 
         if worker is None:
-            # 보안: 이메일 존재 여부를 노출하지 않음
             logger.info(f"Password reset requested for non-existent email: {email}")
             return {
-                'message': '입력하신 이메일로 재설정 코드를 발송했습니다.'
-            }, 200
+                'error': 'EMAIL_NOT_FOUND',
+                'message': '등록되지 않은 이메일입니다.'
+            }, 404
 
         reset_code = create_password_reset_code(worker.id)
 
