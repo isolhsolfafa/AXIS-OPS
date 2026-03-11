@@ -571,15 +571,15 @@ class AuthService:
 
         if worker is None:
             return {
-                'error': 'INVALID_CREDENTIALS',
-                'message': '이메일 또는 비밀번호가 잘못되었습니다.'
-            }, 401
+                'error': 'ACCOUNT_NOT_FOUND',
+                'message': '등록되지 않은 계정입니다.'
+            }, 404
 
         # 비밀번호 검증
         if not self.verify_password(password, worker.password_hash):
             return {
-                'error': 'INVALID_CREDENTIALS',
-                'message': '이메일 또는 비밀번호가 잘못되었습니다.'
+                'error': 'INVALID_PASSWORD',
+                'message': '비밀번호가 잘못되었습니다.'
             }, 401
 
         # Admin freepass: 이메일 인증 / 승인 체크 건너뜀
