@@ -1739,9 +1739,11 @@ def _get_attendance_data(target_start_kst, target_end_kst, company_filter=None):
 
 
 def _get_manager_company_filter():
-    """Manager인 경우 자사 company 반환, Admin이면 None (전체)"""
+    """Manager인 경우 자사 company 반환, Admin 또는 GST면 None (전체)"""
     worker = get_worker_by_id(g.worker_id)
     if worker and worker.is_manager and not worker.is_admin:
+        if worker.company == 'GST':
+            return None  # GST 직원은 전체 협력사 데이터 접근
         return worker.company
     return None
 
