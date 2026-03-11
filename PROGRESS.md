@@ -2708,12 +2708,20 @@ frontend/lib/utils/app_version.dart                     # v1.6.3
 - **GET /api/admin/managers 권한 완화**: `@admin_required` → `@manager_or_admin_required` + Manager는 같은 company 자동 필터
 - **ETL change_log API RealDictCursor 수정**: `row[index]` → `row['key']` (500 에러 수정)
 
+### Shipped 제품 QR 스캔 안내 (Sprint 23 추가)
+- **BE**: `GET /api/app/product/{qr_doc_id}` — 일반 작업자가 shipped 제품 스캔 시 `PRODUCT_SHIPPED` (200) 반환, Admin/Manager는 shipped 포함 정상 조회
+- **FE**: `ProductShippedException` 클래스 추가 + `_showShippedDialog()` — 트럭 아이콘 + "출고 완료된 제품입니다" 안내 (에러 스타일 X)
+
 ### 수정된 파일
 ```
 frontend/lib/screens/home/home_screen.dart              # 메뉴 순서 변경 + 권한 부여 카드 추가
 frontend/lib/screens/admin/manager_delegation_screen.dart # 권한 부여 화면 (신규)
 frontend/lib/main.dart                                   # /manager-delegation 라우트 등록
 backend/app/routes/admin.py                             # managers API 권한 완화 + ETL API dict 수정
+backend/app/routes/product.py                           # shipped 제품 PRODUCT_SHIPPED 응답 추가
+backend/app/models/product_info.py                      # include_shipped 파라미터 추가
+frontend/lib/services/task_service.dart                 # ProductShippedException 추가
+frontend/lib/screens/qr/qr_scan_screen.dart             # shipped 안내 다이얼로그 추가
 backend/version.py                                      # v1.7.0
 frontend/lib/utils/app_version.dart                     # v1.7.0
 ```

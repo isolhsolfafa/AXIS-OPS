@@ -203,6 +203,13 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 - **공용 태블릿 시나리오**: 공장 현장 공용 기기 사용 시 로그아웃 시 localStorage 클리어 로직 필요 (현재는 미구현, 필요 시 추가)
 - **model_config 조회/수정**: CLAUDE.md에 "추후"로 기록됨. Admin이 모델별 설정(has_docking, is_tms 등) 수정 가능한 UI.
 - **Sprint 완료 시 자동 공지사항 등록**: 버전 업데이트(version.py) 시 유저 체감 기능 변경사항만 골라서 `POST /api/admin/notices`로 자동 등록. notices 테이블에 `version` 필드 이미 존재. 시스템 변경(리팩터링, 테스트 등)은 제외하고 사용자 관점 기능만 포함. 방식: A) CLAUDE.md 버전 업데이트 절차에 공지 생성 단계 추가 (즉시 가능) / B) 배포 스크립트에 API 호출 자동화 / C) CI/CD hook (추후)
+- **QR 목록 contract_type / sales_note 필드 추가 검토**:
+  - `contract_type`: Excel N열 "신규여부" (양산/신규/계약변경). step1_extract.py에서 추출은 됨, DB 컬럼 미추가 + step2 UPSERT 미포함
+  - `sales_note`: Excel CJ열 "특이사항(영업)". 마찬가지로 추출만, DB 미적재
+  - 작업 필요: ① plan.product_info ALTER TABLE ② step2_load.py UPSERT 추가 ③ qr.py SELECT 추가
+  - 활용성 검토 필요: VIEW QR관리 페이지에서 이 정보를 어떻게 활용할지 (필터? 표시만?) 확인 후 진행
+  - OPS_API_REQUESTS.md #6에 등록됨
+- **PWA 버전 업데이트 알림 토스트**: 현재 Service Worker는 `skipWaiting()` + Cache-first 전략. 새 배포 후 새로고침 1~2회 필요하지만 사용자에게 안내 없음. "새 버전이 있습니다. 업데이트하시겠습니까?" 토스트 팝업 추가 → 클릭 시 `window.location.reload()`. Flutter의 `flutter_service_worker.js`에서 새 SW 감지 시 `postMessage('skipWaiting')` → FE에서 `controllerchange` 이벤트 수신 → 토스트 표시. 참고: index.html은 Online-first, JS/CSS는 Cache-first
 
 ---
 

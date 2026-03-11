@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/task_provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/qr_scanner_service.dart';
+import '../../services/task_service.dart';
 import '../../utils/design_system.dart';
 
 /// QR 스캔 화면 (웹 호환 - 카메라 우선, 텍스트 입력 보조)
@@ -170,10 +171,22 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
         }
 
         // 제품 조회
-        final success = await taskNotifier.scanQrCode(qrCode.toUpperCase());
+        bool success;
+        try {
+          success = await taskNotifier.scanQrCode(qrCode.toUpperCase());
+        } on ProductShippedException {
+          _showShippedDialog();
+          setState(() => _isProcessing = false);
+          return;
+        }
         if (!success) {
           final errorMessage = ref.read(taskProvider).errorMessage;
-          _showErrorDialog(errorMessage ?? '제품 조회에 실패했습니다.');
+          // 출고 완료 메시지면 안내 다이얼로그 표시
+          if (errorMessage != null && errorMessage.contains('출고 완료')) {
+            _showShippedDialog();
+          } else {
+            _showErrorDialog(errorMessage ?? '제품 조회에 실패했습니다.');
+          }
         } else {
           // 성공: Task 목록 조회
           final product = ref.read(taskProvider).currentProduct;
@@ -303,6 +316,49 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
             onPressed: () {
               Navigator.of(ctx).pop();
               // 다이얼로그 닫힌 후 카메라 다시 표시
+              _qrScannerService.show();
+            },
+            child: const Text('확인', style: TextStyle(color: GxColors.accent, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showShippedDialog() {
+    _qrScannerService.hide();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.lg)),
+        title: Row(
+          children: [
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: GxColors.accentSoft,
+                borderRadius: BorderRadius.circular(GxRadius.md),
+              ),
+              child: const Icon(Icons.local_shipping, color: GxColors.accent, size: 18),
+            ),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Text(
+                '출고 완료',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: GxColors.charcoal),
+              ),
+            ),
+          ],
+        ),
+        content: const Text(
+          '출고 완료된 제품입니다.\n해당 제품은 더 이상 작업할 수 없습니다.',
+          style: TextStyle(fontSize: 14, color: GxColors.slate, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
               _qrScannerService.show();
             },
             child: const Text('확인', style: TextStyle(color: GxColors.accent, fontWeight: FontWeight.w600)),

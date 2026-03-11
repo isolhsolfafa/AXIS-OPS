@@ -92,6 +92,14 @@ def get_product(qr_doc_id: str) -> Tuple[Dict[str, Any], int]:
     include_shipped = worker and (worker.is_admin or worker.is_manager)
     product = get_product_by_qr_doc_id(qr_doc_id, include_shipped=include_shipped)
     if not product:
+        # 일반 작업자: shipped 제품이면 출고 완료 안내
+        if not include_shipped:
+            shipped_product = get_product_by_qr_doc_id(qr_doc_id, include_shipped=True)
+            if shipped_product:
+                return jsonify({
+                    'error': 'PRODUCT_SHIPPED',
+                    'message': '출고 완료된 제품입니다.'
+                }), 200
         return jsonify({
             'error': 'PRODUCT_NOT_FOUND',
             'message': '제품을 찾을 수 없습니다.'

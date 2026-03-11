@@ -6183,7 +6183,298 @@ backend/app/routes/admin.py       — toggle_manager() 데코레이터 + company
 
 ---
 
-### Sprint 22-D (별도): PM Role Push + DB 백업 정책
+### Sprint 22-D: 공지수정 + Admin 간편로그인 + ETL API (v1.6.3, 완료)
 
-> Phase A(DB 백업 pg_dump), PM Role(Railway ALTER TYPE) — 별도 진행 예정
-> PM Role: 코드 완료 상태, `ALTER TYPE worker_role ADD VALUE IF NOT EXISTS 'pm';` Railway 실행 필요
+**구현 내용**:
+1. 공지사항 수정 기능: `NoticeWriteScreen` 수정 모드 (existingNotice 파라미터)
+2. Admin 간편 로그인: `get_admin_by_email_prefix()` 2단계 매칭
+3. ETL 변경 이력 API: `GET /api/admin/etl/changes` — CORE-ETL Sprint 2 Task 4
+   - `@manager_or_admin_required` 권한
+   - days/field/serial_number/limit 쿼리 파라미터
+   - `etl.change_log` JOIN `plan.product_info` (model 포함)
+   - summary: total_changes + by_field 집계
+
+**파일 목록**:
+```
+frontend/lib/screens/admin/notice_write_screen.dart     — 수정 모드
+frontend/lib/screens/notice/notice_detail_screen.dart   — 수정 버튼
+backend/app/models/worker.py                            — admin prefix 2단계 매칭
+backend/app/routes/admin.py                             — ETL changes 엔드포인트
+```
+
+**체크리스트**:
+- [x] 공지사항 수정 모드 (NoticeWriteScreen + NoticeDetailScreen)
+- [x] Admin 간편 로그인 prefix 2단계 매칭
+- [x] GET /api/admin/etl/changes 엔드포인트
+
+---
+
+### Sprint 22-E (별도): DB 백업 정책
+
+> Phase A(DB 백업 pg_dump) — 별도 진행 예정
+> Railway Pro 자동 일일 백업 + 7일 보관 확인됨
+> ALTER TABLE 전 수동 pg_dump 절차 필요
+
+---
+
+### Sprint 23: OPS FE 메뉴 재구성 (is_manager 권한 메뉴 + 메뉴 순서)
+
+**목표**: is_manager 로그인 시 "관리자 권한 부여" 메뉴 노출 + 관리자 관련 메뉴를 공지사항 바로 위로 이동
+
+**배경**:
+- Sprint 22-C에서 BE `toggle_manager()`에 `@manager_or_admin_required` 권한 위임 완료
+- 그러나 FE에서 is_manager 로그인 시 해당 기능에 접근할 메뉴가 없음
+- 관리자 관련 메뉴(관리자 옵션, 권한 부여)를 공지사항 바로 위에 그룹핑
+
+**Teammate**: 불필요 (FE 1개 파일 수정, BE 변경 없음)
+
+**⚠️ BE 변경 없음**: 이 Sprint은 순수 FE(Flutter) 작업만 포함
+
+**⚠️ 필수 참조 (CLAUDE.md)**:
+- **버전 관리**: `CLAUDE.md > 버전 관리 기준` 섹션 확인 → Sprint 완료 시 `backend/version.py` + `frontend/lib/utils/app_version.dart` 동시 업데이트 (현재 v1.6.3)
+- **DB 보호 규칙**: `CLAUDE.md > DB 규칙 > 운영 데이터 보존 규칙` — `workers`, `partner_attendance`, `qr_registry`, `plan.product_info` 훼손 금지 (이번 Sprint은 FE만이므로 해당 없으나 습관적 확인)
+
+---
+
+#### Task 1: 메뉴 순서 재배치 (OPS-2)
+
+**현재 메뉴 순서** (`home_screen.dart` lines 683-806):
+```
+1. 전사 작업 진행현황 / 작업 진행현황
+2. QR Scan
+3. 작업 관리
+4. 관리자 옵션          ← isAdmin only (line 718)
+5. 미종료 작업          ← isManager && !isAdmin (line 731)
+6. 알림
+7. PI/QI/SI 검사       ← GST || isAdmin (line 755)
+8. 공지사항             ← 항상 표시 (line 798)
+```
+
+**변경 후 메뉴 순서**:
+```
+1. 전사 작업 진행현황 / 작업 진행현황
+2. QR Scan
+3. 작업 관리
+4. 미종료 작업          ← isManager && !isAdmin
+5. 알림
+6. PI/QI/SI 검사       ← GST || isAdmin
+7. 관리자 옵션          ← isAdmin only (공지사항 위로 이동)
+8. 관리자 권한 부여     ← NEW: isManager (Task 2에서 추가)
+9. 공지사항             ← 항상 표시 (최하단 유지)
+```
+
+**수정 내용**:
+- `home_screen.dart`에서 "관리자 옵션" 블록(line 718-728)을 공지사항(line 798) 바로 위로 이동
+- 기존 조건(`isAdmin == true`)은 그대로 유지, 위치만 변경
+
+---
+
+#### Task 2: "관리자 권한 부여" 메뉴 카드 추가 (OPS-1)
+
+**조건**: `worker?.isManager == true` (Admin 포함 — Admin도 is_manager 부여 가능하므로)
+
+**메뉴 카드 구성**:
+```dart
+if (worker?.isManager == true || worker?.isAdmin == true) ...[
+  _buildFeatureCard(
+    icon: Icons.supervisor_account,       // 또는 Icons.group_add
+    iconBg: GxColors.primaryBg,           // 또는 적절한 색상
+    iconColor: GxColors.primary,
+    title: '관리자 권한 부여',
+    subtitle: '${worker?.company ?? ''} 소속 작업자 Manager 권한 관리',
+    onTap: () => Navigator.pushNamed(context, '/manager-delegation'),
+  ),
+  const SizedBox(height: 8),
+],
+```
+
+**위치**: 관리자 옵션과 공지사항 사이 (변경 후 순서 8번)
+
+**라우트**: `/manager-delegation` — 새 화면 필요
+
+---
+
+#### Task 3: Manager 권한 부여 화면 생성
+
+**새 파일**: `frontend/lib/screens/admin/manager_delegation_screen.dart`
+
+**화면 구성**:
+1. 본인과 같은 company 소속 작업자 목록 표시
+   - API: `GET /api/admin/workers` (기존 API, company 필터)
+   - Admin인 경우: 전체 작업자 표시
+   - Manager인 경우: 같은 company만 필터링 (FE에서 필터 또는 BE 쿼리 파라미터)
+2. 각 작업자 옆에 is_manager 토글 스위치
+   - API: `PUT /api/admin/workers/{id}/toggle-manager` (Sprint 22-C에서 구현 완료)
+3. Admin 사용자는 토글 비활성화 (변경 불가 표시)
+4. 성공/실패 Snackbar 피드백
+
+**참고**: BE는 Sprint 22-C에서 이미 완료됨
+- Manager → 같은 company만 toggle 가능
+- Manager → Admin 권한 변경 시 403 반환
+- Admin → 전체 toggle 가능
+
+---
+
+#### Task 4: 라우트 등록
+
+**수정 파일**: `frontend/lib/main.dart` (또는 라우트 설정 파일)
+
+```dart
+'/manager-delegation': (context) => const ManagerDelegationScreen(),
+```
+
+---
+
+**파일 목록**:
+```
+frontend/lib/screens/home/home_screen.dart              — 메뉴 순서 변경 + 새 카드 추가 (수정)
+frontend/lib/screens/admin/manager_delegation_screen.dart — 권한 부여 화면 (신규)
+frontend/lib/main.dart                                   — 라우트 등록 (수정)
+```
+
+**체크리스트**:
+- [x] 관리자 옵션 메뉴를 공지사항 바로 위로 이동 (Task 1)
+- [x] "관리자 권한 부여" 메뉴 카드 추가 — isManager || isAdmin 조건 (Task 2)
+- [x] Manager 권한 부여 화면 — 같은 company 작업자 목록 + toggle (Task 3)
+- [x] `/manager-delegation` 라우트 등록 (Task 4)
+- [x] is_manager 로그인 테스트: 메뉴 표시 확인
+- [x] Admin 로그인 테스트: 관리자 옵션 + 권한 부여 메뉴 모두 표시 확인
+- [x] 일반 작업자 로그인 테스트: 두 메뉴 모두 미표시 확인
+- [x] Shipped 제품 QR 스캔 시 "출고 완료" 안내 다이얼로그 (추가)
+
+---
+
+## Sprint 24: QR 목록 actual_ship_date 추가 + is_manager 자사 필터
+
+> **버전**: v1.7.0 → v1.7.1 (PATCH — BE API 응답 확장 + 권한 필터)
+> **범위**: BE only (FE 변경 없음)
+
+### 필수 참조 (CLAUDE.md)
+- **버전 관리**: `backend/app/version.py` → `1.7.1` 업데이트
+- **DB 보호**: workers, partner_attendance, qr_registry, plan.product_info — conftest.py 백업/복원 확인
+
+---
+
+#### Task 1: QR 목록 응답에 actual_ship_date 추가
+
+**수정 파일**: `backend/app/routes/qr.py`
+
+**현재 상태**: `GET /api/admin/qr/list` SELECT 절에 `actual_ship_date` 누락
+- `plan.product_info`에 컬럼은 존재 (CORE-ETL Sprint 2 Task 3에서 ALTER TABLE 완료)
+- ETL에서 적재도 진행 중
+- 단, SELECT 절에 빠져서 응답에 안 내려옴
+
+**수정 내용**:
+```python
+# qr.py의 SELECT 절에 추가
+p.actual_ship_date,   # ← 추가
+```
+
+**응답 변환 부분도 확인**:
+```python
+# dict 변환 시 actual_ship_date 포함
+'actual_ship_date': str(row['actual_ship_date']) if row.get('actual_ship_date') else None,
+```
+
+**검증**:
+- `actual_ship_date`가 있는 S/N → 날짜 문자열 반환
+- `actual_ship_date`가 NULL인 S/N → `null` 반환
+- `status`가 `shipped`인 건과 `actual_ship_date`가 있는 건이 일치하는지 확인
+
+---
+
+#### Task 2: QR 목록 — is_manager 자사 필터
+
+**수정 파일**: `backend/app/routes/qr.py`
+
+**현재 문제**: `@manager_or_admin_required`는 역할만 체크. 함수 내부에서 company 필터 없음 → manager가 전사 QR 데이터 조회 가능.
+
+**수정 패턴** (기존 force_close_task과 동일):
+```python
+from flask import g
+from app.models.worker import get_worker_by_id
+
+# get_qr_list() 함수 내부, WHERE 조건 빌드 부분
+current_worker = get_worker_by_id(g.worker_id)
+if current_worker and current_worker.is_manager and not current_worker.is_admin:
+    manager_company = current_worker.company
+    conditions.append("(p.mech_partner = %s OR p.elec_partner = %s)")
+    params.extend([manager_company, manager_company])
+```
+
+**검증**:
+- Admin 로그인 → 전체 QR 반환 (기존과 동일)
+- Manager(company='BAT') 로그인 → mech_partner='BAT' OR elec_partner='BAT' 건만 반환
+- Manager가 다른 회사 S/N 조회 불가 확인
+
+---
+
+#### Task 3: 출퇴근 API — is_manager 접근 허용 + 자사 필터
+
+**수정 파일**: `backend/app/routes/admin.py`
+
+**현재 문제**: `/api/admin/hr/attendance/today` 등이 `@admin_required`만 적용 → manager 접근 자체 불가 (403).
+
+**수정 내용**:
+
+1. 데코레이터 변경:
+```python
+# 변경 전
+@admin_required
+def get_attendance_today():
+
+# 변경 후
+@manager_or_admin_required
+def get_attendance_today():
+```
+
+2. `_get_attendance_data()` 함수에 company 필터 추가:
+```python
+current_worker = get_worker_by_id(g.worker_id)
+company_filter = None
+if current_worker and current_worker.is_manager and not current_worker.is_admin:
+    company_filter = current_worker.company
+
+# SQL WHERE 절에 추가
+if company_filter:
+    query += " AND w.company = %s"
+    params.append(company_filter)
+```
+
+**대상 엔드포인트 3개**:
+- `GET /api/admin/hr/attendance/today`
+- `GET /api/admin/hr/attendance` (date 파라미터)
+- `GET /api/admin/hr/attendance/summary`
+
+**검증**:
+- Admin → 전체 협력사 출퇴근 데이터
+- Manager(company='FNI') → FNI 소속만 표시
+- 일반 작업자 → 403
+
+---
+
+#### Task 4: 테스트 + 버전 업데이트
+
+1. 기존 테스트 회귀 확인 (pytest 전체 실행)
+2. `backend/app/version.py` → `1.7.1`
+3. `CLAUDE.md` 버전 이력에 Sprint 24 추가
+
+---
+
+**파일 목록**:
+```
+backend/app/routes/qr.py    — actual_ship_date SELECT 추가 + manager company 필터 (수정)
+backend/app/routes/admin.py  — attendance 3개 엔드포인트 데코레이터 + company 필터 (수정)
+backend/app/version.py       — 1.7.0 → 1.7.1 (수정)
+```
+
+**체크리스트**:
+- [ ] qr.py SELECT에 `p.actual_ship_date` 추가 (Task 1)
+- [ ] qr.py에 manager company 필터 추가 (Task 2)
+- [ ] admin.py attendance 3개 → `@manager_or_admin_required` 변경 (Task 3)
+- [ ] admin.py `_get_attendance_data()`에 company 필터 추가 (Task 3)
+- [ ] Manager 로그인 → QR 자사만 반환 테스트
+- [ ] Manager 로그인 → 출퇴근 자사만 반환 테스트
+- [ ] Admin 로그인 → 전체 데이터 반환 (회귀 확인)
+- [ ] pytest 전체 통과
+- [ ] version.py → 1.7.1

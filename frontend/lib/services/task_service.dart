@@ -2,6 +2,15 @@ import 'api_service.dart';
 import '../models/product_info.dart';
 import '../models/task_item.dart';
 
+/// 출고 완료 제품 예외
+class ProductShippedException implements Exception {
+  final String message;
+  ProductShippedException(this.message);
+
+  @override
+  String toString() => message;
+}
+
 /// Task 서비스
 ///
 /// QR 기반 제품 조회, Task 목록 조회, 작업 시작/완료 등을 담당
@@ -22,6 +31,10 @@ class TaskService {
   Future<ProductInfo> getProductByQrDocId(String qrDocId) async {
     try {
       final response = await _apiService.get('/app/product/$qrDocId');
+      // shipped 제품 응답 처리
+      if (response is Map && response['error'] == 'PRODUCT_SHIPPED') {
+        throw ProductShippedException(response['message'] ?? '출고 완료된 제품입니다.');
+      }
       return ProductInfo.fromJson(response);
     } catch (e) {
       rethrow;
