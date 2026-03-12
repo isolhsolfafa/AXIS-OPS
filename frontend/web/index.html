@@ -95,6 +95,52 @@
       0%, 100% { opacity: 1; transform: scale(1); }
       50% { opacity: 0.85; transform: scale(0.97); }
     }
+
+    /* ── PWA Update Toast ── */
+    #update-toast {
+      display: none;
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 100000;
+      background: #1E293B;
+      color: #FFFFFF;
+      padding: 14px 20px;
+      border-radius: 12px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      align-items: center;
+      gap: 12px;
+      max-width: 360px;
+      width: calc(100% - 48px);
+      cursor: pointer;
+      animation: toast-slide-up 0.3s ease-out;
+    }
+    #update-toast:active {
+      transform: translateX(-50%) scale(0.97);
+    }
+    #update-toast-icon { font-size: 20px; flex-shrink: 0; }
+    #update-toast-text { flex: 1; line-height: 1.4; }
+    #update-toast-text strong { display: block; font-size: 14px; margin-bottom: 2px; }
+    #update-toast-text span { font-size: 12px; color: #94A3B8; }
+    #update-toast-btn {
+      background: #6366F1;
+      color: white;
+      border: none;
+      padding: 6px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    #update-toast-btn:active { background: #4F46E5; }
+    @keyframes toast-slide-up {
+      from { opacity: 0; transform: translateX(-50%) translateY(20px); }
+      to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+    }
   </style>
 </head>
 <body>
@@ -103,6 +149,16 @@
     <img id="splash-logo" src="img/g-axis-splash.png" alt="G-AXIS">
     <div id="splash-text">Loading...</div>
     <div id="splash-loader"></div>
+  </div>
+
+  <!-- PWA Update Toast: 새 SW 감지 시 표시 -->
+  <div id="update-toast" onclick="applyUpdate()">
+    <div id="update-toast-icon">🔄</div>
+    <div id="update-toast-text">
+      <strong>새 버전이 있습니다</strong>
+      <span>탭하여 업데이트</span>
+    </div>
+    <button id="update-toast-btn" onclick="applyUpdate()">업데이트</button>
   </div>
 
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -119,6 +175,54 @@
         }, 400);
       }
     });
+  </script>
+
+  <!-- PWA Update Detection -->
+  <script>
+    (function() {
+      if (!('serviceWorker' in navigator)) return;
+
+      var updateToast = null;
+
+      function showUpdateToast() {
+        updateToast = document.getElementById('update-toast');
+        if (updateToast) {
+          updateToast.style.display = 'flex';
+        }
+      }
+
+      window.applyUpdate = function() {
+        if (updateToast) {
+          updateToast.style.display = 'none';
+        }
+        window.location.reload();
+      };
+
+      var refreshing = false;
+      navigator.serviceWorker.addEventListener('controllerchange', function() {
+        if (refreshing) return;
+        refreshing = true;
+        showUpdateToast();
+      });
+
+      navigator.serviceWorker.ready.then(function(registration) {
+        if (registration.waiting) {
+          showUpdateToast();
+          return;
+        }
+
+        registration.addEventListener('updatefound', function() {
+          var newSW = registration.installing;
+          if (!newSW) return;
+
+          newSW.addEventListener('statechange', function() {
+            if (newSW.state === 'installed' && navigator.serviceWorker.controller) {
+              showUpdateToast();
+            }
+          });
+        });
+      });
+    })();
   </script>
 </body>
 </html>

@@ -10,6 +10,9 @@ import '../../services/websocket_service.dart';
 import '../../utils/design_system.dart';
 import '../../widgets/break_time_popup.dart';
 import '../../widgets/break_time_end_popup.dart';
+import '../../widgets/update_dialog.dart';
+import '../../services/update_service.dart';
+import '../../services/notice_service.dart';
 
 /// 홈 화면 (메인 화면)
 ///
@@ -43,6 +46,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initializeAlerts();
       _fetchAttendanceStatus();
+      _checkForUpdate();
     });
   }
 
@@ -68,6 +72,28 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       } catch (e) {
         debugPrint('[HomeScreen] Failed to initialize alerts: $e');
       }
+    }
+  }
+
+  /// 버전 업데이트 공지 확인
+  Future<void> _checkForUpdate() async {
+    if (!mounted) return;
+    try {
+      final apiService = ref.read(apiServiceProvider);
+      final noticeService = NoticeService(apiService: apiService);
+      final updateService = UpdateService(noticeService);
+
+      final notice = await updateService.checkForUpdateNotice();
+      if (notice != null && mounted) {
+        await UpdateDialog.show(
+          context,
+          title: notice['title'] ?? 'OPS 업데이트',
+          content: notice['content'] ?? '',
+          version: notice['version'],
+        );
+      }
+    } catch (e) {
+      debugPrint('[HomeScreen] Update check failed: $e');
     }
   }
 
