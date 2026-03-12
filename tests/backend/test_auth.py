@@ -45,6 +45,14 @@ class TestWorkerRegistration:
             if not has_company:
                 pytest.skip("Sprint 6 DB 마이그레이션 필요 (workers.company 컬럼 없음)")
 
+        # 이전 실행 잔여 데이터 정리
+        if db_conn:
+            cursor = db_conn.cursor()
+            cursor.execute("DELETE FROM email_verification WHERE worker_id IN (SELECT id FROM workers WHERE email = 'newworker@axisos.test')")
+            cursor.execute("DELETE FROM workers WHERE email = 'newworker@axisos.test'")
+            db_conn.commit()
+            cursor.close()
+
         payload = {
             'name': '신규 작업자',
             'email': 'newworker@axisos.test',
