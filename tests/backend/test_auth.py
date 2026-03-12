@@ -49,7 +49,8 @@ class TestWorkerRegistration:
             'name': '신규 작업자',
             'email': 'newworker@axisos.test',
             'password': 'SecurePassword123!',
-            'role': 'MECH'  # Sprint 6 역할명
+            'role': 'MECH',  # Sprint 6 역할명
+            'company': 'FNI',
         }
 
         response = client.post('/api/auth/register', json=payload)
@@ -336,7 +337,7 @@ class TestLoginFailures:
         존재하지 않는 이메일로 로그인 실패
 
         Expected:
-        - Status code 401 Unauthorized (보안상 이메일 존재 여부 노출 X)
+        - Status code 404 (내부 시스템 — 편의성 우선, Sprint 24 변경)
         """
         payload = {
             'email': 'nonexistent@axisos.test',
@@ -345,4 +346,6 @@ class TestLoginFailures:
 
         response = client.post('/api/auth/login', json=payload)
 
-        assert response.status_code == 401, f"Expected 401, got {response.status_code}"
+        assert response.status_code == 404, f"Expected 404, got {response.status_code}"
+        data = response.get_json()
+        assert data['error'] == 'ACCOUNT_NOT_FOUND'
