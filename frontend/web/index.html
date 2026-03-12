@@ -183,8 +183,12 @@
       if (!('serviceWorker' in navigator)) return;
 
       var updateToast = null;
+      // 토스트 탭 → reload 후에는 다시 안 보이도록 세션 플래그
+      var TOAST_KEY = 'pwa_update_applied';
 
       function showUpdateToast() {
+        // 이미 업데이트 적용(reload) 후면 표시하지 않음
+        if (sessionStorage.getItem(TOAST_KEY)) return;
         updateToast = document.getElementById('update-toast');
         if (updateToast) {
           updateToast.style.display = 'flex';
@@ -192,6 +196,8 @@
       }
 
       window.applyUpdate = function() {
+        // reload 후 토스트 재표시 방지
+        sessionStorage.setItem(TOAST_KEY, '1');
         if (updateToast) {
           updateToast.style.display = 'none';
         }
