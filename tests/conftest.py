@@ -154,6 +154,8 @@ def db_schema():
             backed_up_workers = []
             backed_up_auth_settings = []
             backed_up_attendance = []
+            backed_up_product_info = []
+            backed_up_qr_registry = []
             try:
                 cursor.execute(
                     "SELECT id, name, email, password_hash, role::text, "
@@ -181,8 +183,32 @@ def db_schema():
                 )
                 backed_up_attendance = cursor.fetchall()
                 print(f"[db_schema] Backed up {len(backed_up_attendance)} attendance records")
+                # plan.product_info 백업 (ETL 적재 데이터 보존)
+                cursor.execute(
+                    "SELECT id, serial_number, model, title_number, product_code, "
+                    "sales_order, customer, line, quantity, "
+                    "mech_partner, elec_partner, module_outsourcing, "
+                    "prod_date, mech_start, mech_end, elec_start, elec_end, "
+                    "module_start, pi_start, qi_start, si_start, "
+                    "ship_plan_date, location_qr_id, "
+                    "actual_ship_date, "
+                    "created_at, updated_at "
+                    "FROM plan.product_info"
+                )
+                backed_up_product_info = cursor.fetchall()
+                print(f"[db_schema] Backed up {len(backed_up_product_info)} product_info records")
+
+                # public.qr_registry 백업 (QR ↔ 제품 매핑 보존)
+                cursor.execute(
+                    "SELECT id, qr_doc_id, serial_number, status, "
+                    "issued_at, revoked_at, created_at, updated_at "
+                    "FROM public.qr_registry"
+                )
+                backed_up_qr_registry = cursor.fetchall()
+                print(f"[db_schema] Backed up {len(backed_up_qr_registry)} qr_registry records")
+
             except Exception as backup_err:
-                print(f"[db_schema] Worker backup skipped (table may not exist): {backup_err}")
+                print(f"[db_schema] Backup skipped (table may not exist): {backup_err}")
 
             # 기존 스키마 정리 (재실행 대비) - Sprint 6 + Sprint 11 + Sprint 12 테이블 포함
             drop_stmts = [
@@ -326,6 +352,74 @@ def db_schema():
                     "COALESCE((SELECT MAX(id) FROM hr.partner_attendance), 1))"
                 )
                 print(f"[db_schema] Restored {restored_att}/{len(backed_up_attendance)} attendance records")
+
+            # plan.product_info 복원 (ETL 적재 데이터)
+            if backed_up_product_info:
+                # actual_ship_date 컬럼 보장 (migration에 없으므로)
+                try:
+                    cursor.execute(
+                        "ALTER TABLE plan.product_info ADD COLUMN IF NOT EXISTS actual_ship_date DATE"
+                    )
+                except Exception:
+                    pass
+                restored_pi = 0
+                for row in backed_up_product_info:
+                    try:
+                        cursor.execute(
+                            """
+                            INSERT INTO plan.product_info
+                                (id, serial_number, model, title_number, product_code,
+                                 sales_order, customer, line, quantity,
+                                 mech_partner, elec_partner, module_outsourcing,
+                                 prod_date, mech_start, mech_end, elec_start, elec_end,
+                                 module_start, pi_start, qi_start, si_start,
+                                 ship_plan_date, location_qr_id,
+                                 actual_ship_date,
+                                 created_at, updated_at)
+                            VALUES (%s, %s, %s, %s, %s,
+                                    %s, %s, %s, %s,
+                                    %s, %s, %s,
+                                    %s, %s, %s, %s, %s,
+                                    %s, %s, %s, %s,
+                                    %s, %s,
+                                    %s,
+                                    %s, %s)
+                            ON CONFLICT (id) DO NOTHING
+                            """,
+                            row
+                        )
+                        restored_pi += 1
+                    except Exception as pi_err:
+                        print(f"[db_schema] product_info restore failed: {pi_err}")
+                cursor.execute(
+                    "SELECT setval('plan.product_info_id_seq', "
+                    "COALESCE((SELECT MAX(id) FROM plan.product_info), 1))"
+                )
+                print(f"[db_schema] Restored {restored_pi}/{len(backed_up_product_info)} product_info records")
+
+            # public.qr_registry 복원 (product_info 다음 — FK 의존성)
+            if backed_up_qr_registry:
+                restored_qr = 0
+                for row in backed_up_qr_registry:
+                    try:
+                        cursor.execute(
+                            """
+                            INSERT INTO public.qr_registry
+                                (id, qr_doc_id, serial_number, status,
+                                 issued_at, revoked_at, created_at, updated_at)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (id) DO NOTHING
+                            """,
+                            row
+                        )
+                        restored_qr += 1
+                    except Exception as qr_err:
+                        print(f"[db_schema] qr_registry restore failed for id={row[0]}: {qr_err}")
+                cursor.execute(
+                    "SELECT setval('qr_registry_id_seq', "
+                    "COALESCE((SELECT MAX(id) FROM public.qr_registry), 1))"
+                )
+                print(f"[db_schema] Restored {restored_qr}/{len(backed_up_qr_registry)} qr_registry records")
 
         finally:
             cursor.close()

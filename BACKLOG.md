@@ -67,7 +67,8 @@
   - ✅ `workers` — backup/restore 구현됨
   - ✅ `hr.worker_auth_settings` — backup/restore 구현됨
   - ✅ `hr.partner_attendance` — backup/restore 구현됨
-  - ⚠️ `qr_registry` — **백업 누락** → conftest.py에 backup/restore 추가 필요
+  - ✅ `qr_registry` — backup/restore 구현됨 (Sprint 22-E)
+  - ✅ `plan.product_info` — backup/restore 구현됨 (Sprint 22-E)
 - **운영 규칙**: ALTER TABLE 실행 전 반드시 수동 pg_dump
 - **최종 목표**: 사내 WAS DB로 마이그레이션 → production 분리 운영
 
@@ -262,4 +263,5 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 | 22-D | 공지수정 UI + Admin 간편로그인 + ETL 변경이력 API | ✅ v1.6.3 |
 | 23 | Manager 권한 위임 화면 + 홈 메뉴 재구성 | ✅ v1.7.0 |
 | 24 | QR actual_ship_date + Manager 자사 필터 + workers 권한 완화 | ✅ v1.7.1 |
-| 24 핫픽스 | BUG-18/19: GST 출퇴근 + 비밀번호 찾기 + PM role + VIEW GST 접근 | ✅ |
+| 24 핫픽스 | BUG-18/19/20/21: GST 출퇴근 + 비밀번호 찾기 + 로그인 에러 분리 + 404 메시지 | ✅ |
+| 22-E | conftest.py 운영 데이터 5테이블 백업/복원 완성 (product_info + qr_registry) | ✅ |
