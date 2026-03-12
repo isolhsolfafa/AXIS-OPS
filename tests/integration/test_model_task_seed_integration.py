@@ -3,9 +3,9 @@ test_model_task_seed_integration.py
 Sprint 7: Task Seed 통합 테스트 — 모델별 Task 초기화 결과 검증
 
 검증 대상:
-  GAIA-I DUAL   → MECH 7행 (적용 6개, HEATING_JACKET 기본 비활성), ELEC 6행, TMS 2행 = 총 15행
-  DRAGON-V      → MECH 7행 (적용 5개, TANK_DOCKING+HEATING_JACKET 비활성), ELEC 6행, TMS 0행 = 총 13행
-  GALLANT-III   → MECH 7행 (적용 1개, SELF_INSPECTION만), ELEC 6행, TMS 0행 = 총 13행
+  GAIA-I DUAL   → MECH 7행 (적용 6개, HEATING_JACKET 기본 비활성), ELEC 6행, TMS 2행, PI 2행, QI 1행, SI 1행 = 총 19행
+  DRAGON-V      → MECH 7행 (적용 5개, TANK_DOCKING+HEATING_JACKET 비활성), ELEC 6행, TMS 0행, PI 2행, QI 1행, SI 1행 = 총 17행
+  GALLANT-III   → MECH 7행 (적용 1개, SELF_INSPECTION만), ELEC 6행, TMS 0행, PI 2행, QI 1행, SI 1행 = 총 17행
   MITHAS-II     → GALLANT과 동일 분기 (기타 모델)
   SDS-100       → GALLANT과 동일 분기 (기타 모델)
   SWS-200       → GALLANT과 동일 분기 (기타 모델)
@@ -107,7 +107,7 @@ class TestGAIATaskSeed:
     """
     TC-01~TC-03: GAIA-I DUAL 모델 Task Seed 통합 테스트
     GAIA: has_docking=True, is_tms=True
-    기대: MECH 7행 (활성 6개) + ELEC 6행 + TMS 2행 = 총 15행
+    기대: MECH 7행 (활성 6개) + ELEC 6행 + TMS 2행 + PI 2행 + QI 1행 + SI 1행 = 총 19행
     """
 
     def test_gaia_total_row_count(self, db_conn, seed_test_products):
@@ -127,15 +127,15 @@ class TestGAIATaskSeed:
         # 에러 없음 확인
         assert result['error'] is None, f"Task seed 실패: {result['error']}"
 
-        # 총 생성 수 확인: MECH 7 + ELEC 6 + TMS 2 = 15
-        assert result['created'] == 15, (
-            f"GAIA 총 생성 수 불일치: expected=15, actual={result['created']}"
+        # 총 생성 수 확인: MECH 7 + ELEC 6 + TMS 2 + PI 2 + QI 1 + SI 1 = 19
+        assert result['created'] == 19, (
+            f"GAIA 총 생성 수 불일치: expected=19, actual={result['created']}"
         )
 
         _cleanup_tasks(db_conn, serial_number)
 
     def test_gaia_category_distribution(self, db_conn, seed_test_products):
-        """TC-02: GAIA 카테고리별 행 수 분포 (MECH=7, ELEC=6, TMS=2)"""
+        """TC-02: GAIA 카테고리별 행 수 분포 (MECH=7, ELEC=6, TMS=2, PI=2, QI=1, SI=1)"""
         if db_conn is None:
             pytest.skip("DB 연결 없음 — staging DB 필요")
 
@@ -154,6 +154,9 @@ class TestGAIATaskSeed:
         assert counts.get('MECH', 0) == 7, f"MECH 행 수: expected=7, actual={counts.get('MECH', 0)}"
         assert counts.get('ELEC', 0) == 6, f"ELEC 행 수: expected=6, actual={counts.get('ELEC', 0)}"
         assert counts.get('TMS', 0) == 2,  f"TMS 행 수: expected=2, actual={counts.get('TMS', 0)}"
+        assert counts.get('PI', 0) == 2,   f"PI 행 수: expected=2, actual={counts.get('PI', 0)}"
+        assert counts.get('QI', 0) == 1,   f"QI 행 수: expected=1, actual={counts.get('QI', 0)}"
+        assert counts.get('SI', 0) == 1,   f"SI 행 수: expected=1, actual={counts.get('SI', 0)}"
 
         _cleanup_tasks(db_conn, serial_number)
 
@@ -198,11 +201,11 @@ class TestDRAGONTaskSeed:
     """
     TC-04~TC-06: DRAGON-V 모델 Task Seed 통합 테스트
     DRAGON: tank_in_mech=True, has_docking=False, is_tms=False
-    기대: MECH 7행 (활성 5개: TANK_DOCKING+HEATING_JACKET 비활성) + ELEC 6행 + TMS 0행 = 총 13행
+    기대: MECH 7행 (활성 5개: TANK_DOCKING+HEATING_JACKET 비활성) + ELEC 6행 + TMS 0행 + PI 2행 + QI 1행 + SI 1행 = 총 17행
     """
 
     def test_dragon_total_row_count(self, db_conn, seed_test_products):
-        """TC-04: DRAGON 제품 Task Seed 총 행 수 = 13 (TMS 없음)"""
+        """TC-04: DRAGON 제품 Task Seed 총 행 수 = 17 (TMS 없음)"""
         if db_conn is None:
             pytest.skip("DB 연결 없음 — staging DB 필요")
 
@@ -216,9 +219,9 @@ class TestDRAGONTaskSeed:
         result = initialize_product_tasks(serial_number, qr_doc_id, model)
 
         assert result['error'] is None
-        # DRAGON: TMS 없음 → MECH 7 + ELEC 6 = 13
-        assert result['created'] == 13, (
-            f"DRAGON 총 생성 수: expected=13, actual={result['created']}"
+        # DRAGON: TMS 없음 → MECH 7 + ELEC 6 + PI 2 + QI 1 + SI 1 = 17
+        assert result['created'] == 17, (
+            f"DRAGON 총 생성 수: expected=17, actual={result['created']}"
         )
 
         _cleanup_tasks(db_conn, serial_number)
@@ -293,11 +296,11 @@ class TestGALLANTTaskSeed:
     """
     TC-07~TC-09: GALLANT-III 모델 Task Seed 통합 테스트
     GALLANT: has_docking=False, tank_in_mech=False, is_tms=False (기타 모델)
-    기대: MECH 7행 (활성 1개: SELF_INSPECTION만), ELEC 6행, TMS 0행 = 총 13행
+    기대: MECH 7행 (활성 1개: SELF_INSPECTION만), ELEC 6행, TMS 0행, PI 2행, QI 1행, SI 1행 = 총 17행
     """
 
     def test_gallant_total_row_count(self, db_conn, seed_test_products):
-        """TC-07: GALLANT 제품 Task Seed 총 행 수 = 13 (TMS 없음)"""
+        """TC-07: GALLANT 제품 Task Seed 총 행 수 = 17 (TMS 없음)"""
         if db_conn is None:
             pytest.skip("DB 연결 없음 — staging DB 필요")
 
@@ -311,8 +314,8 @@ class TestGALLANTTaskSeed:
         result = initialize_product_tasks(serial_number, qr_doc_id, model)
 
         assert result['error'] is None
-        assert result['created'] == 13, (
-            f"GALLANT 총 생성 수: expected=13, actual={result['created']}"
+        assert result['created'] == 17, (
+            f"GALLANT 총 생성 수: expected=17, actual={result['created']}"
         )
 
         _cleanup_tasks(db_conn, serial_number)
@@ -425,12 +428,12 @@ class TestMultiModelSeedIndependence:
 
         # 기대 행 수 맵 (모델 이름 prefix → 총 행 수)
         expected_totals = {
-            'GAIA': 15,    # MECH 7 + ELEC 6 + TMS 2
-            'DRAGON': 13,  # MECH 7 + ELEC 6 + TMS 0
-            'GALLANT': 13, # MECH 7 + ELEC 6 + TMS 0
-            'MITHAS': 13,  # MECH 7 + ELEC 6 + TMS 0
-            'SDS': 13,     # MECH 7 + ELEC 6 + TMS 0
-            'SWS': 13,     # MECH 7 + ELEC 6 + TMS 0
+            'GAIA': 19,    # MECH 7 + ELEC 6 + TMS 2 + PI 2 + QI 1 + SI 1
+            'DRAGON': 17,  # MECH 7 + ELEC 6 + PI 2 + QI 1 + SI 1
+            'GALLANT': 17, # MECH 7 + ELEC 6 + PI 2 + QI 1 + SI 1
+            'MITHAS': 17,  # MECH 7 + ELEC 6 + PI 2 + QI 1 + SI 1
+            'SDS': 17,     # MECH 7 + ELEC 6 + PI 2 + QI 1 + SI 1
+            'SWS': 17,     # MECH 7 + ELEC 6 + PI 2 + QI 1 + SI 1
         }
 
         seeded_serials = []
@@ -501,22 +504,22 @@ class TestTaskSeedIdempotency:
                 # 첫 번째 Seed
                 result1 = initialize_product_tasks(serial_number, qr_doc_id, model)
                 assert result1['error'] is None
-                assert result1['created'] == 15
+                assert result1['created'] == 19
 
                 # 두 번째 Seed — Task 행은 ON CONFLICT DO NOTHING으로 건너뜀
                 result2 = initialize_product_tasks(serial_number, qr_doc_id, model)
-                # ON CONFLICT DO NOTHING → created=0, skipped=15
+                # ON CONFLICT DO NOTHING → created=0, skipped=19
                 # (completion_status FK 에러는 무시 — Task 삽입 결과에 영향 없음)
                 assert result2['created'] == 0, (
                     f"두 번째 Seed created: expected=0, actual={result2['created']}"
                 )
-                assert result2['skipped'] == 15, (
-                    f"두 번째 Seed skipped: expected=15, actual={result2['skipped']}"
+                assert result2['skipped'] == 19, (
+                    f"두 번째 Seed skipped: expected=19, actual={result2['skipped']}"
                 )
 
-            # 실제 DB 행 수는 여전히 15
+            # 실제 DB 행 수는 여전히 19
             rows = _query_task_rows(db_conn, serial_number)
-            assert len(rows) == 15, f"두 번 Seed 후 총 행 수: expected=15, actual={len(rows)}"
+            assert len(rows) == 19, f"두 번 Seed 후 총 행 수: expected=19, actual={len(rows)}"
 
         finally:
             _cleanup_tasks(db_conn, serial_number)

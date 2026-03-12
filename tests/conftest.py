@@ -649,6 +649,13 @@ def create_test_worker(db_conn):
             elif role in role_upgrade_map:
                 db_role = role_upgrade_map[role]
 
+        # 테스트 이메일 잔여 데이터 정리 (이전 실행 잔여 → UniqueViolation 방지)
+        if email.endswith('@test.axisos.com') or email.endswith('@axisos.test'):
+            cursor.execute("DELETE FROM email_verification WHERE worker_id IN (SELECT id FROM workers WHERE email = %s)", (email,))
+            cursor.execute("DELETE FROM hr.worker_auth_settings WHERE worker_id IN (SELECT id FROM workers WHERE email = %s)", (email,))
+            cursor.execute("DELETE FROM workers WHERE email = %s", (email,))
+            db_conn.commit()
+
         # company 컬럼 존재 여부 확인 (Sprint 6 마이그레이션 유무)
         cursor.execute("""
             SELECT column_name FROM information_schema.columns
