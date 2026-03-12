@@ -251,7 +251,7 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 - **PWA → Native 전환**: 현재 Flutter Web(PWA) 코드는 Native 전환 시 비즈니스 로직 그대로 재사용 가능. 플랫폼 의존 코드(html5-qrcode → mobile_scanner, secure storage 등)만 조건부 import 처리.
 - **공용 태블릿 시나리오**: 공장 현장 공용 기기 사용 시 로그아웃 시 localStorage 클리어 로직 필요 (현재는 미구현, 필요 시 추가)
 - **model_config 조회/수정**: CLAUDE.md에 "추후"로 기록됨. Admin이 모델별 설정(has_docking, is_tms 등) 수정 가능한 UI.
-- **Sprint 완료 시 자동 공지사항 등록**: 버전 업데이트(version.py) 시 유저 체감 기능 변경사항만 골라서 `POST /api/admin/notices`로 자동 등록. notices 테이블에 `version` 필드 이미 존재. 시스템 변경(리팩터링, 테스트 등)은 제외하고 사용자 관점 기능만 포함. 방식: A) CLAUDE.md 버전 업데이트 절차에 공지 생성 단계 추가 (즉시 가능) / B) 배포 스크립트에 API 호출 자동화 / C) CI/CD hook (추후)
+- **Sprint 완료 시 공지사항 등록**: 현재 수동 (Admin 화면에서 version 필드 입력). 업데이트 팝업은 notices 테이블에 해당 버전 공지가 있을 때만 표시됨. 공지 없으면 팝업 안 뜸. 자동화 옵션: A) CLAUDE.md 버전 업데이트 절차에 공지 생성 단계 추가 / B) 배포 스크립트에 API 호출 / C) CI/CD hook (추후)
 - **QR 목록 contract_type / sales_note 필드 추가 검토**:
   - `contract_type`: Excel N열 "신규여부" (양산/신규/계약변경). step1_extract.py에서 추출은 됨, DB 컬럼 미추가 + step2 UPSERT 미포함
   - `sales_note`: Excel CJ열 "특이사항(영업)". 마찬가지로 추출만, DB 미적재
