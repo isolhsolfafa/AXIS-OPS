@@ -214,7 +214,9 @@ def db_schema():
             drop_stmts = [
                 "DROP SCHEMA IF EXISTS auth CASCADE",
                 "DROP SCHEMA IF EXISTS checklist CASCADE",
-                "DROP SCHEMA IF EXISTS hr CASCADE",
+                # ⚠️ hr 스키마는 DROP하지 않음 — partner_attendance 운영 데이터 보존
+                # hr 테이블은 migration에서 CREATE IF NOT EXISTS로 처리
+                # "DROP SCHEMA IF EXISTS hr CASCADE",  # ← 절대 사용 금지
                 "DROP TABLE IF EXISTS location_history CASCADE",
                 "DROP TABLE IF EXISTS offline_sync_queue CASCADE",
                 "DROP TABLE IF EXISTS app_alert_logs CASCADE",
