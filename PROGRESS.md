@@ -3,7 +3,7 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v1.7.2 (Sprint 25, 2026-03-12)
+> **현재 버전**: v1.7.3 (Sprint 26, 2026-03-12)
 
 ---
 
@@ -2884,3 +2884,32 @@ frontend/lib/utils/app_version.dart        # v1.7.2
 - `fix: update task seed tests for PI/QI/SI templates + fix test worker cleanup` — seed count 업데이트 + UniqueViolation 방지
 
 **BE 코드 버그**: 0건 (전체 실패는 테스트 코드 문제)
+
+---
+
+## Sprint 26: PWA 버전 업데이트 알림 (v1.7.3, 2026-03-12)
+
+### FE 완료 내역
+- `frontend/web/index.html` — SW controllerchange/updatefound 감지 → 하단 토스트 표시
+- `frontend/lib/services/update_service.dart` — SharedPreferences 버전 비교 + notices API 조회 (신규)
+- `frontend/lib/widgets/update_dialog.dart` — 업데이트 내용 팝업 다이얼로그 (신규)
+- `frontend/lib/screens/home/home_screen.dart` — initState에 `_checkForUpdate()` 추가
+- `frontend/lib/utils/app_version.dart` — v1.7.3
+
+### BE 변경
+- `backend/version.py` — v1.7.3 (로직 변경 없음)
+
+### 동작 흐름
+1. Netlify 배포 → SW가 백그라운드에서 새 파일 감지
+2. 하단 토스트 "새 버전이 있습니다" 표시 → 탭하면 reload
+3. reload 후 HomeScreen → SharedPreferences 버전 비교 → 새 버전이면 notices API 호출
+4. 해당 버전 공지 있으면 업데이트 내용 팝업 표시 (최초 1회만)
+
+### conftest.py 운영 데이터 보호 강화
+- `DROP SCHEMA hr CASCADE` 제거 — partner_attendance/auth_settings 보존
+- `DROP TABLE workers CASCADE` 제거 — FK CASCADE 방지
+- `DROP TABLE admin_settings/model_config` 제거 — 운영 설정 보존
+- `DROP SCHEMA auth CASCADE` 제거 — refresh_tokens 보존
+
+### 배포
+- Netlify: https://gaxis-ops.netlify.app ✅

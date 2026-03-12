@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-03-12 (Sprint 25 완료 + pytest 전체 실행 + 테스트 수정)
+> 마지막 업데이트: 2026-03-12 (Sprint 26 완료 — PWA 업데이트 알림 v1.7.3)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -32,6 +32,20 @@
 | BUG-20 | 로그인 에러 메시지 불명확 (계정 미존재 vs 비밀번호 오류) | ✅ Sprint 24 핫픽스 수정 완료 | 동일 INVALID_CREDENTIALS → 404 ACCOUNT_NOT_FOUND + 401 INVALID_PASSWORD 분리 |
 | BUG-21 | FE 404 에러 메시지 하드코딩 | ✅ Sprint 24 핫픽스 수정 완료 | "요청한 리소스가 없습니다" → 서버 메시지 그대로 표시 |
 | BUG-22 | Logout Storm — 401 무한 루프 | ✅ Sprint 25 수정 완료 | FE: _authSkipPaths + _isForceLogout + _isLoggingOut + clearToken 선행 + 3s timeout. BE: jwt_optional 데코레이터 + logout @jwt_optional (토큰 없이 200 OK). VIEW도 동일 패턴 수정 완료 (v1.4.2) |
+
+---
+
+## ✅ Sprint 26 완료 (v1.7.3, 2026-03-12)
+
+### PWA-1: ✅ SW 업데이트 토스트 — 완료
+- index.html: controllerchange + updatefound 감지 → 하단 토스트 표시 → 탭하면 reload
+
+### PWA-2: ✅ 업데이트 내용 팝업 — 완료
+- UpdateService: SharedPreferences 버전 비교 → notices API 호출 (최초 1회)
+- UpdateDialog: GxDesignSystem 팝업 (버전 뱃지 + 본문 스크롤 + 확인 버튼)
+
+### DB-PROTECT: ✅ conftest.py 운영 데이터 보호 강화 — 완료
+- workers, hr 스키마, auth 스키마, admin_settings, model_config DROP 제거
 
 ---
 
