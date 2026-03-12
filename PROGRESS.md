@@ -3,7 +3,7 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v1.7.1 (Sprint 24 + 핫픽스, 2026-03-11)
+> **현재 버전**: v1.7.2 (Sprint 25, 2026-03-12)
 
 ---
 
@@ -2825,4 +2825,38 @@ backend/migrations/021_add_pm_role.sql   # PM role enum 추가
 tests/conftest.py    # product_info + qr_registry 백업/복원 추가
 CLAUDE.md            # 운영 데이터 보존 규칙 5/5 완료 표기
 BACKLOG.md           # DB-1 conftest.py 현황 5/5 완료
+```
+
+---
+
+## Sprint 25: BUG-22 Logout Storm 수정 (v1.7.2, 2026-03-12)
+
+### 변경 내역
+
+**FE (Flutter) — 3중 방어:**
+1. `api_service.dart` — `_authSkipPaths`로 auth 경로 401 재시도 차단 + `_isForceLogout` 싱글턴으로 중복 실행 방지 + `setToken()`에서 플래그 리셋
+2. `auth_service.dart` — `_isLoggingOut` 플래그로 중복 logout 차단 + `clearToken()` 서버 호출 전 선행 실행 + `Future.any` 3초 timeout
+3. `auth_provider.dart` — 중복 방지 주석 업데이트
+
+**BE (Flask) — logout 401 근본 차단:**
+1. `jwt_auth.py` — `jwt_optional` 데코레이터 신규 추가 (토큰 없어도 `g.worker_id=None`으로 진행)
+2. `auth.py` — logout 엔드포인트 `@jwt_required` → `@jwt_optional` 변경, 토큰 없이도 200 반환
+
+### 수정 전후 비교
+| 시나리오 | 수정 전 | 수정 후 |
+|---------|---------|---------|
+| refresh 401 | logout API 10회+ 호출 | forceLogout 1회 (BE 호출 0~1회) |
+| 동시 401 5건 | 각자 onRefreshFailed | _isForceLogout 차단 → 1회만 |
+| logout API 자체 401 | interceptor 재진입 → 무한 루프 | _authSkipPaths로 즉시 reject |
+| BE 토큰 없는 logout | 401 에러 | @jwt_optional → 200 OK |
+
+### 수정된 파일
+```
+frontend/lib/services/api_service.dart      # AUTH_SKIP_PATHS + forceLogout 싱글턴
+frontend/lib/services/auth_service.dart     # _isLoggingOut + clearToken 선행 + 3초 timeout
+frontend/lib/providers/auth_provider.dart   # 주석 업데이트
+backend/app/middleware/jwt_auth.py          # jwt_optional 데코레이터 신규
+backend/app/routes/auth.py                 # @jwt_required → @jwt_optional (logout만)
+backend/version.py                         # v1.7.2
+frontend/lib/utils/app_version.dart        # v1.7.2
 ```

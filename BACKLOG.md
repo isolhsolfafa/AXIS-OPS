@@ -31,7 +31,7 @@
 | BUG-19 | 비밀번호 찾기 — 없는 이메일도 인증 화면 이동 | ✅ Sprint 24 핫픽스 수정 완료 | 보안 관행(항상 200) → 내부 시스템이므로 404 EMAIL_NOT_FOUND 반환으로 변경 |
 | BUG-20 | 로그인 에러 메시지 불명확 (계정 미존재 vs 비밀번호 오류) | ✅ Sprint 24 핫픽스 수정 완료 | 동일 INVALID_CREDENTIALS → 404 ACCOUNT_NOT_FOUND + 401 INVALID_PASSWORD 분리 |
 | BUG-21 | FE 404 에러 메시지 하드코딩 | ✅ Sprint 24 핫픽스 수정 완료 | "요청한 리소스가 없습니다" → 서버 메시지 그대로 표시 |
-| BUG-22 | Logout Storm — 401 무한 루프 | 🔍 분석 완료 | Railway HTTP 로그에서 `/api/auth/logout` 401이 10회+ 반복. OPS FE에서 refresh 실패 시 다중 logout 호출 발생. 동시접속 로그인 실패 원인. VIEW 측 동일 패턴은 수정 완료 (`client.ts` AUTH_SKIP_URLS + forceLogout 싱글턴, `authStore.ts` logoutRef + 3s timeout). **OPS FE(Flutter) 동일 패턴 확인 및 수정 필요** |
+| BUG-22 | Logout Storm — 401 무한 루프 | ✅ Sprint 25 수정 완료 | FE: _authSkipPaths + _isForceLogout + _isLoggingOut + clearToken 선행 + 3s timeout. BE: jwt_optional 데코레이터 + logout @jwt_optional (토큰 없이 200 OK). VIEW도 동일 패턴 수정 완료 (v1.4.2) |
 
 ---
 
@@ -265,3 +265,4 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 | 24 | QR actual_ship_date + Manager 자사 필터 + workers 권한 완화 | ✅ v1.7.1 |
 | 24 핫픽스 | BUG-18/19/20/21: GST 출퇴근 + 비밀번호 찾기 + 로그인 에러 분리 + 404 메시지 | ✅ |
 | 22-E | conftest.py 운영 데이터 5테이블 백업/복원 완성 (product_info + qr_registry) | ✅ |
+| 25 | BUG-22 Logout Storm 수정 (FE 3중 방어 + BE jwt_optional) | ✅ v1.7.2 |
