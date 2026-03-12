@@ -10,6 +10,7 @@ import '../utils/constants.dart';
 class AuthService {
   final ApiService _apiService;
   final _secureStorage = const FlutterSecureStorage();
+  bool _isLoggingOut = false;  // BUG-22: 중복 logout 방지
 
   static const String _tokenKey = 'auth_token';
   static const String _refreshTokenKey = 'refresh_token';
@@ -208,22 +209,31 @@ class AuthService {
   /// 로그아웃
   ///
   /// Sprint 19-B: 서버에 refresh_token 무효화 요청 후 로컬 데이터 삭제
+  /// BUG-22: 중복 호출 차단 + 토큰 선행 클리어 + 3초 timeout
   Future<void> logout() async {
+    if (_isLoggingOut) return;  // 이미 로그아웃 진행 중
+    _isLoggingOut = true;
+
     try {
-      // 서버에 로그아웃 요청 (refresh_token 무효화)
       final storedRefreshToken = await _secureStorage.read(key: _refreshTokenKey);
+
+      // 토큰 먼저 클리어 (서버 호출 전) — 이후 API 호출에서 401 방지
+      _apiService.clearToken();
+
+      // 서버 로그아웃은 best-effort + 3초 timeout
       try {
-        await _apiService.post(
-          authLogoutEndpoint,
-          data: {
-            if (storedRefreshToken != null) 'refresh_token': storedRefreshToken,
-          },
-        );
+        await Future.any([
+          _apiService.post(
+            authLogoutEndpoint,
+            data: {
+              if (storedRefreshToken != null) 'refresh_token': storedRefreshToken,
+            },
+          ),
+          Future.delayed(const Duration(seconds: 3), () => null),
+        ]);
       } catch (_) {
         // 서버 요청 실패해도 로컬 로그아웃은 계속 진행
       }
-
-      _apiService.clearToken();
 
       await _secureStorage.delete(key: _tokenKey);
       await _secureStorage.delete(key: _refreshTokenKey);
@@ -239,6 +249,8 @@ class AuthService {
     } catch (e) {
       await _secureStorage.deleteAll();
       rethrow;
+    } finally {
+      _isLoggingOut = false;
     }
   }
 

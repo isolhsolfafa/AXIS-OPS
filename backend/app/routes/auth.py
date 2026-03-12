@@ -9,12 +9,12 @@ Sprint 12: PIN 설정/변경/로그인/상태 엔드포인트 추가
 import logging
 import re
 from datetime import datetime, timezone, timedelta
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, g
 from typing import Tuple, Dict, Any
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from app.services.auth_service import AuthService
-from app.middleware.jwt_auth import jwt_required, admin_required
+from app.middleware.jwt_auth import jwt_required, jwt_optional, admin_required
 from app.models.worker import update_approval_status, update_active_role, get_worker_by_id
 from app.middleware.jwt_auth import get_current_worker_id
 from app.models.worker import get_db_connection
@@ -448,13 +448,13 @@ def refresh() -> Tuple[Dict[str, Any], int]:
 # ──────────────────────────────────────────────────────────────────
 
 @auth_bp.route("/logout", methods=["POST"])
-@jwt_required
+@jwt_optional  # BUG-22: 토큰 없어도 logout 요청 허용 (Logout Storm 방지)
 def logout() -> Tuple[Dict[str, Any], int]:
     """
     로그아웃 — 현재 refresh_token DB에서 무효화
 
     Headers:
-        Authorization: Bearer {token}
+        Authorization: Bearer {token}  # optional (jwt_optional)
 
     Request Body:
         {
@@ -464,17 +464,20 @@ def logout() -> Tuple[Dict[str, Any], int]:
     Response:
         200: {"message": "로그아웃 완료"}
     """
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     refresh_token = data.get('refresh_token')
 
     if refresh_token:
+        # body에 refresh_token 있으면 해당 토큰만 무효화
         auth_service.revoke_refresh_token(refresh_token, reason='logout')
-        logger.info(f"Logout with token revocation: worker_id={get_current_worker_id()}")
+        logger.info(f"Logout with token revocation: worker_id={g.worker_id}")
+    elif g.worker_id:
+        # refresh_token 미전송이지만 JWT 유효 → 전체 토큰 무효화
+        auth_service.revoke_all_worker_tokens(g.worker_id, reason='logout')
+        logger.info(f"Logout all tokens: worker_id={g.worker_id}")
     else:
-        # refresh_token 미전송 시 해당 worker 전체 토큰 무효화
-        worker_id = get_current_worker_id()
-        auth_service.revoke_all_worker_tokens(worker_id, reason='logout')
-        logger.info(f"Logout all tokens: worker_id={worker_id}")
+        # 토큰도 없고 refresh_token도 없음 → 로컬 로그아웃만
+        logger.info("Logout without credentials (already expired)")
 
     return jsonify({'message': '로그아웃 완료'}), 200
 

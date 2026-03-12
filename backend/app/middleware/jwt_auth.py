@@ -93,6 +93,45 @@ def jwt_required(f: Callable) -> Callable:
     return decorated_function
 
 
+def jwt_optional(f: Callable) -> Callable:
+    """
+    JWT 토큰 선택적 검증 데코레이터 (BUG-22 Logout Storm 방지)
+
+    토큰이 있으면 g.worker_id 설정, 없거나 무효하면 g.worker_id = None으로 진행.
+    logout처럼 토큰 없이도 호출 가능해야 하는 엔드포인트에 사용.
+    """
+    @wraps(f)
+    def decorated_function(*args: Any, **kwargs: Any) -> Any:
+        auth_header = request.headers.get('Authorization')
+
+        if not auth_header:
+            g.worker_id = None
+            g.worker_email = None
+            g.worker_role = None
+            return f(*args, **kwargs)
+
+        parts = auth_header.split(' ')
+        if len(parts) != 2 or parts[0] != 'Bearer':
+            g.worker_id = None
+            g.worker_email = None
+            g.worker_role = None
+            return f(*args, **kwargs)
+
+        token = parts[1]
+        try:
+            payload = jwt.decode(token, Config.JWT_SECRET_KEY, algorithms=['HS256'])
+            g.worker_id = int(payload['sub'])
+            g.worker_email = payload['email']
+            g.worker_role = payload['role']
+        except (ExpiredSignatureError, InvalidTokenError):
+            g.worker_id = None
+            g.worker_email = None
+            g.worker_role = None
+
+        return f(*args, **kwargs)
+    return decorated_function
+
+
 def decode_jwt(token: str) -> dict:
     """JWT 토큰 디코딩 (WebSocket 연결 시 사용)"""
     return jwt.decode(token, Config.JWT_SECRET_KEY, algorithms=['HS256'])

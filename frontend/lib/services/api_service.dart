@@ -9,6 +9,14 @@ class ApiService {
 
   // 401 응답 시 무한 재시도 방지 플래그
   bool _isRefreshing = false;
+  bool _isForceLogout = false;  // BUG-22: forceLogout 중복 실행 방지
+
+  // auth 관련 경로는 401 재시도 하지 않음 (logout storm 방지)
+  static const List<String> _authSkipPaths = [
+    '/auth/logout',
+    '/auth/refresh',
+    '/auth/login',
+  ];
 
   // 로그인/로그아웃 콜백 (AuthService에서 주입)
   Future<bool> Function()? onRefreshToken;
@@ -45,10 +53,13 @@ class ApiService {
         onError: (error, handler) async {
           // 401 Unauthorized 에러 처리 — refresh token으로 재시도
           if (error.response?.statusCode == 401 && !_isRefreshing) {
-            // /auth/refresh 경로 자체는 재시도하지 않음 (무한루프 방지)
             final requestPath = error.requestOptions.path;
-            if (requestPath.contains('/auth/refresh') ||
-                requestPath.contains('/auth/login')) {
+            // auth 관련 경로는 401 재시도 하지 않음 (logout storm 방지)
+            if (_authSkipPaths.any((p) => requestPath.contains(p))) {
+              return handler.next(error);
+            }
+            // 이미 강제 로그아웃 중이면 바로 reject
+            if (_isForceLogout) {
               return handler.next(error);
             }
 
@@ -63,14 +74,11 @@ class ApiService {
                 final retryResponse = await _dio.fetch(retryOptions);
                 return handler.resolve(retryResponse);
               } else {
-                // refresh 실패 → 로그아웃 처리
-                clearToken();
-                onRefreshFailed?.call();
+                _forceLogout();
                 return handler.next(error);
               }
             } catch (e) {
-              clearToken();
-              onRefreshFailed?.call();
+              _forceLogout();
               return handler.next(error);
             } finally {
               _isRefreshing = false;
@@ -92,9 +100,18 @@ class ApiService {
     );
   }
 
+  /// BUG-22: refresh 실패 시 1회만 실행되는 강제 로그아웃
+  void _forceLogout() {
+    if (_isForceLogout) return;
+    _isForceLogout = true;
+    clearToken();
+    onRefreshFailed?.call();
+  }
+
   /// JWT 토큰 설정
   void setToken(String token) {
     _token = token;
+    _isForceLogout = false;  // 로그인 성공 → 리셋
   }
 
   /// JWT 토큰 제거

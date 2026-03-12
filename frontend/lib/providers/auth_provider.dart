@@ -302,7 +302,7 @@ final authProvider = StateNotifierProvider<AuthNotifier, AuthState>((ref) {
   final authService = ref.watch(authServiceProvider);
   final notifier = AuthNotifier(authService);
 
-  // refresh 실패 시 자동 로그아웃 콜백 주입
+  // refresh 실패 시 자동 로그아웃 — 중복 호출 방지는 AuthService._isLoggingOut + ApiService._isForceLogout에서 처리
   authService.onRefreshFailed = () {
     notifier.logout();
   };
