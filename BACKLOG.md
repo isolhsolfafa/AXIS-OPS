@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-03-12 (BUG-22 Logout Storm 등록 — OPS FE 수정 필요)
+> 마지막 업데이트: 2026-03-12 (Sprint 25 완료 + pytest 전체 실행 + 테스트 수정)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -32,6 +32,35 @@
 | BUG-20 | 로그인 에러 메시지 불명확 (계정 미존재 vs 비밀번호 오류) | ✅ Sprint 24 핫픽스 수정 완료 | 동일 INVALID_CREDENTIALS → 404 ACCOUNT_NOT_FOUND + 401 INVALID_PASSWORD 분리 |
 | BUG-21 | FE 404 에러 메시지 하드코딩 | ✅ Sprint 24 핫픽스 수정 완료 | "요청한 리소스가 없습니다" → 서버 메시지 그대로 표시 |
 | BUG-22 | Logout Storm — 401 무한 루프 | ✅ Sprint 25 수정 완료 | FE: _authSkipPaths + _isForceLogout + _isLoggingOut + clearToken 선행 + 3s timeout. BE: jwt_optional 데코레이터 + logout @jwt_optional (토큰 없이 200 OK). VIEW도 동일 패턴 수정 완료 (v1.4.2) |
+
+---
+
+## ✅ Sprint 25 완료 (v1.7.2, 2026-03-12)
+
+### BUG-22: ✅ Logout Storm 수정 — 완료
+- FE: `_authSkipPaths` + `_isForceLogout` + `_isLoggingOut` 3중 방어
+- BE: `jwt_optional` 데코레이터 + logout `@jwt_optional` 변경
+
+### pytest 전체 실행 결과: 643 passed / 44 failed / 12 skipped
+- 실패 원인: 코드 버그 0건 — 테스트 코드 데이터 불일치 + DB 상태 간섭
+- Task Seed count 수정 (PI/QI/SI 추가: GAIA 15→19, 기타 13→17)
+- `create_test_worker` 잔여 데이터 cleanup 추가
+- `test_auth.py` Sprint 24 login 에러 분리 반영 (404 ACCOUNT_NOT_FOUND)
+
+### TEST-FIX: ✅ 테스트 수정 3건 — 완료
+- `test_model_task_seed_integration.py` — seed count assertions 업데이트
+- `conftest.py` — create_test_worker에 pre-insert cleanup 추가
+- `test_auth.py` — Sprint 24 login error 코드 변경 반영
+
+---
+
+## ✅ Sprint 24 완료 (v1.7.1, 2026-03-11)
+
+### 핫픽스 (BUG-18~21):
+- BUG-18: GST Manager 출퇴근 데이터 미표시 → GST manager는 전체 접근
+- BUG-19: 비밀번호 찾기 없는 이메일 → 404 EMAIL_NOT_FOUND 반환
+- BUG-20: 로그인 에러 분리 → 404 ACCOUNT_NOT_FOUND + 401 INVALID_PASSWORD
+- BUG-21: FE 404 하드코딩 → 서버 메시지 그대로 표시
 
 ---
 

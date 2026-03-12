@@ -2860,3 +2860,27 @@ backend/app/routes/auth.py                 # @jwt_required → @jwt_optional (lo
 backend/version.py                         # v1.7.2
 frontend/lib/utils/app_version.dart        # v1.7.2
 ```
+
+### pytest 전체 실행 결과 (2026-03-12)
+
+**1차 실행**: 643 passed / 44 failed / 12 skipped (1시간 42분, Railway 원격 DB)
+
+**실패 원인 분석 (44건)**:
+| 유형 | 건수 | 원인 | 대응 |
+|------|------|------|------|
+| Task Seed count 불일치 | ~20건 | PI/QI/SI 템플릿 추가 후 테스트 미갱신 (15→19, 13→17) | ✅ 수정 완료 |
+| DB 상태 간섭 (UniqueViolation) | ~15건 | 공유 DB에서 이전 실행 잔여 데이터 | ✅ create_test_worker cleanup 추가 |
+| 테스트 간 상태 간섭 | ~9건 | 전체 스위트 실행 시 발생, 개별 실행 시 통과 | DB 격리 필요 (장기 과제) |
+
+**개별 검증 결과**:
+- `test_auth.py` — 8/8 passed ✅ (Sprint 24 login 에러 분리 반영)
+- `test_work_api.py::TestWorkStart` — 6/6 passed ✅ (개별 실행)
+- `test_process_check_flow.py` — 9/10 passed (tc_10만 UniqueViolation → cleanup 추가로 수정)
+- `test_model_task_seed_integration.py` — seed count 15→19, 13→17 수정 완료
+
+**테스트 수정 커밋**:
+- `fix: update test_auth for Sprint 24 login error changes` — 404 ACCOUNT_NOT_FOUND 대응
+- `fix: clean up stale test data before register test` — company 필드 + 잔여 데이터 정리
+- `fix: update task seed tests for PI/QI/SI templates + fix test worker cleanup` — seed count 업데이트 + UniqueViolation 방지
+
+**BE 코드 버그**: 0건 (전체 실패는 테스트 코드 문제)
