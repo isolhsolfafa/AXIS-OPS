@@ -212,10 +212,15 @@ def db_schema():
 
             # 기존 스키마 정리 (재실행 대비) - Sprint 6 + Sprint 11 + Sprint 12 테이블 포함
             drop_stmts = [
+                # ──────────────────────────────────────────────
+                # ⚠️ 운영 데이터 보존 정책 (절대 DROP 금지):
+                #   - workers: 실서비스 계정 (FK: 거의 모든 테이블 참조)
+                #   - hr 스키마: partner_attendance, worker_auth_settings
+                #   - plan 스키마: product_info (ETL 적재)
+                #   - qr_registry: QR↔제품 매핑
+                # ──────────────────────────────────────────────
                 "DROP SCHEMA IF EXISTS auth CASCADE",
                 "DROP SCHEMA IF EXISTS checklist CASCADE",
-                # ⚠️ hr 스키마는 DROP하지 않음 — partner_attendance 운영 데이터 보존
-                # hr 테이블은 migration에서 CREATE IF NOT EXISTS로 처리
                 # "DROP SCHEMA IF EXISTS hr CASCADE",  # ← 절대 사용 금지
                 "DROP TABLE IF EXISTS location_history CASCADE",
                 "DROP TABLE IF EXISTS offline_sync_queue CASCADE",
@@ -226,16 +231,15 @@ def db_schema():
                 "DROP TABLE IF EXISTS completion_status CASCADE",
                 "DROP TABLE IF EXISTS app_task_details CASCADE",
                 "DROP TABLE IF EXISTS email_verification CASCADE",
-                "DROP TABLE IF EXISTS product_info CASCADE",
+                # "DROP TABLE IF EXISTS product_info CASCADE",  # plan.product_info는 migration에서 IF NOT EXISTS
                 "DROP TABLE IF EXISTS admin_settings CASCADE",
                 "DROP TABLE IF EXISTS model_config CASCADE",
-                "DROP TABLE IF EXISTS workers CASCADE",
-                "DROP TYPE IF EXISTS alert_type_enum CASCADE",
-                "DROP TYPE IF EXISTS alert_type_enum_new CASCADE",
-                "DROP TYPE IF EXISTS role_enum CASCADE",
-                "DROP TYPE IF EXISTS role_enum_new CASCADE",
-                "DROP TYPE IF EXISTS approval_status_enum CASCADE",
-                "DROP FUNCTION IF EXISTS update_updated_at_column() CASCADE",
+                # "DROP TABLE IF EXISTS workers CASCADE",  # ← 절대 사용 금지 (FK CASCADE로 hr 전체 삭제됨)
+                # TYPE/ENUM/FUNCTION은 IF NOT EXISTS로 migration에서 처리
+                # "DROP TYPE IF EXISTS alert_type_enum CASCADE",
+                # "DROP TYPE IF EXISTS role_enum CASCADE",
+                # "DROP TYPE IF EXISTS approval_status_enum CASCADE",
+                # "DROP FUNCTION IF EXISTS update_updated_at_column() CASCADE",
             ]
             for stmt in drop_stmts:
                 cursor.execute(stmt)
