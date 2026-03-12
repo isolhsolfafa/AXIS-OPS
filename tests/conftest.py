@@ -219,7 +219,7 @@ def db_schema():
                 #   - plan 스키마: product_info (ETL 적재)
                 #   - qr_registry: QR↔제품 매핑
                 # ──────────────────────────────────────────────
-                "DROP SCHEMA IF EXISTS auth CASCADE",
+                # "DROP SCHEMA IF EXISTS auth CASCADE",  # ← refresh_tokens 84건 삭제 → 전원 재로그인 강제
                 "DROP SCHEMA IF EXISTS checklist CASCADE",
                 # "DROP SCHEMA IF EXISTS hr CASCADE",  # ← 절대 사용 금지
                 "DROP TABLE IF EXISTS location_history CASCADE",
@@ -231,9 +231,9 @@ def db_schema():
                 "DROP TABLE IF EXISTS completion_status CASCADE",
                 "DROP TABLE IF EXISTS app_task_details CASCADE",
                 "DROP TABLE IF EXISTS email_verification CASCADE",
-                # "DROP TABLE IF EXISTS product_info CASCADE",  # plan.product_info는 migration에서 IF NOT EXISTS
-                "DROP TABLE IF EXISTS admin_settings CASCADE",
-                "DROP TABLE IF EXISTS model_config CASCADE",
+                # "DROP TABLE IF EXISTS product_info CASCADE",  # plan.product_info — ETL 적재
+                # "DROP TABLE IF EXISTS admin_settings CASCADE",  # ← 운영 설정값 17건 보존
+                # "DROP TABLE IF EXISTS model_config CASCADE",    # ← 모델 분기 설정 6건 보존
                 # "DROP TABLE IF EXISTS workers CASCADE",  # ← 절대 사용 금지 (FK CASCADE로 hr 전체 삭제됨)
                 # TYPE/ENUM/FUNCTION은 IF NOT EXISTS로 migration에서 처리
                 # "DROP TYPE IF EXISTS alert_type_enum CASCADE",
