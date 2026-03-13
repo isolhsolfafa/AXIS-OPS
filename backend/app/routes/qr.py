@@ -8,9 +8,8 @@ import logging
 from flask import Blueprint, request, jsonify
 from typing import Tuple, Dict, Any
 
-from flask import g
 from app.middleware.jwt_auth import jwt_required, view_access_required
-from app.models.worker import get_db_connection, get_worker_by_id
+from app.models.worker import get_db_connection
 
 logger = logging.getLogger(__name__)
 
@@ -66,13 +65,6 @@ def get_qr_list() -> Tuple[Dict[str, Any], int]:
         # WHERE 조건 빌드
         conditions = []
         params = []
-
-        # Manager: 자사 제품만 필터
-        current_worker = get_worker_by_id(g.worker_id)
-        if current_worker and current_worker.is_manager and not current_worker.is_admin:
-            manager_company = current_worker.company
-            conditions.append("(p.mech_partner = %s OR p.elec_partner = %s)")
-            params.extend([manager_company, manager_company])
 
         if search:
             conditions.append("(p.serial_number ILIKE %s OR qr.qr_doc_id ILIKE %s)")
@@ -146,15 +138,8 @@ def get_qr_list() -> Tuple[Dict[str, Any], int]:
         """)
         models = [row['model'] for row in cursor.fetchall() if row['model']]
 
-        # 통계 (Manager: 자사 필터 적용)
-        stats_conditions = []
-        stats_params = []
-        if current_worker and current_worker.is_manager and not current_worker.is_admin:
-            stats_conditions.append("(p.mech_partner = %s OR p.elec_partner = %s)")
-            stats_params.extend([manager_company, manager_company])
-        stats_where = f"WHERE {' AND '.join(stats_conditions)}" if stats_conditions else ""
-
-        cursor.execute(f"""
+        # 통계 (전체 — QR은 자사 필터 없음)
+        cursor.execute("""
             SELECT
                 COUNT(*) AS total,
                 COUNT(*) FILTER (WHERE qr.status = 'active') AS active_count,
@@ -162,8 +147,7 @@ def get_qr_list() -> Tuple[Dict[str, Any], int]:
                 COUNT(*) FILTER (WHERE qr.status = 'revoked') AS revoked_count
             FROM public.qr_registry qr
             JOIN plan.product_info p ON qr.serial_number = p.serial_number
-            {stats_where}
-        """, stats_params)
+        """)
         stats_row = cursor.fetchone()
 
         conn.close()
