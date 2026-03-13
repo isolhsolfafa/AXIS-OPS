@@ -85,6 +85,8 @@ def _task_to_dict(task) -> Dict[str, Any]:
         # Sprint 9: 일시정지 상태
         'is_paused': task.is_paused,
         'total_pause_minutes': task.total_pause_minutes,
+        # Sprint 27: 단일 액션 Task
+        'task_type': getattr(task, 'task_type', 'NORMAL'),
     }
 
 
@@ -192,6 +194,96 @@ def complete_work() -> Tuple[Dict[str, Any], int]:
             return jsonify(result), 200
 
     return jsonify(response), status_code
+
+
+@work_bp.route("/work/complete-single", methods=["POST"])
+@jwt_required
+def complete_single_action_route() -> Tuple[Dict[str, Any], int]:
+    """
+    단일 액션 Task 완료 API (Sprint 27).
+
+    SINGLE_ACTION type Task는 시작 없이 바로 완료 체크만 수행.
+    started_at = completed_at 동시 설정, duration = 0.
+
+    Request Body:
+        {"task_detail_id": int}
+
+    Returns:
+        200: 완료된 TaskDetail + category_completed
+        400: task_type 불일치 / 이미 완료
+        404: Task 미발견
+    """
+    data = request.get_json()
+    if not data or 'task_detail_id' not in data:
+        return jsonify({
+            'error': 'VALIDATION_ERROR',
+            'message': 'task_detail_id가 필요합니다.'
+        }), 400
+
+    task_detail_id = data['task_detail_id']
+    task = get_task_by_id(task_detail_id)
+
+    if not task:
+        return jsonify({'error': 'NOT_FOUND', 'message': 'Task를 찾을 수 없습니다.'}), 404
+
+    if task.task_type != 'SINGLE_ACTION':
+        return jsonify({
+            'error': 'INVALID_TASK_TYPE',
+            'message': '단일 액션 Task가 아닙니다.'
+        }), 400
+
+    if task.completed_at is not None:
+        return jsonify({
+            'error': 'ALREADY_COMPLETED',
+            'message': '이미 완료된 Task입니다.'
+        }), 400
+
+    from datetime import timezone
+    from app.models.task_detail import complete_single_action
+    from app.models.completion_status import update_process_completion, check_all_processes_completed, update_all_completed
+    from app.models.task_detail import get_incomplete_tasks
+
+    completed_at = datetime.now(timezone.utc)
+    worker_id = get_current_worker_id()
+
+    success = complete_single_action(task_detail_id, completed_at, worker_id)
+    if not success:
+        return jsonify({'error': 'COMPLETE_FAILED', 'message': '완료 처리에 실패했습니다.'}), 500
+
+    # work_completion_log 기록
+    try:
+        from app.models.worker import get_db_connection
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO work_completion_log (
+                task_id, worker_id, serial_number, qr_doc_id,
+                task_category, task_id_ref, task_name,
+                completed_at, duration_minutes
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 0)
+            """,
+            (task.id, worker_id, task.serial_number, task.qr_doc_id,
+             task.task_category, task.task_id, task.task_name, completed_at)
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Failed to log single action completion: {e}")
+
+    # completion_status 업데이트
+    incomplete = get_incomplete_tasks(task.serial_number, task.task_category)
+    category_completed = len(incomplete) == 0
+    if category_completed:
+        update_process_completion(task.serial_number, task.task_category, True)
+        if check_all_processes_completed(task.serial_number):
+            update_all_completed(task.serial_number, True, completed_at)
+
+    updated_task = get_task_by_id(task_detail_id)
+    result = _task_to_dict(updated_task) if updated_task else {}
+    result['category_completed'] = category_completed
+
+    return jsonify(result), 200
 
 
 # === 편의 라우트: FE task_service.dart 호환 ===

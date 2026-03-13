@@ -69,6 +69,8 @@ class TaskDetail:
     # Sprint 9: 일시정지 필드
     is_paused: bool = False                  # 현재 일시정지 여부
     total_pause_minutes: int = 0             # 누적 일시정지 시간 (분)
+    # Sprint 27: 단일 액션 Task 지원
+    task_type: str = 'NORMAL'  # 'NORMAL' 또는 'SINGLE_ACTION'
 
     @staticmethod
     def from_db_row(row: Dict[str, Any]) -> "TaskDetail":
@@ -103,6 +105,7 @@ class TaskDetail:
             close_reason=row.get('close_reason'),
             is_paused=row.get('is_paused') or False,
             total_pause_minutes=row.get('total_pause_minutes') or 0,
+            task_type=row.get('task_type') or 'NORMAL',
         )
 
 
@@ -354,6 +357,58 @@ def complete_task(task_detail_id: int, completed_at: datetime) -> bool:
         if conn:
             conn.rollback()
         logger.error(f"Failed to complete task: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+
+def complete_single_action(task_detail_id: int, completed_at: datetime, worker_id: int) -> bool:
+    """
+    단일 액션 Task 완료 처리 (started_at 없이 바로 완료).
+
+    SINGLE_ACTION Task는 시작 단계 없이 "완료 체크"만 수행.
+    started_at = completed_at (동시), duration_minutes = 0으로 설정.
+
+    Args:
+        task_detail_id: 작업 ID
+        completed_at: 완료 시간 (timezone-aware)
+        worker_id: 완료 처리한 작업자 ID
+
+    Returns:
+        성공 시 True, 실패 시 False
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            UPDATE app_task_details
+            SET started_at = %s,
+                completed_at = %s,
+                duration_minutes = 0,
+                worker_id = %s,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+              AND task_type = 'SINGLE_ACTION'
+              AND completed_at IS NULL
+            """,
+            (completed_at, completed_at, worker_id, task_detail_id)
+        )
+
+        updated = cur.rowcount > 0
+        conn.commit()
+
+        if updated:
+            logger.info(f"Single action completed: id={task_detail_id}, worker_id={worker_id}")
+        return updated
+
+    except PsycopgError as e:
+        if conn:
+            conn.rollback()
+        logger.error(f"Failed to complete single action: {e}")
         return False
     finally:
         if conn:

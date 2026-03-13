@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../models/task_item.dart';
 import '../../providers/task_provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../utils/design_system.dart';
@@ -317,6 +318,8 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
               // 액션 버튼
               if (_isActionLoading)
                 const Center(child: CircularProgressIndicator(color: GxColors.accent, strokeWidth: 2))
+              else if (task.isSingleAction)
+                _buildSingleActionButton(task)
               else if (task.status == 'pending')
                 _buildStartButton(task.id, workerId)
               else if (task.status == 'in_progress' && task.myWorkStatus == 'not_started')
@@ -337,6 +340,62 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   }
 
   // ===================== 액션 버튼 빌더 =====================
+
+  Widget _buildSingleActionButton(TaskItem task) {
+    if (task.completedAt != null) {
+      return Container(
+        height: 48,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: GxColors.successBg,
+          borderRadius: BorderRadius.circular(GxRadius.sm),
+          border: Border.all(color: GxColors.success, width: 1),
+        ),
+        child: const Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.check_circle, size: 20, color: GxColors.success),
+            SizedBox(width: 8),
+            Text('작업 완료됨', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: GxColors.success)),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      height: 48,
+      decoration: BoxDecoration(
+        gradient: GxGradients.accentButton,
+        borderRadius: BorderRadius.circular(GxRadius.sm),
+        boxShadow: [BoxShadow(color: GxColors.accent.withValues(alpha: 0.35), blurRadius: 16, offset: const Offset(0, 4))],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => _completeSingleAction(task),
+          borderRadius: BorderRadius.circular(GxRadius.sm),
+          child: Center(child: Row(mainAxisAlignment: MainAxisAlignment.center, children: const [
+            Icon(Icons.check, size: 20, color: Colors.white),
+            SizedBox(width: 8),
+            Text('완료', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.white)),
+          ])),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _completeSingleAction(TaskItem task) async {
+    setState(() => _isActionLoading = true);
+    try {
+      final taskNotifier = ref.read(taskProvider.notifier);
+      final success = await taskNotifier.completeSingleAction(taskDetailId: task.id);
+      if (mounted) {
+        _showSnack(success, '작업이 완료되었습니다.', '작업 완료에 실패했습니다.');
+      }
+    } finally {
+      if (mounted) setState(() => _isActionLoading = false);
+    }
+  }
 
   Widget _buildStartButton(int taskId, int workerId) {
     return Container(

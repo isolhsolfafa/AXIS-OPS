@@ -28,6 +28,7 @@ class TaskItem {
   final DateTime createdAt;
   final DateTime? updatedAt;
   final String? myStatus; // 이 작업자의 참여 상태 ('not_started', 'in_progress', 'completed')
+  final String taskType; // 'NORMAL' 또는 'SINGLE_ACTION'
 
   TaskItem({
     required this.id,
@@ -49,6 +50,7 @@ class TaskItem {
     required this.createdAt,
     this.updatedAt,
     this.myStatus,
+    this.taskType = 'NORMAL',
   });
 
   /// JSON에서 TaskItem 객체 생성
@@ -113,6 +115,7 @@ class TaskItem {
           ? DateTime.parse(json['updated_at'] as String)
           : null,
       myStatus: json['my_status'] as String?,
+      taskType: json['task_type'] as String? ?? 'NORMAL',
     );
   }
 
@@ -138,6 +141,7 @@ class TaskItem {
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt?.toIso8601String(),
       'my_status': myStatus,
+      'task_type': taskType,
     };
   }
 
@@ -162,6 +166,7 @@ class TaskItem {
     DateTime? createdAt,
     DateTime? updatedAt,
     String? myStatus,
+    String? taskType,
   }) {
     return TaskItem(
       id: id ?? this.id,
@@ -183,8 +188,12 @@ class TaskItem {
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       myStatus: myStatus ?? this.myStatus,
+      taskType: taskType ?? this.taskType,
     );
   }
+
+  /// 단일 액션 Task 여부
+  bool get isSingleAction => taskType == 'SINGLE_ACTION';
 
   /// Task 상태 확인 (전체 Task 상태)
   String get status {
@@ -247,7 +256,8 @@ class TaskItem {
         other.totalPauseMinutes == totalPauseMinutes &&
         other.createdAt == createdAt &&
         other.updatedAt == updatedAt &&
-        other.myStatus == myStatus;
+        other.myStatus == myStatus &&
+        other.taskType == taskType;
   }
 
   @override

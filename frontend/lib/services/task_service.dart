@@ -166,6 +166,23 @@ class TaskService {
     }
   }
 
+  /// 단일 액션 Task 완료 (Sprint 27)
+  ///
+  /// SINGLE_ACTION Task는 시작 없이 바로 완료 체크만 수행.
+  ///
+  /// API: POST /api/app/work/complete-single
+  Future<TaskItem> completeSingleAction({required int taskDetailId}) async {
+    try {
+      final response = await _apiService.post(
+        '/app/work/complete-single',
+        data: {'task_detail_id': taskDetailId},
+      );
+      return TaskItem.fromJson(response);
+    } catch (e) {
+      rethrow;
+    }
+  }
+
   /// 공정 완료 상태 조회
   ///
   /// [serialNumber]: 제품 시리얼 번호

@@ -271,6 +271,38 @@ class TaskNotifier extends StateNotifier<TaskState> {
     }
   }
 
+  /// 단일 액션 Task 완료 (Sprint 27)
+  Future<bool> completeSingleAction({required int taskDetailId}) async {
+    state = state.copyWith(isLoading: true, clearError: true);
+    try {
+      final updatedTask = await _taskService.completeSingleAction(
+        taskDetailId: taskDetailId,
+      );
+
+      final updatedTasks = state.tasks.map((task) {
+        return task.id == taskDetailId ? updatedTask : task;
+      }).toList();
+
+      state = state.copyWith(
+        isLoading: false,
+        tasks: updatedTasks,
+        selectedTask: updatedTask,
+      );
+
+      if (state.currentSerialNumber != null) {
+        await refreshCompletionStatus(state.currentSerialNumber!);
+      }
+
+      return true;
+    } catch (e) {
+      state = state.copyWith(
+        isLoading: false,
+        errorMessage: _extractErrorMessage(e),
+      );
+      return false;
+    }
+  }
+
   /// 공정 완료 상태 조회
   ///
   /// [serialNumber]: 제품 시리얼 번호

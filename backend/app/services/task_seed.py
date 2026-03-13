@@ -46,13 +46,14 @@ class TaskTemplate:
     task_name: str
     phase: str
     is_docking_required: bool = False  # docking 관련 task 여부
+    task_type: str = 'NORMAL'  # Sprint 27: 'NORMAL' 또는 'SINGLE_ACTION'
 
 
 # MECH Tasks (7개) — CLAUDE.md 기준
 MECH_TASKS: List[TaskTemplate] = [
     TaskTemplate('WASTE_GAS_LINE_1', 'Waste Gas LINE 1',  'PRE_DOCKING',  True),
     TaskTemplate('UTIL_LINE_1',      'Util LINE 1',        'PRE_DOCKING',  True),
-    TaskTemplate('TANK_DOCKING',     'Tank Docking',       'DOCKING',      True),
+    TaskTemplate('TANK_DOCKING',     'Tank Docking',       'DOCKING',      True, 'SINGLE_ACTION'),
     TaskTemplate('WASTE_GAS_LINE_2', 'Waste Gas LINE 2',  'POST_DOCKING', True),
     TaskTemplate('UTIL_LINE_2',      'Util LINE 2',        'POST_DOCKING', True),
     TaskTemplate('HEATING_JACKET',   'Heating Jacket',     'PRE_DOCKING',  False),  # admin 옵션
@@ -86,9 +87,10 @@ QI_TASKS: List[TaskTemplate] = [
     TaskTemplate('QI_INSPECTION', '공정검사', 'FINAL', False),
 ]
 
-# Sprint 11: SI Tasks (1개) — 모든 모델 공통 (GST SI 작업자 전용)
+# Sprint 11: SI Tasks (2개) — 모든 모델 공통 (GST SI 작업자 전용)
 SI_TASKS: List[TaskTemplate] = [
     TaskTemplate('SI_FINISHING', '마무리공정', 'FINAL', False),
+    TaskTemplate('SI_SHIPMENT', '출하완료', 'FINAL', False, 'SINGLE_ACTION'),  # Sprint 27
 ]
 
 # category → 템플릿 매핑
@@ -117,7 +119,7 @@ def initialize_product_tasks(
     model_name: str
 ) -> Dict[str, Any]:
     """
-    제품 등록 시 Task 19개(MECH 7 + ELEC 6 + TMS 2 + PI 2 + QI 1 + SI 1) 자동 생성.
+    제품 등록 시 Task 20개(MECH 7 + ELEC 6 + TMS 2 + PI 2 + QI 1 + SI 2) 자동 생성.
     Sprint 11: PI/QI/SI 4개 추가.
     CLAUDE.md "Task Seed 초기화 로직" 그대로 구현.
 
@@ -133,7 +135,7 @@ def initialize_product_tasks(
       TMS: is_tms=True 인 모델만 생성 (GAIA)
       PI: 모든 모델 2개 전부 활성 (GST PI 검사원 전용)
       QI: 모든 모델 1개 전부 활성 (GST QI 검사원 전용)
-      SI: 모든 모델 1개 전부 활성 (GST SI 작업자 전용)
+      SI: 모든 모델 2개 전부 활성 (GST SI 작업자 전용)
 
     Args:
         serial_number: 제품 시리얼 번호
@@ -190,7 +192,7 @@ def initialize_product_tasks(
 
             inserted = _upsert_task(
                 cur, serial_number, qr_doc_id,
-                'MECH', t.task_id, t.task_name, t.phase, is_applicable
+                'MECH', t.task_id, t.task_name, t.phase, is_applicable, t.task_type
             )
             if inserted:
                 created += 1
@@ -202,7 +204,7 @@ def initialize_product_tasks(
         for t in ELEC_TASKS:
             inserted = _upsert_task(
                 cur, serial_number, qr_doc_id,
-                'ELEC', t.task_id, t.task_name, t.phase, True
+                'ELEC', t.task_id, t.task_name, t.phase, True, t.task_type
             )
             if inserted:
                 created += 1
@@ -215,7 +217,7 @@ def initialize_product_tasks(
             for t in TMS_TASKS:
                 inserted = _upsert_task(
                     cur, serial_number, qr_doc_id,
-                    'TMS', t.task_id, t.task_name, t.phase, True
+                    'TMS', t.task_id, t.task_name, t.phase, True, t.task_type
                 )
                 if inserted:
                     created += 1
@@ -227,7 +229,7 @@ def initialize_product_tasks(
         for t in PI_TASKS:
             inserted = _upsert_task(
                 cur, serial_number, qr_doc_id,
-                'PI', t.task_id, t.task_name, t.phase, True
+                'PI', t.task_id, t.task_name, t.phase, True, t.task_type
             )
             if inserted:
                 created += 1
@@ -239,7 +241,7 @@ def initialize_product_tasks(
         for t in QI_TASKS:
             inserted = _upsert_task(
                 cur, serial_number, qr_doc_id,
-                'QI', t.task_id, t.task_name, t.phase, True
+                'QI', t.task_id, t.task_name, t.phase, True, t.task_type
             )
             if inserted:
                 created += 1
@@ -251,7 +253,7 @@ def initialize_product_tasks(
         for t in SI_TASKS:
             inserted = _upsert_task(
                 cur, serial_number, qr_doc_id,
-                'SI', t.task_id, t.task_name, t.phase, True
+                'SI', t.task_id, t.task_name, t.phase, True, t.task_type
             )
             if inserted:
                 created += 1
@@ -341,7 +343,8 @@ def _upsert_task(
     task_id: str,
     task_name: str,
     phase: str,
-    is_applicable: bool
+    is_applicable: bool,
+    task_type: str = 'NORMAL'
 ) -> bool:
     """
     app_task_details에 Task 행 삽입 (이미 있으면 건너뜀).
@@ -357,14 +360,14 @@ def _upsert_task(
         """
         INSERT INTO app_task_details (
             serial_number, qr_doc_id, task_category,
-            task_id, task_name, is_applicable
+            task_id, task_name, is_applicable, task_type
         )
-        VALUES (%s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (serial_number, task_category, task_id) DO NOTHING
         RETURNING id
         """,
         (serial_number, qr_doc_id, task_category,
-         task_id, task_name, is_applicable)
+         task_id, task_name, is_applicable, task_type)
     )
     row = cur.fetchone()
     return row is not None  # RETURNING이 있으면 삽입됨
