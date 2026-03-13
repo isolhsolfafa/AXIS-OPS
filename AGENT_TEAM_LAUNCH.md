@@ -7966,3 +7966,379 @@ pytest tests/ -x -q 2>&1 | tail -20
 - [x] app_version.dart → '1.7.3' (일치)
 - [x] flutter build web 에러 없음
 - [x] pytest — BE 로직 변경 0건, 스킵 (version.py만 변경)
+
+---
+
+# Sprint 27: AXIS-VIEW 권한 데코레이터 재정비
+
+> **버전**: 1.7.3 → 1.7.4ㅇ
+> **날짜**: 2026-03-13
+> **목표**: (1) `get_current_worker()` 캐싱 헬퍼로 중복 DB 쿼리 제거, (2) 신규 데코레이터 2개 추가 (`@gst_or_admin_required`, `@view_access_required`), (3) 기존 API 4개 데코레이터 교체, (4) 기존 데코레이터도 캐싱 적용
+
+## 배경
+
+AXIS-VIEW 사이드바 권한 테스트 결과, FE/BE 간 권한 불일치 발생.
+- GST 일반 직원(PI, QI 등)이 FE에서 페이지 진입은 되지만 BE API에서 403 반환
+- 원인: `@manager_or_admin_required`가 QR목록, ETL변경이력 등에 걸려있어 GST 일반 직원 차단
+- 추가로 공장 대시보드 전용 API에는 협력사 manager를 차단하는 데코레이터가 필요
+
+**참고 문서**: `/AXIS-VIEW/docs/OPS_API_REQUESTS.md` #11-A ~ #11-D
+
+## 확정 권한 매트릭스 (참고)
+
+| 메뉴 | admin | GST+manager(PM) | GST+일반(PI,QI) | 협력사+manager |
+|------|-------|-----------------|-----------------|---------------|
+| 공장 대시보드 | ✅ | ✅ | ✅ | ❌ |
+| 협력사 관리 | ✅ | ✅ | ❌ | ✅(자사) |
+| 생산관리 | ✅ | ✅ | ✅ | ✅ |
+| QR 관리 | ✅ | ✅ | ✅ | ✅ |
+| 권한 관리 | ✅ | ✅(GST만) | ❌ | ✅(자사) |
+| 불량 분석 | ✅ | ✅ | ✅ | ❌ |
+| CT 분석 | ✅ | ✅ | ✅ | ❌ |
+| AI 예측/챗봇 | ✅ | ✅ | ✅ | ❌ |
+
+## 변경 대상 파일 (BE only — DB 스키마 변경 없음)
+
+| 파일 | 변경 내용 |
+|------|----------|
+| `backend/app/middleware/jwt_auth.py` | `get_current_worker()` 헬퍼 추가, 신규 데코레이터 2개 추가, 기존 데코레이터 캐싱 리팩토링 |
+| `backend/app/routes/qr.py` | L22 `@manager_or_admin_required` → `@view_access_required` |
+| `backend/app/routes/admin.py` | L1921 `@manager_or_admin_required` → `@view_access_required` (etl/changes) |
+| `backend/version.py` | 1.7.3 → 1.7.4 |
+
+## 금지 사항
+
+- ❌ DB 스키마, migration 추가 금지
+- ❌ FE(Flutter) 변경 금지 — VIEW 사이드바는 VIEW 자체 처리
+- ❌ 기존 `@admin_required`, `@manager_or_admin_required` 삭제 금지 (사용처 존재)
+- ❌ `@jwt_required` 로직 변경 금지
+- ❌ 신규 API 엔드포인트 추가 금지 (#9, #10은 별도 Sprint)
+
+---
+
+## Task 1 — `get_current_worker()` 캐싱 헬퍼 추가
+
+**파일**: `backend/app/middleware/jwt_auth.py`
+
+**현재 문제**: `@jwt_required` → `@admin_required` 체이닝 시 `get_worker_by_id(g.worker_id)`가 매번 호출되어 같은 request 안에서 동일 worker를 2~3회 DB 조회.
+
+**구현 위치**: 기존 `get_current_worker_id()` 함수(L140~149) 바로 아래에 추가
+
+```python
+def get_current_worker():
+    """
+    현재 인증된 작업자 객체를 반환 (request 당 1회 DB 조회, 이후 캐시).
+
+    jwt_required 데코레이터 실행 후 호출 가능.
+    g.current_worker에 캐시하여 동일 request 내 중복 DB 쿼리 방지.
+
+    Returns:
+        Worker 객체 또는 None (미인증 시)
+    """
+    if hasattr(g, 'current_worker') and g.current_worker is not None:
+        return g.current_worker
+
+    if not hasattr(g, 'worker_id'):
+        return None
+
+    worker = get_worker_by_id(g.worker_id)
+    g.current_worker = worker
+    return worker
+```
+
+**테스트 관점**:
+- `get_current_worker()` 2회 연속 호출 시 `get_worker_by_id()` 1회만 호출 확인 (mock)
+- `g.worker_id` 없을 때 None 반환 확인
+
+---
+
+## Task 2 — 기존 데코레이터 캐싱 리팩토링
+
+**파일**: `backend/app/middleware/jwt_auth.py`
+
+기존 `admin_required`와 `manager_or_admin_required` 내부의 `get_worker_by_id(g.worker_id)` 호출을 `get_current_worker()` 로 교체.
+
+### admin_required (L183)
+
+**변경 전**:
+```python
+worker = get_worker_by_id(g.worker_id)
+```
+
+**변경 후**:
+```python
+worker = get_current_worker()
+```
+
+### manager_or_admin_required (L221)
+
+**변경 전**:
+```python
+worker = get_worker_by_id(g.worker_id)
+```
+
+**변경 후**:
+```python
+worker = get_current_worker()
+```
+
+**주의**: 두 데코레이터의 권한 조건 로직은 절대 변경하지 말 것. `get_worker_by_id` → `get_current_worker` 호출만 교체.
+
+---
+
+## Task 3 — 신규 데코레이터 `@gst_or_admin_required` 추가
+
+**파일**: `backend/app/middleware/jwt_auth.py`
+
+**삽입 위치**: `manager_or_admin_required` 함수 바로 아래 (파일 끝 부분)
+
+```python
+def gst_or_admin_required(f: Callable) -> Callable:
+    """
+    GST 소속 전직원 또는 Admin만 허용.
+
+    용도: 공장 대시보드 KPI, 불량 분석, CT 분석 등 GST 전용 페이지 API.
+    AXIS-VIEW 접근 가능 사용자 중 협력사 manager를 차단.
+
+    조건: worker.company == 'GST' OR worker.is_admin == True
+
+    jwt_required와 함께 사용되어야 합니다.
+
+    Usage:
+        @app.route('/api/admin/factory/weekly-kpi')
+        @jwt_required
+        @gst_or_admin_required
+        def factory_kpi():
+            ...
+    """
+    @wraps(f)
+    def decorated_function(*args: Any, **kwargs: Any) -> Any:
+        if not hasattr(g, 'worker_id'):
+            return jsonify({
+                'error': 'UNAUTHORIZED',
+                'message': '인증이 필요합니다.'
+            }), 401
+
+        worker = get_current_worker()
+
+        if not worker or (worker.company != 'GST' and not worker.is_admin):
+            logger.warning(
+                f"Forbidden: worker_id={g.worker_id} attempted GST-only access"
+            )
+            return jsonify({
+                'error': 'FORBIDDEN',
+                'message': 'GST 소속 또는 관리자 권한이 필요합니다.'
+            }), 403
+
+        logger.debug(f"GST/admin access granted: worker_id={g.worker_id}")
+        return f(*args, **kwargs)
+
+    return decorated_function
+```
+
+**테스트 시나리오**:
+1. GST+일반(PI) → 200 통과 ✅
+2. GST+manager(PM) → 200 통과 ✅
+3. GST+admin → 200 통과 ✅
+4. 협력사+manager(BAT) → 403 차단 ✅
+5. 협력사+일반(MECH) → 403 차단 ✅
+6. JWT 없음 → 401 ✅
+
+---
+
+## Task 4 — 신규 데코레이터 `@view_access_required` 추가
+
+**파일**: `backend/app/middleware/jwt_auth.py`
+
+**삽입 위치**: `gst_or_admin_required` 바로 아래
+
+```python
+def view_access_required(f: Callable) -> Callable:
+    """
+    AXIS-VIEW 접근 가능 사용자만 허용.
+
+    조건: worker.company == 'GST' OR worker.is_admin OR worker.is_manager
+    (= AXIS-VIEW 로그인 게이트와 동일 조건)
+
+    용도: QR 관리, 생산관리, ETL 변경이력 등 VIEW 사용자 전체 공개 API.
+
+    jwt_required와 함께 사용되어야 합니다.
+
+    Usage:
+        @app.route('/api/admin/qr/list')
+        @jwt_required
+        @view_access_required
+        def qr_list():
+            ...
+    """
+    @wraps(f)
+    def decorated_function(*args: Any, **kwargs: Any) -> Any:
+        if not hasattr(g, 'worker_id'):
+            return jsonify({
+                'error': 'UNAUTHORIZED',
+                'message': '인증이 필요합니다.'
+            }), 401
+
+        worker = get_current_worker()
+
+        if not worker or (
+            worker.company != 'GST'
+            and not worker.is_admin
+            and not worker.is_manager
+        ):
+            logger.warning(
+                f"Forbidden: worker_id={g.worker_id} attempted VIEW access"
+            )
+            return jsonify({
+                'error': 'FORBIDDEN',
+                'message': 'AXIS-VIEW 접근 권한이 필요합니다.'
+            }), 403
+
+        logger.debug(f"VIEW access granted: worker_id={g.worker_id}")
+        return f(*args, **kwargs)
+
+    return decorated_function
+```
+
+**테스트 시나리오**:
+1. GST+일반(PI) → 200 통과 ✅ (핵심! 기존 403 해소)
+2. GST+manager(PM) → 200 통과 ✅
+3. GST+admin → 200 통과 ✅
+4. 협력사+manager(BAT) → 200 통과 ✅
+5. 협력사+일반(MECH) → 403 차단 ✅
+6. JWT 없음 → 401 ✅
+
+---
+
+## Task 5 — 기존 API 데코레이터 교체 (2개 엔드포인트)
+
+### 5-1. QR 목록 조회
+
+**파일**: `backend/app/routes/qr.py` (L20~22)
+
+**변경 전**:
+```python
+@qr_bp.route("/list", methods=["GET"])
+@jwt_required
+@manager_or_admin_required
+```
+
+**변경 후**:
+```python
+@qr_bp.route("/list", methods=["GET"])
+@jwt_required
+@view_access_required
+```
+
+**import 추가** (qr.py 상단):
+```python
+from app.middleware.jwt_auth import jwt_required, view_access_required
+# 기존: from app.middleware.jwt_auth import jwt_required, manager_or_admin_required
+# manager_or_admin_required import가 이 파일에서 더 이상 사용되지 않으면 제거
+```
+
+### 5-2. ETL 변경이력 조회
+
+**파일**: `backend/app/routes/admin.py` (L1919~1921)
+
+**변경 전**:
+```python
+@admin_bp.route("/etl/changes", methods=["GET"])
+@jwt_required
+@manager_or_admin_required
+```
+
+**변경 후**:
+```python
+@admin_bp.route("/etl/changes", methods=["GET"])
+@jwt_required
+@view_access_required
+```
+
+**import 추가** (admin.py 상단): `view_access_required`를 기존 import 라인에 추가.
+```python
+from app.middleware.jwt_auth import jwt_required, admin_required, manager_or_admin_required, view_access_required
+```
+
+**주의**: admin.py에서 `manager_or_admin_required`는 다른 엔드포인트에서 사용 중이므로 import 제거 금지!
+
+---
+
+## Task 6 — 테스트 + 버전 업데이트
+
+### 6-1. 버전 업데이트
+
+**파일**: `backend/version.py`
+
+```python
+VERSION = "1.7.4"
+BUILD_DATE = "2026-03-13"
+```
+
+### 6-2. 테스트 실행
+
+```bash
+cd /path/to/AXIS-OPS/backend
+python -m pytest tests/ -x -v --timeout=30 2>&1 | tail -50
+```
+
+**신규 테스트 필요 항목** (기존 테스트 파일에 추가):
+
+1. `get_current_worker()` 캐싱 동작 확인
+   - 동일 request 내 2회 호출 → DB 쿼리 1회 (mock 검증)
+   - `g.worker_id` 미설정 → None 반환
+
+2. `@gst_or_admin_required` 접근 제어
+   - GST 일반(company='GST', is_admin=False, is_manager=False) → 200
+   - 협력사 manager(company='BAT', is_manager=True) → 403
+   - admin(is_admin=True, company=무관) → 200
+
+3. `@view_access_required` 접근 제어
+   - GST 일반 → 200 (기존 403이 200으로 해소)
+   - 협력사 manager → 200
+   - 협력사 일반 → 403
+
+4. 기존 테스트 통과 확인 (regression)
+   - `@admin_required` 기존 테스트 → 변경 없이 통과
+   - `@manager_or_admin_required` 기존 테스트 → 변경 없이 통과
+
+### 6-3. 기존 테스트 실패 시
+
+`get_worker_by_id` → `get_current_worker` 변경으로 mock 대상이 달라질 수 있음.
+- 기존 테스트에서 `patch('app.middleware.jwt_auth.get_worker_by_id')` → 그대로 유지 (get_current_worker 내부에서 호출하므로)
+- 새 테스트에서는 `patch('app.middleware.jwt_auth.get_current_worker')` 사용 가능
+
+---
+
+## 데코레이터 체계 요약 (변경 후)
+
+| 데코레이터 | 조건 | 용도 |
+|---|---|---|
+| `@admin_required` (기존) | `is_admin` | 시스템 설정, 가입 승인 |
+| `@manager_or_admin_required` (기존) | `is_admin OR is_manager` | 권한 관리, 출퇴근, 강제 종료 |
+| `@gst_or_admin_required` (신규) | `company='GST' OR is_admin` | 공장 대시보드 전용 API |
+| `@view_access_required` (신규) | `company='GST' OR is_admin OR is_manager` | VIEW 전체 공개 API |
+
+**계층 관계**: `admin_required` ⊂ `manager_or_admin_required` ⊂ `view_access_required` (포함 관계)
+
+`gst_or_admin_required`는 별도 축: GST 소속 기준이라 manager 축과 교차
+
+---
+
+## 체크리스트
+
+- [x] `get_current_worker()` 캐싱 헬퍼 추가 (jwt_auth.py)
+- [x] `admin_required` 내부 → `get_current_worker()` 교체
+- [x] `manager_or_admin_required` 내부 → `get_current_worker()` 교체
+- [x] `@gst_or_admin_required` 데코레이터 추가
+- [x] `@view_access_required` 데코레이터 추가
+- [x] `qr.py` L22 → `@view_access_required` 교체 + import 수정
+- [x] `admin.py` L1921 → `@view_access_required` 교체 + import 추가
+- [ ] 신규 데코레이터 테스트 케이스 추가 (GST일반→200, 협력사manager→200/403)
+- [x] 기존 데코레이터 테스트 regression 통과
+- [ ] `get_current_worker()` 캐싱 테스트 통과
+- [x] version.py → 1.7.4
+- [x] pytest 전체 통과 (667 passed, 36 기존 실패 — Sprint 27 regression 0건)
+- [x] ⚠️ DB 스키마 변경 없음 확인
+- [x] ⚠️ FE(Flutter) 변경 없음 확인
+- [x] ⚠️ 기존 `@admin_required`, `@manager_or_admin_required` 사용처 영향 없음 확인

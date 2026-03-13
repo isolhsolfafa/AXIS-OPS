@@ -3,7 +3,7 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v1.7.3 (Sprint 26, 2026-03-12)
+> **현재 버전**: v1.7.4 (Sprint 27, 2026-03-13)
 
 ---
 
@@ -2913,3 +2913,31 @@ frontend/lib/utils/app_version.dart        # v1.7.2
 
 ### 배포
 - Netlify: https://gaxis-ops.netlify.app ✅
+
+---
+
+## Sprint 27: AXIS-VIEW 권한 데코레이터 재정비 (v1.7.4, 2026-03-13)
+
+### BE 완료 내역
+- `backend/app/middleware/jwt_auth.py`:
+  - `get_current_worker()` 캐싱 헬퍼 추가 (request 당 1회 DB 조회, g.current_worker 캐시)
+  - `admin_required` 내부 `get_worker_by_id()` → `get_current_worker()` 교체
+  - `manager_or_admin_required` 내부 `get_worker_by_id()` → `get_current_worker()` 교체
+  - `@gst_or_admin_required` 데코레이터 신규 추가 (company='GST' OR is_admin)
+  - `@view_access_required` 데코레이터 신규 추가 (company='GST' OR is_admin OR is_manager)
+- `backend/app/routes/qr.py` — QR 목록 `@manager_or_admin_required` → `@view_access_required`
+- `backend/app/routes/admin.py` — ETL 변경이력 `@manager_or_admin_required` → `@view_access_required`
+- `backend/version.py` — v1.7.4
+
+### 데코레이터 체계 (변경 후)
+| 데코레이터 | 조건 | 용도 |
+|---|---|---|
+| `@admin_required` | is_admin | 시스템 설정, 가입 승인 |
+| `@manager_or_admin_required` | is_admin OR is_manager | 권한 관리, 출퇴근, 강제 종료 |
+| `@gst_or_admin_required` (신규) | company='GST' OR is_admin | 공장 대시보드 전용 API |
+| `@view_access_required` (신규) | company='GST' OR is_admin OR is_manager | VIEW 전체 공개 API |
+
+### 테스트: 667 passed, 36 기존 실패 (Sprint 27 regression 0건)
+- DB 스키마 변경 없음
+- FE(Flutter) 변경 없음
+- 기존 `@admin_required`, `@manager_or_admin_required` 사용처 영향 없음

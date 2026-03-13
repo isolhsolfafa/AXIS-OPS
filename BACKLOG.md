@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-03-12 (Sprint 26 완료 — PWA 업데이트 알림 v1.7.3)
+> 마지막 업데이트: 2026-03-13 (Sprint 27 완료 — AXIS-VIEW 권한 데코레이터 v1.7.4)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -32,6 +32,20 @@
 | BUG-20 | 로그인 에러 메시지 불명확 (계정 미존재 vs 비밀번호 오류) | ✅ Sprint 24 핫픽스 수정 완료 | 동일 INVALID_CREDENTIALS → 404 ACCOUNT_NOT_FOUND + 401 INVALID_PASSWORD 분리 |
 | BUG-21 | FE 404 에러 메시지 하드코딩 | ✅ Sprint 24 핫픽스 수정 완료 | "요청한 리소스가 없습니다" → 서버 메시지 그대로 표시 |
 | BUG-22 | Logout Storm — 401 무한 루프 | ✅ Sprint 25 수정 완료 | FE: _authSkipPaths + _isForceLogout + _isLoggingOut + clearToken 선행 + 3s timeout. BE: jwt_optional 데코레이터 + logout @jwt_optional (토큰 없이 200 OK). VIEW도 동일 패턴 수정 완료 (v1.4.2) |
+
+---
+
+## ✅ Sprint 27 완료 (v1.7.4, 2026-03-13)
+
+### AXIS-VIEW 권한 데코레이터 재정비 — 완료
+- `get_current_worker()` 캐싱 헬퍼 추가 (request 당 1회 DB 조회)
+- `admin_required`, `manager_or_admin_required` 내부 → 캐싱 리팩토링
+- `@gst_or_admin_required` 신규 (GST 소속 + Admin만 허용, 공장 대시보드 전용)
+- `@view_access_required` 신규 (GST + Admin + Manager, VIEW 전체 공개 API)
+- `qr.py` QR 목록: `@manager_or_admin_required` → `@view_access_required`
+- `admin.py` ETL 변경이력: `@manager_or_admin_required` → `@view_access_required`
+- DB 스키마 변경 없음, FE 변경 없음
+- pytest: 667 passed (Sprint 27 regression 0건)
 
 ---
 
