@@ -307,8 +307,8 @@ def get_admin_by_email_prefix(prefix: str) -> Optional[Worker]:
                 "SELECT * FROM workers WHERE email LIKE %s AND is_admin = TRUE",
                 (prefix + '%',)
             )
+            rows = cur.fetchall()
 
-        rows = cur.fetchall()
         if len(rows) == 1:
             return Worker.from_db_row(rows[0])
         return None
