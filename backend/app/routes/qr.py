@@ -9,7 +9,7 @@ from flask import Blueprint, request, jsonify
 from typing import Tuple, Dict, Any
 
 from flask import g
-from app.middleware.jwt_auth import jwt_required, manager_or_admin_required
+from app.middleware.jwt_auth import jwt_required, view_access_required
 from app.models.worker import get_db_connection, get_worker_by_id
 
 logger = logging.getLogger(__name__)
@@ -19,7 +19,7 @@ qr_bp = Blueprint("qr", __name__, url_prefix="/api/admin/qr")
 
 @qr_bp.route("/list", methods=["GET"])
 @jwt_required
-@manager_or_admin_required
+@view_access_required
 def get_qr_list() -> Tuple[Dict[str, Any], int]:
     """
     QR 목록 조회 (qr_registry JOIN product_info)

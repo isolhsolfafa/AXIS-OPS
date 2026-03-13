@@ -149,6 +149,27 @@ def get_current_worker_id() -> int:
     return g.worker_id
 
 
+def get_current_worker():
+    """
+    현재 인증된 작업자 객체를 반환 (request 당 1회 DB 조회, 이후 캐시).
+
+    jwt_required 데코레이터 실행 후 호출 가능.
+    g.current_worker에 캐시하여 동일 request 내 중복 DB 쿼리 방지.
+
+    Returns:
+        Worker 객체 또는 None (미인증 시)
+    """
+    if hasattr(g, 'current_worker') and g.current_worker is not None:
+        return g.current_worker
+
+    if not hasattr(g, 'worker_id'):
+        return None
+
+    worker = get_worker_by_id(g.worker_id)
+    g.current_worker = worker
+    return worker
+
+
 def admin_required(f: Callable) -> Callable:
     """
     관리자 권한 검증 데코레이터
@@ -179,8 +200,8 @@ def admin_required(f: Callable) -> Callable:
                 'message': '인증이 필요합니다.'
             }), 401
 
-        # 작업자 조회
-        worker = get_worker_by_id(g.worker_id)
+        # 작업자 조회 (캐싱)
+        worker = get_current_worker()
 
         if not worker or not worker.is_admin:
             logger.warning(f"Forbidden: worker_id={g.worker_id} attempted admin access")
@@ -218,7 +239,7 @@ def manager_or_admin_required(f: Callable) -> Callable:
                 'message': '인증이 필요합니다.'
             }), 401
 
-        worker = get_worker_by_id(g.worker_id)
+        worker = get_current_worker()
 
         if not worker or (not worker.is_admin and not worker.is_manager):
             logger.warning(
@@ -230,6 +251,96 @@ def manager_or_admin_required(f: Callable) -> Callable:
             }), 403
 
         logger.debug(f"Manager/admin access granted: worker_id={g.worker_id}")
+        return f(*args, **kwargs)
+
+    return decorated_function
+
+
+def gst_or_admin_required(f: Callable) -> Callable:
+    """
+    GST 소속 전직원 또는 Admin만 허용.
+
+    용도: 공장 대시보드 KPI, 불량 분석, CT 분석 등 GST 전용 페이지 API.
+    AXIS-VIEW 접근 가능 사용자 중 협력사 manager를 차단.
+
+    조건: worker.company == 'GST' OR worker.is_admin == True
+
+    jwt_required와 함께 사용되어야 합니다.
+
+    Usage:
+        @app.route('/api/admin/factory/weekly-kpi')
+        @jwt_required
+        @gst_or_admin_required
+        def factory_kpi():
+            ...
+    """
+    @wraps(f)
+    def decorated_function(*args: Any, **kwargs: Any) -> Any:
+        if not hasattr(g, 'worker_id'):
+            return jsonify({
+                'error': 'UNAUTHORIZED',
+                'message': '인증이 필요합니다.'
+            }), 401
+
+        worker = get_current_worker()
+
+        if not worker or (worker.company != 'GST' and not worker.is_admin):
+            logger.warning(
+                f"Forbidden: worker_id={g.worker_id} attempted GST-only access"
+            )
+            return jsonify({
+                'error': 'FORBIDDEN',
+                'message': 'GST 소속 또는 관리자 권한이 필요합니다.'
+            }), 403
+
+        logger.debug(f"GST/admin access granted: worker_id={g.worker_id}")
+        return f(*args, **kwargs)
+
+    return decorated_function
+
+
+def view_access_required(f: Callable) -> Callable:
+    """
+    AXIS-VIEW 접근 가능 사용자만 허용.
+
+    조건: worker.company == 'GST' OR worker.is_admin OR worker.is_manager
+    (= AXIS-VIEW 로그인 게이트와 동일 조건)
+
+    용도: QR 관리, 생산관리, ETL 변경이력 등 VIEW 사용자 전체 공개 API.
+
+    jwt_required와 함께 사용되어야 합니다.
+
+    Usage:
+        @app.route('/api/admin/qr/list')
+        @jwt_required
+        @view_access_required
+        def qr_list():
+            ...
+    """
+    @wraps(f)
+    def decorated_function(*args: Any, **kwargs: Any) -> Any:
+        if not hasattr(g, 'worker_id'):
+            return jsonify({
+                'error': 'UNAUTHORIZED',
+                'message': '인증이 필요합니다.'
+            }), 401
+
+        worker = get_current_worker()
+
+        if not worker or (
+            worker.company != 'GST'
+            and not worker.is_admin
+            and not worker.is_manager
+        ):
+            logger.warning(
+                f"Forbidden: worker_id={g.worker_id} attempted VIEW access"
+            )
+            return jsonify({
+                'error': 'FORBIDDEN',
+                'message': 'AXIS-VIEW 접근 권한이 필요합니다.'
+            }), 403
+
+        logger.debug(f"VIEW access granted: worker_id={g.worker_id}")
         return f(*args, **kwargs)
 
     return decorated_function

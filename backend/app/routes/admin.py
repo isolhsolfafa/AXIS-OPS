@@ -14,7 +14,7 @@ from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 
 from app.config import Config
-from app.middleware.jwt_auth import jwt_required, admin_required, manager_or_admin_required
+from app.middleware.jwt_auth import jwt_required, admin_required, manager_or_admin_required, view_access_required
 from app.models.worker import get_db_connection, update_approval_status, get_worker_by_id
 from app.models.admin_settings import get_all_settings, update_setting
 from app.services.alert_service import create_and_broadcast_alert
@@ -1918,7 +1918,7 @@ _FIELD_LABELS = {
 
 @admin_bp.route("/etl/changes", methods=["GET"])
 @jwt_required
-@manager_or_admin_required
+@view_access_required
 def get_etl_changes() -> Tuple[Dict[str, Any], int]:
     """
     ETL 변경 이력 조회
