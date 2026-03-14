@@ -656,9 +656,17 @@ def create_test_worker(db_conn):
                 db_role = role_upgrade_map[role]
 
         # 테스트 이메일 잔여 데이터 정리 (이전 실행 잔여 → UniqueViolation 방지)
-        if email.endswith('@test.axisos.com') or email.endswith('@axisos.test'):
+        if email.endswith('@test.axisos.com') or email.endswith('@axisos.test') or email.endswith('@test.com'):
+            cursor.execute("DELETE FROM work_completion_log WHERE worker_id IN (SELECT id FROM workers WHERE email = %s)", (email,))
+            cursor.execute("DELETE FROM work_start_log WHERE worker_id IN (SELECT id FROM workers WHERE email = %s)", (email,))
+            cursor.execute("DELETE FROM app_task_details WHERE worker_id IN (SELECT id FROM workers WHERE email = %s)", (email,))
+            cursor.execute("DELETE FROM app_alert_logs WHERE triggered_by_worker_id IN (SELECT id FROM workers WHERE email = %s)", (email,))
+            cursor.execute("DELETE FROM app_alert_logs WHERE target_worker_id IN (SELECT id FROM workers WHERE email = %s)", (email,))
             cursor.execute("DELETE FROM email_verification WHERE worker_id IN (SELECT id FROM workers WHERE email = %s)", (email,))
             cursor.execute("DELETE FROM hr.worker_auth_settings WHERE worker_id IN (SELECT id FROM workers WHERE email = %s)", (email,))
+            cursor.execute("DELETE FROM auth.refresh_tokens WHERE worker_id IN (SELECT id FROM workers WHERE email = %s)", (email,))
+            cursor.execute("DELETE FROM hr.partner_attendance WHERE worker_id IN (SELECT id FROM workers WHERE email = %s)", (email,))
+            cursor.execute("UPDATE admin_settings SET updated_by = NULL WHERE updated_by IN (SELECT id FROM workers WHERE email = %s)", (email,))
             cursor.execute("DELETE FROM workers WHERE email = %s", (email,))
             db_conn.commit()
 
