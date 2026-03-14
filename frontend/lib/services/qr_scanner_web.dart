@@ -36,6 +36,10 @@ void _injectScannerCss() {
       #qr-scanner-dom-div img {
         object-fit: cover !important;
       }
+      /* BUG-23: viewfinder 코너 마커가 잘리지 않도록 보호 */
+      [id*="shaded"], [id*="region"] {
+        overflow: visible !important;
+      }
     ''';
   html.document.head!.append(_scannerStyle!);
 }
@@ -201,10 +205,17 @@ void _forceSquareAfterCameraStart() {
       ..height = '100%';
   }
 
-  // html5-qrcode 내부 컨테이너 (id에 __scan_region 또는 직접 자식 div)
+  // html5-qrcode 내부 컨테이너 (video 포함 div만 타겟, viewfinder 제외)
   final children = _scannerDiv!.children;
   for (final child in children) {
     if (child is html.DivElement) {
+      // viewfinder(#qr-shaded-region) 및 코너 마커 영역은 건드리지 않음 (BUG-23)
+      final childId = child.id;
+      if (childId.contains('shaded') || childId.contains('region')) continue;
+      // video 태그를 포함한 div만 overflow:hidden 적용
+      final hasVideo = child.querySelector('video') != null;
+      if (!hasVideo) continue;
+
       child.style
         ..width = '100%'
         ..height = '${_savedWidth}px'
