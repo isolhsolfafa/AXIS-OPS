@@ -189,9 +189,9 @@ def debug_db_info() -> Tuple[Dict[str, Any], int]:
             db_url_masked = db_url
 
         return jsonify({
-            'database': db_info[0] if db_info else None,
-            'server_addr': str(db_info[1]) if db_info else None,
-            'server_port': db_info[2] if db_info else None,
+            'database': db_info.get('current_database') if db_info else None,
+            'server_addr': str(db_info.get('inet_server_addr', '')) if db_info else None,
+            'server_port': db_info.get('inet_server_port') if db_info else None,
             'database_url_masked': db_url_masked,
             'task_type_column_exists': task_type_exists,
             'all_columns': columns,
