@@ -1984,7 +1984,7 @@ def get_etl_changes() -> Tuple[Dict[str, Any], int]:
 
         # 변경 이력 조회 (product_info JOIN으로 model 포함)
         cur.execute(f"""
-            SELECT cl.id, cl.serial_number, pi.model,
+            SELECT cl.id, cl.serial_number, pi.sales_order, pi.model,
                    cl.field_name, cl.old_value, cl.new_value, cl.changed_at
             FROM etl.change_log cl
             LEFT JOIN plan.product_info pi ON cl.serial_number = pi.serial_number
@@ -2002,6 +2002,7 @@ def get_etl_changes() -> Tuple[Dict[str, Any], int]:
             changes.append({
                 'id': row['id'],
                 'serial_number': row['serial_number'],
+                'sales_order': row['sales_order'],
                 'model': row['model'],
                 'field_name': field_name,
                 'field_label': _FIELD_LABELS.get(field_name, field_name),
