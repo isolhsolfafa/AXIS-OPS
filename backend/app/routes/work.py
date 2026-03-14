@@ -279,6 +279,14 @@ def complete_single_action_route() -> Tuple[Dict[str, Any], int]:
         if check_all_processes_completed(task.serial_number):
             update_all_completed(task.serial_number, True, completed_at)
 
+    # Sprint 27: 완료 연쇄 알림 트리거 (TANK_DOCKING → ELEC 관리자 등)
+    try:
+        from app.services.task_service import TaskService
+        task_service = TaskService()
+        task_service._trigger_completion_alerts(task)
+    except Exception as e:
+        logger.error(f"Failed to trigger completion alerts for single action: {e}")
+
     updated_task = get_task_by_id(task_detail_id)
     result = _task_to_dict(updated_task) if updated_task else {}
     result['category_completed'] = category_completed
