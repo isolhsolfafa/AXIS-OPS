@@ -1968,6 +1968,20 @@ def get_etl_changes() -> Tuple[Dict[str, Any], int]:
 
         where_clause = " AND ".join(conditions)
 
+        # summary 쿼리 (limit 무관 — 전체 건수 + 필드별 건수)
+        cur.execute(f"""
+            SELECT cl.field_name, COUNT(*) AS cnt
+            FROM etl.change_log cl
+            WHERE {where_clause}
+            GROUP BY cl.field_name
+        """, tuple(params))
+        summary_rows = cur.fetchall()
+        by_field: dict = {}
+        total_changes = 0
+        for sr in summary_rows:
+            by_field[sr['field_name']] = sr['cnt']
+            total_changes += sr['cnt']
+
         # 변경 이력 조회 (product_info JOIN으로 model 포함)
         cur.execute(f"""
             SELECT cl.id, cl.serial_number, pi.model,
@@ -1982,7 +1996,6 @@ def get_etl_changes() -> Tuple[Dict[str, Any], int]:
         rows = cur.fetchall()
 
         changes = []
-        by_field: dict = {}
         for row in rows:
             field_name = row['field_name']
             changed_at = row['changed_at']
@@ -1996,12 +2009,11 @@ def get_etl_changes() -> Tuple[Dict[str, Any], int]:
                 'new_value': row['new_value'],
                 'changed_at': changed_at.isoformat() if changed_at else None,
             })
-            by_field[field_name] = by_field.get(field_name, 0) + 1
 
         return jsonify({
             'changes': changes,
             'summary': {
-                'total_changes': len(changes),
+                'total_changes': total_changes,
                 'by_field': by_field,
             }
         }), 200
