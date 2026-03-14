@@ -35,7 +35,7 @@
 
 ---
 
-## ✅ Sprint 27-fix 완료 (2026-03-15) — Task Seed Silent Fail 해결
+## ✅ Sprint 27-fix 완료 (2026-03-15) — Task Seed Silent Fail + SINGLE_ACTION UI
 
 ### 근본 원인
 `022_add_task_type.sql` migration 미적용 상태에서 task seed가 `task_type` 컬럼 참조 → silent fail (`logger.warning`으로 삼킴).
@@ -44,6 +44,8 @@
 - 에러 로깅 강화 (warning → error + traceback) — 향후 silent fail 방지
 - migration 적용 후 GBWS-6869, GBWS-6867 각각 20개 task 생성 확인
 - debug 엔드포인트 추가 → 원인 확인 → 제거 완료
+- BE task 목록 API에 `task_type` 필드 추가 (누락 수정)
+- FE task_management_screen: SINGLE_ACTION task에 녹색 "완료" 버튼 표시 (Netlify 배포 완료)
 
 ---
 
