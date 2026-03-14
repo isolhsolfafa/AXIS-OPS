@@ -363,7 +363,36 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
                 const SizedBox(height: 12),
                 Row(
                   children: [
-                    if (task.status == 'pending')
+                    if (task.status == 'pending' && task.isSingleAction)
+                      Expanded(
+                        child: SizedBox(
+                          height: 38,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(colors: [Color(0xFF43A047), Color(0xFF66BB6A)]),
+                              borderRadius: BorderRadius.circular(GxRadius.sm),
+                            ),
+                            child: Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: () => _handleCompleteSingleAction(task.id),
+                                borderRadius: BorderRadius.circular(GxRadius.sm),
+                                child: Center(
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: const [
+                                      Icon(Icons.check_circle_outline, size: 18, color: Colors.white),
+                                      SizedBox(width: 4),
+                                      Text('완료', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (task.status == 'pending' && !task.isSingleAction)
                       Expanded(
                         child: SizedBox(
                           height: 38,
@@ -564,6 +593,34 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _handleCompleteSingleAction(int taskId) async {
+    final taskNotifier = ref.read(taskProvider.notifier);
+    final success = await taskNotifier.completeSingleAction(taskDetailId: taskId);
+
+    if (mounted) {
+      if (success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('완료 처리되었습니다.'),
+            backgroundColor: GxColors.success,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.sm)),
+          ),
+        );
+      } else {
+        final errorMessage = ref.read(taskProvider).errorMessage;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMessage ?? '완료 처리에 실패했습니다.'),
+            backgroundColor: GxColors.danger,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.sm)),
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _handleStartTask(int taskId, int workerId) async {
