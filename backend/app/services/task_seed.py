@@ -279,9 +279,29 @@ def initialize_product_tasks(
         }
 
     except PsycopgError as e:
+        import traceback
         if conn:
             conn.rollback()
-        logger.error(f"Task seed failed: serial_number={serial_number}, error={e}")
+        logger.error(
+            f"Task seed DB ERROR: serial_number={serial_number}, "
+            f"model_name={model_name}, error={e}\n"
+            f"Traceback: {traceback.format_exc()}"
+        )
+        return {
+            "created": created,
+            "skipped": skipped,
+            "categories": counts,
+            "error": str(e)
+        }
+    except Exception as e:
+        import traceback
+        if conn:
+            conn.rollback()
+        logger.error(
+            f"Task seed UNEXPECTED ERROR: serial_number={serial_number}, "
+            f"model_name={model_name}, error={e}\n"
+            f"Traceback: {traceback.format_exc()}"
+        )
         return {
             "created": created,
             "skipped": skipped,

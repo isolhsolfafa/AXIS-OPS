@@ -3,7 +3,31 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v1.7.4 (Sprint 27, 2026-03-13)
+> **현재 버전**: v1.7.4 (Sprint 27-fix, 2026-03-14)
+
+---
+
+## Sprint 27-fix: Task Seed Silent Fail 디버깅 (진행 중)
+
+### Phase 1 — 에러 로깅 강화 + 디버그 엔드포인트 (배포 완료)
+
+**현상**: QR 태깅 시 task 0개 생성 (GBWS-6867, GBWS-6869 등 복수 제품 재현)
+**원인**: product.py에서 `logger.warning`으로 에러 삼킴 → FE에 에러 미표시
+
+**BE 변경 내역**:
+- `product.py`: task seed except 블록 `logger.warning` → `logger.error` + `traceback.format_exc()`
+- `task_seed.py`: `PsycopgError` catch에 traceback 추가 + 일반 `Exception` catch 블록 신규 추가
+- `product.py`: `POST /api/app/product/debug/seed/<qr_doc_id>` 디버그 엔드포인트 추가 (임시)
+
+**수정 파일**:
+- `backend/app/routes/product.py`
+- `backend/app/services/task_seed.py`
+
+**테스트**: 35 passed, 1 failed (test_admin_email_notification — 기존 이슈, 이번 변경 무관)
+
+### Phase 2 — 근본 원인 수정 (대기)
+- debug/seed 호출 후 에러 메시지 확인
+- 의심 원인: `_upsert_task()` INSERT에 worker_id 누락 (NOT NULL 제약조건)
 
 ---
 
@@ -2941,3 +2965,26 @@ frontend/lib/utils/app_version.dart        # v1.7.2
 - DB 스키마 변경 없음
 - FE(Flutter) 변경 없음
 - 기존 `@admin_required`, `@manager_or_admin_required` 사용처 영향 없음
+
+---
+
+## ETL pi_start 변경이력 지원 (2026-03-14) — CORE-ETL Sprint 2-A 연동
+
+### BE 변경 내역
+- `backend/app/routes/admin.py`:
+  - `_FIELD_LABELS`에 `'pi_start': '가압시작'` 추가 (5→6개)
+  - `valid_fields = set(_FIELD_LABELS.keys())`에 자동 포함 → `field=pi_start` 필터 지원
+
+### _FIELD_LABELS (변경 후)
+| 키 | 한글 라벨 |
+|---|---|
+| `sales_order` | 수주번호 |
+| `ship_plan_date` | 출하예정일 |
+| `mech_start` | 기구시작 |
+| `pi_start` | 가압시작 |
+| `mech_partner` | 기구협력사 |
+| `elec_partner` | 전장협력사 |
+
+### 연관 변경 (타 repo)
+- **CORE-ETL**: `TRACKED_FIELDS`에 `'pressure_test': 'pi_start'` 추가, `_prefetch_tracked_values()` SELECT/캐시 수정
+- **AXIS-VIEW**: FIELD_CONFIG, DATE_FIELDS, KPI 그리드 6열, kpiCards, 주간 차트 — VIEW 별도 진행

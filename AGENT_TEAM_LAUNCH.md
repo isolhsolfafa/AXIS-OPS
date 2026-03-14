@@ -7969,9 +7969,565 @@ pytest tests/ -x -q 2>&1 | tail -20
 
 ---
 
-# Sprint 27: AXIS-VIEW 권한 데코레이터 재정비
+# Sprint 27: 단일 액션 Task 설계 (task_type 컬럼 + 출하완료 Task)
 
-> **버전**: 1.7.3 → 1.7.4ㅇ
+> **버전**: 1.7.4 → 1.7.4 (동일 — version.py는 Sprint 28에서 올림)
+> **날짜**: 2026-03-13
+> **목표**: (1) `app_task_details` 테이블에 `task_type` 컬럼 추가, (2) Tank Docking을 SINGLE_ACTION으로 전환, (3) SI에 '출하완료' Task 추가, (4) FE에서 task_type에 따라 버튼 분기
+
+## 배경
+
+현재 모든 Task는 **시작 → 완료** 2단계 액션이 필요합니다.
+하지만 일부 Task는 "완료 체크만" 하면 되는 단일 액션이 적합합니다:
+
+| Task | 공정 | 현재 | 변경 | 주체 |
+|------|------|------|------|------|
+| Tank Docking | MECH | 시작/종료 | 단일 액션 | MECH 담당 |
+| 출하완료 (신규) | SI | 없음 | 단일 액션 | SI 담당 |
+
+**A안 채택**: `task_type` 컬럼을 추가하여 장기적으로 다른 Task에도 확장 가능하게 설계.
+
+## 변경 대상 파일
+
+| 파일 | 변경 내용 |
+|------|----------|
+| `backend/migrations/022_add_task_type.sql` | task_type 컬럼 추가 + 기존 TANK_DOCKING 업데이트 |
+| `backend/app/models/task_detail.py` | TaskDetail dataclass에 task_type 필드 추가 |
+| `backend/app/services/task_seed.py` | TaskTemplate에 task_type 추가 + 출하완료 Task 등록 |
+| `backend/app/services/task_service.py` | complete_single_action() 함수 추가 |
+| `backend/app/routes/work.py` | POST /work/complete-single 엔드포인트 추가 |
+| `frontend/lib/models/task_item.dart` | taskType 필드 추가 |
+| `frontend/lib/screens/task/task_detail_screen.dart` | task_type 분기 → "완료" 버튼 1개 표시 |
+
+---
+
+## Task 1 — DB 마이그레이션: task_type 컬럼 추가
+
+**파일**: `backend/migrations/022_add_task_type.sql`
+
+```sql
+-- Sprint 27: 단일 액션 Task 지원
+-- task_type: 'NORMAL' (기본, 시작→완료) / 'SINGLE_ACTION' (완료 체크만)
+
+ALTER TABLE app_task_details
+ADD COLUMN IF NOT EXISTS task_type VARCHAR(20) NOT NULL DEFAULT 'NORMAL';
+
+-- 기존 Tank Docking 행을 SINGLE_ACTION으로 업데이트
+UPDATE app_task_details
+SET task_type = 'SINGLE_ACTION'
+WHERE task_id = 'TANK_DOCKING';
+
+COMMENT ON COLUMN app_task_details.task_type IS 'NORMAL: 시작/완료 2단계, SINGLE_ACTION: 완료 체크만';
+```
+
+**주의**: `DEFAULT 'NORMAL'`이므로 기존 행은 자동으로 NORMAL 유지. Tank Docking만 UPDATE.
+
+---
+
+## Task 2 — BE 모델: TaskDetail에 task_type 필드 추가
+
+**파일**: `backend/app/models/task_detail.py`
+
+### 2-1. TaskDetail dataclass에 필드 추가
+
+기존 `total_pause_minutes` 아래에 추가:
+
+```python
+    # Sprint 27: 단일 액션 Task 지원
+    task_type: str = 'NORMAL'  # 'NORMAL' 또는 'SINGLE_ACTION'
+```
+
+### 2-2. from_db_row()에 task_type 파싱 추가
+
+기존 `total_pause_minutes` 파싱 아래에:
+
+```python
+            task_type=row.get('task_type') or 'NORMAL',
+```
+
+### 2-3. complete_single_action() 함수 추가
+
+`complete_task()` 함수 아래에 새 함수 추가:
+
+```python
+def complete_single_action(task_detail_id: int, completed_at: datetime, worker_id: int) -> bool:
+    """
+    단일 액션 Task 완료 처리 (started_at 없이 바로 완료).
+
+    SINGLE_ACTION Task는 시작 단계 없이 "완료 체크"만 수행.
+    started_at = completed_at (동시), duration_minutes = 0으로 설정.
+
+    Args:
+        task_detail_id: 작업 ID
+        completed_at: 완료 시간 (timezone-aware)
+        worker_id: 완료 처리한 작업자 ID
+
+    Returns:
+        성공 시 True, 실패 시 False
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            UPDATE app_task_details
+            SET started_at = %s,
+                completed_at = %s,
+                duration_minutes = 0,
+                worker_id = %s,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+              AND task_type = 'SINGLE_ACTION'
+              AND completed_at IS NULL
+            """,
+            (completed_at, completed_at, worker_id, task_detail_id)
+        )
+
+        updated = cur.rowcount > 0
+        conn.commit()
+
+        if updated:
+            logger.info(f"Single action completed: id={task_detail_id}, worker_id={worker_id}")
+        return updated
+
+    except PsycopgError as e:
+        if conn:
+            conn.rollback()
+        logger.error(f"Failed to complete single action: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+```
+
+---
+
+## Task 3 — BE 서비스: TaskSeed 업데이트
+
+**파일**: `backend/app/services/task_seed.py`
+
+### 3-1. TaskTemplate에 task_type 필드 추가
+
+```python
+@dataclass
+class TaskTemplate:
+    task_id: str
+    task_name: str
+    phase: str
+    is_docking_required: bool = False
+    task_type: str = 'NORMAL'  # Sprint 27: 'NORMAL' 또는 'SINGLE_ACTION'
+```
+
+### 3-2. TANK_DOCKING 템플릿에 task_type 설정
+
+```python
+# MECH_TASKS 중 TANK_DOCKING 행 변경:
+TaskTemplate('TANK_DOCKING', 'Tank Docking', 'DOCKING', True, 'SINGLE_ACTION'),
+```
+
+**주의**: 위치 인자 순서에 맞게 `is_docking_required=True` 다음에 `task_type='SINGLE_ACTION'` 추가. 다른 TaskTemplate 행은 변경하지 않음 (기본값 'NORMAL' 유지).
+
+### 3-3. SI_TASKS에 출하완료 Task 추가
+
+```python
+# Sprint 11: SI Tasks (1개) → Sprint 27: 2개로 확장
+SI_TASKS: List[TaskTemplate] = [
+    TaskTemplate('SI_FINISHING', '마무리공정', 'FINAL', False),
+    TaskTemplate('SI_SHIPMENT', '출하완료', 'FINAL', False, 'SINGLE_ACTION'),  # Sprint 27
+]
+```
+
+### 3-4. _upsert_task()에 task_type 파라미터 추가
+
+```python
+def _upsert_task(
+    cur,
+    serial_number: str,
+    qr_doc_id: str,
+    task_category: str,
+    task_id: str,
+    task_name: str,
+    phase: str,
+    is_applicable: bool,
+    task_type: str = 'NORMAL'  # Sprint 27 추가
+) -> bool:
+    cur.execute(
+        """
+        INSERT INTO app_task_details (
+            serial_number, qr_doc_id, task_category,
+            task_id, task_name, is_applicable, task_type
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (serial_number, task_category, task_id) DO NOTHING
+        RETURNING id
+        """,
+        (serial_number, qr_doc_id, task_category,
+         task_id, task_name, is_applicable, task_type)
+    )
+    row = cur.fetchone()
+    return row is not None
+```
+
+### 3-5. 모든 _upsert_task 호출부에 task_type 전달
+
+각 카테고리 루프에서 `t.task_type`을 전달:
+
+```python
+# 예시 (모든 카테고리 동일 패턴):
+inserted = _upsert_task(
+    cur, serial_number, qr_doc_id,
+    'MECH', t.task_id, t.task_name, t.phase, is_applicable, t.task_type
+)
+```
+
+### 3-6. docstring 업데이트
+
+`initialize_product_tasks` docstring의 Task 수 업데이트:
+- 기존: `Task 19개(MECH 7 + ELEC 6 + TMS 2 + PI 2 + QI 1 + SI 1)`
+- 변경: `Task 20개(MECH 7 + ELEC 6 + TMS 2 + PI 2 + QI 1 + SI 2)`
+
+---
+
+## Task 4 — BE 라우트: 단일 액션 완료 엔드포인트
+
+**파일**: `backend/app/routes/work.py`
+
+기존 `POST /work/complete` 아래에 추가:
+
+```python
+@work_bp.route("/work/complete-single", methods=["POST"])
+@jwt_required
+def complete_single_action_route():
+    """
+    단일 액션 Task 완료 API.
+
+    SINGLE_ACTION type Task는 시작 없이 바로 완료 체크만 수행.
+    started_at = completed_at 동시 설정, duration = 0.
+
+    Request Body:
+        {
+            "task_detail_id": int (required)
+        }
+
+    Returns:
+        200: {"status": "COMPLETED", "message": "작업이 완료되었습니다."}
+        400: 유효성 검증 실패
+        404: Task 미발견 또는 task_type 불일치
+    """
+    data = request.get_json()
+    if not data or 'task_detail_id' not in data:
+        return jsonify({
+            'error': 'VALIDATION_ERROR',
+            'message': 'task_detail_id가 필요합니다.'
+        }), 400
+
+    task_detail_id = data['task_detail_id']
+
+    # Task 조회 및 task_type 검증
+    task = get_task_by_id(task_detail_id)
+    if not task:
+        return jsonify({'error': 'NOT_FOUND', 'message': 'Task를 찾을 수 없습니다.'}), 404
+
+    if task.task_type != 'SINGLE_ACTION':
+        return jsonify({
+            'error': 'INVALID_TASK_TYPE',
+            'message': '단일 액션 Task가 아닙니다. 일반 시작/완료 API를 사용하세요.'
+        }), 400
+
+    if task.completed_at is not None:
+        return jsonify({
+            'error': 'ALREADY_COMPLETED',
+            'message': '이미 완료된 Task입니다.'
+        }), 400
+
+    # 완료 처리
+    completed_at = datetime.now(timezone.utc)
+    success = complete_single_action(task_detail_id, completed_at, g.worker_id)
+
+    if not success:
+        return jsonify({'error': 'COMPLETE_FAILED', 'message': '완료 처리에 실패했습니다.'}), 500
+
+    # completion_status 업데이트 (기존 로직 재사용)
+    task_service = TaskService()
+    task_service._check_category_completion(task.serial_number, task.task_category)
+
+    # work_completion_log 기록
+    _log_single_action_completion(task, g.worker_id, completed_at)
+
+    return jsonify({
+        'status': 'COMPLETED',
+        'message': '작업이 완료되었습니다.',
+        'task_detail_id': task_detail_id
+    }), 200
+```
+
+**필요 import 추가**:
+```python
+from datetime import datetime, timezone
+from app.models.task_detail import get_task_by_id, complete_single_action
+from app.services.task_service import TaskService
+```
+
+**_log_single_action_completion() 헬퍼** (같은 파일 하단에):
+```python
+def _log_single_action_completion(task, worker_id, completed_at):
+    """단일 액션 완료 로그 기록 (work_completion_log)"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO work_completion_log (
+                task_id, worker_id, serial_number, qr_doc_id,
+                task_category, task_id_ref, task_name,
+                completed_at, duration_minutes
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 0)
+            """,
+            (task.id, worker_id, task.serial_number, task.qr_doc_id,
+             task.task_category, task.task_id, task.task_name,
+             completed_at)
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Failed to log single action completion: {e}")
+```
+
+---
+
+## Task 5 — FE 모델: TaskItem에 taskType 추가
+
+**파일**: `frontend/lib/models/task_item.dart`
+
+### 5-1. 필드 추가
+
+`myStatus` 아래에:
+```dart
+  final String taskType; // 'NORMAL' 또는 'SINGLE_ACTION'
+```
+
+### 5-2. 생성자에 추가
+
+```dart
+  this.taskType = 'NORMAL',
+```
+
+### 5-3. fromJson에 추가
+
+```dart
+      taskType: json['task_type'] as String? ?? 'NORMAL',
+```
+
+### 5-4. toJson에 추가
+
+```dart
+      'task_type': taskType,
+```
+
+### 5-5. copyWith에 추가
+
+파라미터: `String? taskType,`
+본문: `taskType: taskType ?? this.taskType,`
+
+### 5-6. 상태 헬퍼 추가
+
+```dart
+  /// 단일 액션 Task 여부
+  bool get isSingleAction => taskType == 'SINGLE_ACTION';
+```
+
+---
+
+## Task 6 — FE 화면: 단일 액션 버튼 분기
+
+**파일**: `frontend/lib/screens/task/task_detail_screen.dart`
+
+### 6-1. 액션 버튼 빌드 분기
+
+기존 `_buildActionButtons()` 메서드(또는 버튼 영역)에서 task_type 분기 추가:
+
+```dart
+// 기존 버튼 빌드 로직 앞에 추가:
+if (task.isSingleAction) {
+  return _buildSingleActionButton(task);
+}
+// ... 기존 시작/완료 버튼 로직
+```
+
+### 6-2. _buildSingleActionButton() 구현
+
+```dart
+Widget _buildSingleActionButton(TaskItem task) {
+  // 이미 완료됨
+  if (task.completedAt != null) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 14),
+      decoration: BoxDecoration(
+        color: GxColors.success.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: const Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.check_circle, color: GxColors.success, size: 20),
+          SizedBox(width: 8),
+          Text('작업 완료됨', style: TextStyle(
+            color: GxColors.success,
+            fontWeight: FontWeight.w600,
+            fontSize: 15,
+          )),
+        ],
+      ),
+    );
+  }
+
+  // 완료 버튼 (1개만)
+  return SizedBox(
+    width: double.infinity,
+    child: ElevatedButton(
+      onPressed: _isActionLoading ? null : () => _completeSingleAction(task),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: GxColors.accent,
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      child: _isActionLoading
+          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+          : const Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.check, size: 20),
+                SizedBox(width: 8),
+                Text('완료', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+              ],
+            ),
+    ),
+  );
+}
+```
+
+### 6-3. _completeSingleAction() 메서드
+
+```dart
+Future<void> _completeSingleAction(TaskItem task) async {
+  setState(() => _isActionLoading = true);
+  try {
+    final taskNotifier = ref.read(taskProvider.notifier);
+    final success = await taskNotifier.completeSingleAction(task.id);
+    if (mounted) {
+      _showSnack(success, '작업이 완료되었습니다.', '작업 완료에 실패했습니다.');
+    }
+  } finally {
+    if (mounted) setState(() => _isActionLoading = false);
+  }
+}
+```
+
+---
+
+## Task 7 — FE 서비스/프로바이더: completeSingleAction API 호출
+
+### 7-1. task_service.dart에 추가
+
+```dart
+Future<bool> completeSingleAction(int taskDetailId) async {
+  try {
+    final response = await _dio.post('/work/complete-single', data: {
+      'task_detail_id': taskDetailId,
+    });
+    return response.statusCode == 200;
+  } catch (e) {
+    debugPrint('completeSingleAction error: $e');
+    return false;
+  }
+}
+```
+
+### 7-2. task_provider.dart에 추가
+
+```dart
+Future<bool> completeSingleAction(int taskDetailId) async {
+  final success = await _taskService.completeSingleAction(taskDetailId);
+  if (success) {
+    await refreshCurrentProduct(); // Task 목록 새로고침
+  }
+  return success;
+}
+```
+
+---
+
+## Task 8 — 테스트
+
+### 8-1. BE 테스트
+
+```bash
+cd /path/to/AXIS-OPS/backend
+python -m pytest tests/ -x -v --timeout=30 2>&1 | tail -50
+```
+
+**신규 테스트 항목**:
+
+1. **마이그레이션 적용 확인**
+   - `task_type` 컬럼 존재, DEFAULT = 'NORMAL'
+   - 기존 Task 행 → task_type = 'NORMAL' 유지
+
+2. **Task Seed**
+   - TANK_DOCKING seed → task_type = 'SINGLE_ACTION'
+   - SI_SHIPMENT seed → task_type = 'SINGLE_ACTION'
+   - 기존 Task seed → task_type = 'NORMAL' 유지
+   - SI Task 수: 1개 → 2개 (SI_FINISHING + SI_SHIPMENT)
+
+3. **complete_single_action()**
+   - SINGLE_ACTION Task → started_at = completed_at, duration = 0, 200 반환
+   - NORMAL Task로 호출 → 400 반환 (task_type 불일치)
+   - 이미 완료된 Task → 400 반환
+
+4. **기존 시작/완료 API regression**
+   - NORMAL Task: 기존 start/complete 정상 동작
+   - SINGLE_ACTION Task: 기존 start API 호출 시 동작 확인 (방어 로직 선택)
+
+### 8-2. FE 빌드
+
+```bash
+cd /path/to/AXIS-OPS/frontend
+flutter build web
+```
+
+빌드 에러 없음 확인.
+
+---
+
+## 체크리스트
+
+- [x] `022_add_task_type.sql` 마이그레이션 작성
+- [x] TaskDetail dataclass에 `task_type` 필드 추가
+- [x] `complete_single_action()` DB 함수 추가
+- [x] TaskTemplate에 `task_type` 필드 추가
+- [x] TANK_DOCKING → `SINGLE_ACTION` 변경
+- [x] SI_SHIPMENT ('출하완료') Task 추가
+- [x] `_upsert_task()`에 task_type 파라미터 추가
+- [x] 모든 _upsert_task 호출부 task_type 전달
+- [x] `POST /work/complete-single` 엔드포인트 추가
+- [x] work_completion_log 기록 함수 추가
+- [x] TaskItem.dart에 `taskType` 필드 + `isSingleAction` getter 추가
+- [x] task_detail_screen.dart에 단일 액션 버튼 분기 추가
+- [x] task_service.dart에 completeSingleAction() 추가
+- [x] task_provider.dart에 completeSingleAction() 추가
+- [x] pytest 전체 통과 (35 passed, 1 기존 fail — Sprint 27 regression 0건)
+- [x] flutter build web 에러 없음
+- [x] ⚠️ 기존 NORMAL Task 시작/완료 동작 영향 없음 확인
+- [x] ⚠️ 기존 Task Seed 19개 → 20개 (SI +1) 카운트 확인
+
+---
+
+# Sprint 28: AXIS-VIEW 권한 데코레이터 재정비
+
+> **버전**: 1.7.4 → 1.7.5
 > **날짜**: 2026-03-13
 > **목표**: (1) `get_current_worker()` 캐싱 헬퍼로 중복 DB 쿼리 제거, (2) 신규 데코레이터 2개 추가 (`@gst_or_admin_required`, `@view_access_required`), (3) 기존 API 4개 데코레이터 교체, (4) 기존 데코레이터도 캐싱 적용
 
@@ -8271,7 +8827,7 @@ from app.middleware.jwt_auth import jwt_required, admin_required, manager_or_adm
 **파일**: `backend/version.py`
 
 ```python
-VERSION = "1.7.4"
+VERSION = "1.7.5"
 BUILD_DATE = "2026-03-13"
 ```
 
@@ -8334,11 +8890,555 @@ python -m pytest tests/ -x -v --timeout=30 2>&1 | tail -50
 - [x] `@view_access_required` 데코레이터 추가
 - [x] `qr.py` L22 → `@view_access_required` 교체 + import 수정
 - [x] `admin.py` L1921 → `@view_access_required` 교체 + import 추가
-- [ ] 신규 데코레이터 테스트 케이스 추가 (GST일반→200, 협력사manager→200/403)
+- [ ] 신규 데코레이터 테스트 케이스 추가 (GST일반→200, 협력사manager→200/403) → Sprint 29에서 처리
 - [x] 기존 데코레이터 테스트 regression 통과
-- [ ] `get_current_worker()` 캐싱 테스트 통과
-- [x] version.py → 1.7.4
+- [ ] `get_current_worker()` 캐싱 테스트 통과 → Sprint 29에서 처리
+- [ ] version.py → 1.7.5 → Sprint 29 완료 시 함께 버전업
 - [x] pytest 전체 통과 (667 passed, 36 기존 실패 — Sprint 27 regression 0건)
 - [x] ⚠️ DB 스키마 변경 없음 확인
 - [x] ⚠️ FE(Flutter) 변경 없음 확인
 - [x] ⚠️ 기존 `@admin_required`, `@manager_or_admin_required` 사용처 영향 없음 확인
+
+---
+
+# Sprint 29: 공장 API — 생산일정 + 주간 KPI (BE only)
+
+> **버전**: 현재 version.py 확인 후 patch +1
+> **날짜**: 2026-03-13
+> **범위**: BE only (FE 없음). factory.py 블루프린트 신규 생성
+> **참조**: OPS_API_REQUESTS.md #9, #10
+
+## 배경
+
+VIEW 생산일정 페이지(`ProductionPlanPage.tsx`)와 공장 대시보드(`FactoryDashboardPage.tsx`)에 필요한 BE API 2개를 구현한다.
+
+- **#10 monthly-detail**: 생산일정 페이지 테이블 데이터 (GST 공정 일정)
+- **#9 weekly-kpi**: 공장 대시보드 KPI 카드 + 차트 데이터
+
+두 엔드포인트 모두 `plan.product_info` + `completion_status` JOIN 기반이며, 기존 패턴(qr.py 페이지네이션)을 따른다.
+
+## 전제 조건
+
+- `finishing_plan_end` 컬럼이 `plan.product_info`에 이미 존재 (CORE-ETL migration 001)
+- `actual_ship_date` 컬럼이 `public.qr_registry`에 이미 존재
+- `@gst_or_admin_required`, `@view_access_required` 데코레이터 이미 구현 (Sprint 28)
+
+---
+
+## Task 1: factory.py 블루프린트 생성 + __init__.py 등록
+
+### 파일 생성: `backend/app/routes/factory.py`
+
+```python
+"""
+공장 API 라우트 (Sprint 29)
+엔드포인트: /api/admin/factory/*
+VIEW 생산일정 + 공장 대시보드 전용
+"""
+
+import logging
+import math
+from datetime import date, timedelta
+from flask import Blueprint, request, jsonify
+from typing import Tuple, Dict, Any
+
+from app.middleware.jwt_auth import (
+    jwt_required,
+    gst_or_admin_required,
+    view_access_required,
+)
+from app.models.worker import get_db_connection
+from psycopg2 import Error as PsycopgError
+
+logger = logging.getLogger(__name__)
+
+factory_bp = Blueprint("factory", __name__, url_prefix="/api/admin/factory")
+```
+
+### __init__.py 등록
+
+`backend/app/__init__.py`에 추가:
+
+```python
+from app.routes.factory import factory_bp  # Sprint 29
+# ... 기존 register_blueprint 아래에
+app.register_blueprint(factory_bp)
+```
+
+### 검증
+- `python -c "from app.routes.factory import factory_bp; print(factory_bp.name)"` → `factory`
+
+---
+
+## Task 2: #10 monthly-detail 엔드포인트 구현
+
+### 파일: `backend/app/routes/factory.py`에 추가
+
+```python
+@factory_bp.route("/monthly-detail", methods=["GET"])
+@jwt_required
+@view_access_required
+def get_monthly_detail() -> Tuple[Dict[str, Any], int]:
+    """
+    월간 생산 현황 상세 (OPS_API_REQUESTS #10)
+
+    생산일정 페이지 + 공장 대시보드 상세 테이블용.
+    plan.product_info + completion_status JOIN.
+
+    Query Parameters:
+        month: YYYY-MM (기본: 현재 월)
+        date_field: pi_start | mech_start (기본: pi_start)
+        page: 페이지 번호 (기본: 1)
+        per_page: 페이지당 건수, max 200 (기본: 50)
+    """
+```
+
+### 구현 요구 사항
+
+1. **파라미터 검증**:
+   - `month`: `YYYY-MM` 정규식 검증. 유효하지 않으면 400
+   - `date_field`: `pi_start` 또는 `mech_start`만 허용. 그 외 400
+   - `per_page`: max 200 제한
+   - `page`: 1 이상
+
+2. **SQL 쿼리** (OPS_API_REQUESTS.md #10 그대로):
+```sql
+-- COUNT 쿼리
+SELECT COUNT(*) AS cnt
+FROM plan.product_info p
+WHERE p.{date_field} >= %s AND p.{date_field} < %s
+
+-- 데이터 쿼리
+SELECT p.sales_order, p.product_code, p.serial_number, p.model,
+       p.customer, p.line, p.mech_partner, p.elec_partner,
+       p.mech_start, p.mech_end, p.elec_start, p.elec_end,
+       p.pi_start, p.qi_start, p.si_start, p.finishing_plan_end,
+       cs.mech_completed, cs.elec_completed, cs.tm_completed,
+       cs.pi_completed, cs.qi_completed, cs.si_completed
+FROM plan.product_info p
+LEFT JOIN completion_status cs ON p.serial_number = cs.serial_number
+WHERE p.{date_field} >= %s AND p.{date_field} < %s
+ORDER BY p.{date_field} DESC
+LIMIT %s OFFSET %s
+
+-- by_model 집계 쿼리
+SELECT p.model, COUNT(*) AS count
+FROM plan.product_info p
+WHERE p.{date_field} >= %s AND p.{date_field} < %s
+GROUP BY p.model
+ORDER BY count DESC
+```
+
+   ⚠️ **중요**: `date_field`는 SQL 인젝션 방지를 위해 **화이트리스트 검증 후 f-string**으로 삽입. 파라미터 바인딩(%s)은 날짜값에만 사용.
+
+3. **날짜 범위 계산**:
+   - `month = "2026-03"` → `start_date = date(2026, 3, 1)`, `end_date = date(2026, 4, 1)`
+   - 12월이면 다음해 1월 1일
+
+4. **progress_pct 계산** (Python 측):
+```python
+def _calc_progress(row):
+    """완료 단계 수 / 해당 단계 수 * 100"""
+    is_gaia = (row.get('model') or '').upper().startswith('GAIA')
+    stages = ['mech_completed', 'elec_completed', 'pi_completed', 'qi_completed', 'si_completed']
+    if is_gaia:
+        stages.append('tm_completed')
+    completed = sum(1 for s in stages if row.get(s))
+    return round(completed / len(stages) * 100, 1)
+```
+
+5. **completion.tm 처리**:
+   - GAIA 모델: `tm_completed` 값 반환 (bool)
+   - 비GAIA 모델: `null` 반환
+
+6. **응답 형식** (OPS_API_REQUESTS.md #10 그대로):
+```python
+{
+    "month": "2026-03",
+    "items": [
+        {
+            "sales_order": "6408",
+            "product_code": "41000558",
+            "serial_number": "GBWS-6408",
+            "model": "GAIA-I DUAL",
+            "customer": "SEC",
+            "line": "15L",
+            "mech_partner": "BAT",
+            "elec_partner": "C&A",
+            "mech_start": "2026-03-03",  # date → isoformat() or null
+            "mech_end": "2026-03-10",
+            "elec_start": "2026-03-08",
+            "elec_end": "2026-03-15",
+            "pi_start": "2026-03-14",
+            "qi_start": "2026-03-16",
+            "si_start": "2026-03-18",
+            "finishing_plan_end": "2026-03-20",
+            "completion": {
+                "mech": True,
+                "elec": False,
+                "tm": None,  # 비GAIA
+                "pi": False,
+                "qi": False,
+                "si": False
+            },
+            "progress_pct": 16.7
+        }
+    ],
+    "by_model": [
+        {"model": "GAIA-I DUAL", "count": 81}
+    ],
+    "total": 119,
+    "page": 1,
+    "per_page": 50,
+    "total_pages": 3
+}
+```
+
+7. **에러 처리**: qr.py 패턴 동일 — `PsycopgError` catch → 500 + logger.error
+
+### 검증
+- 서버 재시작 후 `curl` 또는 pytest로 엔드포인트 호출 가능 확인
+
+---
+
+## Task 3: #9 weekly-kpi 엔드포인트 구현
+
+### 파일: `backend/app/routes/factory.py`에 추가
+
+```python
+@factory_bp.route("/weekly-kpi", methods=["GET"])
+@jwt_required
+@gst_or_admin_required
+def get_weekly_kpi() -> Tuple[Dict[str, Any], int]:
+    """
+    주간 공장 KPI (OPS_API_REQUESTS #9)
+
+    공장 대시보드 KPI 카드 + 차트용.
+    finishing_plan_end 기준 ISO week 필터.
+
+    Query Parameters:
+        week: ISO week 번호 1~53 (기본: 현재 주)
+        year: 연도 (기본: 현재 연도)
+    """
+```
+
+### 구현 요구 사항
+
+1. **파라미터 검증**:
+   - `week`: 1~53 범위. 그 외 400
+   - `year`: 2020~2100 범위 (합리적 범위)
+
+2. **ISO week → 날짜 범위 변환**:
+```python
+from datetime import date
+# ISO week → Monday~Sunday
+week_start = date.fromisocalendar(year, week, 1)  # Monday
+week_end = date.fromisocalendar(year, week, 7)     # Sunday
+```
+
+3. **SQL 쿼리**:
+```sql
+-- 대상 S/N + completion_status JOIN
+SELECT p.serial_number, p.model, p.finishing_plan_end,
+       cs.mech_completed, cs.elec_completed, cs.tm_completed,
+       cs.pi_completed, cs.qi_completed, cs.si_completed
+FROM plan.product_info p
+LEFT JOIN completion_status cs ON p.serial_number = cs.serial_number
+WHERE p.finishing_plan_end >= %s AND p.finishing_plan_end <= %s
+```
+
+4. **Python 집계** (쿼리 결과 rows를 순회하며):
+
+   a. `production_count`: len(rows)
+
+   b. `completion_rate`: 각 S/N의 progress_pct 평균
+
+   c. `by_model`: model별 카운트 → `[{"model": "...", "count": N}]` (count DESC)
+
+   d. `by_stage`:
+   ```python
+   {
+       "mech": (mech_completed=True 수 / 전체) * 100,
+       "elec": (elec_completed=True 수 / 전체) * 100,
+       "tm": (tm_completed=True 수 / GAIA 모델 수) * 100,  # GAIA만 분모
+       "pi": (pi_completed=True 수 / 전체) * 100,
+       "qi": (qi_completed=True 수 / 전체) * 100,
+       "si": (si_completed=True 수 / 전체) * 100
+   }
+   ```
+   - `by_stage.tm`: TM 해당 모델(GAIA)의 S/N만 분모. 비GAIA 제외
+   - 전체 0건이면 모든 값 0.0
+
+   e. `pipeline`: GST 공정 파이프라인 현재 대수
+   ```python
+   {
+       "pi": pi_completed=True AND qi_completed=False 인 S/N 수,
+       "qi": qi_completed=True AND si_completed=False 인 S/N 수,
+       "si": si_completed=True AND finishing_plan_end > TODAY 인 S/N 수,
+       "shipped": finishing_plan_end <= TODAY 인 S/N 수
+   }
+   ```
+
+5. **응답 형식** (OPS_API_REQUESTS.md #9 그대로):
+```python
+{
+    "week": 11,
+    "year": 2026,
+    "week_range": {
+        "start": "2026-03-09",
+        "end": "2026-03-15"
+    },
+    "production_count": 37,
+    "completion_rate": 62.5,
+    "by_model": [...],
+    "by_stage": {...},
+    "pipeline": {...}
+}
+```
+
+### 검증
+- 주차별 KPI 값이 합리적인지 확인
+
+---
+
+## Task 4: 테스트
+
+### 파일 생성: `backend/tests/test_factory.py`
+
+```python
+"""
+Sprint 29: 공장 API 테스트
+- #10 monthly-detail
+- #9 weekly-kpi
+"""
+```
+
+### 테스트 케이스
+
+**#10 monthly-detail**:
+1. 정상 조회 (기본 파라미터) → 200, items 배열 + total + by_model
+2. `date_field=mech_start` → 200
+3. `date_field=invalid` → 400
+4. `month=2026-13` → 400 (유효하지 않은 월)
+5. `per_page=300` → 200 (max 200으로 제한)
+6. 페이지네이션: page=2 → 200, offset 올바른지 확인
+7. completion.tm: GAIA 모델 → bool, 비GAIA → null
+8. progress_pct 계산 검증
+
+**#9 weekly-kpi**:
+1. 정상 조회 (기본 파라미터) → 200, week + year + production_count
+2. `week=53` 경계값 → 200 또는 400 (해당 연도에 53주가 없으면)
+3. `week=0` → 400
+4. by_stage.tm 분모가 GAIA 모델만인지 확인
+5. pipeline 카운트 합리성 검증
+
+**권한 테스트**:
+1. monthly-detail: 토큰 없음 → 401
+2. monthly-detail: 협력사 일반 → 403 (view_access_required)
+3. monthly-detail: 협력사 manager → 200
+4. weekly-kpi: 협력사 manager → 403 (gst_or_admin_required)
+5. weekly-kpi: GST 일반 → 200
+
+### 실행
+```bash
+cd backend && python -m pytest tests/test_factory.py -v
+```
+
+기존 테스트 regression 확인:
+```bash
+cd backend && python -m pytest --tb=short -q 2>&1 | tail -5
+```
+
+---
+
+## Task 5: version.py 업데이트 + 최종 확인
+
+### version.py
+```python
+VERSION = "{현재 버전 patch +1}"
+BUILD_DATE = "2026-03-13"
+```
+
+### 최종 확인
+1. `python -m pytest tests/test_factory.py -v` → 전체 통과
+2. `python -m pytest --tb=short -q` → 기존 테스트 regression 없음
+3. factory.py에 미사용 import 없음
+4. `finishing_plan_end` 컬럼이 실제 DB에 존재하는지 쿼리로 확인:
+```sql
+SELECT column_name FROM information_schema.columns
+WHERE table_schema='plan' AND table_name='product_info'
+AND column_name='finishing_plan_end';
+```
+5. 컬럼 미존재 시 → CORE-ETL migration 001 실행 필요하다는 WARNING 로그 출력 (엔드포인트는 정상 동작해야 함, null 반환)
+
+---
+
+## 체크리스트
+
+- [ ] `factory.py` 블루프린트 생성 (`/api/admin/factory`)
+- [ ] `__init__.py`에 `factory_bp` 등록
+- [ ] `GET /monthly-detail` 구현 (#10)
+  - [ ] month, date_field, page, per_page 파라미터
+  - [ ] date_field 화이트리스트 검증 (SQL 인젝션 방지)
+  - [ ] completion.tm GAIA 분기
+  - [ ] progress_pct 계산
+  - [ ] by_model 집계
+  - [ ] 페이지네이션 (total, page, per_page, total_pages)
+- [ ] `GET /weekly-kpi` 구현 (#9)
+  - [ ] ISO week → 날짜 범위 변환
+  - [ ] production_count, completion_rate
+  - [ ] by_model, by_stage, pipeline 집계
+  - [ ] by_stage.tm GAIA 분모 분리
+- [ ] `test_factory.py` 테스트
+- [ ] 기존 pytest regression 0건
+- [ ] version.py 업데이트
+- [ ] ⚠️ DB 스키마 변경 없음 확인 (finishing_plan_end는 CORE-ETL에서 이미 추가됨)
+- [ ] ⚠️ FE(Flutter) 변경 없음 확인 (BE only Sprint)
+
+---
+
+## Sprint 27-fix: Task Seed Silent Fail 디버깅 + 수정
+
+> **목표**: QR 태깅 시 task가 0개 생성되는 문제 해결
+> **현상**: DB 스키마 정상 (수동 INSERT 성공), Railway 앱에서 task seed가 silent fail
+> **우선순위**: 🔴 긴급 (QR 스캔 핵심 기능 불가)
+
+### 배경 정보
+
+- `app_task_details` 테이블 구조 정상 (task_type 컬럼 존재, UNIQUE 제약조건 존재)
+- 수동 INSERT 성공: `INSERT INTO app_task_details (..., task_type) VALUES (...) ON CONFLICT DO NOTHING RETURNING id;` → id=7 반환
+- `model_config` 테이블에 GAIA prefix 존재 (has_docking=true, is_tms=true)
+- `qr_registry`에 DOC_GBWS-6869 active 상태 확인
+- `product.py` line 119-120에서 `except Exception as e: logger.warning(...)` 으로 에러를 삼킴 → FE에 에러 미표시
+- 이 문제는 GBWS-6867, GBWS-6869 등 복수 제품에서 재현됨
+
+### Task 1: 에러 로깅 강화 (product.py)
+
+`backend/app/routes/product.py` 의 task seed except 블록을 수정:
+
+**현재** (line 119-120):
+```python
+except Exception as e:
+    logger.warning(f"Task seed failed (non-blocking): {e}")
+```
+
+**변경**:
+```python
+except Exception as e:
+    import traceback
+    logger.error(
+        f"Task seed FAILED: serial={product.serial_number}, "
+        f"model={product.model}, error={e}\n"
+        f"Traceback: {traceback.format_exc()}"
+    )
+```
+
+→ `logger.warning` → `logger.error` + traceback 추가. Railway 로그에서 정확한 에러 확인 가능.
+
+### Task 2: task_seed.py 에러 로깅 강화
+
+`backend/app/services/task_seed.py` line 281-284의 except 블록:
+
+**현재**:
+```python
+except PsycopgError as e:
+    if conn:
+        conn.rollback()
+    logger.error(f"Task seed failed: serial_number={serial_number}, error={e}")
+```
+
+**변경**:
+```python
+except PsycopgError as e:
+    import traceback
+    if conn:
+        conn.rollback()
+    logger.error(
+        f"Task seed DB ERROR: serial_number={serial_number}, "
+        f"model_name={model_name}, error={e}\n"
+        f"Traceback: {traceback.format_exc()}"
+    )
+except Exception as e:
+    import traceback
+    if conn:
+        conn.rollback()
+    logger.error(
+        f"Task seed UNEXPECTED ERROR: serial_number={serial_number}, "
+        f"model_name={model_name}, error={e}\n"
+        f"Traceback: {traceback.format_exc()}"
+    )
+```
+
+→ PsycopgError 외의 일반 Exception도 별도 catch + traceback.
+
+### Task 3: 디버그 엔드포인트 추가 (임시)
+
+`backend/app/routes/product.py`에 디버그용 엔드포인트 추가:
+
+```python
+@product_bp.route("/debug/seed/<qr_doc_id>", methods=["POST"])
+@jwt_required
+def debug_task_seed(qr_doc_id: str):
+    """임시 디버그: task seed 수동 실행 + 상세 에러 반환"""
+    from app.models.product_info import get_product_by_qr_doc_id
+    
+    product = get_product_by_qr_doc_id(qr_doc_id, include_shipped=False)
+    if not product:
+        return jsonify({'error': 'PRODUCT_NOT_FOUND'}), 404
+    
+    try:
+        seed_result = initialize_product_tasks(
+            serial_number=product.serial_number,
+            qr_doc_id=product.qr_doc_id,
+            model_name=product.model
+        )
+        return jsonify({
+            'success': True,
+            'serial_number': product.serial_number,
+            'model': product.model,
+            'seed_result': seed_result
+        }), 200
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
+```
+
+→ `POST /api/app/product/debug/seed/DOC_GBWS-6869` 호출 시 에러 메시지를 JSON으로 직접 반환.
+
+### Task 4: Railway 배포 확인 + 디버그
+
+1. 코드 push 후 Railway 재배포
+2. `curl -X POST https://axis-ops-api.up.railway.app/api/app/product/debug/seed/DOC_GBWS-6869 -H "Authorization: Bearer {token}"` 호출
+3. 반환된 에러 메시지 확인
+4. 에러 원인에 따라 수정
+
+### Task 5: 근본 원인 수정 후 정리
+
+- 근본 원인 수정 적용
+- debug/seed 엔드포인트 제거 (또는 admin_required로 변경)
+- 기존 task가 없는 제품들 재스캔하여 task seed 확인
+- GBWS-6867, GBWS-6869 등 task 생성 확인
+
+### Task 6: version.py + 테스트
+
+- version.py 버전은 유지 (v1.7.4 — 핫픽스 수준)
+- 기존 pytest regression 0건 확인
+
+### 체크리스트
+
+- [x] product.py 에러 로깅 강화 (warning → error + traceback)
+- [x] task_seed.py 에러 로깅 강화 (일반 Exception 추가)
+- [x] debug/seed 엔드포인트 추가
+- [ ] Railway push + 재배포
+- [ ] debug/seed 호출로 에러 원인 확인
+- [ ] 근본 원인 수정
+- [ ] GBWS-6869 QR 태깅 → task 생성 확인
+- [ ] SINGLE_ACTION 검증: TANK_DOCKING task_type='SINGLE_ACTION' 확인
+- [ ] SINGLE_ACTION 검증: SI_SHIPMENT task_type='SINGLE_ACTION' 확인
+- [ ] SINGLE_ACTION 검증: 나머지 task는 task_type='NORMAL' 확인
+- [ ] debug 엔드포인트 정리
+- [ ] 기존 pytest regression 0건 확인

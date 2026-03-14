@@ -117,7 +117,12 @@ def get_product(qr_doc_id: str) -> Tuple[Dict[str, Any], int]:
                 f"created={seed_result['created']}, skipped={seed_result['skipped']}"
             )
     except Exception as e:
-        logger.warning(f"Task seed failed (non-blocking): {e}")
+        import traceback
+        logger.error(
+            f"Task seed FAILED: serial={product.serial_number}, "
+            f"model={product.model}, error={e}\n"
+            f"Traceback: {traceback.format_exc()}"
+        )
 
     # TMS 제품 여부 확인
     is_tms = is_tms_product(product)
@@ -143,6 +148,35 @@ def get_product(qr_doc_id: str) -> Tuple[Dict[str, Any], int]:
         'updated_at': product.updated_at.isoformat() if product.updated_at else None,
         'is_tms': is_tms
     }), 200
+
+
+@product_bp.route("/debug/seed/<qr_doc_id>", methods=["POST"])
+@jwt_required
+def debug_task_seed(qr_doc_id: str) -> Tuple[Dict[str, Any], int]:
+    """임시 디버그: task seed 수동 실행 + 상세 에러 반환"""
+    product = get_product_by_qr_doc_id(qr_doc_id, include_shipped=False)
+    if not product:
+        return jsonify({'error': 'PRODUCT_NOT_FOUND'}), 404
+
+    try:
+        seed_result = initialize_product_tasks(
+            serial_number=product.serial_number,
+            qr_doc_id=product.qr_doc_id,
+            model_name=product.model
+        )
+        return jsonify({
+            'success': True,
+            'serial_number': product.serial_number,
+            'model': product.model,
+            'seed_result': seed_result
+        }), 200
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
 
 
 @product_bp.route("/location/update", methods=["POST"])
