@@ -150,6 +150,61 @@ def get_product(qr_doc_id: str) -> Tuple[Dict[str, Any], int]:
     }), 200
 
 
+@product_bp.route("/debug/db-info", methods=["GET"])
+@jwt_required
+def debug_db_info() -> Tuple[Dict[str, Any], int]:
+    """임시: 앱이 연결한 DB 정보 + task_type 컬럼 존재 확인"""
+    from app.models.worker import get_db_connection
+    import os
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # 현재 DB 정보
+        cur.execute("SELECT current_database(), inet_server_addr(), inet_server_port()")
+        db_info = cur.fetchone()
+
+        # task_type 컬럼 확인
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema='public' AND table_name='app_task_details' AND column_name='task_type'
+        """)
+        task_type_exists = cur.fetchone() is not None
+
+        # 전체 컬럼 목록
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema='public' AND table_name='app_task_details'
+            ORDER BY ordinal_position
+        """)
+        columns = [row[0] if isinstance(row, tuple) else row['column_name'] for row in cur.fetchall()]
+
+        # DATABASE_URL 확인 (비밀번호 마스킹)
+        db_url = os.environ.get('DATABASE_URL', 'NOT SET')
+        if '@' in db_url:
+            parts = db_url.split('@')
+            db_url_masked = '***@' + parts[-1]
+        else:
+            db_url_masked = db_url
+
+        return jsonify({
+            'database': db_info[0] if db_info else None,
+            'server_addr': str(db_info[1]) if db_info else None,
+            'server_port': db_info[2] if db_info else None,
+            'database_url_masked': db_url_masked,
+            'task_type_column_exists': task_type_exists,
+            'all_columns': columns,
+            'column_count': len(columns)
+        }), 200
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
 @product_bp.route("/debug/seed/<qr_doc_id>", methods=["POST"])
 @jwt_required
 def debug_task_seed(qr_doc_id: str) -> Tuple[Dict[str, Any], int]:
