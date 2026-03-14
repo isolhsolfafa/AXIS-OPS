@@ -1911,6 +1911,7 @@ _FIELD_LABELS = {
     'sales_order': '판매오더',
     'ship_plan_date': '출하예정',
     'mech_start': '기구시작',
+    'pi_start': '가압시작',
     'mech_partner': '기구외주',
     'elec_partner': '전장외주',
 }

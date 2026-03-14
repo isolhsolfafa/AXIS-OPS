@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-03-13 (Sprint 27 완료 — AXIS-VIEW 권한 데코레이터 v1.7.4)
+> 마지막 업데이트: 2026-03-14 (Sprint 27 완료 — 단일 액션 Task / Sprint 29 공장 API 프롬프트 완료)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -35,17 +35,40 @@
 
 ---
 
-## ✅ Sprint 27 완료 (v1.7.4, 2026-03-13)
+## ✅ Sprint 27 완료 (v1.7.4, 2026-03-14) — 단일 액션 Task (task_type)
 
-### AXIS-VIEW 권한 데코레이터 재정비 — 완료
+### 개요
+app_task_details 테이블에 `task_type VARCHAR(20) DEFAULT 'NORMAL'` 컬럼 추가. 기존 시작/종료 2-step → 완료 체크만(SINGLE_ACTION) 지원.
+
+| Task | 공정 | 현재 | 변경 | 주체 |
+|------|------|------|------|------|
+| Tank Docking | MECH | 시작/종료 (NORMAL) | 단일 액션 (SINGLE_ACTION) | MECH 담당 |
+| 출하완료 (SI_SHIPMENT) | SI (신규) | 없음 | 단일 액션 (SINGLE_ACTION) | SI 담당 |
+
+### 구현 완료 항목
+- 022_add_task_type.sql migration (Railway DB 적용 완료 2026-03-14)
+- TaskDetail model + complete_single_action()
+- TaskSeed update (TANK_DOCKING→SINGLE_ACTION, SI_SHIPMENT 신규, total 20)
+- POST /work/complete-single 엔드포인트
+- TaskItem.dart taskType 필드 + isSingleAction getter
+- task_detail_screen.dart 단일 액션 "완료" 버튼 UI
+- FE service/provider completeSingleAction()
+- ⚠️ migration 미적용으로 task seed silent fail 발생 → 2026-03-14 적용으로 해결
+
+---
+
+## 🔧 Sprint 28 진행 중 (v1.7.4→1.7.5, 2026-03-13)
+
+### AXIS-VIEW 권한 데코레이터 재정비 — 테스트 잔여
 - `get_current_worker()` 캐싱 헬퍼 추가 (request 당 1회 DB 조회)
 - `admin_required`, `manager_or_admin_required` 내부 → 캐싱 리팩토링
 - `@gst_or_admin_required` 신규 (GST 소속 + Admin만 허용, 공장 대시보드 전용)
 - `@view_access_required` 신규 (GST + Admin + Manager, VIEW 전체 공개 API)
-- `qr.py` QR 목록: `@manager_or_admin_required` → `@view_access_required`
+- QR 엔드포인트: 자사필터로 처리하여 데코레이터 변경 불필요 → 제거
 - `admin.py` ETL 변경이력: `@manager_or_admin_required` → `@view_access_required`
 - DB 스키마 변경 없음, FE 변경 없음
-- pytest: 667 passed (Sprint 27 regression 0건)
+- pytest: 667 passed (regression 0건)
+- **잔여**: 신규 데코레이터 테스트 + get_current_worker 캐싱 테스트 + version.py 1.7.5
 
 ---
 
@@ -200,6 +223,39 @@
 
 ---
 
+## 📋 VIEW 생산관리 페이지 검토 (2026-03-13)
+
+### 생산일정 (ProductionPlanPage)
+- **GST 공정 일정만 표시** (PI/QI/SI + 출하). MECH/ELEC은 변수가 많고 OPS에서 트래킹
+- GST 공정은 보통 하루 만에 끝남 → 현황 파악 용이
+- 파이프라인 라벨: **가압(PI) → 공정(QI) → 포장(SI) → 출하**. 자주검사 삭제
+- 출하 컬럼 = finishing_plan_end 값 확정
+- API: #10 monthly-detail 그대로 사용, 권한 @view_access_required
+- **BE 추가 코드 거의 없음** — 엔드포인트 구현 1개뿐
+
+### 생산실적 (ProductionPerformancePage)
+- **협력사 실적 처리용 페이지** (MECH/ELEC/TM). GST 공정은 QMS I/F로 자동 처리
+- **확인 주체: PM**. OPS progress 100% → VIEW 반영(react) → PM 확인 → SAP key 값 저장
+- 혼재 태그 (P&S/C&A): 업체별 개별 확인 필요 → 행/셀 단위 처리 + 추후 일괄 처리
+- 월마감 탭: 주간 결과 합산 — 실제 완료 count vs 실적처리 count (미처리 건수 체크)
+- 일괄확인: OPS progress 100% 건에 대한 실적 일괄 승인 처리
+- SAP key 값 매핑 columns 확인 필요 (내용 정리 우선)
+
+### 출하이력 (ShipmentHistoryPage)
+- finishing_plan_end = 출하예정일, actual_ship_date = 실제출하일
+- 데이터 소스 확정 대기, 출하 지연 상태 추가 검토 필요
+- 기간/고객사 필터 추가 권장
+
+### 출하 확인 프로세스 (전체 흐름)
+1. **OPS App**: SI 담당자가 QR 스캔 → "출하완료" task 체크 (단일 액션)
+2. **BE 자동 처리**: actual_ship_date = NOW() + qr_registry.status = 'shipped'
+3. **VIEW 생산실적**: 공정별 "확인" 버튼 활성화 → 실적 확인
+4. **VIEW 생산관리(PM)**: 최종 승인 → SAP key-in 값 저장
+5. **CORE-ETL**: actual_ship_date 덮어쓰기 방지 (CASE 분기)
+- SAP/QMS 매핑 data thread 값은 추후 정의 예정
+
+---
+
 ## 🔵 추후 구현 (Phase 로드맵)
 
 CLAUDE.md Phase 계획 기반. 시급도순.
@@ -272,7 +328,7 @@ CLAUDE.md Phase 계획 기반. 시급도순.
   - 작업 필요: ① plan.product_info ALTER TABLE ② step2_load.py UPSERT 추가 ③ qr.py SELECT 추가
   - 활용성 검토 필요: VIEW QR관리 페이지에서 이 정보를 어떻게 활용할지 (필터? 표시만?) 확인 후 진행
   - OPS_API_REQUESTS.md #6에 등록됨
-- **PWA 버전 업데이트 알림 토스트**: 현재 Service Worker는 `skipWaiting()` + Cache-first 전략. 새 배포 후 새로고침 1~2회 필요하지만 사용자에게 안내 없음. "새 버전이 있습니다. 업데이트하시겠습니까?" 토스트 팝업 추가 → 클릭 시 `window.location.reload()`. Flutter의 `flutter_service_worker.js`에서 새 SW 감지 시 `postMessage('skipWaiting')` → FE에서 `controllerchange` 이벤트 수신 → 토스트 표시. 참고: index.html은 Online-first, JS/CSS는 Cache-first
+- ~~**PWA 버전 업데이트 알림 토스트**~~ → ✅ Sprint 26 Task 1 완료 (index.html controllerchange + updatefound 감지 → 하단 토스트). Task 2~5 (업데이트 내용 팝업 + HomeScreen 연동) 대기 중
 
 ---
 
@@ -323,3 +379,7 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 | 24 핫픽스 | BUG-18/19/20/21: GST 출퇴근 + 비밀번호 찾기 + 로그인 에러 분리 + 404 메시지 | ✅ |
 | 22-E | conftest.py 운영 데이터 5테이블 백업/복원 완성 (product_info + qr_registry) | ✅ |
 | 25 | BUG-22 Logout Storm 수정 (FE 3중 방어 + BE jwt_optional) | ✅ v1.7.2 |
+| 26 | PWA 업데이트 알림 토스트 + conftest 보호 강화 | ✅ v1.7.3 (Task 2~5 대기) |
+| 27 | 단일 액션 Task (task_type 컬럼 + Docking/출하완료) | ✅ v1.7.4 (migration 022 적용) |
+| 28 | AXIS-VIEW 권한 데코레이터 재정비 (gst_or_admin + view_access) | 🔧 테스트 잔여 3건 진행 중 |
+| 29 | 공장 API — 생산일정 #10 + 주간 KPI #9 (BE only) | 🟡 프롬프트 완료, 실행 대기 |
