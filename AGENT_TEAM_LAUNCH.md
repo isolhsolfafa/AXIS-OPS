@@ -9433,12 +9433,127 @@ def debug_task_seed(qr_doc_id: str):
 - [x] product.py 에러 로깅 강화 (warning → error + traceback)
 - [x] task_seed.py 에러 로깅 강화 (일반 Exception 추가)
 - [x] debug/seed 엔드포인트 추가
-- [ ] Railway push + 재배포
-- [ ] debug/seed 호출로 에러 원인 확인
-- [ ] 근본 원인 수정
-- [ ] GBWS-6869 QR 태깅 → task 생성 확인
+- [x] Railway push + 재배포
+- [x] debug/seed 호출로 에러 원인 확인 → task_type 컬럼 미존재 (migration 미적용 시점 문제)
+- [x] 근본 원인 수정 → migration 적용 후 정상 동작 확인
+- [x] GBWS-6869 QR 태깅 → task 20개 생성 확인 (MECH7+ELEC6+TMS2+PI2+QI1+SI2)
 - [ ] SINGLE_ACTION 검증: TANK_DOCKING task_type='SINGLE_ACTION' 확인
 - [ ] SINGLE_ACTION 검증: SI_SHIPMENT task_type='SINGLE_ACTION' 확인
 - [ ] SINGLE_ACTION 검증: 나머지 task는 task_type='NORMAL' 확인
-- [ ] debug 엔드포인트 정리
+- [x] debug 엔드포인트 정리 (제거 완료)
+- [x] 기존 pytest regression 0건 확인 (35 passed, 1 기존 이슈)
+
+---
+
+## Sprint 27-fix Phase 2: task_type 컬럼 미존재 근본 원인 수정
+
+> **확인된 에러**: debug/seed 엔드포인트 응답:
+> ```json
+> "error": "column \"task_type\" of relation \"app_task_details\" does not exist"
+> ```
+> **모순**: pgAdmin에서 `SELECT table_schema, column_name FROM information_schema.columns WHERE table_name='app_task_details' AND column_name='task_type';` → `public, task_type` 존재 확인됨.
+> pgAdmin과 앱이 같은 Railway DB (10.250.11.60:5432, database=railway)에 연결되어 있음 확인.
+
+### 조사 방법
+
+1. **앱이 실제로 연결하는 DB 확인**: Railway 대시보드 Variables 탭에서 `DATABASE_URL` 확인. 또는 코드에서 DB 연결 정보 확인:
+   ```bash
+   grep -r "DATABASE_URL\|DB_HOST\|DB_NAME\|get_db_connection" backend/app/models/worker.py backend/app/ --include="*.py" | head -30
+   ```
+
+2. **터미널에서 debug/seed 직접 호출**:
+   먼저 JWT 토큰 발급:
+   ```bash
+   TOKEN=$(curl -s -X POST https://axis-ops-api.up.railway.app/api/auth/login \
+     -H "Content-Type: application/json" \
+     -d '{"email":"admin1234@gst-in.com","password":"YOUR_PASSWORD"}' | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))")
+   ```
+   
+   그 다음 debug/seed 호출:
+   ```bash
+   curl -s -X POST https://axis-ops-api.up.railway.app/api/app/product/debug/seed/DOC_GBWS-6876 \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
+   ```
+
+3. **DB 연결 정보 디버그 엔드포인트 추가** (임시):
+   `backend/app/routes/product.py`에 DB 정보 확인용 엔드포인트 추가:
+   ```python
+   @product_bp.route("/debug/db-info", methods=["GET"])
+   @jwt_required
+   def debug_db_info():
+       """임시: 앱이 연결한 DB 정보 + task_type 컬럼 존재 확인"""
+       from app.models.worker import get_db_connection
+       conn = None
+       try:
+           conn = get_db_connection()
+           cur = conn.cursor()
+           
+           # 현재 DB 정보
+           cur.execute("SELECT current_database(), inet_server_addr(), inet_server_port()")
+           db_info = cur.fetchone()
+           
+           # task_type 컬럼 확인
+           cur.execute("""
+               SELECT column_name FROM information_schema.columns
+               WHERE table_schema='public' AND table_name='app_task_details' AND column_name='task_type'
+           """)
+           task_type_exists = cur.fetchone() is not None
+           
+           # 전체 컬럼 목록
+           cur.execute("""
+               SELECT column_name FROM information_schema.columns
+               WHERE table_schema='public' AND table_name='app_task_details'
+               ORDER BY ordinal_position
+           """)
+           columns = [row[0] if isinstance(row, tuple) else row['column_name'] for row in cur.fetchall()]
+           
+           # DATABASE_URL 확인 (비밀번호 마스킹)
+           import os
+           db_url = os.environ.get('DATABASE_URL', 'NOT SET')
+           if '@' in db_url:
+               parts = db_url.split('@')
+               db_url_masked = '***@' + parts[-1]
+           else:
+               db_url_masked = db_url
+           
+           return jsonify({
+               'database': db_info[0] if db_info else None,
+               'server_addr': str(db_info[1]) if db_info else None,
+               'server_port': db_info[2] if db_info else None,
+               'database_url_masked': db_url_masked,
+               'task_type_column_exists': task_type_exists,
+               'all_columns': columns,
+               'column_count': len(columns)
+           }), 200
+       except Exception as e:
+           import traceback
+           return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+       finally:
+           if conn:
+               conn.close()
+   ```
+
+4. **배포 후 확인**:
+   ```bash
+   curl -s https://axis-ops-api.up.railway.app/api/app/product/debug/db-info \
+     -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
+   ```
+
+5. **결과에 따른 수정**:
+   - task_type_column_exists=false → 앱 DB에 컬럼 추가 필요 (앱에서 직접 ALTER TABLE 실행하는 마이그레이션 코드 추가)
+   - server_addr이 pgAdmin과 다름 → 앱 DATABASE_URL 수정 필요
+   - 그 외 → 결과에 따라 판단
+
+### 체크리스트
+
+- [ ] DB 연결 정보 확인 (get_db_connection 코드 확인)
+- [ ] debug/db-info 엔드포인트 추가
+- [ ] Railway push + 재배포
+- [ ] debug/db-info 호출로 앱 DB 상태 확인
+- [ ] task_type 컬럼 미존재 시 → 앱 DB에 직접 ALTER TABLE 실행 또는 startup migration 추가
+- [ ] debug/seed 재호출로 task seed 성공 확인
+- [ ] GBWS-6869, GBWS-6876 QR 태깅 → task 생성 확인
+- [ ] SINGLE_ACTION 검증: TANK_DOCKING, SI_SHIPMENT task_type='SINGLE_ACTION'
+- [ ] debug 엔드포인트 정리 (제거 또는 admin_required)
 - [ ] 기존 pytest regression 0건 확인

@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-03-14 (Sprint 27-fix Task Seed 디버깅 배포 / Sprint 27 완료 — 단일 액션 Task / Sprint 29 공장 API 프롬프트 완료 / ETL pi_start 지원)
+> 마지막 업데이트: 2026-03-15 (Sprint 27-fix 완료 — Task Seed Silent Fail 해결 / Sprint 27 완료 — 단일 액션 Task / ETL pi_start 지원)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -35,22 +35,15 @@
 
 ---
 
-## 🔧 Sprint 27-fix 진행 중 (2026-03-14) — Task Seed Silent Fail 디버깅
+## ✅ Sprint 27-fix 완료 (2026-03-15) — Task Seed Silent Fail 해결
 
-### 개요
-QR 태깅 시 task가 0개 생성되는 문제 디버깅. DB 스키마 정상(수동 INSERT 성공)이나 Railway 앱에서 silent fail.
+### 근본 원인
+`022_add_task_type.sql` migration 미적용 상태에서 task seed가 `task_type` 컬럼 참조 → silent fail (`logger.warning`으로 삼킴).
 
-### Phase 1 배포 완료
-- product.py 에러 로깅 강화 (warning → error + traceback)
-- task_seed.py 에러 로깅 강화 (PsycopgError traceback + 일반 Exception catch 추가)
-- debug/seed 엔드포인트 추가 (`POST /api/app/product/debug/seed/<qr_doc_id>`)
-- 의심 원인: `_upsert_task()` INSERT에 worker_id 누락 (NOT NULL 제약조건 위반 가능성)
-
-### 남은 작업
-- [ ] Railway 배포 후 debug/seed 호출로 에러 확인
-- [ ] 근본 원인 수정
-- [ ] GBWS-6869 task 생성 확인
-- [ ] debug 엔드포인트 정리
+### 해결
+- 에러 로깅 강화 (warning → error + traceback) — 향후 silent fail 방지
+- migration 적용 후 GBWS-6869, GBWS-6867 각각 20개 task 생성 확인
+- debug 엔드포인트 추가 → 원인 확인 → 제거 완료
 
 ---
 
