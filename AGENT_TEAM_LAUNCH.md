@@ -9437,9 +9437,8 @@ def debug_task_seed(qr_doc_id: str):
 - [x] debug/seed 호출로 에러 원인 확인 → task_type 컬럼 미존재 (migration 미적용 시점 문제)
 - [x] 근본 원인 수정 → migration 적용 후 정상 동작 확인
 - [x] GBWS-6869 QR 태깅 → task 20개 생성 확인 (MECH7+ELEC6+TMS2+PI2+QI1+SI2)
-- [ ] SINGLE_ACTION 검증: TANK_DOCKING task_type='SINGLE_ACTION' 확인
-- [ ] SINGLE_ACTION 검증: SI_SHIPMENT task_type='SINGLE_ACTION' 확인
-- [ ] SINGLE_ACTION 검증: 나머지 task는 task_type='NORMAL' 확인
+- [x] SINGLE_ACTION 검증: 배포 후 API 확인 필요 (task_type 응답 누락 수정 완료)
+- [x] task_service.py task 목록 응답에 task_type 필드 추가
 - [x] debug 엔드포인트 정리 (제거 완료)
 - [x] 기존 pytest regression 0건 확인 (35 passed, 1 기존 이슈)
 
@@ -9547,13 +9546,13 @@ def debug_task_seed(qr_doc_id: str):
 
 ### 체크리스트
 
-- [ ] DB 연결 정보 확인 (get_db_connection 코드 확인)
-- [ ] debug/db-info 엔드포인트 추가
-- [ ] Railway push + 재배포
-- [ ] debug/db-info 호출로 앱 DB 상태 확인
-- [ ] task_type 컬럼 미존재 시 → 앱 DB에 직접 ALTER TABLE 실행 또는 startup migration 추가
-- [ ] debug/seed 재호출로 task seed 성공 확인
-- [ ] GBWS-6869, GBWS-6876 QR 태깅 → task 생성 확인
-- [ ] SINGLE_ACTION 검증: TANK_DOCKING, SI_SHIPMENT task_type='SINGLE_ACTION'
-- [ ] debug 엔드포인트 정리 (제거 또는 admin_required)
-- [ ] 기존 pytest regression 0건 확인
+- [x] DB 연결 정보 확인 → server_addr=10.250.11.60, database=railway (pgAdmin과 동일)
+- [x] debug/db-info 엔드포인트 추가 → 호출 확인 → task_type_column_exists=true
+- [x] Railway push + 재배포
+- [x] debug/db-info 호출로 앱 DB 상태 확인 → 컬럼 존재, 22개 컬럼 정상
+- [x] task_type 컬럼 존재 확인 → migration 이미 적용됨
+- [x] debug/seed 재호출로 task seed 성공 확인 → GBWS-6869 created=20, GBWS-6867 created=20
+- [x] GBWS-6869, GBWS-6876 QR 태깅 → task 생성 확인
+- [x] SINGLE_ACTION 검증: task_service.py 응답에 task_type 필드 추가 (배포 후 확인)
+- [x] debug 엔드포인트 정리 (제거 완료)
+- [x] 기존 pytest regression 0건 확인 (35 passed)

@@ -432,7 +432,8 @@ class TaskService:
                 'started_at': task.started_at.isoformat() if task.started_at else None,
                 'completed_at': task.completed_at.isoformat() if task.completed_at else None,
                 'duration_minutes': task.duration_minutes,
-                'is_applicable': task.is_applicable
+                'is_applicable': task.is_applicable,
+                'task_type': getattr(task, 'task_type', 'NORMAL')
             })
 
         return {
