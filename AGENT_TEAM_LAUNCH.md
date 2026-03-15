@@ -9275,25 +9275,25 @@ AND column_name='finishing_plan_end';
 
 ## 체크리스트
 
-- [ ] `factory.py` 블루프린트 생성 (`/api/admin/factory`)
-- [ ] `__init__.py`에 `factory_bp` 등록
-- [ ] `GET /monthly-detail` 구현 (#10)
-  - [ ] month, date_field, page, per_page 파라미터
-  - [ ] date_field 화이트리스트 검증 (SQL 인젝션 방지)
-  - [ ] completion.tm GAIA 분기
-  - [ ] progress_pct 계산
-  - [ ] by_model 집계
-  - [ ] 페이지네이션 (total, page, per_page, total_pages)
-- [ ] `GET /weekly-kpi` 구현 (#9)
-  - [ ] ISO week → 날짜 범위 변환
-  - [ ] production_count, completion_rate
-  - [ ] by_model, by_stage, pipeline 집계
-  - [ ] by_stage.tm GAIA 분모 분리
+- [x] `factory.py` 블루프린트 생성 (`/api/admin/factory`)
+- [x] `__init__.py`에 `factory_bp` 등록 (12번째 블루프린트)
+- [x] `GET /monthly-detail` 구현 (#10)
+  - [x] month, date_field, page, per_page 파라미터
+  - [x] date_field 화이트리스트 검증 (SQL 인젝션 방지)
+  - [x] completion.tm GAIA 분기
+  - [x] progress_pct 계산
+  - [x] by_model 집계
+  - [x] 페이지네이션 (total, page, per_page, total_pages)
+- [x] `GET /weekly-kpi` 구현 (#9)
+  - [x] ISO week → 날짜 범위 변환
+  - [x] production_count, completion_rate
+  - [x] by_model, by_stage, pipeline 집계
+  - [x] by_stage.tm GAIA 분모 분리
 - [ ] `test_factory.py` 테스트
 - [ ] 기존 pytest regression 0건
-- [ ] version.py 업데이트
-- [ ] ⚠️ DB 스키마 변경 없음 확인 (finishing_plan_end는 CORE-ETL에서 이미 추가됨)
-- [ ] ⚠️ FE(Flutter) 변경 없음 확인 (BE only Sprint)
+- [x] version.py 업데이트 (v1.7.6)
+- [x] ⚠️ DB 스키마 변경 없음 확인 (finishing_plan_end는 CORE-ETL에서 이미 추가됨)
+- [x] ⚠️ FE(Flutter) 변경 없음 확인 (BE only Sprint)
 
 ---
 
@@ -9556,3 +9556,118 @@ def debug_task_seed(qr_doc_id: str):
 - [x] SINGLE_ACTION 검증: task_service.py 응답에 task_type 필드 추가 (배포 후 확인)
 - [x] debug 엔드포인트 정리 (제거 완료)
 - [x] 기존 pytest regression 0건 확인 (35 passed)
+
+---
+
+## BUG-23: QR 카메라 Viewfinder 모서리 코너 간헐적 미표시
+
+> **현상**: QR 스캔 화면에서 인식 영역(qrbox)의 모서리 코너 마커가 표시될 때도 있고 안 될 때도 있음
+> **우선순위**: 🟡 중간 (기능은 정상, UI 개선)
+> **관련 이력**: BUG-5(프레임 벗어남), BUG-10(스크롤 분리), BUG-15(dialog overlay), BUG-17(깜빡임 루프) — 카메라 11차 수정까지 진행됨
+
+### 근본 원인 분석
+
+`frontend/lib/services/qr_scanner_web.dart`의 `_forceSquareAfterCameraStart()` (line 185~240)에서 문제 발생:
+
+```dart
+// line 205-213: 모든 자식 div 스타일을 무차별 덮어씀
+final children = _scannerDiv!.children;
+for (final child in children) {
+  if (child is html.DivElement) {
+    child.style
+      ..width = '100%'
+      ..height = '${_savedWidth}px'
+      ..maxHeight = '${_savedWidth}px'
+      ..overflow = 'hidden';  // ← viewfinder 모서리를 잘라냄
+  }
+}
+```
+
+**html5-qrcode 라이브러리**는 카메라 시작 후 내부적으로 다음 DOM 구조를 생성:
+```
+#qr-scanner-dom-div (우리가 만든 컨테이너)
+  └─ div (html5-qrcode 내부 컨테이너)
+      ├─ video (카메라 피드)
+      ├─ canvas (QR 디코딩용, display:none)
+      └─ div#qr-shaded-region (viewfinder + 코너 마커)
+          ├─ div (top-left corner)
+          ├─ div (top-right corner)  
+          ├─ div (bottom-left corner)
+          └─ div (bottom-right corner)
+```
+
+`_forceSquareAfterCameraStart()`가 **모든 자식 DivElement**에 `overflow: hidden`을 적용하면서 `#qr-shaded-region`과 그 내부 코너 마커까지 영향받음.
+
+**간헐적인 이유**: 카메라 시작 타이밍에 따라:
+- `_forceSquareAfterCameraStart()`가 먼저 실행 → html5-qrcode가 나중에 viewfinder 생성 → **코너 보임**
+- html5-qrcode가 먼저 viewfinder 생성 → `_forceSquareAfterCameraStart()`가 덮어씀 → **코너 안 보임**
+
+추가로 **MutationObserver** (line 218-237)가 스타일 변경을 감시하며 반복 적용하므로, 라이브러리가 viewfinder를 복구해도 다시 덮어씌워질 수 있음.
+
+### 수정 방향
+
+`_forceSquareAfterCameraStart()` line 205-213의 자식 div 스타일 적용에서 **viewfinder 관련 요소 제외**:
+
+```dart
+// 수정 전: 모든 자식 div에 적용
+final children = _scannerDiv!.children;
+for (final child in children) {
+  if (child is html.DivElement) {
+    child.style
+      ..width = '100%'
+      ..height = '${_savedWidth}px'
+      ..maxHeight = '${_savedWidth}px'
+      ..overflow = 'hidden';
+  }
+}
+
+// 수정 후: viewfinder(#qr-shaded-region) 제외
+final children = _scannerDiv!.children;
+for (final child in children) {
+  if (child is html.DivElement) {
+    // html5-qrcode의 viewfinder 영역은 건드리지 않음
+    final childId = child.id;
+    if (childId.contains('shaded') || childId.contains('region')) continue;
+    // qr-shaded-region의 부모 div도 overflow:hidden이면 안됨
+    // → video 태그를 포함한 div만 타겟팅
+    final hasVideo = child.querySelector('video') != null;
+    if (!hasVideo) continue;
+    
+    child.style
+      ..width = '100%'
+      ..height = '${_savedWidth}px'
+      ..maxHeight = '${_savedWidth}px'
+      ..overflow = 'hidden';
+  }
+}
+```
+
+또한 MutationObserver 콜백 (line 218-237)에서도 동일하게 viewfinder 요소를 건드리지 않도록 확인.
+
+### ⚠️ 주의사항 (이전 카메라 수정 이력 참고)
+
+이 파일은 **11차 수정**까지 거친 민감한 코드. 수정 시 반드시:
+1. 정사각형 컨테이너 강제 (`aspect-ratio: 1/1`) 유지 — 이것이 깨지면 BUG-5 재발
+2. MutationObserver의 height 복원 로직 유지 — 이것이 깨지면 카메라 비율 왜곡
+3. `overflow: hidden`은 **컨테이너 div**에는 유지 (카메라 피드 crop용), viewfinder div에서만 제거
+4. dialog overlay 시 hide/show 로직 건드리지 않음 — 이것이 깨지면 BUG-17 재발
+5. video 태그의 `object-fit: cover` 유지
+
+### 테스트 방법
+
+1. QR 스캔 화면 진입 → viewfinder 코너 4개 보이는지 확인
+2. 5회 이상 반복 진입 → 매번 코너가 보이는지 확인 (간헐적 미표시 재현 방지)
+3. 카메라 영역이 정사각형인지 확인 (BUG-5 regression)
+4. QR 인식 정상 동작 확인
+5. dialog(Location QR 팝업) 열림/닫힘 시 카메라 정상 복구 확인 (BUG-17 regression)
+
+### 체크리스트
+
+- [ ] `_forceSquareAfterCameraStart()` 자식 div 순회에서 viewfinder 제외
+- [ ] MutationObserver 콜백에서 viewfinder 스타일 덮어쓰기 방지
+- [ ] CSS `_injectScannerCss()`에서 `#qr-shaded-region` overflow 보호 추가 검토
+- [ ] QR 스캔 5회 반복 → 코너 마커 항상 표시 확인
+- [ ] 정사각형 컨테이너 유지 확인 (BUG-5 regression)
+- [ ] QR 인식 정상 확인
+- [ ] dialog overlay hide/show 정상 확인 (BUG-17 regression)
+- [ ] Netlify 배포 + 실기기 테스트
