@@ -289,8 +289,7 @@ def get_weekly_kpi() -> Tuple[Dict[str, Any], int]:
             by_stage = {'mech': 0.0, 'elec': 0.0, 'tm': 0.0, 'pi': 0.0, 'qi': 0.0, 'si': 0.0}
 
         # pipeline 집계
-        # shipped 판정: finishing_plan_end(출하 예정일) 기반 추정.
-        # actual_ship_date(qr_registry)가 더 정확하나 현재 JOIN 범위 밖 — 추후 VIEW 연동 시 검토.
+        # shipped 판정: finishing_plan_end(출하 예정일) 기준 — 주간 생산량 관리 기준일.
         pipeline = {'pi': 0, 'qi': 0, 'si': 0, 'shipped': 0}
         for r in rows:
             if r.get('pi_completed') and not r.get('qi_completed'):
