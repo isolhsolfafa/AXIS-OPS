@@ -9,7 +9,7 @@ VIEW 생산일정 + 공장 대시보드 전용
 
 import logging
 import math
-from datetime import date, timedelta
+from datetime import date, timedelta, timezone
 from flask import Blueprint, request, jsonify
 from typing import Tuple, Dict, Any, Optional
 
@@ -73,8 +73,10 @@ def get_monthly_detail() -> Tuple[Dict[str, Any], int]:
             'message': f'date_field는 {", ".join(_ALLOWED_DATE_FIELDS)} 중 하나여야 합니다.'
         }), 400
 
-    # month 파싱
-    today = date.today()
+    # month 파싱 (KST 기준)
+    from datetime import datetime
+    kst = timezone(timedelta(hours=9))
+    today = datetime.now(kst).date()
     if month_str:
         try:
             parts = month_str.split('-')
@@ -207,7 +209,10 @@ def get_weekly_kpi() -> Tuple[Dict[str, Any], int]:
         week: ISO week 번호 1~53 (기본: 현재 주)
         year: 연도 (기본: 현재 연도)
     """
-    today = date.today()
+    # KST 기준 오늘 (Railway 서버는 UTC → KST 변환 필요)
+    from datetime import datetime
+    kst = timezone(timedelta(hours=9))
+    today = datetime.now(kst).date()
     year = request.args.get('year', today.year, type=int)
     week = request.args.get('week', today.isocalendar()[1], type=int)
 
