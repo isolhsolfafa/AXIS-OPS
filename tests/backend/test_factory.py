@@ -254,10 +254,10 @@ class TestFactoryAuth:
         )
         assert resp.status_code == 200
 
-    def test_auth04_weekly_partner_manager_forbidden(
+    def test_auth04_weekly_partner_manager_ok(
         self, client, manager_worker, get_auth_token
     ):
-        """weekly-kpi: 협력사 manager → 403 (gst_or_admin_required)"""
+        """weekly-kpi: 협력사 manager → 200 (view_access_required로 변경)"""
         token = get_auth_token(
             worker_id=manager_worker['id'],
             role='MECH'
@@ -266,7 +266,7 @@ class TestFactoryAuth:
             '/api/admin/factory/weekly-kpi',
             headers={'Authorization': f'Bearer {token}'}
         )
-        assert resp.status_code == 403
+        assert resp.status_code == 200
 
     def test_auth05_weekly_gst_worker_ok(
         self, client, create_test_worker, get_auth_token

@@ -15,7 +15,6 @@ from typing import Tuple, Dict, Any, Optional
 
 from app.middleware.jwt_auth import (
     jwt_required,
-    gst_or_admin_required,
     view_access_required,
 )
 from app.models.worker import get_db_connection
@@ -199,7 +198,7 @@ def get_monthly_detail() -> Tuple[Dict[str, Any], int]:
 
 @factory_bp.route("/weekly-kpi", methods=["GET"])
 @jwt_required
-@gst_or_admin_required
+@view_access_required
 def get_weekly_kpi() -> Tuple[Dict[str, Any], int]:
     """
     주간 공장 KPI (OPS_API_REQUESTS #9)
