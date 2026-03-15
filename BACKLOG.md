@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-03-15 (Sprint 27-fix 완료 — Task Seed Silent Fail 해결 / Sprint 27 완료 — 단일 액션 Task / ETL pi_start 지원)
+> 마지막 업데이트: 2026-03-15 (Sprint 29 완료 — 공장 API v1.7.6 / Sprint 27-fix 완료 / BUG-23 수정)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -33,6 +33,15 @@
 | BUG-21 | FE 404 에러 메시지 하드코딩 | ✅ Sprint 24 핫픽스 수정 완료 | "요청한 리소스가 없습니다" → 서버 메시지 그대로 표시 |
 | BUG-22 | Logout Storm — 401 무한 루프 | ✅ Sprint 25 수정 완료 | FE: _authSkipPaths + _isForceLogout + _isLoggingOut + clearToken 선행 + 3s timeout. BE: jwt_optional 데코레이터 + logout @jwt_optional (토큰 없이 200 OK). VIEW도 동일 패턴 수정 완료 (v1.4.2) |
 | BUG-23 | QR 카메라 Viewfinder 모서리 코너 간헐적 미표시 | ✅ 수정 + 배포 완료 | `_forceSquareAfterCameraStart()`에서 viewfinder 제외 (video 포함 div만 타겟) + CSS `overflow:visible !important` 보호. Netlify 배포 완료 — 실기기 테스트 필요 |
+
+---
+
+## ✅ Sprint 29 완료 (v1.7.6, 2026-03-15) — 공장 API (BE only)
+
+- `GET /api/admin/factory/monthly-detail` — 월간 생산 현황 상세 (view_access_required)
+- `GET /api/admin/factory/weekly-kpi` — 주간 KPI 대시보드 (gst_or_admin_required)
+- test_factory.py 18 passed
+- factory.py 블루프린트 신규 (12번째)
 
 ---
 
