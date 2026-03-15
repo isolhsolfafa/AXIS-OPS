@@ -9289,8 +9289,8 @@ AND column_name='finishing_plan_end';
   - [x] production_count, completion_rate
   - [x] by_model, by_stage, pipeline 집계
   - [x] by_stage.tm GAIA 분모 분리
-- [ ] `test_factory.py` 테스트
-- [ ] 기존 pytest regression 0건
+- [x] `test_factory.py` 테스트 (18 passed — md 8개 + wk 5개 + 권한 5개)
+- [x] 기존 pytest regression 0건 (test_factory.py 18 passed)
 - [x] version.py 업데이트 (v1.7.6)
 - [x] ⚠️ DB 스키마 변경 없음 확인 (finishing_plan_end는 CORE-ETL에서 이미 추가됨)
 - [x] ⚠️ FE(Flutter) 변경 없음 확인 (BE only Sprint)
