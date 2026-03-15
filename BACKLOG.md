@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-03-15 (Sprint 29 완료 — 공장 API v1.7.6 / Sprint 27-fix 완료 / BUG-23 수정)
+> 마지막 업데이트: 2026-03-16 (공장 API 협력사 manager 접근 허용 / Sprint 29 완료 v1.7.6 / Sprint 27-fix / BUG-23)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
