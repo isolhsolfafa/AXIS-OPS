@@ -3,7 +3,27 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v1.7.5 (Sprint 27-fix, 2026-03-15)
+> **현재 버전**: v1.7.6 (Sprint 29, 2026-03-15)
+
+---
+
+## Sprint 29: 공장 API — 생산일정 + 주간 KPI (완료)
+
+**범위**: BE only (FE 없음)
+
+**신규 파일**: `backend/app/routes/factory.py`
+**수정 파일**: `backend/app/__init__.py` (factory_bp 등록)
+
+**엔드포인트**:
+- `GET /api/admin/factory/monthly-detail` — 월간 생산 현황 상세 (#10)
+  - 파라미터: month, date_field(pi_start/mech_start), page, per_page
+  - completion 상태 + progress_pct + by_model 집계
+  - @view_access_required (GST + Admin + Manager)
+- `GET /api/admin/factory/weekly-kpi` — 주간 공장 KPI (#9)
+  - 파라미터: week, year (ISO week)
+  - production_count, completion_rate, by_model, by_stage, pipeline
+  - by_stage.tm: GAIA 모델만 분모
+  - @gst_or_admin_required (GST + Admin)
 
 ---
 
