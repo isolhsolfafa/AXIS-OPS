@@ -11,7 +11,7 @@ import logging
 import math
 from datetime import date, timedelta
 from flask import Blueprint, request, jsonify
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, Optional
 
 from app.middleware.jwt_auth import (
     jwt_required,
@@ -39,7 +39,7 @@ def _calc_progress(row: dict) -> float:
     return round(completed / len(stages) * 100, 1)
 
 
-def _date_to_iso(val) -> str:
+def _date_to_iso(val) -> Optional[str]:
     """date/datetime → ISO string, None → None"""
     if val is None:
         return None
@@ -289,6 +289,8 @@ def get_weekly_kpi() -> Tuple[Dict[str, Any], int]:
             by_stage = {'mech': 0.0, 'elec': 0.0, 'tm': 0.0, 'pi': 0.0, 'qi': 0.0, 'si': 0.0}
 
         # pipeline 집계
+        # shipped 판정: finishing_plan_end(출하 예정일) 기반 추정.
+        # actual_ship_date(qr_registry)가 더 정확하나 현재 JOIN 범위 밖 — 추후 VIEW 연동 시 검토.
         pipeline = {'pi': 0, 'qi': 0, 'si': 0, 'shipped': 0}
         for r in rows:
             if r.get('pi_completed') and not r.get('qi_completed'):
