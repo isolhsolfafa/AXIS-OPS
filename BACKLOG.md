@@ -101,9 +101,9 @@ CORE-ETL에서 pi_start(가압시작) 변경이력 추적 추가에 따른 OPS B
 
 ---
 
-## 🔧 Sprint 28 진행 중 (v1.7.4→1.7.5, 2026-03-13)
+## ✅ Sprint 28 완료 (v1.7.5, 2026-03-13)
 
-### AXIS-VIEW 권한 데코레이터 재정비 — 테스트 잔여
+### AXIS-VIEW 권한 데코레이터 재정비
 - `get_current_worker()` 캐싱 헬퍼 추가 (request 당 1회 DB 조회)
 - `admin_required`, `manager_or_admin_required` 내부 → 캐싱 리팩토링
 - `@gst_or_admin_required` 신규 (GST 소속 + Admin만 허용, 공장 대시보드 전용)
@@ -112,7 +112,6 @@ CORE-ETL에서 pi_start(가압시작) 변경이력 추적 추가에 따른 OPS B
 - `admin.py` ETL 변경이력: `@manager_or_admin_required` → `@view_access_required`
 - DB 스키마 변경 없음, FE 변경 없음
 - pytest: 667 passed (regression 0건)
-- **잔여**: 신규 데코레이터 테스트 + get_current_worker 캐싱 테스트 + version.py 1.7.5
 
 ---
 
@@ -425,6 +424,7 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 | 25 | BUG-22 Logout Storm 수정 (FE 3중 방어 + BE jwt_optional) | ✅ v1.7.2 |
 | 26 | PWA 업데이트 알림 토스트 + conftest 보호 강화 | ✅ v1.7.3 (Task 2~5 대기) |
 | 27 | 단일 액션 Task (task_type 컬럼 + Docking/출하완료) | ✅ v1.7.4 (migration 022 적용) |
-| 28 | AXIS-VIEW 권한 데코레이터 재정비 (gst_or_admin + view_access) | 🔧 테스트 잔여 3건 진행 중 |
-| 27-fix | Task Seed Silent Fail 디버깅 — 로깅 강화 + debug 엔드포인트 | 🔴 긴급, 프롬프트 완료 |
-| 29 | 공장 API — 생산일정 #10 + 주간 KPI #9 (BE only) | 🟡 프롬프트 완료, 실행 대기 |
+| 28 | AXIS-VIEW 권한 데코레이터 재정비 (gst_or_admin + view_access) | ✅ v1.7.4~v1.7.5 |
+| 27-fix | Task Seed Silent Fail 디버깅 — 로깅 강화 + SINGLE_ACTION UI | ✅ v1.7.5 |
+| 29 | 공장 API — 생산일정 #10 + 주간 KPI #9 (BE only) | ✅ v1.7.6 |
+| 29 보완 | PM role + 이름 로그인 + ship_plan_date + per_page 500 | ✅ v1.7.7 |
