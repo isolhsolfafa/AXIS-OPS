@@ -64,7 +64,7 @@ def get_monthly_detail() -> Tuple[Dict[str, Any], int]:
     month_str = request.args.get('month')
     date_field = request.args.get('date_field', 'pi_start')
     page = max(1, request.args.get('page', 1, type=int))
-    per_page = min(200, max(1, request.args.get('per_page', 50, type=int)))
+    per_page = min(500, max(1, request.args.get('per_page', 50, type=int)))
 
     # date_field 화이트리스트 검증
     if date_field not in _ALLOWED_DATE_FIELDS:
