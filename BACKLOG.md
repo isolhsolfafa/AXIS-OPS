@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-03-16 (공장 API 협력사 manager 접근 허용 / Sprint 29 완료 v1.7.6 / Sprint 27-fix / BUG-23)
+> 마지막 업데이트: 2026-03-16 (Sprint 29 보완 v1.7.7 — PM role 추가, 이름 로그인, ship_plan_date, per_page 500)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -35,6 +35,13 @@
 | BUG-23 | QR 카메라 Viewfinder 모서리 코너 간헐적 미표시 | ✅ 수정 + 배포 완료 | `_forceSquareAfterCameraStart()`에서 viewfinder 제외 (video 포함 div만 타겟) + CSS `overflow:visible !important` 보호. Netlify 배포 완료 — 실기기 테스트 필요 |
 
 ---
+
+## ✅ Sprint 29 보완 완료 (v1.7.7, 2026-03-16)
+
+- DB: `role_enum`에 PM 추가 (migration 021 적용)
+- BE: 이름 기반 로그인 (`get_worker_by_name`, login 조회 체인 확장)
+- BE: monthly-detail `ship_plan_date` 응답 추가
+- BE: monthly-detail `per_page` 상한 200 → 500
 
 ## ✅ Sprint 29 완료 (v1.7.6, 2026-03-15) — 공장 API (BE only)
 

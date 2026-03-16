@@ -3,7 +3,29 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v1.7.6 (Sprint 29, 2026-03-15)
+> **현재 버전**: v1.7.7 (Sprint 29 보완, 2026-03-16)
+
+---
+
+## Sprint 29 보완 (v1.7.7, 2026-03-16)
+
+**DB 수정**:
+- `role_enum`에 `PM` 값 추가 (migration `021_add_pm_role.sql` Railway DB 적용)
+
+**BE 변경**:
+1. **이름 기반 로그인 지원** — `@` 미포함 입력 시 admin prefix → 이름 → 이메일 순서로 조회
+   - `worker.py`: `get_worker_by_name()` 함수 추가 (동명이인 2명+ 시 None 반환)
+   - `auth_service.py`: login 조회 체인에 이름 조회 단계 추가
+2. **monthly-detail `ship_plan_date` 추가** — 응답 `items[]`에 출하계획일 필드 추가
+   - `factory.py`: SELECT 쿼리 + 응답 dict에 `ship_plan_date` 추가
+   - 용도 분리: `finishing_plan_end`(주간 KPI) vs `ship_plan_date`(생산일정 출하 카운트)
+3. **monthly-detail `per_page` 상한 완화** — 200 → 500
+   - 208건 전체 fetch 불가 이슈 해결 (클라이언트 사이드 필터/정렬용)
+
+**수정 파일**:
+- `backend/app/models/worker.py` — get_worker_by_name 추가
+- `backend/app/services/auth_service.py` — login 이름 조회 체인
+- `backend/app/routes/factory.py` — ship_plan_date + per_page 500
 
 ---
 
