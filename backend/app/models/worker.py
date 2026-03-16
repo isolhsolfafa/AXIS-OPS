@@ -276,6 +276,41 @@ def get_worker_by_email(email: str) -> Optional[Worker]:
             conn.close()
 
 
+def get_worker_by_name(name: str) -> Optional[Worker]:
+    """
+    이름으로 작업자 조회 (이름 기반 로그인용)
+
+    동일 이름이 2명 이상이면 None 반환 (모호성 방지).
+
+    Args:
+        name: 작업자 이름
+
+    Returns:
+        Worker 객체 (매칭 1명), 없거나 2명+ 시 None
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            "SELECT * FROM workers WHERE name = %s",
+            (name,)
+        )
+
+        rows = cur.fetchall()
+        if len(rows) == 1:
+            return Worker.from_db_row(rows[0])
+        return None
+
+    except PsycopgError as e:
+        logger.error(f"Failed to get worker by name={name}: {e}")
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
 def get_admin_by_email_prefix(prefix: str) -> Optional[Worker]:
     """
     이메일 prefix로 관리자 조회 (Admin 간편 로그인용)
