@@ -3,7 +3,26 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v1.7.7 (Sprint 29 보완, 2026-03-16)
+> **현재 버전**: v1.7.8 (Sprint 29-fix, 2026-03-16)
+
+---
+
+## Sprint 29-fix: BUG-24 재발 방지 — ensure_schema (v1.7.8, 2026-03-16)
+
+**배경**: 배포마다 migration 022(`task_type` 컬럼)가 소실 → task seed INSERT silent fail → task 0건 반복 발생
+
+**신규 파일**:
+- `backend/app/schema_check.py` — 앱 시작 시 필수 컬럼/FK 제약조건 자동 검증 및 복구
+- `backend/migrations/023_fix_cascade_and_task_type.sql` — 수동 적용 내역 정식 기록
+
+**수정 파일**:
+- `backend/app/__init__.py` — `ensure_schema()` 호출 추가 (스케줄러 후, 블루프린트 전)
+
+**검증 항목**:
+- `app_task_details.task_type` 컬럼 존재 여부 → 누락 시 자동 ADD
+- `app_task_details.qr_doc_id` FK: CASCADE → RESTRICT 자동 변경
+- `completion_status.serial_number` FK: CASCADE → RESTRICT 자동 변경
+- TESTING 환경에서는 실행하지 않음
 
 ---
 
