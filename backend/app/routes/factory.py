@@ -125,7 +125,7 @@ def get_monthly_detail() -> Tuple[Dict[str, Any], int]:
             f"""SELECT p.sales_order, p.product_code, p.serial_number, p.model,
                        p.customer, p.line, p.mech_partner, p.elec_partner,
                        p.mech_start, p.mech_end, p.elec_start, p.elec_end,
-                       p.pi_start, p.qi_start, p.si_start, p.finishing_plan_end,
+                       p.pi_start, p.qi_start, p.si_start, p.finishing_plan_end, p.ship_plan_date,
                        cs.mech_completed, cs.elec_completed, cs.tm_completed,
                        cs.pi_completed, cs.qi_completed, cs.si_completed
                 FROM plan.product_info p
@@ -169,6 +169,7 @@ def get_monthly_detail() -> Tuple[Dict[str, Any], int]:
                 'qi_start': _date_to_iso(row.get('qi_start')),
                 'si_start': _date_to_iso(row.get('si_start')),
                 'finishing_plan_end': _date_to_iso(row.get('finishing_plan_end')),
+                'ship_plan_date': _date_to_iso(row.get('ship_plan_date')),
                 'completion': {
                     'mech': bool(row.get('mech_completed')),
                     'elec': bool(row.get('elec_completed')),
