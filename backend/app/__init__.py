@@ -63,6 +63,11 @@ def create_app(config_class: type = Config) -> Flask:
         start_scheduler()
         logger.info("Scheduler initialized and started")
 
+    # DB 스키마 자동 검증 (BUG-24: migration 누락 방지)
+    if not app.config.get('TESTING', False):
+        from app.schema_check import ensure_schema
+        ensure_schema()
+
     # 블루프린트 등록
     from app.routes.auth import auth_bp
     from app.routes.work import work_bp
