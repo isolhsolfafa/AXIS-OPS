@@ -3,7 +3,27 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v1.7.8 (Sprint 29-fix, 2026-03-16)
+> **현재 버전**: v1.8.0 (Sprint 30, 2026-03-17)
+
+---
+
+## Sprint 30: DB Connection Pool 도입 (v1.8.0, 2026-03-17)
+
+**목적**: 100명+ 동시 접속 시 DB 연결 포화(499 타임아웃) 방지
+
+**신규 파일**:
+- `backend/app/db_pool.py` — ThreadedConnectionPool (min=5, max=20)
+
+**수정 파일** (33개):
+- `backend/app/__init__.py` — init_pool() + atexit close_pool()
+- `backend/app/models/worker.py` — get_db_connection() → pool 기반 교체
+- models 12개 + routes 11개 + services 9개: `conn.close()` → `put_conn(conn)` (175건)
+
+**주요 변경**:
+- 매 요청마다 새 연결 생성 → 풀에서 재사용 (연결 생성 비용 ~50ms/건 절감)
+- 최대 20개 연결로 100명+ 동시 처리 가능 (기존: 요청당 3연결 × 100명 = 300개 시도)
+- `DB_POOL_DISABLED=true` 환경변수로 코드 변경 없이 롤백 가능
+- TESTING 환경에서는 풀 미초기화 (기존 테스트 영향 없음)
 
 ---
 

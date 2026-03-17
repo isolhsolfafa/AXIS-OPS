@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-03-16 (Sprint 29 보완 v1.7.7 — PM role 추가, 이름 로그인, ship_plan_date, per_page 500)
+> 마지막 업데이트: 2026-03-17 (Sprint 30 v1.8.0 — DB Connection Pool 도입)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -430,3 +430,4 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 | 29 | 공장 API — 생산일정 #10 + 주간 KPI #9 (BE only) | ✅ v1.7.6 |
 | 29 보완 | PM role + 이름 로그인 + ship_plan_date + per_page 500 | ✅ v1.7.7 |
 | 29-fix | BUG-24 재발 방지 — ensure_schema 자동 검증 + migration 023 | ✅ v1.7.8 |
+| 30 | DB Connection Pool 도입 — 동시 접속 안정화 (33파일 175건 변환) | ✅ v1.8.0 |
