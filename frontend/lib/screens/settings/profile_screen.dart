@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/auth_provider.dart';
 import '../../utils/design_system.dart';
+import '../../utils/app_version.dart';
 
 /// 개인 설정 화면
 ///
@@ -300,6 +301,22 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                           Icons.face,
                           'Face ID',
                         ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+
+                  // 앱 정보 섹션
+                  _buildSectionHeader('앱 정보'),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: GxGlass.cardSm(radius: GxRadius.lg),
+                    child: Column(
+                      children: [
+                        _buildInfoRow(Icons.info_outline, '버전', AppVersion.version),
+                        const Divider(color: GxColors.mist, height: 20),
+                        _buildInfoRow(Icons.calendar_today_outlined, '빌드', AppVersion.buildDate),
                       ],
                     ),
                   ),
