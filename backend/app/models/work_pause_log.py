@@ -12,6 +12,7 @@ from typing import Optional, Dict, Any, List
 from psycopg2 import Error as PsycopgError
 
 from .worker import get_db_connection
+from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
@@ -126,7 +127,7 @@ def create_pause(
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def resume_pause(pause_id: int, resumed_at: datetime) -> Optional[WorkPauseLog]:
@@ -189,7 +190,7 @@ def resume_pause(pause_id: int, resumed_at: datetime) -> Optional[WorkPauseLog]:
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def get_active_pause(task_detail_id: int) -> Optional[WorkPauseLog]:
@@ -228,7 +229,7 @@ def get_active_pause(task_detail_id: int) -> Optional[WorkPauseLog]:
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def get_pauses_by_task(task_detail_id: int) -> List[WorkPauseLog]:
@@ -263,4 +264,4 @@ def get_pauses_by_task(task_detail_id: int) -> List[WorkPauseLog]:
         return []
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)

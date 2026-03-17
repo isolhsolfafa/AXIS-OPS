@@ -16,6 +16,7 @@ import psycopg2.extras
 from psycopg2 import Error as PsycopgError
 
 from ..config import Config
+from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
@@ -125,26 +126,14 @@ class EmailVerification:
         )
 
 
-def get_db_connection() -> psycopg2.extensions.connection:
+def get_db_connection():
     """
-    데이터베이스 연결 생성
-
-    Returns:
-        psycopg2 connection 객체
-
-    Raises:
-        psycopg2.Error: DB 연결 실패 시
+    DB 연결 가져오기 (Connection Pool 사용).
+    Sprint 30: 직접 연결 → 풀 기반으로 교체.
+    사용 후 반드시 put_conn(conn) 호출로 풀에 반납.
     """
-    try:
-        conn = psycopg2.connect(
-            Config.DATABASE_URL,
-            cursor_factory=psycopg2.extras.RealDictCursor,
-            options="-c timezone=Asia/Seoul"
-        )
-        return conn
-    except PsycopgError as e:
-        logger.error(f"Database connection failed: {e}")
-        raise
+    from app.db_pool import get_conn
+    return get_conn()
 
 
 def create_worker(
@@ -207,7 +196,7 @@ def create_worker(
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def get_worker_by_id(worker_id: int) -> Optional[Worker]:
@@ -240,7 +229,7 @@ def get_worker_by_id(worker_id: int) -> Optional[Worker]:
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def get_worker_by_email(email: str) -> Optional[Worker]:
@@ -273,7 +262,7 @@ def get_worker_by_email(email: str) -> Optional[Worker]:
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def get_worker_by_name(name: str) -> Optional[Worker]:
@@ -308,7 +297,7 @@ def get_worker_by_name(name: str) -> Optional[Worker]:
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def get_admin_by_email_prefix(prefix: str) -> Optional[Worker]:
@@ -353,7 +342,7 @@ def get_admin_by_email_prefix(prefix: str) -> Optional[Worker]:
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def update_approval_status(worker_id: int, status: str) -> bool:
@@ -395,7 +384,7 @@ def update_approval_status(worker_id: int, status: str) -> bool:
         return False
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def update_email_verified(worker_id: int) -> bool:
@@ -432,7 +421,7 @@ def update_email_verified(worker_id: int) -> bool:
         return False
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def create_verification_code(worker_id: int) -> Optional[str]:
@@ -477,7 +466,7 @@ def create_verification_code(worker_id: int) -> Optional[str]:
             # 중복 코드 발생 (UNIQUE 제약 위반)
             if conn:
                 conn.rollback()
-                conn.close()
+                put_conn(conn)
             logger.warning(f"Duplicate verification code, retrying... (attempt {attempt + 1}/3)")
             continue
         except PsycopgError as e:
@@ -487,7 +476,7 @@ def create_verification_code(worker_id: int) -> Optional[str]:
             return None
         finally:
             if conn and not conn.closed:
-                conn.close()
+                put_conn(conn)
 
     logger.error("Failed to create verification code after 3 attempts")
     return None
@@ -533,7 +522,7 @@ def get_verification_code(code: str) -> Optional[Dict[str, Any]]:
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def create_password_reset_code(worker_id: int) -> Optional[str]:
@@ -578,7 +567,7 @@ def create_password_reset_code(worker_id: int) -> Optional[str]:
             # 중복 코드 발생 (UNIQUE 제약 위반)
             if conn:
                 conn.rollback()
-                conn.close()
+                put_conn(conn)
             logger.warning(f"Duplicate reset code, retrying... (attempt {attempt + 1}/3)")
             continue
         except PsycopgError as e:
@@ -588,7 +577,7 @@ def create_password_reset_code(worker_id: int) -> Optional[str]:
             return None
         finally:
             if conn and not conn.closed:
-                conn.close()
+                put_conn(conn)
 
     logger.error("Failed to create password reset code after 3 attempts")
     return None
@@ -629,7 +618,7 @@ def update_password_hash(worker_id: int, password_hash: str) -> bool:
         return False
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def update_active_role(worker_id: int, active_role: str) -> bool:
@@ -667,7 +656,7 @@ def update_active_role(worker_id: int, active_role: str) -> bool:
         return False
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def mark_code_as_verified(code: str) -> bool:
@@ -719,4 +708,4 @@ def mark_code_as_verified(code: str) -> bool:
         return False
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)

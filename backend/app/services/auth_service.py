@@ -20,6 +20,7 @@ import bcrypt
 import jwt
 
 from app.config import Config
+from app.db_pool import put_conn
 from app.models.worker import (
     create_worker,
     get_worker_by_email,
@@ -233,7 +234,7 @@ class AuthService:
                             (worker_id, device_id, token_hash, expires_at)
                         VALUES (%s, %s, %s, %s)
                     """, (worker_id, device_id, token_hash, expires_at))
-            conn.close()
+            put_conn(conn)
         except Exception as e:
             logger.error(f"Failed to store refresh token: worker_id={worker_id}, error={e}")
 
@@ -260,7 +261,7 @@ class AuthService:
             if row is None:
                 # DB에 없는 토큰 → Phase A 이전 발급된 토큰이거나 미등록
                 # Phase B 호환: 차단하지 않고 None 반환 (호출측에서 fallback)
-                conn.close()
+                put_conn(conn)
                 logger.warning("Refresh token not found in DB (pre-migration token?)")
                 return None
 
@@ -279,7 +280,7 @@ class AuthService:
                             SET revoked = TRUE, revoked_reason = 'theft_detected'
                             WHERE worker_id = %s AND revoked = FALSE
                         """, (worker_id,))
-                conn.close()
+                put_conn(conn)
                 return {'theft_detected': True, 'worker_id': worker_id}
 
             # 정상 토큰 → last_used_at 업데이트
@@ -290,7 +291,7 @@ class AuthService:
                         SET last_used_at = NOW()
                         WHERE id = %s
                     """, (row['id'],))
-            conn.close()
+            put_conn(conn)
             return {'worker_id': row['worker_id'], 'device_id': row['device_id']}
 
         except Exception as e:
@@ -310,7 +311,7 @@ class AuthService:
                         WHERE token_hash = %s AND revoked = FALSE
                     """, (reason, token_hash))
                     updated = cur.rowcount
-            conn.close()
+            put_conn(conn)
             return updated > 0
         except Exception as e:
             logger.error(f"Failed to revoke refresh token: {e}")
@@ -328,7 +329,7 @@ class AuthService:
                         WHERE worker_id = %s AND revoked = FALSE
                     """, (reason, worker_id))
                     count = cur.rowcount
-            conn.close()
+            put_conn(conn)
             logger.info(f"Revoked {count} tokens for worker_id={worker_id}, reason={reason}")
             return count
         except Exception as e:
@@ -844,7 +845,7 @@ class AuthService:
                 )
                 last_row = cur.fetchone()
         finally:
-            conn.close()
+            put_conn(conn)
 
         if last_row and last_row['created_at']:
             from datetime import timezone as tz

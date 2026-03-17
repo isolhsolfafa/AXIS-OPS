@@ -10,6 +10,7 @@ from typing import Tuple, Dict, Any
 
 from app.middleware.jwt_auth import jwt_required, view_access_required
 from app.models.worker import get_db_connection
+from app.db_pool import put_conn
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +151,7 @@ def get_qr_list() -> Tuple[Dict[str, Any], int]:
         """)
         stats_row = cursor.fetchone()
 
-        conn.close()
+        put_conn(conn)
 
         # 응답 빌드
         items = []

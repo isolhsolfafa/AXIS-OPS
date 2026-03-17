@@ -21,6 +21,7 @@ from app.services.alert_service import create_and_broadcast_alert
 from app.services.scheduler_service import trigger_unfinished_task_check_manually
 from app.services.task_service import _calculate_working_minutes
 from psycopg2 import Error as PsycopgError
+from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
@@ -178,7 +179,7 @@ def get_pending_workers() -> Tuple[Dict[str, Any], int]:
         }), 500
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 @admin_bp.route("/workers", methods=["GET"])
@@ -283,7 +284,7 @@ def get_workers() -> Tuple[Dict[str, Any], int]:
         }), 500
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 @admin_bp.route("/dashboard/process-summary", methods=["GET"])
@@ -377,7 +378,7 @@ def get_process_summary() -> Tuple[Dict[str, Any], int]:
         }), 500
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 @admin_bp.route("/dashboard/active-tasks", methods=["GET"])
@@ -469,7 +470,7 @@ def get_active_tasks() -> Tuple[Dict[str, Any], int]:
         }), 500
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 @admin_bp.route("/dashboard/alerts-summary", methods=["GET"])
@@ -590,7 +591,7 @@ def get_alerts_summary() -> Tuple[Dict[str, Any], int]:
         }), 500
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 @admin_bp.route("/task-corrections", methods=["GET"])
@@ -743,7 +744,7 @@ def get_task_corrections() -> Tuple[Dict[str, Any], int]:
         }), 500
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 @admin_bp.route("/tasks/<int:task_id>/force-complete", methods=["POST"])
@@ -840,7 +841,7 @@ def force_complete_task(task_id: int) -> Tuple[Dict[str, Any], int]:
         }), 500
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 @admin_bp.route("/products/initialize-tasks", methods=["POST"])
@@ -1110,7 +1111,7 @@ def force_close_task(task_id: int) -> Tuple[Dict[str, Any], int]:
         }), 500
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 @admin_bp.route("/cron/check-unfinished-tasks", methods=["POST"])
@@ -1235,7 +1236,7 @@ def get_managers() -> Tuple[Dict[str, Any], int]:
         }), 500
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 @admin_bp.route("/workers/<int:worker_id>/manager", methods=["PUT"])
@@ -1336,7 +1337,7 @@ def toggle_manager(worker_id: int) -> Tuple[Dict[str, Any], int]:
         }), 500
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 @admin_bp.route("/settings", methods=["GET"])
@@ -1522,7 +1523,7 @@ def update_settings() -> Tuple[Dict[str, Any], int]:
                 conn.rollback()
         finally:
             if conn:
-                conn.close()
+                put_conn(conn)
 
     return jsonify({
         'message': '설정이 저장되었습니다.',
@@ -1624,7 +1625,7 @@ def get_pending_tasks() -> Tuple[Dict[str, Any], int]:
         }), 500
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 # ============================================================
@@ -1735,7 +1736,7 @@ def _get_attendance_data(target_start_kst, target_end_kst, company_filter=None):
 
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def _get_manager_company_filter():
@@ -2028,4 +2029,4 @@ def get_etl_changes() -> Tuple[Dict[str, Any], int]:
         }), 500
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)

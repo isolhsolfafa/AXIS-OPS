@@ -1,3 +1,3 @@
 """AXIS-OPS 버전 정보 — 단일 소스"""
-VERSION = "1.7.8"
-BUILD_DATE = "2026-03-16"
+VERSION = "1.8.0"
+BUILD_DATE = "2026-03-17"

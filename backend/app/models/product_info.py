@@ -17,6 +17,7 @@ from typing import Optional, Dict, Any
 from psycopg2 import Error as PsycopgError
 
 from .worker import get_db_connection
+from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
@@ -181,7 +182,7 @@ def get_product_by_qr_doc_id(qr_doc_id: str, include_shipped: bool = False) -> O
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def get_product_by_serial_number(serial_number: str) -> Optional[ProductInfo]:
@@ -215,7 +216,7 @@ def get_product_by_serial_number(serial_number: str) -> Optional[ProductInfo]:
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def update_location_qr(qr_doc_id: str, location_qr_id: str) -> bool:
@@ -265,7 +266,7 @@ def update_location_qr(qr_doc_id: str, location_qr_id: str) -> bool:
         return False
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def is_tms_product(product: ProductInfo) -> bool:

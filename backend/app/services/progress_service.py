@@ -7,6 +7,7 @@ import logging
 from typing import Dict, Any, List, Optional
 
 from app.models.worker import get_db_connection
+from app.db_pool import put_conn
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +128,7 @@ def get_partner_sn_progress(
         raise
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def _build_company_filter(

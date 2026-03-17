@@ -19,6 +19,7 @@ from app.middleware.jwt_auth import (
 )
 from app.models.worker import get_db_connection
 from psycopg2 import Error as PsycopgError
+from app.db_pool import put_conn
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +197,7 @@ def get_monthly_detail() -> Tuple[Dict[str, Any], int]:
         return jsonify({'error': 'INTERNAL_ERROR', 'message': '데이터 조회 실패'}), 500
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 @factory_bp.route("/weekly-kpi", methods=["GET"])
@@ -327,4 +328,4 @@ def get_weekly_kpi() -> Tuple[Dict[str, Any], int]:
         return jsonify({'error': 'INTERNAL_ERROR', 'message': '데이터 조회 실패'}), 500
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)

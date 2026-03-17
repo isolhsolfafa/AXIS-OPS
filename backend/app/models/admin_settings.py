@@ -15,6 +15,7 @@ from typing import Optional, Dict, Any, List
 from psycopg2 import Error as PsycopgError
 
 from .worker import get_db_connection
+from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
@@ -104,7 +105,7 @@ def get_setting(setting_key: str, default: Any = None) -> Any:
         return default
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def get_setting_obj(setting_key: str) -> Optional[AdminSettings]:
@@ -137,7 +138,7 @@ def get_setting_obj(setting_key: str) -> Optional[AdminSettings]:
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def get_all_settings() -> List[AdminSettings]:
@@ -162,7 +163,7 @@ def get_all_settings() -> List[AdminSettings]:
         return []
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def update_setting(setting_key: str, setting_value: Any, updated_by: Optional[int] = None) -> bool:
@@ -208,4 +209,4 @@ def update_setting(setting_key: str, setting_value: Any, updated_by: Optional[in
         return False
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)

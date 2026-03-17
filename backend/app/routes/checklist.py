@@ -11,6 +11,7 @@ from typing import Tuple, Dict, Any
 from app.middleware.jwt_auth import jwt_required, admin_required, get_current_worker_id
 from app.models.worker import get_worker_by_id, get_db_connection
 from psycopg2 import Error as PsycopgError
+from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
@@ -136,7 +137,7 @@ def get_checklist(serial_number: str, category: str) -> Tuple[Dict[str, Any], in
         }), 500
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 @checklist_bp.route("/api/app/checklist/check", methods=["PUT"])
@@ -248,7 +249,7 @@ def upsert_checklist_record() -> Tuple[Dict[str, Any], int]:
         }), 500
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 @checklist_bp.route("/api/admin/checklist/import", methods=["POST"])
@@ -386,7 +387,7 @@ def import_checklist_master() -> Tuple[Dict[str, Any], int]:
         }), 500
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
     logger.info(f"Checklist import done: imported={imported}, updated={updated}, errors={len(errors)}")
 

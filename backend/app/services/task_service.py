@@ -36,6 +36,7 @@ from app.models.product_info import (
 )
 from app.models.worker import get_db_connection
 from psycopg2 import Error as PsycopgError
+from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
@@ -735,7 +736,7 @@ def _record_completion_log(task, worker_id: int, completed_at: datetime) -> Opti
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def _all_workers_completed(task_detail_id: int) -> bool:
@@ -785,7 +786,7 @@ def _all_workers_completed(task_detail_id: int) -> bool:
         return True  # 오류 시 완료로 처리 (작업 블로킹 방지)
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def _finalize_task_multi_worker(task_detail_id: int, completed_at: datetime) -> Dict[str, Any]:
@@ -897,7 +898,7 @@ def _finalize_task_multi_worker(task_detail_id: int, completed_at: datetime) -> 
         }
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def _worker_has_started_task(task_detail_id: int, worker_id: int) -> bool:
@@ -932,7 +933,7 @@ def _worker_has_started_task(task_detail_id: int, worker_id: int) -> bool:
         return False
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def _worker_already_completed_task(task_detail_id: int, worker_id: int) -> bool:
@@ -966,4 +967,4 @@ def _worker_already_completed_task(task_detail_id: int, worker_id: int) -> bool:
         return False
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)

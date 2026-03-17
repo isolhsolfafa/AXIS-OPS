@@ -14,6 +14,7 @@ from flask import Blueprint, request, jsonify
 from app.middleware.jwt_auth import jwt_required, get_current_worker_id
 from app.models.worker import get_db_connection, get_worker_by_id
 from app.services.geo_service import verify_location, is_geo_check_enabled, is_geo_strict_mode
+from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
@@ -120,7 +121,7 @@ def attendance_check() -> Tuple[Dict[str, Any], int]:
             # 이미 체크아웃 없이 체크인한 상태이면 중복 방지
             # (마지막 in 이후 out이 없으면 현재 체크인 상태)
             if check_ins and len(check_ins) > len(check_outs):
-                conn.close()
+                put_conn(conn)
                 return jsonify({
                     'error': 'ALREADY_CHECKED_IN',
                     'message': '이미 출근 기록이 있습니다.'
@@ -136,7 +137,7 @@ def attendance_check() -> Tuple[Dict[str, Any], int]:
                 if client_lat is None or client_lon is None:
                     if strict:
                         # strict 모드: 위치 미전송 → 거부
-                        conn.close()
+                        put_conn(conn)
                         return jsonify({
                             'error': 'LOCATION_REQUIRED',
                             'message': '위치 보안이 활성화되어 있습니다. latitude와 longitude를 전송해주세요.'
@@ -151,14 +152,14 @@ def attendance_check() -> Tuple[Dict[str, Any], int]:
                         client_lat = float(client_lat)
                         client_lon = float(client_lon)
                     except (TypeError, ValueError):
-                        conn.close()
+                        put_conn(conn)
                         return jsonify({
                             'error': 'INVALID_LOCATION',
                             'message': 'latitude, longitude는 숫자여야 합니다.'
                         }), 400
                     allowed, distance = verify_location(client_lat, client_lon)
                     if not allowed:
-                        conn.close()
+                        put_conn(conn)
                         return jsonify({
                             'error': 'OUT_OF_RANGE',
                             'message': f'현재 위치가 허용 구역을 벗어났습니다. (거리: {distance}m)'
@@ -166,13 +167,13 @@ def attendance_check() -> Tuple[Dict[str, Any], int]:
 
             # work_site / product_line 유효성 검사 (출근 시만)
             if work_site not in ('GST', 'HQ'):
-                conn.close()
+                put_conn(conn)
                 return jsonify({
                     'error': 'INVALID_WORK_SITE',
                     'message': "work_site는 'GST' 또는 'HQ'이어야 합니다."
                 }), 400
             if product_line not in ('SCR', 'CHI'):
-                conn.close()
+                put_conn(conn)
                 return jsonify({
                     'error': 'INVALID_PRODUCT_LINE',
                     'message': "product_line은 'SCR' 또는 'CHI'이어야 합니다."
@@ -181,7 +182,7 @@ def attendance_check() -> Tuple[Dict[str, Any], int]:
         elif check_type == 'out':
             # 체크인 없이 체크아웃 불가
             if not check_ins or len(check_ins) <= len(check_outs):
-                conn.close()
+                put_conn(conn)
                 return jsonify({
                     'error': 'NOT_CHECKED_IN',
                     'message': '출근 기록이 없습니다. 먼저 출근 체크를 해주세요.'
@@ -208,7 +209,7 @@ def attendance_check() -> Tuple[Dict[str, Any], int]:
                     RETURNING id, worker_id, check_type, check_time, method, note, work_site, product_line
                 """, (worker_id, check_type, now_utc, note, work_site, product_line))
                 record = cur.fetchone()
-        conn.close()
+        put_conn(conn)
 
     except Exception as e:
         logger.error(f"attendance_check DB error: worker_id={worker_id}, error={e}")
@@ -273,7 +274,7 @@ def attendance_today() -> Tuple[Dict[str, Any], int]:
                 ORDER BY check_time ASC
             """, (worker_id, today_start, today_end))
             rows = cur.fetchall()
-        conn.close()
+        put_conn(conn)
     except Exception as e:
         logger.error(f"attendance_today DB error: worker_id={worker_id}, error={e}")
         return jsonify({

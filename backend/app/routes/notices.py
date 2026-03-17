@@ -11,6 +11,7 @@ from typing import Tuple, Dict, Any
 from app.middleware.jwt_auth import jwt_required, admin_required
 from app.models.worker import get_db_connection
 from psycopg2 import Error as PsycopgError
+from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
@@ -107,7 +108,7 @@ def get_notices() -> Tuple[Dict[str, Any], int]:
         }), 500
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 @notices_bp.route("/api/notices/<int:notice_id>", methods=["GET"])
@@ -160,7 +161,7 @@ def get_notice_detail(notice_id: int) -> Tuple[Dict[str, Any], int]:
         }), 500
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 # ──────────────────────────────────────────────────
@@ -237,7 +238,7 @@ def create_notice() -> Tuple[Dict[str, Any], int]:
         }), 500
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 @notices_bp.route("/api/admin/notices/<int:notice_id>", methods=["PUT"])
@@ -307,7 +308,7 @@ def update_notice(notice_id: int) -> Tuple[Dict[str, Any], int]:
         }), 500
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 @notices_bp.route("/api/admin/notices/<int:notice_id>", methods=["DELETE"])
@@ -353,4 +354,4 @@ def delete_notice(notice_id: int) -> Tuple[Dict[str, Any], int]:
         }), 500
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)

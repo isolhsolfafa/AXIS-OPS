@@ -13,6 +13,7 @@ from typing import Optional, List, Dict, Any
 from psycopg2 import Error as PsycopgError
 
 from .worker import get_db_connection
+from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
@@ -133,7 +134,7 @@ def create_alert(
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def get_alerts_by_worker(
@@ -186,7 +187,7 @@ def get_alerts_by_worker(
         return []
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def get_alert_by_id(alert_id: int) -> Optional[AlertLog]:
@@ -219,7 +220,7 @@ def get_alert_by_id(alert_id: int) -> Optional[AlertLog]:
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def mark_alert_read(alert_id: int) -> bool:
@@ -260,7 +261,7 @@ def mark_alert_read(alert_id: int) -> bool:
         return False
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def get_unread_count(worker_id: int) -> int:
@@ -295,4 +296,4 @@ def get_unread_count(worker_id: int) -> int:
         return 0
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)

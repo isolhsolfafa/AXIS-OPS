@@ -15,6 +15,7 @@ from app.models.completion_status import get_or_create_completion_status
 from app.models.product_info import get_product_by_qr_doc_id
 from app.models.alert_log import create_alert
 from app.models.admin_settings import get_setting
+from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
@@ -166,4 +167,4 @@ def get_managers_for_role(role: str) -> List[int]:
         return []
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)

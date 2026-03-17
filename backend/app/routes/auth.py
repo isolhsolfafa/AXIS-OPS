@@ -18,6 +18,7 @@ from app.middleware.jwt_auth import jwt_required, jwt_optional, admin_required
 from app.models.worker import update_approval_status, update_active_role, get_worker_by_id
 from app.middleware.jwt_auth import get_current_worker_id
 from app.models.worker import get_db_connection
+from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
@@ -544,7 +545,7 @@ def set_pin() -> Tuple[Dict[str, Any], int]:
                             pin_locked_until = NULL,
                             updated_at     = NOW()
                 """, (worker_id, pin_hash))
-        conn.close()
+        put_conn(conn)
     except Exception as e:
         logger.error(f"set_pin DB error: worker_id={worker_id}, error={e}")
         return jsonify({
@@ -607,7 +608,7 @@ def change_pin() -> Tuple[Dict[str, Any], int]:
             row = cur.fetchone()
 
         if not row or not row['pin_hash']:
-            conn.close()
+            put_conn(conn)
             return jsonify({
                 'error': 'PIN_NOT_SET',
                 'message': 'PIN이 등록되어 있지 않습니다. 먼저 PIN을 등록하세요.'
@@ -615,7 +616,7 @@ def change_pin() -> Tuple[Dict[str, Any], int]:
 
         # 현재 PIN 검증
         if not check_password_hash(row['pin_hash'], current_pin):
-            conn.close()
+            put_conn(conn)
             return jsonify({
                 'error': 'WRONG_PIN',
                 'message': '현재 PIN이 올바르지 않습니다.'
@@ -631,7 +632,7 @@ def change_pin() -> Tuple[Dict[str, Any], int]:
                         pin_locked_until = NULL, updated_at = NOW()
                     WHERE worker_id = %s
                 """, (new_hash, worker_id))
-        conn.close()
+        put_conn(conn)
     except Exception as e:
         logger.error(f"change_pin DB error: worker_id={worker_id}, error={e}")
         return jsonify({
@@ -703,7 +704,7 @@ def pin_login() -> Tuple[Dict[str, Any], int]:
             worker_row = cur.fetchone()
 
         if not worker_row:
-            conn.close()
+            put_conn(conn)
             return jsonify({
                 'error': 'WORKER_NOT_FOUND',
                 'message': '작업자를 찾을 수 없습니다.'
@@ -719,7 +720,7 @@ def pin_login() -> Tuple[Dict[str, Any], int]:
             pin_row = cur.fetchone()
 
         if not pin_row or not pin_row['pin_hash']:
-            conn.close()
+            put_conn(conn)
             return jsonify({
                 'error': 'PIN_NOT_SET',
                 'message': 'PIN이 등록되어 있지 않습니다. ID/PW로 로그인 후 PIN을 등록하세요.'
@@ -729,7 +730,7 @@ def pin_login() -> Tuple[Dict[str, Any], int]:
         now_utc = datetime.now(timezone.utc)
         if pin_row['pin_locked_until'] and pin_row['pin_locked_until'] > now_utc:
             remaining = int((pin_row['pin_locked_until'] - now_utc).total_seconds())
-            conn.close()
+            put_conn(conn)
             return jsonify({
                 'error': 'PIN_LOCKED',
                 'message': f'PIN이 잠겼습니다. {remaining}초 후에 다시 시도하세요.'
@@ -750,7 +751,7 @@ def pin_login() -> Tuple[Dict[str, Any], int]:
                         SET pin_fail_count = %s, pin_locked_until = %s, updated_at = NOW()
                         WHERE worker_id = %s
                     """, (new_fail, locked_until, worker_id))
-            conn.close()
+            put_conn(conn)
 
             if locked_until:
                 return jsonify({
@@ -772,7 +773,7 @@ def pin_login() -> Tuple[Dict[str, Any], int]:
                     SET pin_fail_count = 0, pin_locked_until = NULL, updated_at = NOW()
                     WHERE worker_id = %s
                 """, (worker_id,))
-        conn.close()
+        put_conn(conn)
 
     except Exception as e:
         logger.error(f"pin_login DB error: worker_id={worker_id}, error={e}")
@@ -842,7 +843,7 @@ def pin_status() -> Tuple[Dict[str, Any], int]:
                 (worker_id,)
             )
             row = cur.fetchone()
-        conn.close()
+        put_conn(conn)
     except Exception as e:
         logger.error(f"pin_status DB error: worker_id={worker_id}, error={e}")
         return jsonify({

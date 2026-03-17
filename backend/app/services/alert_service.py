@@ -15,6 +15,7 @@ from app.models.alert_log import (
 )
 from psycopg2 import Error as PsycopgError
 from app.models.worker import get_db_connection
+from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
@@ -196,4 +197,4 @@ def mark_all_read(worker_id: int) -> int:
         return 0
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)

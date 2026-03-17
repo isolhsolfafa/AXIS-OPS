@@ -11,6 +11,7 @@ from datetime import datetime, timezone, timedelta
 
 from app.config import Config
 from app.models.worker import get_db_connection
+from app.db_pool import put_conn
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ def get_admin_emails():
         cur.execute("SELECT email FROM workers WHERE is_admin = true AND email IS NOT NULL")
         return [row['email'] for row in cur.fetchall()]
     finally:
-        conn.close()
+        put_conn(conn)
 
 
 def _send_email(to_email: str, subject: str, html_body: str) -> bool:

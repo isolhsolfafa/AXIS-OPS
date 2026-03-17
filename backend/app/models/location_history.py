@@ -12,6 +12,7 @@ from typing import Optional, List, Dict, Any
 from psycopg2 import Error as PsycopgError
 
 from .worker import get_db_connection
+from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
@@ -104,7 +105,7 @@ def create_location_record(
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def get_location_by_id(record_id: int) -> Optional[LocationHistory]:
@@ -137,7 +138,7 @@ def get_location_by_id(record_id: int) -> Optional[LocationHistory]:
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def get_locations_by_worker(
@@ -177,4 +178,4 @@ def get_locations_by_worker(
         return []
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)

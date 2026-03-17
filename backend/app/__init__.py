@@ -56,6 +56,14 @@ def create_app(config_class: type = Config) -> Flask:
 
     logger.info("WebSocket route /ws registered (flask-sock)")
 
+    # DB Connection Pool 초기화 (Sprint 30)
+    if not app.config.get('TESTING', False):
+        from app.db_pool import init_pool, close_pool
+        init_pool()
+
+        import atexit
+        atexit.register(close_pool)
+
     # 스케줄러 초기화 및 시작 (Sprint 4) — 테스트 환경에서는 비활성화
     if not app.config.get('TESTING', False):
         from app.services.scheduler_service import init_scheduler, start_scheduler

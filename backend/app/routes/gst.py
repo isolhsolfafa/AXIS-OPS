@@ -11,6 +11,7 @@ from typing import Tuple, Dict, Any
 from app.middleware.jwt_auth import jwt_required, get_current_worker_id
 from app.models.worker import get_worker_by_id, get_db_connection
 from psycopg2 import Error as PsycopgError
+from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
@@ -276,4 +277,4 @@ def get_gst_products(category: str) -> Tuple[Dict[str, Any], int]:
         }), 500
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)

@@ -12,6 +12,7 @@ from typing import Optional, Dict, Any, List
 from psycopg2 import Error as PsycopgError
 
 from .worker import get_db_connection
+from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
@@ -105,7 +106,7 @@ def get_all_model_configs() -> List[ModelConfig]:
         return []
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def get_model_config_by_prefix(model_prefix: str) -> Optional[ModelConfig]:
@@ -138,7 +139,7 @@ def get_model_config_by_prefix(model_prefix: str) -> Optional[ModelConfig]:
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def get_model_config_for_product(model_name: str) -> Optional[ModelConfig]:
@@ -180,4 +181,4 @@ def get_model_config_for_product(model_name: str) -> Optional[ModelConfig]:
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)

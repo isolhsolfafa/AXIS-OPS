@@ -6,6 +6,7 @@ BUG-24: 배포마다 migration 누락으로 task seed silent fail 방지.
 import logging
 from app.models.worker import get_db_connection
 from psycopg2 import Error as PsycopgError
+from app.db_pool import put_conn
 
 logger = logging.getLogger(__name__)
 
@@ -114,4 +115,4 @@ def ensure_schema():
             conn.rollback()
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)

@@ -18,6 +18,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from app.config import Config
 from app.services.duration_validator import check_unfinished_tasks
+from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
@@ -323,7 +324,7 @@ def _get_active_tasks() -> List[Dict[str, Any]]:
         return []
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def _get_overdue_tasks(before: datetime) -> List[Dict[str, Any]]:
@@ -374,7 +375,7 @@ def _get_overdue_tasks(before: datetime) -> List[Dict[str, Any]]:
         return []
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def _get_company_managers(worker_id: int) -> List[int]:
@@ -430,7 +431,7 @@ def _get_company_managers(worker_id: int) -> List[int]:
         return []
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -624,7 +625,7 @@ def force_pause_all_active_tasks(pause_type: str, message: str) -> None:
         return
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
     paused_count = 0
     for task_row in active_tasks:
@@ -710,7 +711,7 @@ def send_break_end_notifications(pause_type: str, message: str) -> None:
         return
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
     now_kst = datetime.now(Config.KST)
     notified_workers = set()

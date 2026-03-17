@@ -14,6 +14,7 @@ from app.middleware.jwt_auth import jwt_required
 from app.models.worker import get_db_connection
 from app.models.alert_log import mark_alert_read
 from psycopg2 import Error as PsycopgError
+from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
@@ -183,7 +184,7 @@ def sync_offline_batch() -> Tuple[Dict[str, Any], int]:
         }), 500
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 @sync_bp.route("/status", methods=["GET"])
@@ -259,4 +260,4 @@ def get_sync_status() -> Tuple[Dict[str, Any], int]:
         }), 500
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)

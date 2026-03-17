@@ -13,6 +13,7 @@ from typing import Optional, Dict, Any
 from psycopg2 import Error as PsycopgError
 
 from .worker import get_db_connection
+from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
@@ -123,7 +124,7 @@ def get_or_create_completion_status(serial_number: str) -> Optional[CompletionSt
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def update_process_completion(serial_number: str, process_type: str, completed: bool) -> bool:
@@ -190,7 +191,7 @@ def update_process_completion(serial_number: str, process_type: str, completed: 
         return False
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def update_all_completed(serial_number: str, all_completed: bool, completed_at: Optional[datetime] = None) -> bool:
@@ -233,7 +234,7 @@ def update_all_completed(serial_number: str, all_completed: bool, completed_at: 
         return False
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def check_all_processes_completed(serial_number: str) -> bool:
@@ -280,4 +281,4 @@ def check_all_processes_completed(serial_number: str) -> bool:
         return False
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)

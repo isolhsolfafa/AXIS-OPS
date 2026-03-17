@@ -14,6 +14,7 @@ from app.models.worker import get_db_connection
 from app.models.task_detail import get_task_by_id
 from app.models.alert_log import create_alert
 from app.services.process_validator import get_managers_for_role
+from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
@@ -199,4 +200,4 @@ def check_unfinished_tasks() -> List[Dict[str, Any]]:
         return []
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)

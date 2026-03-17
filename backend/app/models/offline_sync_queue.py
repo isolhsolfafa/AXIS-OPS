@@ -14,6 +14,7 @@ from psycopg2 import Error as PsycopgError
 import psycopg2.extras
 
 from .worker import get_db_connection
+from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
@@ -128,7 +129,7 @@ def create_sync_item(
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def get_sync_item_by_id(item_id: int) -> Optional[OfflineSyncQueue]:
@@ -161,7 +162,7 @@ def get_sync_item_by_id(item_id: int) -> Optional[OfflineSyncQueue]:
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def get_pending_sync_items(worker_id: int) -> List[OfflineSyncQueue]:
@@ -196,7 +197,7 @@ def get_pending_sync_items(worker_id: int) -> List[OfflineSyncQueue]:
         return []
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def mark_sync_item_done(item_id: int) -> bool:
@@ -237,4 +238,4 @@ def mark_sync_item_done(item_id: int) -> bool:
         return False
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)

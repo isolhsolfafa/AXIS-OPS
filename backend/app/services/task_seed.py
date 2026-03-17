@@ -22,6 +22,7 @@ from app.models.worker import get_db_connection
 from app.models.model_config import get_model_config_for_product
 from app.models.admin_settings import get_setting
 from app.models.completion_status import get_or_create_completion_status
+from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
@@ -310,7 +311,7 @@ def initialize_product_tasks(
         }
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def _resolve_mech_applicability(

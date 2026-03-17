@@ -19,6 +19,7 @@ from app.models.product_info import get_product_by_serial_number
 from app.models.work_pause_log import create_pause, resume_pause, get_active_pause, get_pauses_by_task
 from app.models.task_detail import set_paused
 from app.models.admin_settings import get_all_settings
+from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
@@ -267,7 +268,7 @@ def complete_single_action_route() -> Tuple[Dict[str, Any], int]:
              task.task_category, task.task_id, task.task_name, completed_at)
         )
         conn.commit()
-        conn.close()
+        put_conn(conn)
     except Exception as e:
         logger.error(f"Failed to log single action completion: {e}")
 
@@ -351,7 +352,7 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
                 (worker_ids,)
             )
             worker_map = {row['id']: row['name'] for row in cur.fetchall()}
-            conn.close()
+            put_conn(conn)
             for item in task_list:
                 wid = item.get('worker_id')
                 item['worker_name'] = worker_map.get(wid) if wid else None
@@ -407,7 +408,7 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
                 if len(wlist) >= 2:
                     names = [w['worker_name'] for w in wlist]
                     logger.info(f"[BUG-14] task_id={tid} has {len(wlist)} workers: {names}")
-            conn.close()
+            put_conn(conn)
         except Exception as e:
             logger.warning(f"Workers batch query failed: {e}")
 

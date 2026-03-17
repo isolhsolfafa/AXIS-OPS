@@ -13,6 +13,7 @@ from typing import Optional, List, Dict, Any
 from psycopg2 import Error as PsycopgError
 
 from .worker import get_db_connection
+from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
@@ -140,7 +141,7 @@ def create_work_completion_log(
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def get_work_completion_log_by_id(log_id: int) -> Optional[WorkCompletionLog]:
@@ -173,7 +174,7 @@ def get_work_completion_log_by_id(log_id: int) -> Optional[WorkCompletionLog]:
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def get_work_completion_logs_by_serial(
@@ -213,7 +214,7 @@ def get_work_completion_logs_by_serial(
         return []
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def get_work_completion_logs_by_worker(
@@ -253,4 +254,4 @@ def get_work_completion_logs_by_worker(
         return []
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)

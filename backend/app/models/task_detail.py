@@ -14,6 +14,7 @@ from typing import Optional, Dict, Any, List
 from psycopg2 import Error as PsycopgError
 
 from .worker import get_db_connection
+from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
@@ -164,7 +165,7 @@ def create_task(
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def get_task_by_id(task_detail_id: int) -> Optional[TaskDetail]:
@@ -197,7 +198,7 @@ def get_task_by_id(task_detail_id: int) -> Optional[TaskDetail]:
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def get_task_by_serial_and_id(serial_number: str, task_category: str, task_id: str) -> Optional[TaskDetail]:
@@ -229,7 +230,7 @@ def get_task_by_serial_and_id(serial_number: str, task_category: str, task_id: s
         return None
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def get_tasks_by_serial_number(
@@ -278,7 +279,7 @@ def get_tasks_by_serial_number(
         return []
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def start_task(task_detail_id: int, started_at: datetime) -> bool:
@@ -316,7 +317,7 @@ def start_task(task_detail_id: int, started_at: datetime) -> bool:
         return False
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def complete_task(task_detail_id: int, completed_at: datetime) -> bool:
@@ -360,7 +361,7 @@ def complete_task(task_detail_id: int, completed_at: datetime) -> bool:
         return False
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def complete_single_action(task_detail_id: int, completed_at: datetime, worker_id: int) -> bool:
@@ -412,7 +413,7 @@ def complete_single_action(task_detail_id: int, completed_at: datetime, worker_i
         return False
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def get_incomplete_tasks(serial_number: str, task_category: str) -> List[TaskDetail]:
@@ -451,7 +452,7 @@ def get_incomplete_tasks(serial_number: str, task_category: str) -> List[TaskDet
         return []
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def toggle_task_applicable(task_detail_id: int, is_applicable: bool) -> bool:
@@ -489,7 +490,7 @@ def toggle_task_applicable(task_detail_id: int, is_applicable: bool) -> bool:
         return False
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
 
 
 def set_paused(
@@ -553,4 +554,4 @@ def set_paused(
         return False
     finally:
         if conn:
-            conn.close()
+            put_conn(conn)
