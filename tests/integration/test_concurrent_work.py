@@ -80,7 +80,7 @@ def _insert_task(db_conn, serial_number: str, qr_doc_id: str,
              worker_count, force_closed, closed_by, close_reason)
         VALUES (%s, %s, %s, %s, %s, %s,
                 NULL, NULL, NULL, NULL, NULL, 0, FALSE, NULL, NULL)
-        ON CONFLICT (serial_number, task_category, task_id)
+        ON CONFLICT (serial_number, qr_doc_id, task_category, task_id)
         DO UPDATE SET
             started_at = NULL, completed_at = NULL, worker_id = NULL,
             duration_minutes = NULL, elapsed_minutes = NULL,

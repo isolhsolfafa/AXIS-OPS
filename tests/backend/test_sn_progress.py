@@ -101,7 +101,7 @@ def _seed_task(db_conn, serial_number: str, qr_doc_id: str, worker_id: int,
             (worker_id, serial_number, qr_doc_id, task_category, task_id, task_name,
              is_applicable, completed_at, duration_minutes)
         VALUES (%s, %s, %s, %s, %s, %s, %s, {completed_at}, {duration})
-        ON CONFLICT (serial_number, task_category, task_id) DO NOTHING
+        ON CONFLICT (serial_number, qr_doc_id, task_category, task_id) DO NOTHING
     """, (worker_id, serial_number, qr_doc_id, category, task_id, task_name, is_applicable))
 
     db_conn.commit()

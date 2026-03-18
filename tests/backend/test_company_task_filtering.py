@@ -74,7 +74,7 @@ def _insert_tasks(db_conn, serial_number: str, qr_doc_id: str) -> None:
             INSERT INTO app_task_details
                 (serial_number, qr_doc_id, task_category, task_id, task_name, is_applicable)
             VALUES (%s, %s, %s, %s, %s, TRUE)
-            ON CONFLICT (serial_number, task_category, task_id) DO NOTHING
+            ON CONFLICT (serial_number, qr_doc_id, task_category, task_id) DO NOTHING
         """, (serial_number, qr_doc_id, cat, tid, tname))
     db_conn.commit()
     cursor.close()
@@ -360,7 +360,7 @@ class TestDRAGONCompanyFilter:
                 INSERT INTO app_task_details
                     (serial_number, qr_doc_id, task_category, task_id, task_name, is_applicable)
                 VALUES (%s, %s, %s, %s, %s, TRUE)
-                ON CONFLICT (serial_number, task_category, task_id) DO NOTHING
+                ON CONFLICT (serial_number, qr_doc_id, task_category, task_id) DO NOTHING
             """, (self.SN, self.QR, cat, tid, tname))
         db_conn.commit()
         cursor.close()
@@ -530,7 +530,7 @@ class TestGALLANTCompanyFilter:
                 INSERT INTO app_task_details
                     (serial_number, qr_doc_id, task_category, task_id, task_name, is_applicable)
                 VALUES (%s, %s, 'MECH', %s, %s, %s)
-                ON CONFLICT (serial_number, task_category, task_id) DO NOTHING
+                ON CONFLICT (serial_number, qr_doc_id, task_category, task_id) DO NOTHING
             """, (self.SN, self.QR, task_id, task_name, applicable))
 
         # ELEC: 6개 전부 active
@@ -546,7 +546,7 @@ class TestGALLANTCompanyFilter:
                 INSERT INTO app_task_details
                     (serial_number, qr_doc_id, task_category, task_id, task_name, is_applicable)
                 VALUES (%s, %s, 'ELEC', %s, %s, TRUE)
-                ON CONFLICT (serial_number, task_category, task_id) DO NOTHING
+                ON CONFLICT (serial_number, qr_doc_id, task_category, task_id) DO NOTHING
             """, (self.SN, self.QR, task_id, task_name))
 
         db_conn.commit()

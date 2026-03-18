@@ -48,7 +48,7 @@ class TestTaskOperations:
             INSERT INTO app_task_details
                 (serial_number, qr_doc_id, task_category, task_id, task_name, is_applicable)
             VALUES ('SN-WORK-001', 'DOC-WORK-001', 'MECH', 'CABINET_ASSY', '캐비넷 조립', TRUE)
-            ON CONFLICT (serial_number, task_category, task_id)
+            ON CONFLICT (serial_number, qr_doc_id, task_category, task_id)
             DO UPDATE SET is_applicable = TRUE, started_at = NULL, completed_at = NULL, worker_id = NULL
             RETURNING id
         """)
@@ -362,7 +362,7 @@ class TestTaskValidation:
             INSERT INTO app_task_details
                 (serial_number, qr_doc_id, task_category, task_id, task_name, is_applicable)
             VALUES ('SN-WORK-007', 'DOC-WORK-007', 'MECH', 'WASTE_GAS_LINE', 'Waste Gas 라인', TRUE)
-            ON CONFLICT (serial_number, task_category, task_id)
+            ON CONFLICT (serial_number, qr_doc_id, task_category, task_id)
             DO UPDATE SET started_at = NULL, completed_at = NULL, worker_id = NULL
             RETURNING id
         """)
@@ -371,7 +371,7 @@ class TestTaskValidation:
             INSERT INTO app_task_details
                 (serial_number, qr_doc_id, task_category, task_id, task_name, is_applicable)
             VALUES ('SN-WORK-007', 'DOC-WORK-007', 'MECH', 'PCW_LINE', 'PCW 라인', TRUE)
-            ON CONFLICT (serial_number, task_category, task_id)
+            ON CONFLICT (serial_number, qr_doc_id, task_category, task_id)
             DO UPDATE SET started_at = NULL, completed_at = NULL, worker_id = NULL
             RETURNING id
         """)

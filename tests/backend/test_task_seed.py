@@ -820,7 +820,7 @@ class TestCompanyBasedTaskFilter:
                 INSERT INTO app_task_details
                     (serial_number, qr_doc_id, task_category, task_id, task_name, is_applicable)
                 VALUES (%s, %s, %s, %s, %s, TRUE)
-                ON CONFLICT (serial_number, task_category, task_id) DO NOTHING
+                ON CONFLICT (serial_number, qr_doc_id, task_category, task_id) DO NOTHING
             """, (serial_number, qr_doc_id, cat, tid, tname))
         db_conn.commit()
         cursor.close()
@@ -884,7 +884,7 @@ class TestCompanyBasedTaskFilter:
                 INSERT INTO app_task_details
                     (serial_number, qr_doc_id, task_category, task_id, task_name, is_applicable)
                 VALUES (%s, %s, %s, %s, %s, TRUE)
-                ON CONFLICT (serial_number, task_category, task_id) DO NOTHING
+                ON CONFLICT (serial_number, qr_doc_id, task_category, task_id) DO NOTHING
             """, (serial_number, qr_doc_id, cat, tid, tname))
         db_conn.commit()
         cursor.close()

@@ -410,7 +410,7 @@ class TestActiveRoleTaskFiltering:
             INSERT INTO app_task_details
                 (worker_id, serial_number, qr_doc_id, task_category, task_id, task_name, is_applicable)
             VALUES (%s, %s, %s, 'PI', 'PI_LNG_UTIL', 'LNG/UTIL 가압검사', TRUE)
-            ON CONFLICT (serial_number, task_category, task_id) DO NOTHING
+            ON CONFLICT (serial_number, qr_doc_id, task_category, task_id) DO NOTHING
         """, (worker_id, serial_number, qr_doc_id))
         db_conn.commit()
         cursor.close()

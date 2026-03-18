@@ -39,7 +39,7 @@ class TestTaskWorkersArray:
                  is_applicable, worker_id, started_at)
             VALUES ('SN-WA-001', 'DOC-WA-001', 'MECH', 'SELF_INSPECTION_WA01',
                     '자주검사 WA01', TRUE, %s, %s)
-            ON CONFLICT (serial_number, task_category, task_id)
+            ON CONFLICT (serial_number, qr_doc_id, task_category, task_id)
             DO UPDATE SET worker_id = %s, started_at = %s, completed_at = NULL
             RETURNING id
         """, (worker_id, started_at, worker_id, started_at))
@@ -113,7 +113,7 @@ class TestTaskWorkersArray:
                  is_applicable, worker_id, started_at, completed_at, duration_minutes)
             VALUES ('SN-WA-002', 'DOC-WA-002', 'MECH', 'PANEL_WORK_WA02',
                     '판넬 작업 WA02', TRUE, %s, %s, %s, 50)
-            ON CONFLICT (serial_number, task_category, task_id)
+            ON CONFLICT (serial_number, qr_doc_id, task_category, task_id)
             DO UPDATE SET worker_id = %s, started_at = %s, completed_at = %s,
                           duration_minutes = 50
             RETURNING id
@@ -203,7 +203,7 @@ class TestTaskWorkersArray:
                  is_applicable, worker_id, started_at)
             VALUES ('SN-WA-003', 'DOC-WA-003', 'MECH', 'WIRING_WA03',
                     '배선 WA03', TRUE, %s, %s)
-            ON CONFLICT (serial_number, task_category, task_id)
+            ON CONFLICT (serial_number, qr_doc_id, task_category, task_id)
             DO UPDATE SET worker_id = %s, started_at = %s, completed_at = NULL
             RETURNING id
         """, (wid1, started_at, wid1, started_at))
@@ -291,7 +291,7 @@ class TestTaskWorkersArray:
                  is_applicable, worker_id, started_at)
             VALUES ('SN-WA-004', 'DOC-WA-004', 'MECH', 'IF_1_WA04',
                     'I.F 1 WA04', TRUE, %s, %s)
-            ON CONFLICT (serial_number, task_category, task_id)
+            ON CONFLICT (serial_number, qr_doc_id, task_category, task_id)
             DO UPDATE SET worker_id = %s, started_at = %s, completed_at = NULL
             RETURNING id
         """, (worker_id, started_at, worker_id, started_at))
@@ -354,7 +354,7 @@ class TestTaskWorkersArray:
                  is_applicable, worker_id, started_at)
             VALUES ('SN-WA-005', 'DOC-WA-005', 'PI', 'PI_INSPECTION_WA05',
                     'PI 검사 WA05', TRUE, %s, %s)
-            ON CONFLICT (serial_number, task_category, task_id)
+            ON CONFLICT (serial_number, qr_doc_id, task_category, task_id)
             DO UPDATE SET worker_id = %s, started_at = %s, completed_at = NULL
             RETURNING id
         """, (worker_id, started_at, worker_id, started_at))
@@ -421,7 +421,7 @@ class TestTaskWorkersArray:
                  is_applicable, worker_id, started_at)
             VALUES ('SN-WA-006', 'DOC-WA-006', 'MECH', 'IF_2_WA06',
                     'I.F 2 WA06', TRUE, %s, %s)
-            ON CONFLICT (serial_number, task_category, task_id)
+            ON CONFLICT (serial_number, qr_doc_id, task_category, task_id)
             DO UPDATE SET worker_id = %s, started_at = %s, completed_at = NULL
             RETURNING id
         """, (worker_id, started_at, worker_id, started_at))
@@ -485,7 +485,7 @@ class TestTaskWorkersArray:
                 (serial_number, qr_doc_id, task_category, task_id, task_name, is_applicable)
             VALUES ('SN-WA-007', 'DOC-WA-007', 'MECH', 'TANK_DOCKING_WA07',
                     'Tank Docking WA07', TRUE)
-            ON CONFLICT (serial_number, task_category, task_id)
+            ON CONFLICT (serial_number, qr_doc_id, task_category, task_id)
             DO UPDATE SET worker_id = NULL, started_at = NULL, completed_at = NULL
             RETURNING id
         """)
