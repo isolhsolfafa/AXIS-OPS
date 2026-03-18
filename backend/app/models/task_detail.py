@@ -282,6 +282,60 @@ def get_tasks_by_serial_number(
             put_conn(conn)
 
 
+def get_tasks_by_qr_doc_id(
+    qr_doc_id: str,
+    task_category: Optional[str] = None
+) -> List[TaskDetail]:
+    """
+    QR 문서 ID로 작업 목록 조회.
+    Sprint 31A: DUAL L/R 분리 — 스캔한 QR에 해당하는 태스크만 반환.
+
+    PRODUCT QR 스캔 → 해당 qr_doc_id의 MECH/ELEC/PI/QI/SI (+SINGLE TMS)
+    TANK QR L 스캔 → 해당 qr_doc_id의 TMS L만
+    TANK QR R 스캔 → 해당 qr_doc_id의 TMS R만
+
+    Args:
+        qr_doc_id: QR 문서 ID (DOC_xxx 또는 DOC_xxx-L/R)
+        task_category: Task 카테고리, None이면 전체
+
+    Returns:
+        TaskDetail 리스트
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        if task_category:
+            cur.execute(
+                """
+                SELECT * FROM app_task_details
+                WHERE qr_doc_id = %s AND task_category = %s
+                ORDER BY id
+                """,
+                (qr_doc_id, task_category)
+            )
+        else:
+            cur.execute(
+                """
+                SELECT * FROM app_task_details
+                WHERE qr_doc_id = %s
+                ORDER BY id
+                """,
+                (qr_doc_id,)
+            )
+
+        rows = cur.fetchall()
+        return [TaskDetail.from_db_row(row) for row in rows]
+
+    except PsycopgError as e:
+        logger.error(f"Failed to get tasks by qr_doc_id={qr_doc_id}: {e}")
+        return []
+    finally:
+        if conn:
+            put_conn(conn)
+
+
 def start_task(task_detail_id: int, started_at: datetime) -> bool:
     """
     작업 시작 처리

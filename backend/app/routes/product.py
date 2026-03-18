@@ -104,11 +104,30 @@ def get_product(qr_doc_id: str) -> Tuple[Dict[str, Any], int]:
             'message': '제품을 찾을 수 없습니다.'
         }), 404
 
+    # Sprint 31A: TANK QR 스캔 시 PRODUCT QR로 task_seed 실행
+    # TANK QR의 parent_qr_doc_id = PRODUCT QR의 qr_doc_id
+    seed_qr_doc_id = product.qr_doc_id
+    try:
+        from app.models.worker import get_db_connection
+        from app.db_pool import put_conn as _put_conn
+        _conn = get_db_connection()
+        _cur = _conn.cursor()
+        _cur.execute(
+            "SELECT parent_qr_doc_id FROM qr_registry WHERE qr_doc_id = %s",
+            (qr_doc_id,)
+        )
+        _qr_row = _cur.fetchone()
+        if _qr_row and _qr_row.get('parent_qr_doc_id'):
+            seed_qr_doc_id = _qr_row['parent_qr_doc_id']
+        _put_conn(_conn)
+    except Exception:
+        pass  # fallback: 스캔한 QR 그대로 사용
+
     # Task Seed 자동 초기화 (ON CONFLICT DO NOTHING — 이미 있으면 무시)
     try:
         seed_result = initialize_product_tasks(
             serial_number=product.serial_number,
-            qr_doc_id=product.qr_doc_id,
+            qr_doc_id=seed_qr_doc_id,
             model_name=product.model
         )
         if seed_result.get('created', 0) > 0:

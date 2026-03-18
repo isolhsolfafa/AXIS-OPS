@@ -13,7 +13,7 @@ from typing import Tuple, Dict, Any
 from app.config import Config
 from app.middleware.jwt_auth import jwt_required, get_current_worker_id
 from app.services.task_service import TaskService
-from app.models.task_detail import get_task_by_id, get_tasks_by_serial_number
+from app.models.task_detail import get_task_by_id, get_tasks_by_serial_number, get_tasks_by_qr_doc_id
 from app.models.completion_status import get_or_create_completion_status
 from app.models.product_info import get_product_by_serial_number
 from app.models.work_pause_log import create_pause, resume_pause, get_active_pause, get_pauses_by_task
@@ -320,8 +320,14 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
 
     task_category = request.args.get('process_type')
     fetch_all = request.args.get('all', '').lower() == 'true'
+    qr_doc_id = request.args.get('qr_doc_id')  # Sprint 31A: QR 기반 필터링
 
-    tasks = get_tasks_by_serial_number(serial_number, task_category)
+    # Sprint 31A: qr_doc_id가 있으면 해당 QR의 태스크만 조회
+    # PRODUCT QR → MECH/ELEC/PI/QI/SI, TANK QR → TMS L 또는 R만
+    if qr_doc_id:
+        tasks = get_tasks_by_qr_doc_id(qr_doc_id, task_category)
+    else:
+        tasks = get_tasks_by_serial_number(serial_number, task_category)
 
     # all=true이면 필터 없이 반환 (관리자 전체 조회)
     if not fetch_all and task_category is None:
