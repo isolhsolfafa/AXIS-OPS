@@ -322,12 +322,14 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
     fetch_all = request.args.get('all', '').lower() == 'true'
     qr_doc_id = request.args.get('qr_doc_id')  # Sprint 31A: QR 기반 필터링
 
-    # Sprint 31A: qr_doc_id가 있으면 해당 QR의 태스크만 조회
-    # PRODUCT QR → MECH/ELEC/PI/QI/SI, TANK QR → TMS L 또는 R만
-    if qr_doc_id:
-        tasks = get_tasks_by_qr_doc_id(qr_doc_id, task_category)
-    else:
+    # Sprint 31A: QR 기반 태스크 필터링
+    # all=true (관리자): serial_number 기준 전체 조회 (TANK L/R 포함)
+    # qr_doc_id 지정 (작업자): 해당 QR의 태스크만 (PRODUCT → 본체, TANK → L/R만)
+    # 둘 다 없으면: serial_number 기준 (기존 호환)
+    if fetch_all or not qr_doc_id:
         tasks = get_tasks_by_serial_number(serial_number, task_category)
+    else:
+        tasks = get_tasks_by_qr_doc_id(qr_doc_id, task_category)
 
     # all=true이면 필터 없이 반환 (관리자 전체 조회)
     if not fetch_all and task_category is None:
