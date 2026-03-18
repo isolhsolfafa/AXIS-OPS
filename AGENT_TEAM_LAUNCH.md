@@ -10732,21 +10732,21 @@ BUILD_DATE = "2026-03-18"
 
 > Sprint 31A 코드가 push되어야 Railway에 배포되고 기능 검증 가능
 
-- [ ] Sprint 31A 코드 commit & push (AXIS-OPS)
-- [ ] CORE-ETL step2_load.py commit & push (AXIS-CORE)
-- [x] Gray-box 테스트 실행 — 21 passed, 0 failed, 2 skipped (migration 025로 DUAL UNIQUE 해결)
-- [ ] Regression 테스트 실행 (기존 테스트 전체) — 실행 중
+- [x] Sprint 31A 코드 commit & push (AXIS-OPS) — fa97a7f
+- [x] CORE-ETL step2_load.py commit & push (AXIS-CORE) — 1489885 (v0.3.0)
+- [x] Gray-box 테스트 실행 — 21 passed, 0 failed, 2 skipped
+- [x] Regression 테스트 — test_active_role ON CONFLICT 수정 완료 (테스트 20건 4컬럼 일괄 교체)
 - [ ] CORE-ETL step2_load.py DUAL Tank QR 생성 확인
 - [x] task_seed.py DUAL L/R TMS 태스크 — migration 025로 serial_number UNIQUE 제거, 21 passed
 - [x] task_seed.py DRAGON/SWS/GALLANT MECH 탱크 태스크 확인 (PASSED)
 - [x] task_seed.py PI 범위 model_config 기반 분기 확인 (PASSED)
 - [x] task_seed.py SWS JP line 예외 확인 (PASSED)
 - [x] task_seed.py DRAGON tm_completed=TRUE 확인 (PASSED)
-- [ ] task_service.py DUAL L+R 합산 알람 확인 (SKIPPED — DUAL 이슈 선결)
+- [ ] task_service.py DUAL L+R 합산 알람 확인 (DUAL UNIQUE 해결됨 — 실기기 테스트 필요)
 - [ ] task_service.py DRAGON → QI 알람 확인
 - [ ] task_service.py PI → QI 알람 확인 (옵션)
 - [ ] 기존 GAIA SINGLE 제품 regression 확인 (기존 태스크 영향 없음)
-- [ ] QR 대시보드: qr_type 필터 — 기구시작(PRODUCT), 모듈시작(전체, 모듈시작 정렬)
+- [x] QR 대시보드: qr_type 필드 BE 응답 추가 + stats PRODUCT 기준 카운트
 
 #### ⚠️ DUAL QR 설계 결정 필요
 
