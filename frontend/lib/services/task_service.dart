@@ -87,11 +87,16 @@ class TaskService {
   Future<List<TaskItem>> getTasksBySerialNumber({
     required String serialNumber,
     required int workerId,
+    String? qrDocId,
   }) async {
     try {
+      final params = <String, dynamic>{'worker_id': workerId};
+      if (qrDocId != null) {
+        params['qr_doc_id'] = qrDocId;
+      }
       final response = await _apiService.get(
         '/app/tasks/$serialNumber',
-        queryParameters: {'worker_id': workerId},
+        queryParameters: params,
       );
 
       // response가 리스트 형태인지 확인

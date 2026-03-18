@@ -189,6 +189,7 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
             final tasksSuccess = await taskNotifier.fetchTasks(
               serialNumber: product.serialNumber,
               workerId: workerId,
+              qrDocId: ref.read(taskProvider).currentQrDocId,
             );
 
             if (tasksSuccess) {

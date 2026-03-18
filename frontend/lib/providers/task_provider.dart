@@ -170,12 +170,14 @@ class TaskNotifier extends StateNotifier<TaskState> {
   Future<bool> fetchTasks({
     required String serialNumber,
     required int workerId,
+    String? qrDocId,
   }) async {
     state = state.copyWith(isLoading: true, clearError: true);
     try {
       final tasks = await _taskService.getTasksBySerialNumber(
         serialNumber: serialNumber,
         workerId: workerId,
+        qrDocId: qrDocId,
       );
       state = state.copyWith(
         isLoading: false,
