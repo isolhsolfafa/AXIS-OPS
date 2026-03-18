@@ -10933,3 +10933,188 @@ python -m pytest tests/ -v --tb=short -x
    ALTER TABLE work_start_log ADD CONSTRAINT work_start_log_worker_id_fkey FOREIGN KEY (worker_id) REFERENCES workers(id) ON DELETE CASCADE;
    -- 나머지 테이블도 동일 패턴
    ```
+
+---
+
+## Sprint 31B: QR 기반 태스크 필터링 — DUAL L/R 분리 표시
+
+> **목적**: QR 스캔 시 해당 QR에 배정된 태스크만 표시 (PRODUCT QR → 본체 작업, TANK QR → 해당 탱크 TMS만)
+> **범위**: BE 3파일 수정 완료 + FE Flutter 3파일 수정 필요
+> **의존성**: Sprint 31A 완료
+
+### 배경
+
+Sprint 31A에서 DUAL 모델의 TMS 태스크가 L/R 분리되었으나, 태스크 조회가 `serial_number` 기준이라서
+TANK QR L을 스캔해도 L+R 전부(4개) 표시되는 문제 발생.
+
+물리적 흐름:
+- 캐비넷 QR(PRODUCT) 스캔 → MECH/ELEC/PI/QI/SI 작업 표시
+- 탱크 모듈 QR(TANK L) 스캔 → 해당 탱크 TMS 작업만 표시 (2개)
+- 탱크 모듈 QR(TANK R) 스캔 → 해당 탱크 TMS 작업만 표시 (2개)
+
+핵심 설계: task_seed가 이미 올바른 qr_doc_id로 태스크를 생성하므로, **조회 시 qr_doc_id로 필터링**하면 모든 모델에서 자동 분리됨.
+
+```
+GAIA SINGLE:  PRODUCT QR → MECH+ELEC+TMS+PI+QI+SI (전부 같은 qr_doc_id)
+GAIA DUAL:    PRODUCT QR → MECH+ELEC+PI+QI+SI / TANK L → TMS×2 / TANK R → TMS×2
+DRAGON:       PRODUCT QR → MECH(+TANK_MODULE+PRESSURE_TEST)+ELEC+QI+SI
+SWS/GALLANT:  PRODUCT QR → MECH(+TANK_MODULE)+ELEC+PI+QI+SI
+```
+
+### BE 수정 (✅ 완료 — Cowork에서 수정됨)
+
+**1. `backend/app/models/task_detail.py`** — `get_tasks_by_qr_doc_id()` 함수 추가
+
+```python
+def get_tasks_by_qr_doc_id(
+    qr_doc_id: str,
+    task_category: Optional[str] = None
+) -> List[TaskDetail]:
+    """qr_doc_id로 작업 목록 조회 — DUAL L/R 분리"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        if task_category:
+            cur.execute(
+                "SELECT * FROM app_task_details WHERE qr_doc_id = %s AND task_category = %s ORDER BY id",
+                (qr_doc_id, task_category)
+            )
+        else:
+            cur.execute(
+                "SELECT * FROM app_task_details WHERE qr_doc_id = %s ORDER BY id",
+                (qr_doc_id,)
+            )
+        rows = cur.fetchall()
+        return [TaskDetail.from_db_row(row) for row in rows]
+    except PsycopgError as e:
+        logger.error(f"Failed to get tasks by qr_doc_id={qr_doc_id}: {e}")
+        return []
+    finally:
+        if conn:
+            put_conn(conn)
+```
+
+**2. `backend/app/routes/work.py`** — `?qr_doc_id=` 쿼리 파라미터 추가
+
+```python
+qr_doc_id = request.args.get('qr_doc_id')  # Sprint 31B
+
+if qr_doc_id:
+    tasks = get_tasks_by_qr_doc_id(qr_doc_id, task_category)
+else:
+    tasks = get_tasks_by_serial_number(serial_number, task_category)
+```
+
+하위 호환: qr_doc_id 없이 호출하면 기존 serial_number 기준 동작.
+
+**3. `backend/app/routes/product.py`** — TANK QR 스캔 시 PRODUCT QR로 task_seed
+
+```python
+seed_qr_doc_id = product.qr_doc_id
+try:
+    _conn = get_db_connection()
+    _cur = _conn.cursor()
+    _cur.execute(
+        "SELECT parent_qr_doc_id FROM qr_registry WHERE qr_doc_id = %s",
+        (qr_doc_id,)
+    )
+    _qr_row = _cur.fetchone()
+    if _qr_row and _qr_row.get('parent_qr_doc_id'):
+        seed_qr_doc_id = _qr_row['parent_qr_doc_id']
+    _put_conn(_conn)
+except Exception:
+    pass
+
+seed_result = initialize_product_tasks(
+    serial_number=product.serial_number,
+    qr_doc_id=seed_qr_doc_id,      # 항상 PRODUCT QR
+    model_name=product.model
+)
+```
+
+### FE 수정 (Teammate 작업)
+
+> CLAUDE.md 읽고 아래 작업 진행. BE 수정은 이미 완료 — FE만 수정.
+
+**팀 구성**: 1명 teammate (Sonnet), **FE** — 소유: frontend/**
+
+#### Task 1: `lib/services/task_service.dart` — qrDocId 파라미터 추가
+
+```dart
+// getTasksBySerialNumber 함수에 optional qrDocId 파라미터 추가
+Future<List<TaskItem>> getTasksBySerialNumber({
+    required String serialNumber,
+    required int workerId,
+    String? qrDocId,                              // ← 추가
+}) async {
+    try {
+        final params = <String, dynamic>{'worker_id': workerId};
+        if (qrDocId != null) {
+            params['qr_doc_id'] = qrDocId;        // ← 추가
+        }
+        final response = await _apiService.get(
+            '/app/tasks/$serialNumber',
+            queryParameters: params,              // ← 변경
+        );
+        // ... 기존 파싱 로직 동일 ...
+    }
+}
+```
+
+#### Task 2: `lib/providers/task_provider.dart` — fetchTasks에 qrDocId 전달
+
+```dart
+// fetchTasks 함수에 optional qrDocId 파라미터 추가
+Future<bool> fetchTasks({
+    required String serialNumber,
+    required int workerId,
+    String? qrDocId,                              // ← 추가
+}) async {
+    state = state.copyWith(isLoading: true, clearError: true);
+    try {
+        final tasks = await _taskService.getTasksBySerialNumber(
+            serialNumber: serialNumber,
+            workerId: workerId,
+            qrDocId: qrDocId,                     // ← 추가
+        );
+        // ... 기존 상태 업데이트 동일 ...
+    }
+}
+```
+
+#### Task 3: fetchTasks 호출부 — currentQrDocId 전달
+
+fetchTasks를 호출하는 모든 곳에서 현재 스캔한 QR의 qrDocId를 전달:
+
+```dart
+// 예: QR 스캔 후 태스크 로드
+await taskProvider.fetchTasks(
+    serialNumber: product.serialNumber,
+    workerId: currentWorker.id,
+    qrDocId: taskProvider.currentQrDocId,         // ← 추가
+);
+```
+
+⚠️ fetchTasks 호출부를 전부 찾아서 수정해야 함:
+```bash
+grep -rn "fetchTasks" frontend/lib/ --include="*.dart"
+```
+
+### 체크리스트
+
+**BE (✅ 완료)**:
+- [x] task_detail.py — get_tasks_by_qr_doc_id 함수 추가
+- [x] work.py — qr_doc_id 쿼리 파라미터 추가 (하위 호환)
+- [x] product.py — TANK QR → PRODUCT QR 해석 후 task_seed
+
+**FE (✅ 완료)**:
+- [x] task_service.dart — getTasksBySerialNumber에 qrDocId 파라미터 추가
+- [x] task_provider.dart — fetchTasks에 qrDocId 전달
+- [x] fetchTasks 호출부 수정 — ref.read(taskProvider).currentQrDocId 전달 (1곳)
+- [ ] GAIA-I DUAL PRODUCT QR 스캔 → MECH+ELEC+PI+QI+SI 표시 확인 — 실기기 테스트
+- [ ] GAIA-I DUAL TANK QR L 스캔 → TMS 2개만 표시 확인 — 실기기 테스트
+- [ ] GAIA-I DUAL TANK QR R 스캔 → TMS 2개만 표시 확인 — 실기기 테스트
+- [ ] GAIA SINGLE QR 스캔 → 기존과 동일 확인 — 실기기 테스트
+- [ ] DRAGON QR 스캔 → MECH(+TANK_MODULE+PRESSURE_TEST)+ELEC+QI+SI 확인 — 실기기 테스트
+- [x] flutter build web 에러 없음 + Netlify 배포 완료
