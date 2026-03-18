@@ -307,8 +307,8 @@ def initialize_product_tasks(
             )
             line_row = cur.fetchone()
             product_line = line_row['line'] if line_row and line_row.get('line') else ''
-            if product_line.strip().upper() == 'JP':
-                _pi_lng = True  # SWS + JP → PI_LNG_UTIL 활성 오버라이드
+            if product_line.strip().upper().startswith('JP'):
+                _pi_lng = True  # SWS + JP(F15) 등 JP 계열 → PI_LNG_UTIL 활성 오버라이드
 
         for t in PI_TASKS:
             if t.task_id == 'PI_LNG_UTIL':
