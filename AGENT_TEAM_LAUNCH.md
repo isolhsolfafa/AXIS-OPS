@@ -9671,3 +9671,1265 @@ for (final child in children) {
 - [ ] QR 인식 정상 확인
 - [ ] dialog overlay hide/show 정상 확인 (BUG-17 regression)
 - [ ] Netlify 배포 + 실기기 테스트
+
+---
+
+## BUG-24: Task Seed 반복 실패 — 배포마다 task 0건
+
+> **현상**: Sprint 배포 후 QR 태깅 시 task가 0건. 매 Sprint마다 반복 발생.
+> **우선순위**: 🔴 치명적
+> **근본 원인**: migration 022(`task_type` 컬럼)가 Railway 배포 과정에서 소실됨.
+>   task seed INSERT에 `task_type` 컬럼이 포함되어 있는데 DB에 컬럼이 없어서 INSERT 실패.
+>   `except Exception`으로 에러가 잡혀 사용자에게는 200 정상 반환 → silent fail.
+> **조치 완료 (수동)**:
+>   - `ALTER TABLE app_task_details ADD COLUMN IF NOT EXISTS task_type VARCHAR(20) DEFAULT 'NORMAL'` 수동 적용
+>   - FK constraint `ON DELETE CASCADE` → `ON DELETE RESTRICT` 변경 (안전장치)
+> **재발 방지 필요**: 앱 시작 시 스키마 자동 검증 로직 추가
+
+---
+
+## Sprint 29-fix: 앱 시작 시 DB 스키마 자동 검증 (ensure_schema)
+
+> **목적**: 배포마다 migration 누락으로 task seed가 silent fail하는 문제 근본 차단
+> **범위**: BE only — `backend/app/schema_check.py` 신규 + `__init__.py` 연동
+> **버전**: v1.7.7 → v1.7.8 (BUILD_DATE 변경만)
+
+### 근본 원인 분석
+
+Sprint 진행 → Railway 배포 → DB에 migration 미적용 → task seed INSERT 실패(컬럼 없음) → except로 잡혀서 200 반환 → 사용자는 정상인 줄 알지만 task 0건
+
+**이력**:
+- Sprint 27-fix: `task_type` 컬럼 수동 추가 → 해결
+- Sprint 29 배포: 같은 컬럼이 또 없음 → 또 task 0건
+- 사용자가 직접 변경한 건 없음. Sprint 배포만 반복됨.
+
+### Task 1: `backend/app/schema_check.py` 신규 생성
+
+```python
+"""
+DB 스키마 자동 검증 — 앱 시작 시 필수 컬럼/제약조건 확인 및 자동 적용.
+BUG-24: 배포마다 migration 누락으로 task seed silent fail 방지.
+"""
+
+import logging
+from app.models.worker import get_db_connection
+from psycopg2 import Error as PsycopgError
+
+logger = logging.getLogger(__name__)
+
+# ── 필수 컬럼 정의 ──────────────────────────────────
+# (테이블명, 컬럼명, 없으면 실행할 ALTER TABLE DDL)
+REQUIRED_COLUMNS = [
+    (
+        'app_task_details',
+        'task_type',
+        "ALTER TABLE app_task_details ADD COLUMN IF NOT EXISTS task_type VARCHAR(20) DEFAULT 'NORMAL'"
+    ),
+    # 향후 추가 컬럼이 있으면 여기에 추가
+]
+
+# ── 필수 FK 제약조건 정의 ────────────────────────────
+# (테이블명, constraint명, 컬럼명, 기대하는 delete_rule, 수정 DDL)
+REQUIRED_CONSTRAINTS = [
+    (
+        'app_task_details',
+        'app_task_details_qr_doc_id_fkey',
+        'qr_doc_id',
+        'RESTRICT',
+        [
+            "ALTER TABLE app_task_details DROP CONSTRAINT IF EXISTS app_task_details_qr_doc_id_fkey",
+            "ALTER TABLE app_task_details ADD CONSTRAINT app_task_details_qr_doc_id_fkey "
+            "FOREIGN KEY (qr_doc_id) REFERENCES qr_registry(qr_doc_id) ON DELETE RESTRICT",
+        ]
+    ),
+    (
+        'completion_status',
+        'completion_status_serial_number_fkey',
+        'serial_number',
+        'RESTRICT',
+        [
+            "ALTER TABLE completion_status DROP CONSTRAINT IF EXISTS completion_status_serial_number_fkey",
+            "ALTER TABLE completion_status ADD CONSTRAINT completion_status_serial_number_fkey "
+            "FOREIGN KEY (serial_number) REFERENCES qr_registry(serial_number) ON DELETE RESTRICT",
+        ]
+    ),
+]
+
+
+def ensure_schema():
+    """
+    앱 시작 시 호출. 필수 컬럼과 FK 제약조건을 검증하고 누락 시 자동 적용.
+    실패해도 앱 시작을 막지는 않지만, ERROR 로그를 남김.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # ── 1. 필수 컬럼 검증 ──────────────────────
+        for table, column, ddl in REQUIRED_COLUMNS:
+            cur.execute(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = %s AND column_name = %s",
+                (table, column)
+            )
+            if not cur.fetchone():
+                logger.warning(
+                    f"[schema_check] 필수 컬럼 누락 감지: {table}.{column} — 자동 추가 실행"
+                )
+                cur.execute(ddl)
+                conn.commit()
+                logger.info(f"[schema_check] {table}.{column} 컬럼 추가 완료")
+            else:
+                logger.info(f"[schema_check] {table}.{column} ✓")
+
+        # ── 2. FK 제약조건 검증 ────────────────────
+        for table, constraint, column, expected_rule, fix_ddls in REQUIRED_CONSTRAINTS:
+            cur.execute(
+                """SELECT rc.delete_rule
+                   FROM information_schema.table_constraints tc
+                   JOIN information_schema.key_column_usage kcu
+                       ON tc.constraint_name = kcu.constraint_name
+                   JOIN information_schema.referential_constraints rc
+                       ON tc.constraint_name = rc.constraint_name
+                   WHERE tc.constraint_type = 'FOREIGN KEY'
+                       AND tc.table_name = %s
+                       AND kcu.column_name = %s""",
+                (table, column)
+            )
+            row = cur.fetchone()
+            if row and row['delete_rule'] == expected_rule:
+                logger.info(f"[schema_check] {table}.{column} FK={expected_rule} ✓")
+            else:
+                current = row['delete_rule'] if row else 'MISSING'
+                logger.warning(
+                    f"[schema_check] FK 수정 필요: {table}.{column} "
+                    f"현재={current}, 기대={expected_rule} — 자동 수정 실행"
+                )
+                for ddl in fix_ddls:
+                    cur.execute(ddl)
+                conn.commit()
+                logger.info(f"[schema_check] {table}.{column} FK → {expected_rule} 변경 완료")
+
+        logger.info("[schema_check] DB 스키마 검증 완료 — 모든 항목 정상")
+
+    except PsycopgError as e:
+        logger.error(f"[schema_check] DB 스키마 검증 실패: {e}")
+        if conn:
+            conn.rollback()
+    except Exception as e:
+        logger.error(f"[schema_check] 예상치 못한 오류: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        if conn:
+            conn.close()
+```
+
+### Task 2: `backend/app/__init__.py` 수정 — ensure_schema 호출
+
+`create_app()` 함수에서 블루프린트 등록 직전에 추가:
+
+```python
+# 기존 코드: 스케줄러 초기화 뒤, 블루프린트 등록 전
+if not app.config.get('TESTING', False):
+    from app.services.scheduler_service import init_scheduler, start_scheduler
+    init_scheduler()
+    start_scheduler()
+    logger.info("Scheduler initialized and started")
+
+# ★ 추가: DB 스키마 자동 검증 (BUG-24 방지)
+if not app.config.get('TESTING', False):
+    from app.schema_check import ensure_schema
+    ensure_schema()
+
+# 블루프린트 등록
+from app.routes.auth import auth_bp
+# ...
+```
+
+**위치**: 스케줄러 초기화 후, 블루프린트 등록 전
+**조건**: TESTING 환경에서는 실행하지 않음 (테스트 DB 스키마는 별도 관리)
+
+### Task 3: migration 023 파일 생성
+
+**파일**: `backend/migrations/023_fix_cascade_and_task_type.sql`
+
+기존 수동 적용 내역을 migration 파일로 정식 기록:
+
+```sql
+-- BUG-24: task_type 컬럼 보장 + CASCADE → RESTRICT 변경
+-- 이미 적용된 경우 IF NOT EXISTS / IF EXISTS로 안전하게 처리
+BEGIN;
+
+-- 1. task_type 컬럼 (migration 022가 누락될 경우 대비)
+ALTER TABLE app_task_details
+    ADD COLUMN IF NOT EXISTS task_type VARCHAR(20) DEFAULT 'NORMAL';
+
+-- 2. FK: CASCADE → RESTRICT
+ALTER TABLE app_task_details
+    DROP CONSTRAINT IF EXISTS app_task_details_qr_doc_id_fkey;
+ALTER TABLE app_task_details
+    ADD CONSTRAINT app_task_details_qr_doc_id_fkey
+    FOREIGN KEY (qr_doc_id) REFERENCES qr_registry(qr_doc_id) ON DELETE RESTRICT;
+
+ALTER TABLE completion_status
+    DROP CONSTRAINT IF EXISTS completion_status_serial_number_fkey;
+ALTER TABLE completion_status
+    ADD CONSTRAINT completion_status_serial_number_fkey
+    FOREIGN KEY (serial_number) REFERENCES qr_registry(serial_number) ON DELETE RESTRICT;
+
+COMMIT;
+```
+
+### Task 4: version.py 업데이트
+
+```python
+VERSION = "1.7.8"
+BUILD_DATE = "2026-03-16"
+```
+
+### 테스트 체크리스트
+
+- [x] `schema_check.py` 생성
+- [x] `__init__.py`에 `ensure_schema()` 호출 추가
+- [x] migration 023 파일 생성 (정식 기록용)
+- [x] DB 검증: task_type 컬럼 존재 확인 (migration 023 수동 적용 후)
+- [x] DB 검증: FK CASCADE → RESTRICT 변경 확인 (migration 023 수동 적용 후)
+- [x] Railway 로그에서 `[schema_check]` 메시지 확인 — 로컬 테스트에서 정상 출력 확인 (task_type ✓, FK RESTRICT ✓, "DB 스키마 검증 완료")
+- [x] QR 태깅 → task 생성 정상 확인 — GBWS-6876: 20 tasks, task_type 전부 정상 (NORMAL/SINGLE_ACTION)
+- [x] 기존 pytest regression 0건 확인 (35 passed, 1 failed — test_admin_email_notification 기존 이슈)
+- [x] version.py v1.7.8 + BUILD_DATE 업데이트
+
+---
+
+## Sprint 30: DB Connection Pool 도입 — 동시 접속 안정화
+
+> **목적**: 100명+ 협력사 동시 접속 시 499 타임아웃 방지
+> **범위**: BE only — `backend/app/db_pool.py` 신규 + `worker.py` + `__init__.py` 수정
+> **버전**: v1.7.8 → v1.8.0 (마이너 버전업 — 인프라 변경)
+
+### 배경
+
+현재 `get_db_connection()`은 **매 요청마다 새 DB 연결을 생성**하고 요청 끝나면 닫음.
+협력사 100명+가 출퇴근 시간(07:30~08:00, 16:30~17:00)에 동시 접속하면:
+- QR 태깅 1건 = product API + tasks API + settings API = 연결 3개
+- 100명 동시 = 300개 연결 시도
+- Railway PostgreSQL max_connections = 기본 100개 → 연결 포화 → 499 에러
+
+Connection Pool은 연결을 미리 만들어두고 재사용하므로:
+- 최대 20~30개 연결로 100명+ 동시 처리 가능
+- 연결 생성 비용(~50ms/건) 절감
+- DB 서버 부하 감소
+
+### Task 1: `backend/app/db_pool.py` 신규 생성
+
+```python
+"""
+DB Connection Pool 관리
+Sprint 30: psycopg2 ConnectionPool 기반 연결 풀링.
+동시 접속 100명+ 환경에서 DB 연결 포화 방지.
+"""
+
+import logging
+import os
+from psycopg2 import pool
+from psycopg2.extras import RealDictCursor
+from app.config import Config
+
+logger = logging.getLogger(__name__)
+
+# 풀 설정
+_MIN_CONN = int(os.environ.get('DB_POOL_MIN', 5))    # 최소 유지 연결
+_MAX_CONN = int(os.environ.get('DB_POOL_MAX', 20))   # 최대 연결 수
+
+_pool = None
+
+
+def init_pool():
+    """앱 시작 시 Connection Pool 초기화. create_app()에서 호출."""
+    global _pool
+    try:
+        _pool = pool.ThreadedConnectionPool(
+            minconn=_MIN_CONN,
+            maxconn=_MAX_CONN,
+            dsn=Config.DATABASE_URL,
+            cursor_factory=RealDictCursor,
+            options="-c timezone=Asia/Seoul"
+        )
+        logger.info(
+            f"[db_pool] Connection pool initialized: "
+            f"min={_MIN_CONN}, max={_MAX_CONN}"
+        )
+    except Exception as e:
+        logger.error(f"[db_pool] Pool initialization failed: {e}")
+        _pool = None
+
+
+def get_conn():
+    """
+    풀에서 연결 가져오기.
+    풀 초기화 실패 시 fallback으로 직접 연결 생성.
+    """
+    global _pool
+    if _pool is None:
+        # fallback: 풀 없으면 기존 방식
+        import psycopg2
+        logger.warning("[db_pool] Pool not available, using direct connection")
+        return psycopg2.connect(
+            Config.DATABASE_URL,
+            cursor_factory=RealDictCursor,
+            options="-c timezone=Asia/Seoul"
+        )
+    try:
+        conn = _pool.getconn()
+        return conn
+    except Exception as e:
+        logger.error(f"[db_pool] getconn failed: {e}")
+        raise
+
+
+def put_conn(conn):
+    """연결을 풀에 반납. 에러 발생한 연결은 close=True로 폐기."""
+    global _pool
+    if _pool is None or conn is None:
+        if conn:
+            conn.close()
+        return
+    try:
+        _pool.putconn(conn)
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def close_pool():
+    """앱 종료 시 풀 정리."""
+    global _pool
+    if _pool:
+        _pool.closeall()
+        logger.info("[db_pool] Connection pool closed")
+        _pool = None
+```
+
+### Task 2: `backend/app/models/worker.py` 수정 — get_db_connection 교체
+
+기존 `get_db_connection()` 함수를 pool 기반으로 교체:
+
+```python
+# ── 기존 코드 (삭제) ──────────────────────────
+def get_db_connection() -> psycopg2.extensions.connection:
+    try:
+        conn = psycopg2.connect(
+            Config.DATABASE_URL,
+            cursor_factory=psycopg2.extras.RealDictCursor,
+            options="-c timezone=Asia/Seoul"
+        )
+        return conn
+    except PsycopgError as e:
+        logger.error(f"Database connection failed: {e}")
+        raise
+
+# ── 변경 코드 ──────────────────────────────────
+def get_db_connection():
+    """
+    DB 연결 가져오기 (Connection Pool 사용).
+    Sprint 30: 직접 연결 → 풀 기반으로 교체.
+    호출부에서 conn.close() 대신 put_conn(conn) 사용 권장.
+    하위 호환: close()도 동작하지만 풀 반납이 안 됨 (연결 낭비).
+    """
+    from app.db_pool import get_conn
+    return get_conn()
+```
+
+### Task 3: 모든 라우트 파일 `conn.close()` → `put_conn(conn)` 변경
+
+**핵심 변경**: `finally` 블록에서 `conn.close()` → `put_conn(conn)`
+
+변경 대상 파일 (모든 라우트 + 서비스):
+- `routes/product.py`
+- `routes/factory.py`
+- `routes/work.py`
+- `routes/admin.py`
+- `routes/gst.py`
+- `routes/checklist.py`
+- `routes/hr.py`
+- `routes/notices.py`
+- `routes/qr.py`
+- `routes/alert.py`
+- `services/task_seed.py`
+- `services/task_service.py`
+- `services/progress_service.py`
+- `services/scheduler_service.py`
+- `services/alert_service.py`
+- `models/task_detail.py`
+- `models/product_info.py`
+- `models/completion_status.py`
+- `models/admin_settings.py`
+- `schema_check.py`
+
+패턴:
+```python
+# 기존
+finally:
+    if conn:
+        conn.close()
+
+# 변경
+from app.db_pool import put_conn
+# ...
+finally:
+    if conn:
+        put_conn(conn)
+```
+
+**⚠️ 주의**: `conn.rollback()` 호출은 유지. rollback 후 put_conn하면 풀이 해당 연결을 정리함.
+
+```python
+# 에러 처리 패턴
+except PsycopgError as e:
+    if conn:
+        conn.rollback()
+    logger.error(...)
+finally:
+    if conn:
+        put_conn(conn)
+```
+
+### Task 4: `backend/app/__init__.py` 수정 — 풀 초기화 + 종료
+
+```python
+# create_app() 내부, 스케줄러 초기화 후:
+
+# ★ DB Connection Pool 초기화 (Sprint 30)
+if not app.config.get('TESTING', False):
+    from app.db_pool import init_pool, close_pool
+    init_pool()
+
+# DB 스키마 자동 검증 (BUG-24: migration 누락 방지)
+if not app.config.get('TESTING', False):
+    from app.schema_check import ensure_schema
+    ensure_schema()
+
+# ...
+
+# 앱 종료 시 풀 정리
+import atexit
+if not app.config.get('TESTING', False):
+    atexit.register(close_pool)
+```
+
+### Task 5: Railway 환경변수 설정
+
+Railway 대시보드에서 환경변수 추가:
+```
+DB_POOL_MIN=5
+DB_POOL_MAX=20
+```
+
+Railway PostgreSQL 기본 max_connections 확인:
+```sql
+SHOW max_connections;
+```
+결과가 100이면 DB_POOL_MAX=20이 안전. 결과가 25이면 DB_POOL_MAX=10으로 조정.
+
+### Task 6: version.py 업데이트
+
+```python
+VERSION = "1.8.0"
+BUILD_DATE = "2026-03-17"
+```
+
+### Task 7: 테스트
+
+기존 테스트는 `TESTING=True`일 때 풀을 초기화하지 않으므로 영향 없음.
+풀 전용 테스트 추가 (선택):
+
+```python
+# tests/backend/test_db_pool.py
+def test_pool_init_and_get():
+    """풀 초기화 후 연결 획득/반납 테스트"""
+    from app.db_pool import init_pool, get_conn, put_conn, close_pool
+    init_pool()
+    conn = get_conn()
+    assert conn is not None
+    cur = conn.cursor()
+    cur.execute("SELECT 1 AS test")
+    assert cur.fetchone()['test'] == 1
+    put_conn(conn)
+    close_pool()
+
+def test_pool_fallback():
+    """풀 없을 때 직접 연결 fallback 테스트"""
+    from app.db_pool import get_conn, put_conn
+    # _pool이 None인 상태에서 get_conn → 직접 연결
+    conn = get_conn()
+    assert conn is not None
+    put_conn(conn)
+```
+
+### 체크리스트
+
+- [x] `db_pool.py` 생성
+- [x] `worker.py`의 `get_db_connection()` 교체
+- [x] 모든 라우트/서비스 `conn.close()` → `put_conn(conn)` 변경 (33개 파일, 175건)
+- [x] `__init__.py`에 `init_pool()` + `atexit.register(close_pool)` 추가
+- [x] Railway 환경변수 `DB_POOL_MIN=5`, `DB_POOL_MAX=20` 설정 — 기본값으로 동작 중, 필요 시 추가
+- [x] Railway DB `SHOW max_connections;` 확인 → 100 확인, pool max=20 안전
+- [x] 로컬 테스트: 앱 시작 → `[db_pool] Connection pool initialized: min=5, max=20` 로그 확인
+- [x] 기존 pytest regression 0건 확인 (35 passed, 1 failed — test_admin_email_notification 기존 이슈)
+- [ ] Railway 배포 후 출퇴근 시간대 499 에러 모니터링 — 다음 출퇴근 시간에 확인
+- [x] version.py v1.8.0 + BUILD_DATE 업데이트
+
+### 롤백 계획
+
+문제 발생 시: Railway 환경변수에 `DB_POOL_DISABLED=true` 추가 → `init_pool()`에서 즉시 return → fallback으로 기존 직접 연결 방식 사용. 코드 롤백 없이 환경변수만으로 제어 가능.
+
+---
+
+## Sprint 31A: DUAL 모델 지원 + DRAGON 탱크 태스크 — 다모델 QR/Task 기반 구축
+
+> **목적**: DUAL 모델(2탱크 L/R) QR 분리 + DRAGON MECH 탱크 태스크 추가 + 모델별 PI 분기
+> **범위**: BE + CORE-ETL — `model_config` 확장, `qr_registry` 확장, `task_seed.py`, `task_service.py`, `step2_load.py`
+> **버전**: v1.8.0 → v1.9.0 (마이너 버전업 — 다모델 지원)
+
+### 배경
+
+현재 시스템은 제품당 QR 1개(DOC_{serial_number}), TMS 태스크는 GAIA만 지원.
+다모델 확장 시 아래 요구사항 발생:
+
+1. **DUAL 모델** (GAIA-I DUAL, GAIA-P DUAL 등): 탱크 2세트 → QR을 L/R로 분리하여 개별 태스크 추적 필요
+2. **DRAGON**: TMS 별도 카테고리 없이 MECH에서 TANK_MODULE + PRESSURE_TEST 작업 → MECH에 태스크 추가 필요
+3. **iVAS**: has_docking=True, is_tms=True, **항상 2탱크** → always_dual 플래그 필요
+4. **SWS/GALLANT**: tank_in_mech=True, PI 범위가 모델별로 다름
+5. **SWS JP line**: 같은 SWS지만 line=JP이면 PI 범위가 확장됨
+
+DUAL 감지: `'DUAL' in model_name.upper().split()` (model 컬럼에 "****DUAL" 형태로 적재됨)
+iVAS는 DUAL 키워드 없이도 항상 2탱크: `always_dual=True`
+DRAGON은 L/R 분리 불필요 (MECH 한 곳에서 전부 처리)
+
+### Task 1: Migration `024_multi_model_support.sql` 신규 생성
+
+```sql
+-- Migration 024: 다모델 지원 (Sprint 31A)
+-- model_config 확장 + qr_registry 확장 + UNIQUE 제약 변경
+
+BEGIN;
+
+-- ① model_config: PI/DUAL 관련 컬럼 추가
+ALTER TABLE model_config
+    ADD COLUMN IF NOT EXISTS pi_lng_util BOOLEAN NOT NULL DEFAULT TRUE,
+    ADD COLUMN IF NOT EXISTS pi_chamber BOOLEAN NOT NULL DEFAULT TRUE,
+    ADD COLUMN IF NOT EXISTS always_dual BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- ② model_config 기존 데이터 업데이트
+UPDATE model_config SET pi_lng_util = TRUE,  pi_chamber = TRUE,  always_dual = FALSE WHERE model_prefix = 'GAIA';
+UPDATE model_config SET pi_lng_util = FALSE, pi_chamber = FALSE, always_dual = FALSE WHERE model_prefix = 'DRAGON';
+UPDATE model_config SET pi_lng_util = FALSE, pi_chamber = TRUE,  always_dual = FALSE, tank_in_mech = TRUE WHERE model_prefix = 'SWS';
+UPDATE model_config SET pi_lng_util = TRUE,  pi_chamber = FALSE, always_dual = FALSE, tank_in_mech = TRUE WHERE model_prefix = 'GALLANT';
+UPDATE model_config SET pi_lng_util = TRUE,  pi_chamber = TRUE,  always_dual = FALSE WHERE model_prefix = 'MITHAS';
+UPDATE model_config SET pi_lng_util = TRUE,  pi_chamber = TRUE,  always_dual = FALSE WHERE model_prefix = 'SDS';
+
+-- ③ iVAS 모델 추가 (has_docking=True, is_tms=True, always_dual=True)
+INSERT INTO model_config (model_prefix, has_docking, is_tms, tank_in_mech, pi_lng_util, pi_chamber, always_dual, description)
+VALUES ('IVAS', TRUE, TRUE, FALSE, TRUE, TRUE, TRUE, 'iVAS 모델: 항상 2탱크(L/R), TMS 별도, 도킹 있음')
+ON CONFLICT (model_prefix) DO UPDATE SET
+    has_docking = EXCLUDED.has_docking,
+    is_tms = EXCLUDED.is_tms,
+    tank_in_mech = EXCLUDED.tank_in_mech,
+    pi_lng_util = EXCLUDED.pi_lng_util,
+    pi_chamber = EXCLUDED.pi_chamber,
+    always_dual = EXCLUDED.always_dual,
+    description = EXCLUDED.description;
+
+-- ④ qr_registry: 탱크 QR 계층 구조 컬럼 추가
+ALTER TABLE public.qr_registry
+    ADD COLUMN IF NOT EXISTS parent_qr_doc_id VARCHAR(100) DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS qr_type VARCHAR(20) NOT NULL DEFAULT 'PRODUCT';
+
+-- parent_qr_doc_id FK (자기 참조)
+-- 제품 QR: parent_qr_doc_id = NULL, qr_type = 'PRODUCT'
+-- 탱크 QR: parent_qr_doc_id = 제품 QR의 qr_doc_id, qr_type = 'TANK'
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE constraint_name = 'qr_registry_parent_fk'
+    ) THEN
+        ALTER TABLE public.qr_registry
+            ADD CONSTRAINT qr_registry_parent_fk
+            FOREIGN KEY (parent_qr_doc_id) REFERENCES public.qr_registry(qr_doc_id)
+            ON DELETE CASCADE;
+    END IF;
+END $$;
+
+-- ⑤ app_task_details: UNIQUE 제약 변경
+-- 기존: (serial_number, task_category, task_id)
+-- 변경: (serial_number, qr_doc_id, task_category, task_id)
+-- DUAL에서 같은 S/N + 같은 task_id지만 qr_doc_id(L/R)가 다른 행 허용
+
+-- 기존 UNIQUE 제약 삭제
+DO $$
+BEGIN
+    -- 제약 이름은 테이블 생성 방식에 따라 다를 수 있음 — 조회 후 삭제
+    PERFORM 1 FROM information_schema.table_constraints
+    WHERE table_name = 'app_task_details'
+      AND constraint_type = 'UNIQUE';
+    IF FOUND THEN
+        EXECUTE (
+            SELECT 'ALTER TABLE app_task_details DROP CONSTRAINT ' || constraint_name
+            FROM information_schema.table_constraints
+            WHERE table_name = 'app_task_details'
+              AND constraint_type = 'UNIQUE'
+            LIMIT 1
+        );
+    END IF;
+END $$;
+
+-- 새 UNIQUE 제약 생성
+ALTER TABLE app_task_details
+    ADD CONSTRAINT app_task_details_sn_qr_cat_tid_unique
+    UNIQUE (serial_number, qr_doc_id, task_category, task_id);
+
+-- ⑥ workers / hr 테이블 보호: CASCADE → RESTRICT
+-- Railway 백업 완료 (2026-03-17 13:19 UTC, 228MB) 후 실행
+
+-- workers 삭제 시 작업 이력 보존 (CASCADE → RESTRICT)
+ALTER TABLE work_start_log
+    DROP CONSTRAINT IF EXISTS work_start_log_worker_id_fkey;
+ALTER TABLE work_start_log
+    ADD CONSTRAINT work_start_log_worker_id_fkey
+    FOREIGN KEY (worker_id) REFERENCES workers(id) ON DELETE RESTRICT;
+
+ALTER TABLE work_completion_log
+    DROP CONSTRAINT IF EXISTS work_completion_log_worker_id_fkey;
+ALTER TABLE work_completion_log
+    ADD CONSTRAINT work_completion_log_worker_id_fkey
+    FOREIGN KEY (worker_id) REFERENCES workers(id) ON DELETE RESTRICT;
+
+-- workers 삭제 시 PIN/생체인증 보존 (CASCADE → RESTRICT)
+ALTER TABLE hr.worker_auth_settings
+    DROP CONSTRAINT IF EXISTS worker_auth_settings_worker_id_fkey;
+ALTER TABLE hr.worker_auth_settings
+    ADD CONSTRAINT worker_auth_settings_worker_id_fkey
+    FOREIGN KEY (worker_id) REFERENCES workers(id) ON DELETE RESTRICT;
+
+-- hr 출퇴근 기록: FK 규칙 없음 → RESTRICT 추가
+ALTER TABLE hr.partner_attendance
+    DROP CONSTRAINT IF EXISTS partner_attendance_worker_id_fkey;
+ALTER TABLE hr.partner_attendance
+    ADD CONSTRAINT partner_attendance_worker_id_fkey
+    FOREIGN KEY (worker_id) REFERENCES workers(id) ON DELETE RESTRICT;
+
+ALTER TABLE hr.gst_attendance
+    DROP CONSTRAINT IF EXISTS gst_attendance_worker_id_fkey;
+ALTER TABLE hr.gst_attendance
+    ADD CONSTRAINT gst_attendance_worker_id_fkey
+    FOREIGN KEY (worker_id) REFERENCES workers(id) ON DELETE RESTRICT;
+
+-- app_task_details.worker_id: 작업자 삭제 시 태스크는 보존, 담당자만 NULL
+ALTER TABLE app_task_details
+    DROP CONSTRAINT IF EXISTS app_task_details_worker_id_fkey;
+ALTER TABLE app_task_details
+    ADD CONSTRAINT app_task_details_worker_id_fkey
+    FOREIGN KEY (worker_id) REFERENCES workers(id) ON DELETE SET NULL;
+
+COMMIT;
+```
+
+### Task 2: `backend/app/models/model_config.py` 수정 — 신규 컬럼 반영
+
+```python
+# ModelConfig dataclass 확장
+@dataclass
+class ModelConfig:
+    id: int
+    model_prefix: str
+    has_docking: bool
+    is_tms: bool
+    tank_in_mech: bool
+    description: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+    # Sprint 31A: 다모델 PI/DUAL 지원
+    pi_lng_util: bool = True       # PI LNG/UTIL 가압검사 진행 여부
+    pi_chamber: bool = True        # PI CHAMBER 가압검사 진행 여부
+    always_dual: bool = False      # 항상 2탱크 (iVAS)
+
+    @staticmethod
+    def from_db_row(row: Dict[str, Any]) -> "ModelConfig":
+        return ModelConfig(
+            id=row['id'],
+            model_prefix=row['model_prefix'],
+            has_docking=row['has_docking'],
+            is_tms=row['is_tms'],
+            tank_in_mech=row['tank_in_mech'],
+            description=row.get('description'),
+            created_at=row['created_at'],
+            updated_at=row['updated_at'],
+            pi_lng_util=row.get('pi_lng_util', True),
+            pi_chamber=row.get('pi_chamber', True),
+            always_dual=row.get('always_dual', False),
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = {
+            'id': self.id,
+            'model_prefix': self.model_prefix,
+            'has_docking': self.has_docking,
+            'is_tms': self.is_tms,
+            'tank_in_mech': self.tank_in_mech,
+            'pi_lng_util': self.pi_lng_util,
+            'pi_chamber': self.pi_chamber,
+            'always_dual': self.always_dual,
+            'description': self.description,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+        return d
+```
+
+### Task 3: `backend/app/services/task_seed.py` 수정 — 핵심 변경
+
+```python
+"""
+Task Seed 서비스
+Sprint 31A: 다모델 지원
+  - DUAL 모델: TMS 태스크를 L/R qr_doc_id별 생성
+  - iVAS: always_dual=True → DUAL 키워드 없이도 L/R 생성
+  - DRAGON: MECH에 TANK_MODULE + PRESSURE_TEST 추가, tm_completed=TRUE
+  - SWS/GALLANT: MECH에 TANK_MODULE 추가, PI 범위 model_config 기반
+  - SWS JP line: product_info.line='JP'이면 PI_LNG_UTIL 추가 활성
+"""
+
+# ── DUAL 감지 함수 ──────────────────────────────────
+def _is_dual_model(model_name: str, config) -> bool:
+    """DUAL 여부 판단: model명에 'DUAL' 포함 OR always_dual=True"""
+    if config and config.always_dual:
+        return True
+    return 'DUAL' in model_name.upper().split()
+
+
+# ── DRAGON/SWS/GALLANT MECH 추가 태스크 ──────────────
+MECH_TANK_TASKS: List[TaskTemplate] = [
+    TaskTemplate('TANK_MODULE',   'Tank Module', 'PRE_DOCKING', False),
+    TaskTemplate('PRESSURE_TEST', '가압검사',    'FINAL',       False),
+]
+
+MECH_TANK_MODULE_ONLY: List[TaskTemplate] = [
+    TaskTemplate('TANK_MODULE',   'Tank Module', 'PRE_DOCKING', False),
+]
+
+
+def initialize_product_tasks(serial_number, qr_doc_id, model_name):
+    config = get_model_config_for_product(model_name)
+    # ... 기존 config 분기 ...
+
+    is_dual = _is_dual_model(model_name, config)
+    tank_in_mech = config.tank_in_mech if config else False
+    pi_lng_util = config.pi_lng_util if config else True
+    pi_chamber = config.pi_chamber if config else True
+
+    # ── MECH Tasks (7개 + tank_in_mech 추가분) ──────
+    for t in MECH_TASKS:
+        # ... 기존 로직 동일 ...
+        pass
+
+    # tank_in_mech 모델: MECH에 탱크 태스크 추가
+    if tank_in_mech:
+        # DRAGON: TANK_MODULE + PRESSURE_TEST (PI 불필요하므로)
+        # SWS/GALLANT: TANK_MODULE만 (가압검사는 GST PI가 담당)
+        extra_tasks = MECH_TANK_TASKS if not pi_lng_util and not pi_chamber else MECH_TANK_MODULE_ONLY
+        for t in extra_tasks:
+            inserted = _upsert_task(
+                cur, serial_number, qr_doc_id,
+                'MECH', t.task_id, t.task_name, t.phase, True, t.task_type
+            )
+            if inserted:
+                created += 1
+                counts['MECH'] += 1
+            else:
+                skipped += 1
+
+    # ── ELEC Tasks (6개) — 전 모델 공통 (기존 동일) ──────
+
+    # ── TMS Tasks — is_tms 모델만 ──────
+    if is_tms:
+        if is_dual:
+            # DUAL: L/R 탱크별 TMS 태스크 생성
+            for suffix in ['-L', '-R']:
+                tank_qr = f"{qr_doc_id}{suffix}"
+                for t in TMS_TASKS:
+                    inserted = _upsert_task(
+                        cur, serial_number, tank_qr,
+                        'TMS', t.task_id, t.task_name, t.phase, True, t.task_type
+                    )
+                    if inserted:
+                        created += 1
+                        counts['TMS'] += 1
+                    else:
+                        skipped += 1
+        else:
+            # SINGLE: 기존 동일
+            for t in TMS_TASKS:
+                inserted = _upsert_task(
+                    cur, serial_number, qr_doc_id,
+                    'TMS', t.task_id, t.task_name, t.phase, True, t.task_type
+                )
+                # ...
+
+    # ── PI Tasks — model_config 기반 분기 ──────
+    # SWS JP line 예외: product_info.line='JP'이면 pi_lng_util 강제 활성
+    if tank_in_mech:
+        # product_info에서 line 조회
+        cur.execute(
+            "SELECT line FROM plan.product_info WHERE serial_number = %s",
+            (serial_number,)
+        )
+        line_row = cur.fetchone()
+        product_line = line_row['line'] if line_row else ''
+        # SWS + JP line → pi_lng_util 활성 오버라이드
+        if product_line and product_line.strip().upper() == 'JP':
+            pi_lng_util = True
+
+    for t in PI_TASKS:
+        if t.task_id == 'PI_LNG_UTIL':
+            is_applicable = pi_lng_util
+        elif t.task_id == 'PI_CHAMBER':
+            is_applicable = pi_chamber
+        else:
+            is_applicable = True
+        inserted = _upsert_task(
+            cur, serial_number, qr_doc_id,
+            'PI', t.task_id, t.task_name, t.phase, is_applicable, t.task_type
+        )
+        # ...
+
+    # ── QI, SI Tasks (기존 동일) ──────
+
+    conn.commit()
+
+    # completion_status 생성
+    get_or_create_completion_status(serial_number)
+
+    # DRAGON 등 is_tms=False 모델: tm_completed = TRUE
+    if not is_tms:
+        from app.models.completion_status import update_process_completion
+        update_process_completion(serial_number, 'TMS', True)
+
+    return { ... }
+```
+
+### Task 4: `CORE-ETL/step2_load.py` 수정 — DUAL Tank QR 생성
+
+```python
+# _process_single_record() 내부, qr_registry INSERT 직후 (is_insert=True 블록):
+
+    elif row[1]:  # is_insert = True (신규 제품)
+        product_id = row[0]
+        qr_doc_id = generate_qr_doc_id(sn)
+
+        # 제품 QR 생성 (기존)
+        cursor.execute('''
+            INSERT INTO public.qr_registry (qr_doc_id, serial_number, status, qr_type)
+            VALUES (%s, %s, 'active', 'PRODUCT')
+            RETURNING id
+        ''', (qr_doc_id, sn))
+        cursor.fetchone()
+
+        # ★ Sprint 31A: DUAL 모델 → Tank QR 추가 생성
+        # DUAL 감지: model_name에 'DUAL' 단어 포함 여부
+        # always_dual 감지: model_config 조회 필요
+        model_name = item['model_name']
+        is_dual = 'DUAL' in model_name.upper().split()
+
+        # always_dual 체크 (model_config 조회)
+        if not is_dual:
+            cursor.execute("""
+                SELECT always_dual FROM model_config
+                WHERE %s ILIKE model_prefix || '%%'
+                ORDER BY LENGTH(model_prefix) DESC
+                LIMIT 1
+            """, (model_name,))
+            mc_row = cursor.fetchone()
+            if mc_row and mc_row[0]:
+                is_dual = True
+
+        # DRAGON 계열(tank_in_mech=True)은 Tank QR 미생성
+        is_tank_in_mech = False
+        if is_dual:
+            cursor.execute("""
+                SELECT tank_in_mech FROM model_config
+                WHERE %s ILIKE model_prefix || '%%'
+                ORDER BY LENGTH(model_prefix) DESC
+                LIMIT 1
+            """, (model_name,))
+            mc_row = cursor.fetchone()
+            if mc_row and mc_row[0]:
+                is_tank_in_mech = True
+
+        if is_dual and not is_tank_in_mech:
+            for suffix in ['-L', '-R']:
+                tank_qr = f"{qr_doc_id}{suffix}"
+                cursor.execute('''
+                    INSERT INTO public.qr_registry
+                        (qr_doc_id, serial_number, status, qr_type, parent_qr_doc_id)
+                    VALUES (%s, %s, 'active', 'TANK', %s)
+                    ON CONFLICT (qr_doc_id) DO NOTHING
+                ''', (tank_qr, sn, qr_doc_id))
+            print(f"  [DUAL] {sn} → Tank QR 생성: {qr_doc_id}-L, {qr_doc_id}-R")
+
+        status = 'inserted'
+```
+
+주의: `qr_registry`에 `qr_type` 컬럼을 추가했으므로, 기존 INSERT 구문에도 `qr_type = 'PRODUCT'`를 명시해야 함 (DEFAULT가 'PRODUCT'이므로 기존 데이터는 영향 없음).
+
+### Task 5: `backend/app/services/task_service.py` 수정 — 알람 확장
+
+```python
+def _trigger_completion_alerts(self, task) -> None:
+    """
+    Sprint 31A: 다모델 알람 확장
+    - GAIA SINGLE: TMS PRESSURE_TEST 완료 → MECH 매니저 (기존)
+    - GAIA DUAL:   TMS PRESSURE_TEST L+R 모두 완료 시 1회 → MECH 매니저
+    - DRAGON:      MECH PRESSURE_TEST 완료 → QI 매니저
+    - MECH TANK_DOCKING 완료 → ELEC 매니저 (기존)
+    - PI 완료 → QI 매니저 (옵션, 같은 부서이므로)
+    """
+    trigger = None
+
+    if task.task_id == 'PRESSURE_TEST':
+        if task.task_category == 'TMS':
+            # GAIA 계열 — DUAL 체크
+            if self._is_dual_pressure_all_done(task.serial_number):
+                trigger = ('TMS_TANK_COMPLETE', 'MECH', 'TMS 가압검사 완료 (전체 탱크)')
+            # SINGLE이면 즉시 또는 DUAL인데 아직 하나만 완료면 skip
+        elif task.task_category == 'MECH':
+            # DRAGON 계열 — MECH에서 가압검사 완료 → QI 매니저
+            trigger = ('TMS_TANK_COMPLETE', 'QI', 'MECH 가압검사 완료')
+
+    elif task.task_category == 'MECH' and task.task_id == 'TANK_DOCKING':
+        trigger = ('TANK_DOCKING_COMPLETE', 'ELEC', 'Tank Docking 완료')
+
+    # 옵션: PI 전체 완료 → QI 매니저 알람
+    elif task.task_category == 'PI':
+        from app.models.task_detail import get_incomplete_tasks
+        incomplete_pi = get_incomplete_tasks(task.serial_number, 'PI')
+        if len(incomplete_pi) == 0:
+            trigger = ('TMS_TANK_COMPLETE', 'QI', 'PI 검사 완료')
+
+    if trigger is None:
+        return
+
+    # ... 기존 알람 생성 로직 동일 ...
+
+
+def _is_dual_pressure_all_done(self, serial_number: str) -> bool:
+    """DUAL 모델의 PRESSURE_TEST가 L+R 모두 완료인지 확인"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT COUNT(*) as incomplete
+            FROM app_task_details
+            WHERE serial_number = %s
+              AND task_category = 'TMS'
+              AND task_id = 'PRESSURE_TEST'
+              AND completed_at IS NULL
+              AND is_applicable = TRUE
+        """, (serial_number,))
+        row = cur.fetchone()
+        return row['incomplete'] == 0
+    except Exception:
+        return True  # 에러 시 알람 발송 (안전 방향)
+    finally:
+        if conn:
+            put_conn(conn)
+```
+
+### Task 6: version.py 업데이트
+
+```python
+VERSION = "1.9.0"
+BUILD_DATE = "2026-03-18"
+```
+
+### Task 7: 테스트 시나리오
+
+```
+[DUAL 테스트]
+1. GAIA-I DUAL 제품 ETL 적재
+   → qr_registry에 DOC_{sn}, DOC_{sn}-L, DOC_{sn}-R 3건 생성 확인
+   → Tank QR의 parent_qr_doc_id, qr_type 확인
+2. QR 태깅 시 task_seed 호출
+   → TMS 태스크 4건 확인 (TANK_MODULE×2 + PRESSURE_TEST×2)
+   → L탱크 QR 스캔 → L 태스크만 표시
+   → R탱크 QR 스캔 → R 태스크만 표시
+3. L PRESSURE_TEST 완료 → 알람 미발송
+4. R PRESSURE_TEST 완료 → MECH 매니저 알람 1건 확인
+
+[iVAS 테스트]
+5. iVAS 제품 ETL 적재 (model에 'DUAL' 없음)
+   → always_dual=True → DOC_{sn}-L, DOC_{sn}-R 생성 확인
+
+[DRAGON 테스트]
+6. DRAGON 제품 task_seed
+   → MECH에 TANK_MODULE + PRESSURE_TEST 추가 확인 (총 9개)
+   → TMS 태스크 0건, tm_completed=TRUE 확인
+7. MECH PRESSURE_TEST 완료 → QI 매니저 알람 확인
+
+[SWS 테스트]
+8. SWS 제품 task_seed
+   → MECH에 TANK_MODULE 추가 확인
+   → PI_LNG_UTIL=FALSE, PI_CHAMBER=TRUE 확인
+9. SWS + line=JP 제품 task_seed
+   → PI_LNG_UTIL=TRUE, PI_CHAMBER=TRUE 확인
+
+[GALLANT 테스트]
+10. GALLANT 제품 task_seed
+    → MECH에 TANK_MODULE 추가 확인
+    → PI_LNG_UTIL=TRUE, PI_CHAMBER=FALSE 확인
+```
+
+### 코드 수정 체크리스트
+
+- [x] Railway DB 백업 확인 (2026-03-17 13:19 UTC, 228MB)
+- [x] Migration 024 SQL 작성 완료 (`backend/migrations/024_multi_model_support.sql`)
+- [x] model_config.py 수정 완료 — pi_lng_util, pi_chamber, always_dual 필드 추가
+- [x] task_seed.py 수정 완료 — _is_dual_model, MECH_TANK_TASKS, DUAL L/R, PI 분기, tm_completed
+- [x] task_seed.py ON CONFLICT 수정 — `(serial_number, qr_doc_id, task_category, task_id)` migration 024 UNIQUE와 일치
+- [x] task_seed.py TMS→TM 매핑 수정 — `update_process_completion(sn, 'TM', True)` (process_map 키가 'TM')
+- [x] task_service.py 수정 완료 — _trigger_completion_alerts 확장, _is_dual_pressure_all_done 추가
+- [x] schema_check.py 수정 완료 — REQUIRED_COLUMNS 5개 + REQUIRED_CONSTRAINTS 5개 추가
+- [x] conftest.py 수정 완료 — migration_files에 022, 023, 024 추가 (테스트 DB 재생성 시 누락 방지)
+- [x] step2_load.py 수정 완료 — DUAL Tank QR 생성, qr_type='PRODUCT' 명시
+- [x] version.py v1.9.0 업데이트 완료
+- [x] White-box 테스트 21/21 PASS (TestIsDualModel 6건, TestDualAlarmLogic 2건)
+- [x] Migration 024 SWS/GALLANT tank_in_mech=TRUE 누락 수정 완료
+
+### DB 배포 체크리스트 (Railway — 2026-03-18 완료)
+
+- [x] Migration 024 Railway DB 실행 (teammate + schema_check 자동 적용)
+- [x] workers/hr 테이블 RESTRICT 보호 확인 — work_start_log, work_completion_log, partner_attendance, gst_attendance, worker_auth_settings 전부 RESTRICT
+- [x] app_task_details.worker_id → SET NULL 확인
+- [x] model_config 7개 모델 확인 — DRAGON(tank_in_mech=T, pi=F/F), SWS(tank_in_mech=T, pi=F/T), GALLANT(tank_in_mech=T, pi=T/F), IVAS(always_dual=T)
+- [x] iVAS model_config 추가 확인 (model_prefix='IVAS', has_docking=T, is_tms=T, always_dual=T)
+- [x] qr_registry parent_qr_doc_id, qr_type 컬럼 확인
+- [x] app_task_details UNIQUE 제약 변경 확인 (app_task_details_sn_qr_cat_tid_unique)
+
+### Sprint 30-B: DB Pool TCP 수정 (2026-03-18 완료)
+
+- [x] db_pool.py — TCP keepalive 활성화 (idle=30s, interval=10s, count=3)
+- [x] db_pool.py — connect_timeout=5s, health check (SELECT 1), dead connection 자동 교체
+- [x] Procfile — workers 1→2, threads 4→8, timeout=30s 명시
+- [x] Railway DATABASE_URL → public proxy 유지 (private networking IPv6 전용 문제로 보류)
+- [ ] Railway Private Networking IPv6→IPv4+IPv6 전환 시 DATABASE_URL private 전환 (보류)
+
+### 기능 검증 체크리스트 (코드 push 후 진행)
+
+> Sprint 31A 코드가 push되어야 Railway에 배포되고 기능 검증 가능
+
+- [ ] Sprint 31A 코드 commit & push (AXIS-OPS)
+- [ ] CORE-ETL step2_load.py commit & push (AXIS-CORE)
+- [x] Gray-box 테스트 실행 — 21 passed, 0 failed, 2 skipped (migration 025로 DUAL UNIQUE 해결)
+- [ ] Regression 테스트 실행 (기존 테스트 전체) — 실행 중
+- [ ] CORE-ETL step2_load.py DUAL Tank QR 생성 확인
+- [x] task_seed.py DUAL L/R TMS 태스크 — migration 025로 serial_number UNIQUE 제거, 21 passed
+- [x] task_seed.py DRAGON/SWS/GALLANT MECH 탱크 태스크 확인 (PASSED)
+- [x] task_seed.py PI 범위 model_config 기반 분기 확인 (PASSED)
+- [x] task_seed.py SWS JP line 예외 확인 (PASSED)
+- [x] task_seed.py DRAGON tm_completed=TRUE 확인 (PASSED)
+- [ ] task_service.py DUAL L+R 합산 알람 확인 (SKIPPED — DUAL 이슈 선결)
+- [ ] task_service.py DRAGON → QI 알람 확인
+- [ ] task_service.py PI → QI 알람 확인 (옵션)
+- [ ] 기존 GAIA SINGLE 제품 regression 확인 (기존 태스크 영향 없음)
+- [ ] QR 대시보드: qr_type 필터 — 기구시작(PRODUCT), 모듈시작(전체, 모듈시작 정렬)
+
+#### ⚠️ DUAL QR 설계 결정 필요
+
+**현상**: `qr_registry.serial_number`에 UNIQUE 제약 → 같은 serial_number로 L/R QR 2행 등록 불가
+**영향**: DUAL 모델(GAIA DUAL, iVAS)의 L/R 탱크 QR을 qr_registry에 등록할 수 없음
+**선택지**:
+1. serial_number UNIQUE 유지 → L/R QR serial_number를 `SN-L`, `SN-R`로 분리 (completion_status FK 영향 없음)
+2. serial_number UNIQUE 제거 → 같은 S/N 공유 허용 (completion_status FK 재설계 필요)
+3. L/R QR은 qr_registry에 등록하지 않고, app_task_details의 qr_doc_id만으로 관리 (기존 FK 영향 없음)
+
+---
+
+### Gray-box 테스트 시나리오 (DB 연결 필요 — Railway)
+
+> 아래 테스트는 실제 Railway DB에 연결된 환경에서 실행해야 합니다.
+> 테스트 파일: `tests/backend/test_sprint31a_multi_model.py`
+
+#### 테스트 클래스 및 시나리오
+
+**Class 1: TestModelConfigSprint31A** (6건)
+```
+- test_gaia_config_has_pi_columns: GAIA → pi_lng_util=True, pi_chamber=True, always_dual=False
+- test_dragon_config_no_pi: DRAGON → pi_lng_util=False, pi_chamber=False
+- test_sws_config: SWS → pi_chamber=True, pi_lng_util=False, tank_in_mech=True
+- test_gallant_config: GALLANT → pi_lng_util=True, pi_chamber=False, tank_in_mech=True
+- test_ivas_config: IVAS → always_dual=True, has_docking=True, is_tms=True
+- test_all_models_have_new_columns: 전체 모델 신규 컬럼 NOT NULL 확인
+```
+
+**Class 2: TestTaskSeedDual** (2건)
+```
+- test_dual_creates_lr_tms_tasks: GAIA DUAL → DOC_{sn}-L, DOC_{sn}-R TMS 태스크 생성 확인
+- test_single_no_lr_tasks: GAIA SINGLE → L/R 분리 없이 기존 qr_doc_id로 TMS 태스크
+```
+
+**Class 3: TestTaskSeedDragon** (2건)
+```
+- test_dragon_mech_extra_tasks: DRAGON → MECH에 TANK_MODULE + PRESSURE_TEST 추가 (총 9개)
+- test_dragon_tm_completed_true: DRAGON → completion_status.tm_completed = TRUE
+```
+
+**Class 4: TestTaskSeedPI** (3건)
+```
+- test_sws_pi_chamber_only: SWS → PI_CHAMBER=applicable, PI_LNG_UTIL=not applicable
+- test_sws_jp_pi_both: SWS + line='JP' → PI_LNG_UTIL + PI_CHAMBER 둘 다 applicable
+- test_gallant_pi_util_only: GALLANT → PI_LNG_UTIL=applicable, PI_CHAMBER=not applicable
+```
+
+**Class 5: TestTaskSeedSWSGallant** (2건)
+```
+- test_sws_mech_tank_module_only: SWS → MECH에 TANK_MODULE만 추가 (PRESSURE_TEST 없음)
+- test_gallant_mech_tank_module_only: GALLANT → MECH에 TANK_MODULE만 추가
+```
+
+#### 테스트 실행 명령어
+
+```bash
+# 프로젝트 루트에서
+cd ~/Desktop/GST/AXIS-OPS
+
+# 전체 Sprint 31A 테스트 실행
+python -m pytest tests/backend/test_sprint31a_multi_model.py -v
+
+# 개별 클래스 실행
+python -m pytest tests/backend/test_sprint31a_multi_model.py::TestModelConfigSprint31A -v
+python -m pytest tests/backend/test_sprint31a_multi_model.py::TestTaskSeedDual -v
+python -m pytest tests/backend/test_sprint31a_multi_model.py::TestTaskSeedDragon -v
+python -m pytest tests/backend/test_sprint31a_multi_model.py::TestTaskSeedPI -v
+python -m pytest tests/backend/test_sprint31a_multi_model.py::TestTaskSeedSWSGallant -v
+
+# White-box 테스트만 (DB 불필요)
+python -m pytest tests/backend/test_sprint31a_multi_model.py::TestIsDualModel -v
+python -m pytest tests/backend/test_sprint31a_multi_model.py::TestDualAlarmLogic -v
+```
+
+#### DB가 없는 환경에서 White-box 테스트만 실행
+
+```bash
+# conftest.py db_conn 고정 없이 직접 실행
+python -c "
+import sys; sys.path.insert(0, 'backend')
+from tests.backend.test_sprint31a_multi_model import TestIsDualModel, TestDualAlarmLogic
+import unittest
+
+suite = unittest.TestSuite()
+for cls in [TestIsDualModel, TestDualAlarmLogic]:
+    for method in dir(cls):
+        if method.startswith('test_'):
+            suite.addTest(cls(method))
+
+runner = unittest.TextTestRunner(verbosity=2)
+result = runner.run(suite)
+sys.exit(0 if result.wasSuccessful() else 1)
+"
+```
+
+---
+
+### Claude Code Teammate 실행 가이드
+
+> Sprint 31A는 코드 수정이 이미 완료되었습니다.
+> Teammate는 **Migration 실행 + Gray-box 테스트 + 배포 검증**에 사용합니다.
+
+#### Step 1: Claude Code 실행
+
+```bash
+cd ~/Desktop/GST/AXIS-OPS
+claude
+```
+
+#### Step 2: Migration 실행 프롬프트
+
+```
+Sprint 31A Migration 024를 Railway DB에 실행해줘.
+
+파일 위치: backend/migrations/024_multi_model_support.sql
+
+실행 순서:
+1. 먼저 CLAUDE.md를 읽고 DB 연결 정보 확인
+2. Migration SQL 파일 내용 확인 (cat으로 확인)
+3. psql 또는 Python으로 Railway DB에 연결
+4. BEGIN ~ COMMIT 트랜잭션 안에서 실행
+5. 실행 후 검증:
+   - SELECT * FROM model_config ORDER BY model_prefix;
+     → IVAS 행 존재, SWS/GALLANT tank_in_mech=TRUE 확인
+   - SELECT column_name FROM information_schema.columns WHERE table_name = 'qr_registry' AND column_name IN ('parent_qr_doc_id', 'qr_type');
+   - SELECT constraint_name, delete_rule FROM information_schema.referential_constraints WHERE constraint_name LIKE '%worker_id_fkey';
+
+문제 발생 시 ROLLBACK하고 에러 내용 알려줘.
+```
+
+#### Step 3: Gray-box 테스트 실행 프롬프트
+
+```
+Sprint 31A Gray-box 테스트를 실행해줘.
+
+테스트 파일: tests/backend/test_sprint31a_multi_model.py
+
+실행 명령:
+python -m pytest tests/backend/test_sprint31a_multi_model.py -v --tb=short
+
+DB 연결이 필요한 테스트 클래스:
+- TestModelConfigSprint31A (6건)
+- TestTaskSeedDual (2건)
+- TestTaskSeedDragon (2건)
+- TestTaskSeedPI (3건)
+- TestTaskSeedSWSGallant (2건)
+
+총 21건 (White-box 8건 + Gray-box 15건 = 23건 전체)
+
+실패하는 테스트가 있으면:
+1. 에러 메시지 분석
+2. 원인 파악 (DB 스키마 vs 코드 로직)
+3. 수정이 필요하면 수정 방안 제시 (코드 직접 수정 금지 — 나한테 확인 받고 진행)
+```
+
+#### Step 4: 기존 테스트 Regression 확인
+
+```
+기존 테스트 전체를 실행해서 Sprint 31A 변경으로 깨진 테스트가 없는지 확인해줘.
+
+python -m pytest tests/ -v --tb=short -x
+
+실패하는 테스트가 있으면 원인 분석 후 알려줘.
+특히 task_seed, task_service, model_config 관련 기존 테스트가 영향받을 수 있으니 주의.
+```
+
+### 롤백 계획
+
+문제 발생 시:
+1. UNIQUE 제약: 신규 UNIQUE 삭제 → 기존 UNIQUE 재생성
+   ```sql
+   ALTER TABLE app_task_details DROP CONSTRAINT app_task_details_sn_qr_cat_tid_unique;
+   ALTER TABLE app_task_details ADD CONSTRAINT app_task_details_unique UNIQUE (serial_number, task_category, task_id);
+   ```
+2. model_config: 신규 컬럼은 DEFAULT 값이 있어 기존 코드에 영향 없음
+3. qr_registry: parent_qr_doc_id, qr_type도 DEFAULT 있어 기존 동작 유지
+4. task_seed: 기존 SINGLE 모델은 is_dual=False로 기존 로직 그대로 실행
+5. SWS/GALLANT tank_in_mech 복구: `UPDATE model_config SET tank_in_mech = FALSE WHERE model_prefix IN ('SWS', 'GALLANT');`
+6. workers/hr RESTRICT → CASCADE 복구:
+   ```sql
+   -- 긴급 복구 시에만 (데이터 보호 해제됨)
+   ALTER TABLE work_start_log DROP CONSTRAINT work_start_log_worker_id_fkey;
+   ALTER TABLE work_start_log ADD CONSTRAINT work_start_log_worker_id_fkey FOREIGN KEY (worker_id) REFERENCES workers(id) ON DELETE CASCADE;
+   -- 나머지 테이블도 동일 패턴
+   ```

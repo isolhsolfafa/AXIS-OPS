@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS app_task_details (
 
 -- 완료 상태 테이블
 CREATE TABLE IF NOT EXISTS completion_status (
-    serial_number VARCHAR(255) PRIMARY KEY REFERENCES qr_registry(serial_number) ON DELETE CASCADE,
+    serial_number VARCHAR(255) PRIMARY KEY REFERENCES plan.product_info(serial_number) ON DELETE RESTRICT,
     mm_completed BOOLEAN DEFAULT FALSE,
     ee_completed BOOLEAN DEFAULT FALSE,
     tm_completed BOOLEAN DEFAULT FALSE,

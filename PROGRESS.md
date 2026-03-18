@@ -3,7 +3,28 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v1.8.0 (Sprint 30, 2026-03-17)
+> **현재 버전**: v1.9.0 (Sprint 31A, 2026-03-18)
+
+---
+
+## Sprint 31A: 다모델 지원 — DUAL L/R, DRAGON MECH, PI 분기 (v1.9.0, 2026-03-18)
+
+**신규 파일**:
+- `backend/migrations/024_multi_model_support.sql` — model_config 컬럼, IVAS, UNIQUE 변경, FK RESTRICT
+- `backend/migrations/025_qr_registry_dual_support.sql` — serial_number UNIQUE 제거 (DUAL L/R 지원)
+- `tests/backend/test_sprint31a_multi_model.py` — 21 passed, 2 skipped
+
+**수정 파일**:
+- `model_config.py` — pi_lng_util, pi_chamber, always_dual 필드 추가
+- `task_seed.py` — DUAL L/R TMS, DRAGON MECH 탱크, PI 분기, tm_completed 자동, ON CONFLICT 4컬럼
+- `task_service.py` — 알림 트리거 확장 (DUAL L+R 완료 체크, DRAGON→QI, PI→QI)
+- `schema_check.py` — 신규 컬럼 5개 + FK RESTRICT 5개 자동 검증
+- `003_create_task_tables.sql` — completion_status FK: qr_registry → plan.product_info
+- `conftest.py` — migration 022~025 추가
+
+**Sprint 30-B (동시 진행)**:
+- `db_pool.py` — TCP keepalive (idle=30s), health check, dead connection 자동 교체
+- `Procfile` — workers 1→2, threads 4→8, timeout=30s
 
 ---
 

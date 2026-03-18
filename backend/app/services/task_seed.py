@@ -9,6 +9,14 @@ CLAUDE.md Task Seed 데이터 기준:
   model_config 기반 분기: GAIA(has_docking), DRAGON(tank_in_mech), 기타
   admin_settings.heating_jacket_enabled 로 HEATING_JACKET 제어
   PI/QI/SI 는 모든 모델에 항상 생성 (is_applicable=True)
+
+Sprint 31A: 다모델 지원
+  DUAL 모델: TMS 태스크를 L/R qr_doc_id별 생성
+  iVAS: always_dual=True → DUAL 키워드 없이도 L/R
+  DRAGON: MECH에 TANK_MODULE + PRESSURE_TEST 추가 (PI 불필요)
+  SWS/GALLANT: MECH에 TANK_MODULE만 추가 (가압검사는 GST PI 담당)
+  SWS JP line: product_info.line='JP'이면 PI_LNG_UTIL 추가 활성
+  PI 범위: model_config.pi_lng_util, pi_chamber 기반 분기
 """
 
 import logging
@@ -77,6 +85,19 @@ TMS_TASKS: List[TaskTemplate] = [
     TaskTemplate('PRESSURE_TEST', '가압검사',    'FINAL',       False),
 ]
 
+# Sprint 31A: DRAGON MECH 추가 태스크 (TANK_MODULE + PRESSURE_TEST)
+# DRAGON은 PI 불필요 → MECH에서 가압검사까지 전부 처리
+MECH_TANK_FULL: List[TaskTemplate] = [
+    TaskTemplate('TANK_MODULE',   'Tank Module', 'PRE_DOCKING', False),
+    TaskTemplate('PRESSURE_TEST', '가압검사',    'FINAL',       False),
+]
+
+# Sprint 31A: SWS/GALLANT MECH 추가 태스크 (TANK_MODULE만)
+# 가압검사는 GST PI가 별도 진행
+MECH_TANK_MODULE_ONLY: List[TaskTemplate] = [
+    TaskTemplate('TANK_MODULE',   'Tank Module', 'PRE_DOCKING', False),
+]
+
 # Sprint 11: PI Tasks (2개) — 모든 모델 공통 (GST PI 검사원 전용)
 PI_TASKS: List[TaskTemplate] = [
     TaskTemplate('PI_LNG_UTIL', 'LNG/UTIL 가압검사', 'FINAL', False),
@@ -108,6 +129,17 @@ _TEMPLATES: Dict[str, List[TaskTemplate]] = {
 def get_templates(category: str) -> List[TaskTemplate]:
     """카테고리별 Task 템플릿 목록 반환"""
     return _TEMPLATES.get(category, [])
+
+
+def _is_dual_model(model_name: str, config) -> bool:
+    """
+    DUAL 여부 판단: model명에 'DUAL' 단어 포함 OR always_dual=True
+    - GAIA-I DUAL, GAIA-P DUAL, DRAGON LE DUAL → 'DUAL' in split
+    - iVAS → always_dual=True (model명에 DUAL 없어도 항상 2탱크)
+    """
+    if config and config.always_dual:
+        return True
+    return 'DUAL' in model_name.upper().split()
 
 
 # ──────────────────────────────────────────────
@@ -173,6 +205,11 @@ def initialize_product_tasks(
             f"Using defaults: has_docking=False, is_tms=False, tank_in_mech=False"
         )
 
+    # Sprint 31A: 다모델 분기 변수
+    is_dual = _is_dual_model(model_name, config)
+    pi_lng_util = config.pi_lng_util if config else True
+    pi_chamber = config.pi_chamber if config else True
+
     # admin_settings에서 heating_jacket 활성화 여부 조회
     heating_jacket_enabled = get_setting('heating_jacket_enabled', False)
 
@@ -201,6 +238,22 @@ def initialize_product_tasks(
             else:
                 skipped += 1
 
+        # ── Sprint 31A: tank_in_mech MECH 추가 태스크 ──────
+        if tank_in_mech:
+            # DRAGON(PI 없음): TANK_MODULE + PRESSURE_TEST
+            # SWS/GALLANT(PI 있음): TANK_MODULE만
+            extra = MECH_TANK_FULL if (not pi_lng_util and not pi_chamber) else MECH_TANK_MODULE_ONLY
+            for t in extra:
+                inserted = _upsert_task(
+                    cur, serial_number, qr_doc_id,
+                    'MECH', t.task_id, t.task_name, t.phase, True, t.task_type
+                )
+                if inserted:
+                    created += 1
+                    counts['MECH'] += 1
+                else:
+                    skipped += 1
+
         # ── ELEC Tasks (6개) — 전 모델 공통 ──────────
         for t in ELEC_TASKS:
             inserted = _upsert_task(
@@ -213,24 +266,60 @@ def initialize_product_tasks(
             else:
                 skipped += 1
 
-        # ── TMS Tasks (2개) — GAIA(is_tms)만 ─────────
+        # ── TMS Tasks (2개) — is_tms 모델만 ─────────
+        # Sprint 31A: DUAL이면 L/R qr_doc_id별 생성
         if is_tms:
-            for t in TMS_TASKS:
-                inserted = _upsert_task(
-                    cur, serial_number, qr_doc_id,
-                    'TMS', t.task_id, t.task_name, t.phase, True, t.task_type
-                )
-                if inserted:
-                    created += 1
-                    counts['TMS'] += 1
-                else:
-                    skipped += 1
+            if is_dual:
+                # DUAL: L/R 탱크별 TMS 태스크 생성
+                for suffix in ['-L', '-R']:
+                    tank_qr = f"{qr_doc_id}{suffix}"
+                    for t in TMS_TASKS:
+                        inserted = _upsert_task(
+                            cur, serial_number, tank_qr,
+                            'TMS', t.task_id, t.task_name, t.phase, True, t.task_type
+                        )
+                        if inserted:
+                            created += 1
+                            counts['TMS'] += 1
+                        else:
+                            skipped += 1
+            else:
+                # SINGLE: 기존 동일
+                for t in TMS_TASKS:
+                    inserted = _upsert_task(
+                        cur, serial_number, qr_doc_id,
+                        'TMS', t.task_id, t.task_name, t.phase, True, t.task_type
+                    )
+                    if inserted:
+                        created += 1
+                        counts['TMS'] += 1
+                    else:
+                        skipped += 1
 
-        # ── Sprint 11: PI Tasks (2개) — 모든 모델 공통 ─────
+        # ── PI Tasks — Sprint 31A: model_config 기반 분기 ─────
+        # SWS JP line 예외: line='JP'이면 pi_lng_util 강제 활성
+        _pi_lng = pi_lng_util
+        _pi_chm = pi_chamber
+        if tank_in_mech:
+            cur.execute(
+                "SELECT line FROM plan.product_info WHERE serial_number = %s",
+                (serial_number,)
+            )
+            line_row = cur.fetchone()
+            product_line = line_row['line'] if line_row and line_row.get('line') else ''
+            if product_line.strip().upper() == 'JP':
+                _pi_lng = True  # SWS + JP → PI_LNG_UTIL 활성 오버라이드
+
         for t in PI_TASKS:
+            if t.task_id == 'PI_LNG_UTIL':
+                is_applicable = _pi_lng
+            elif t.task_id == 'PI_CHAMBER':
+                is_applicable = _pi_chm
+            else:
+                is_applicable = True
             inserted = _upsert_task(
                 cur, serial_number, qr_doc_id,
-                'PI', t.task_id, t.task_name, t.phase, True, t.task_type
+                'PI', t.task_id, t.task_name, t.phase, is_applicable, t.task_type
             )
             if inserted:
                 created += 1
@@ -266,6 +355,11 @@ def initialize_product_tasks(
 
         # completion_status 행 보장 (없으면 생성)
         get_or_create_completion_status(serial_number)
+
+        # Sprint 31A: is_tms=False 모델 → tm_completed = TRUE (TMS 태스크 없음)
+        if not is_tms:
+            from app.models.completion_status import update_process_completion
+            update_process_completion(serial_number, 'TM', True)
 
         logger.info(
             f"Task seed complete: serial_number={serial_number}, "
@@ -370,9 +464,8 @@ def _upsert_task(
     """
     app_task_details에 Task 행 삽입 (이미 있으면 건너뜀).
 
-    UNIQUE 제약: (serial_number, task_category, task_id)
-    worker_id는 seed 시점에 없으므로 NULL 허용 필요 — DB 컬럼이 NOT NULL이면
-    placeholder로 0을 사용하지 않고 ON CONFLICT DO NOTHING으로 처리.
+    UNIQUE 제약: (serial_number, qr_doc_id, task_category, task_id)
+    Sprint 31A: DUAL L/R에서 같은 S/N + task_id지만 qr_doc_id가 다른 행 허용
 
     Returns:
         True = 새로 삽입됨, False = 이미 존재(건너뜀)
@@ -384,7 +477,7 @@ def _upsert_task(
             task_id, task_name, is_applicable, task_type
         )
         VALUES (%s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (serial_number, task_category, task_id) DO NOTHING
+        ON CONFLICT (serial_number, qr_doc_id, task_category, task_id) DO NOTHING
         RETURNING id
         """,
         (serial_number, qr_doc_id, task_category,

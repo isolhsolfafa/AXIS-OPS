@@ -2,6 +2,7 @@
 모델 설정(model_config) 모델 및 CRUD 함수
 테이블: model_config
 Sprint 6: 제품 모델별 Task 분기 설정 (has_docking, is_tms, tank_in_mech)
+Sprint 31A: Multi-model 지원 (pi_lng_util, pi_chamber, always_dual)
 """
 
 import logging
@@ -32,6 +33,9 @@ class ModelConfig:
         description: 설명
         created_at: 생성 시간
         updated_at: 수정 시간
+        pi_lng_util: PI LNG/UTIL 가압검사 진행 여부
+        pi_chamber: PI CHAMBER 가압검사 진행 여부
+        always_dual: 항상 2탱크 (iVAS)
     """
 
     id: int
@@ -42,6 +46,9 @@ class ModelConfig:
     description: Optional[str]
     created_at: datetime
     updated_at: datetime
+    pi_lng_util: bool = True
+    pi_chamber: bool = True
+    always_dual: bool = False
 
     @staticmethod
     def from_db_row(row: Dict[str, Any]) -> "ModelConfig":
@@ -62,7 +69,10 @@ class ModelConfig:
             tank_in_mech=row['tank_in_mech'],
             description=row.get('description'),
             created_at=row['created_at'],
-            updated_at=row['updated_at']
+            updated_at=row['updated_at'],
+            pi_lng_util=row.get('pi_lng_util', True),
+            pi_chamber=row.get('pi_chamber', True),
+            always_dual=row.get('always_dual', False)
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -76,6 +86,9 @@ class ModelConfig:
             'description': self.description,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'pi_lng_util': self.pi_lng_util,
+            'pi_chamber': self.pi_chamber,
+            'always_dual': self.always_dual,
         }
 
 

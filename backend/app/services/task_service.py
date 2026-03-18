@@ -337,25 +337,42 @@ class TaskService:
 
     def _trigger_completion_alerts(self, task) -> None:
         """
-        특정 Task 완료 시 연계 알림 트리거 (GAIA 전용)
+        특정 Task 완료 시 연계 알림 트리거
+        Sprint 31A: 다모델 알람 확장
 
-        트리거 규칙 (CLAUDE.md):
-          - TMS PRESSURE_TEST 완료
-            → alert_type: TMS_TANK_COMPLETE
-            → 수신: 해당 제품의 MECH 관리자 (is_manager=True, role=MECH, 같은 제품)
+        트리거 규칙:
+          - TMS PRESSURE_TEST 완료 (GAIA/iVAS)
+            → DUAL: L+R 모두 완료 시 1회만 → MECH 매니저
+            → SINGLE: 즉시 → MECH 매니저
+          - MECH PRESSURE_TEST 완료 (DRAGON)
+            → 즉시 → QI 매니저
           - MECH TANK_DOCKING 완료
-            → alert_type: TANK_DOCKING_COMPLETE
-            → 수신: 해당 제품의 ELEC 관리자
+            → 즉시 → ELEC 매니저
+          - PI 전체 완료 (SWS/GALLANT)
+            → QI 매니저 (같은 부서이므로 옵션)
 
         Args:
             task: 완료된 TaskDetail 객체
         """
         trigger = None
 
-        if task.task_category == 'TMS' and task.task_id == 'PRESSURE_TEST':
-            trigger = ('TMS_TANK_COMPLETE', 'MECH', 'TMS 가압검사 완료')
+        if task.task_id == 'PRESSURE_TEST':
+            if task.task_category == 'TMS':
+                # GAIA/iVAS: DUAL이면 L+R 모두 완료 확인
+                if self._is_dual_pressure_all_done(task.serial_number):
+                    trigger = ('TMS_TANK_COMPLETE', 'MECH', 'TMS 가압검사 완료')
+            elif task.task_category == 'MECH':
+                # DRAGON: MECH 가압검사 완료 → QI 매니저
+                trigger = ('TMS_TANK_COMPLETE', 'QI', 'MECH 가압검사 완료')
+
         elif task.task_category == 'MECH' and task.task_id == 'TANK_DOCKING':
             trigger = ('TANK_DOCKING_COMPLETE', 'ELEC', 'Tank Docking 완료')
+
+        elif task.task_category == 'PI':
+            # PI 전체 완료 시 → QI 매니저 알람 (옵션: 같은 부서)
+            incomplete_pi = get_incomplete_tasks(task.serial_number, 'PI')
+            if len(incomplete_pi) == 0:
+                trigger = ('TMS_TANK_COMPLETE', 'QI', 'PI 검사 완료')
 
         if trigger is None:
             return
@@ -388,6 +405,37 @@ class TaskService:
         except Exception as e:
             # 알림 실패가 작업 완료 자체를 방해하지 않도록 로그만 남김
             logger.error(f"Failed to trigger completion alert: {e}")
+
+    def _is_dual_pressure_all_done(self, serial_number: str) -> bool:
+        """
+        DUAL 모델의 PRESSURE_TEST가 L+R 모두 완료인지 확인.
+        SINGLE 모델이면 1건만 있으므로 완료 즉시 True 반환.
+
+        Returns:
+            True = 모든 PRESSURE_TEST 완료 (알람 발송 가능)
+            False = 아직 미완료 PRESSURE_TEST 있음 (알람 대기)
+        """
+        conn = None
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT COUNT(*) as incomplete
+                FROM app_task_details
+                WHERE serial_number = %s
+                  AND task_category = 'TMS'
+                  AND task_id = 'PRESSURE_TEST'
+                  AND completed_at IS NULL
+                  AND is_applicable = TRUE
+            """, (serial_number,))
+            row = cur.fetchone()
+            return row['incomplete'] == 0
+        except Exception as e:
+            logger.error(f"Failed to check dual pressure status: {e}")
+            return True  # 에러 시 알람 발송 (안전 방향)
+        finally:
+            if conn:
+                put_conn(conn)
 
     def get_tasks_by_product(
         self,

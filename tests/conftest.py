@@ -260,6 +260,10 @@ def db_schema():
                 '017_add_attendance_classification.sql',
                 '018_auth_refresh_tokens.sql',
                 '019_geolocation_settings.sql',
+                '022_add_task_type.sql',
+                '023_fix_cascade_and_task_type.sql',
+                '024_multi_model_support.sql',
+                '025_qr_registry_dual_support.sql',
             ]
 
             for filename in migration_files:

@@ -18,6 +18,31 @@ REQUIRED_COLUMNS = [
         'task_type',
         "ALTER TABLE app_task_details ADD COLUMN IF NOT EXISTS task_type VARCHAR(20) DEFAULT 'NORMAL'"
     ),
+    (
+        'qr_registry',
+        'parent_qr_doc_id',
+        "ALTER TABLE public.qr_registry ADD COLUMN IF NOT EXISTS parent_qr_doc_id VARCHAR(100) DEFAULT NULL"
+    ),
+    (
+        'qr_registry',
+        'qr_type',
+        "ALTER TABLE public.qr_registry ADD COLUMN IF NOT EXISTS qr_type VARCHAR(20) NOT NULL DEFAULT 'PRODUCT'"
+    ),
+    (
+        'model_config',
+        'always_dual',
+        "ALTER TABLE model_config ADD COLUMN IF NOT EXISTS always_dual BOOLEAN NOT NULL DEFAULT FALSE"
+    ),
+    (
+        'model_config',
+        'pi_lng_util',
+        "ALTER TABLE model_config ADD COLUMN IF NOT EXISTS pi_lng_util BOOLEAN NOT NULL DEFAULT TRUE"
+    ),
+    (
+        'model_config',
+        'pi_chamber',
+        "ALTER TABLE model_config ADD COLUMN IF NOT EXISTS pi_chamber BOOLEAN NOT NULL DEFAULT TRUE"
+    ),
 ]
 
 # ── 필수 FK 제약조건 정의 ────────────────────────────
@@ -43,6 +68,61 @@ REQUIRED_CONSTRAINTS = [
             "ALTER TABLE completion_status DROP CONSTRAINT IF EXISTS completion_status_serial_number_fkey",
             "ALTER TABLE completion_status ADD CONSTRAINT completion_status_serial_number_fkey "
             "FOREIGN KEY (serial_number) REFERENCES qr_registry(serial_number) ON DELETE RESTRICT",
+        ]
+    ),
+    (
+        'work_start_log',
+        'work_start_log_worker_id_fkey',
+        'worker_id',
+        'RESTRICT',
+        [
+            "ALTER TABLE work_start_log DROP CONSTRAINT IF EXISTS work_start_log_worker_id_fkey",
+            "ALTER TABLE work_start_log ADD CONSTRAINT work_start_log_worker_id_fkey "
+            "FOREIGN KEY (worker_id) REFERENCES workers(id) ON DELETE RESTRICT",
+        ]
+    ),
+    (
+        'work_completion_log',
+        'work_completion_log_worker_id_fkey',
+        'worker_id',
+        'RESTRICT',
+        [
+            "ALTER TABLE work_completion_log DROP CONSTRAINT IF EXISTS work_completion_log_worker_id_fkey",
+            "ALTER TABLE work_completion_log ADD CONSTRAINT work_completion_log_worker_id_fkey "
+            "FOREIGN KEY (worker_id) REFERENCES workers(id) ON DELETE RESTRICT",
+        ]
+    ),
+    (
+        'worker_auth_settings',
+        'worker_auth_settings_worker_id_fkey',
+        'worker_id',
+        'RESTRICT',
+        [
+            "ALTER TABLE hr.worker_auth_settings DROP CONSTRAINT IF EXISTS worker_auth_settings_worker_id_fkey",
+            "ALTER TABLE hr.worker_auth_settings ADD CONSTRAINT worker_auth_settings_worker_id_fkey "
+            "FOREIGN KEY (worker_id) REFERENCES workers(id) ON DELETE RESTRICT",
+        ]
+    ),
+    (
+        'partner_attendance',
+        'partner_attendance_worker_id_fkey',
+        'worker_id',
+        'RESTRICT',
+        [
+            "ALTER TABLE hr.partner_attendance DROP CONSTRAINT IF EXISTS partner_attendance_worker_id_fkey",
+            "ALTER TABLE hr.partner_attendance ADD CONSTRAINT partner_attendance_worker_id_fkey "
+            "FOREIGN KEY (worker_id) REFERENCES workers(id) ON DELETE RESTRICT",
+        ]
+    ),
+    (
+        'gst_attendance',
+        'gst_attendance_worker_id_fkey',
+        'worker_id',
+        'RESTRICT',
+        [
+            "ALTER TABLE hr.gst_attendance DROP CONSTRAINT IF EXISTS gst_attendance_worker_id_fkey",
+            "ALTER TABLE hr.gst_attendance ADD CONSTRAINT gst_attendance_worker_id_fkey "
+            "FOREIGN KEY (worker_id) REFERENCES workers(id) ON DELETE RESTRICT",
         ]
     ),
 ]
