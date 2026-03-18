@@ -30,13 +30,73 @@ _ALLOWED_DATE_FIELDS = {'pi_start', 'mech_start'}
 
 
 def _calc_progress(row: dict) -> float:
-    """완료 단계 수 / 해당 단계 수 * 100"""
+    """완료 단계 수 / 해당 단계 수 * 100 (공정 단위)"""
     is_gaia = (row.get('model') or '').upper().startswith('GAIA')
     stages = ['mech_completed', 'elec_completed', 'pi_completed', 'qi_completed', 'si_completed']
     if is_gaia:
         stages.append('tm_completed')
     completed = sum(1 for s in stages if row.get(s))
     return round(completed / len(stages) * 100, 1)
+
+
+def _get_task_progress_by_serial(cur, serial_numbers: list) -> dict:
+    """
+    serial_number 목록에 대해 카테고리별 태스크 진행률 조회.
+    Sprint 31B: OPS 앱처럼 태스크 레벨 진행률 제공.
+
+    Returns:
+        {
+            'GBWS-6899': {
+                'total': 20, 'completed': 5, 'progress_pct': 25.0,
+                'by_category': {
+                    'MECH': {'total': 7, 'completed': 3, 'pct': 42.9},
+                    'ELEC': {'total': 6, 'completed': 0, 'pct': 0.0},
+                    ...
+                }
+            }
+        }
+    """
+    if not serial_numbers:
+        return {}
+
+    cur.execute(
+        """
+        SELECT serial_number, task_category,
+               COUNT(*) AS total,
+               COUNT(completed_at) AS completed
+        FROM app_task_details
+        WHERE serial_number = ANY(%s) AND is_applicable = TRUE
+        GROUP BY serial_number, task_category
+        ORDER BY serial_number, task_category
+        """,
+        (serial_numbers,)
+    )
+    rows = cur.fetchall()
+
+    result = {}
+    for row in rows:
+        sn = row['serial_number']
+        if sn not in result:
+            result[sn] = {'total': 0, 'completed': 0, 'progress_pct': 0.0, 'by_category': {}}
+        cat = row['task_category']
+        total = row['total']
+        completed = row['completed']
+        pct = round(completed / total * 100, 1) if total > 0 else 0.0
+
+        result[sn]['by_category'][cat] = {
+            'total': total,
+            'completed': completed,
+            'pct': pct,
+        }
+        result[sn]['total'] += total
+        result[sn]['completed'] += completed
+
+    # 전체 progress_pct 계산
+    for sn, data in result.items():
+        if data['total'] > 0:
+            data['progress_pct'] = round(data['completed'] / data['total'] * 100, 1)
+
+    return result
 
 
 def _date_to_iso(val) -> Optional[str]:
@@ -149,6 +209,10 @@ def get_monthly_detail() -> Tuple[Dict[str, Any], int]:
         )
         by_model = [{'model': r['model'], 'count': r['count']} for r in cur.fetchall()]
 
+        # Sprint 31B: 태스크 레벨 진행률 조회
+        serial_numbers = [row['serial_number'] for row in rows if row.get('serial_number')]
+        task_progress = _get_task_progress_by_serial(cur, serial_numbers)
+
         # items 변환
         items = []
         for row in rows:
@@ -180,6 +244,9 @@ def get_monthly_detail() -> Tuple[Dict[str, Any], int]:
                     'si': bool(row.get('si_completed')),
                 },
                 'progress_pct': _calc_progress(row),
+                'task_progress': task_progress.get(row.get('serial_number'), {
+                    'total': 0, 'completed': 0, 'progress_pct': 0.0, 'by_category': {}
+                }),
             })
 
         return jsonify({
