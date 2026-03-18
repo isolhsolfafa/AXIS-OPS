@@ -140,7 +140,7 @@ def get_qr_list() -> Tuple[Dict[str, Any], int]:
         """)
         models = [row['model'] for row in cursor.fetchall() if row['model']]
 
-        # 통계 (전체 — QR은 자사 필터 없음)
+        # 통계 (PRODUCT QR만 — TANK QR 제외)
         cursor.execute("""
             SELECT
                 COUNT(*) AS total,
@@ -149,6 +149,7 @@ def get_qr_list() -> Tuple[Dict[str, Any], int]:
                 COUNT(*) FILTER (WHERE qr.status = 'revoked') AS revoked_count
             FROM public.qr_registry qr
             JOIN plan.product_info p ON qr.serial_number = p.serial_number
+            WHERE qr.qr_type = 'PRODUCT'
         """)
         stats_row = cursor.fetchone()
 
