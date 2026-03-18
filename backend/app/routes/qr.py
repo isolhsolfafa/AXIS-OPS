@@ -68,8 +68,8 @@ def get_qr_list() -> Tuple[Dict[str, Any], int]:
         params = []
 
         if search:
-            conditions.append("(p.serial_number ILIKE %s OR qr.qr_doc_id ILIKE %s)")
-            params.extend([f"%{search}%", f"%{search}%"])
+            conditions.append("(p.serial_number ILIKE %s OR qr.qr_doc_id ILIKE %s OR p.sales_order ILIKE %s)")
+            params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
 
         if model_filter:
             conditions.append("p.model = %s")
