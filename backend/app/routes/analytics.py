@@ -61,6 +61,10 @@ _ENDPOINT_LABELS = {
 }
 
 
+# ADMIN 요청 제외 조건 (모든 analytics 쿼리에 적용)
+_EXCLUDE_ADMIN = "AND worker_role != 'ADMIN'"
+
+
 def _parse_period(period_str: str) -> int:
     """'7d', '30d' → 일수 반환. 기본 7."""
     try:
@@ -89,7 +93,7 @@ def get_summary() -> Tuple[Dict[str, Any], int]:
         cur = conn.cursor()
 
         # 전체 요약
-        cur.execute("""
+        cur.execute(f"""
             SELECT
                 COUNT(DISTINCT worker_id) AS unique_users,
                 COUNT(*) AS total_requests,
@@ -97,19 +101,19 @@ def get_summary() -> Tuple[Dict[str, Any], int]:
                 ROUND(COUNT(*) FILTER (WHERE status_code >= 400)::numeric
                       / NULLIF(COUNT(*), 0) * 100, 1) AS error_rate
             FROM app_access_log
-            WHERE created_at >= %s
+            WHERE created_at >= %s {_EXCLUDE_ADMIN}
         """, (since,))
         summary = cur.fetchone()
 
         # 일별 추이
-        cur.execute("""
+        cur.execute(f"""
             SELECT
                 created_at::date AS log_date,
                 COUNT(DISTINCT worker_id) AS users,
                 COUNT(*) AS requests,
                 COUNT(*) FILTER (WHERE status_code >= 400) AS errors
             FROM app_access_log
-            WHERE created_at >= %s
+            WHERE created_at >= %s {_EXCLUDE_ADMIN}
             GROUP BY log_date
             ORDER BY log_date
         """, (since,))
@@ -157,7 +161,7 @@ def get_by_worker() -> Tuple[Dict[str, Any], int]:
         conn = get_conn()
         cur = conn.cursor()
 
-        cur.execute("""
+        cur.execute(f"""
             SELECT
                 a.worker_id,
                 MAX(a.worker_email) AS email,
@@ -170,7 +174,7 @@ def get_by_worker() -> Tuple[Dict[str, Any], int]:
                 EXTRACT(EPOCH FROM (MAX(a.created_at) - MIN(a.created_at))) / 60 AS usage_minutes
             FROM app_access_log a
             LEFT JOIN workers w ON a.worker_id = w.id
-            WHERE a.created_at >= %s AND a.worker_id IS NOT NULL
+            WHERE a.created_at >= %s AND a.worker_id IS NOT NULL {_EXCLUDE_ADMIN}
             GROUP BY a.worker_id
             ORDER BY total_requests DESC
             LIMIT 100
@@ -230,7 +234,7 @@ def get_by_endpoint() -> Tuple[Dict[str, Any], int]:
         conn = get_conn()
         cur = conn.cursor()
 
-        cur.execute("""
+        cur.execute(f"""
             SELECT
                 endpoint,
                 COUNT(*) AS count,
@@ -238,7 +242,7 @@ def get_by_endpoint() -> Tuple[Dict[str, Any], int]:
                 ROUND(COUNT(*) FILTER (WHERE status_code >= 400)::numeric
                       / NULLIF(COUNT(*), 0) * 100, 1) AS error_rate
             FROM app_access_log
-            WHERE created_at >= %s
+            WHERE created_at >= %s {_EXCLUDE_ADMIN}
             GROUP BY endpoint
             ORDER BY count DESC
             LIMIT 50
@@ -286,13 +290,13 @@ def get_hourly() -> Tuple[Dict[str, Any], int]:
         conn = get_conn()
         cur = conn.cursor()
 
-        cur.execute("""
+        cur.execute(f"""
             SELECT
                 EXTRACT(HOUR FROM created_at AT TIME ZONE 'Asia/Seoul')::int AS hour,
                 COUNT(*) AS requests,
                 COUNT(DISTINCT worker_id) AS users
             FROM app_access_log
-            WHERE created_at::date = %s
+            WHERE created_at::date = %s {_EXCLUDE_ADMIN}
             GROUP BY hour
             ORDER BY hour
         """, (target_date,))
