@@ -159,16 +159,19 @@ def get_by_worker() -> Tuple[Dict[str, Any], int]:
 
         cur.execute("""
             SELECT
-                worker_id,
-                MAX(worker_email) AS email,
-                MAX(worker_role) AS role,
+                a.worker_id,
+                MAX(a.worker_email) AS email,
+                MAX(a.worker_role) AS role,
+                MAX(w.name) AS name,
+                MAX(w.company) AS company,
                 COUNT(*) AS total_requests,
-                MIN(created_at) AS first_access,
-                MAX(created_at) AS last_access,
-                EXTRACT(EPOCH FROM (MAX(created_at) - MIN(created_at))) / 60 AS usage_minutes
-            FROM app_access_log
-            WHERE created_at >= %s AND worker_id IS NOT NULL
-            GROUP BY worker_id
+                MIN(a.created_at) AS first_access,
+                MAX(a.created_at) AS last_access,
+                EXTRACT(EPOCH FROM (MAX(a.created_at) - MIN(a.created_at))) / 60 AS usage_minutes
+            FROM app_access_log a
+            LEFT JOIN workers w ON a.worker_id = w.id
+            WHERE a.created_at >= %s AND a.worker_id IS NOT NULL
+            GROUP BY a.worker_id
             ORDER BY total_requests DESC
             LIMIT 100
         """, (since,))
@@ -185,12 +188,14 @@ def get_by_worker() -> Tuple[Dict[str, Any], int]:
                 ORDER BY cnt DESC
                 LIMIT 5
             """, (row['worker_id'], since))
-            top = [r['endpoint'] for r in cur.fetchall()]
+            top = [_ENDPOINT_LABELS.get(r['endpoint'], r['endpoint']) for r in cur.fetchall()]
 
             workers.append({
                 'worker_id': row['worker_id'],
+                'name': row['name'],
                 'email': row['email'],
                 'role': row['role'],
+                'company': row['company'],
                 'total_requests': row['total_requests'],
                 'first_access': row['first_access'].isoformat() if row['first_access'] else None,
                 'last_access': row['last_access'].isoformat() if row['last_access'] else None,
