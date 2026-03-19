@@ -11303,10 +11303,327 @@ def _cleanup_access_logs():
 
 ### 체크리스트
 
-- [ ] Migration 026 작성 + Railway DB 실행
-- [ ] `jwt_auth.py` — `g.request_start_time` 세팅
-- [ ] `__init__.py` — `after_request` access log 기록
-- [ ] analytics API 4개 엔드포인트 구현
-- [ ] 로그 정리 스케줄러 추가 (30일)
-- [ ] 기존 API 성능 영향 없음 확인 (응답시간 측정)
-- [ ] app_access_log 테이블 데이터 적재 확인
+- [x] Migration 026 작성 + Railway DB 실행 ✅
+- [x] `jwt_auth.py` — `g.request_start_time` 세팅 ✅
+- [x] `__init__.py` — `after_request` access log 기록 ✅
+- [x] analytics API 4개 엔드포인트 구현 (summary, by-worker, by-endpoint, hourly) ✅
+- [x] 로그 정리 스케줄러 추가 (30일, 매일 03:00) ✅
+- [x] 기존 API 성능 영향 없음 확인 — 평균 응답시간 43ms ✅
+- [x] app_access_log 테이블 데이터 적재 확인 — 195건+ 기록 확인 ✅
+- [x] by-endpoint 한글 라벨 매핑 (`_ENDPOINT_LABELS` 37개) ✅
+- [x] by-worker name/company 필드 추가 (workers JOIN) ✅
+- [x] 전체 쿼리 ADMIN 요청 제외 (`worker_role != 'ADMIN'`) ✅
+
+---
+
+## Sprint 33: 생산실적 API — O/N 단위 실적확인 + 월마감
+
+> **목적**: VIEW 생산실적 페이지용 API 4개 구현 — O/N 단위 공정별 progress 조회, 실적확인 처리/취소, 월마감 집계
+> **범위**: BE — migration + 라우트 + 모델
+> **참고**: `AXIS-VIEW/docs/OPS_API_REQUESTS.md` #23~#26 상세 스펙
+> **버전**: v1.9.0 → v2.0.0
+
+### 배경
+
+생산실적 관리는 O/N(sales_order) 단위로 공정별 완료 여부를 추적하고 실적확인하는 프로세스.
+현재 개별 S/N 진행률은 있지만, O/N 그룹핑 + 실적확인 이력 + 월마감 집계가 없음.
+
+핵심 흐름:
+```
+O/N 6238 (GAIA-I DUAL × 3대)
+  ├─ GBWS-6627: MECH 100%, ELEC 66%, TMS 50%
+  ├─ GBWS-6628: MECH 100%, ELEC 100%, TMS 100%
+  └─ GBWS-6629: MECH 85%, ELEC 0%, TMS 0%
+
+→ MECH 실적확인 가능? → 6629가 미완료 → confirmable = false
+→ TMS 실적확인 가능? → 6627 미완료 → confirmable = false
+```
+
+공정별 실적확인 조건:
+- MECH: O/N 전체 S/N의 MECH 태스크 100% 완료 (+ 체크리스트 완료 — 추후)
+- ELEC: O/N 전체 S/N의 ELEC 태스크 100% 완료 (+ 체크리스트 완료 — 추후)
+- TM: O/N 전체 S/N의 TANK_MODULE 태스크 완료 (PRESSURE_TEST 무관)
+- DUAL 모델: L/R 통합 (serial_number 기준 GROUP BY)
+- SWS/GALLANT: model_config.is_tms=FALSE이므로 TM은 해당 없음, MECH에서 TANK_MODULE 추적
+- 체크리스트: 아직 미구현 → admin_settings으로 skip 가능하게 옵션 처리
+
+### 팀 구성
+
+```
+CLAUDE.md를 읽고 Sprint 33을 진행해줘.
+
+팀 구성: 2명 teammate (Sonnet)
+1. **BE** — 소유: backend/**
+2. **TEST** — 소유: tests/**
+```
+
+### Task 1: Migration 027 — `plan.production_confirm` 테이블
+
+```sql
+-- Migration 027: 생산실적 확인 이력
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS plan.production_confirm (
+    id SERIAL PRIMARY KEY,
+    sales_order VARCHAR(255) NOT NULL,
+    process_type VARCHAR(20) NOT NULL,        -- MECH, ELEC, TM
+    confirmed_week VARCHAR(10) NOT NULL,      -- W10, W11, W12
+    confirmed_month VARCHAR(7) NOT NULL,      -- 2026-03
+    sn_count INTEGER NOT NULL DEFAULT 0,      -- 확인 시점 O/N 내 S/N 수
+    confirmed_by INTEGER REFERENCES workers(id) ON DELETE SET NULL,
+    confirmed_at TIMESTAMPTZ DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ DEFAULT NULL,      -- soft delete (취소 이력 보존)
+    deleted_by INTEGER REFERENCES workers(id) ON DELETE SET NULL,
+    UNIQUE(sales_order, process_type, confirmed_week)
+);
+
+CREATE INDEX idx_production_confirm_month ON plan.production_confirm(confirmed_month);
+CREATE INDEX idx_production_confirm_order ON plan.production_confirm(sales_order);
+
+-- 실적확인 공정별 on/off 설정 (admin_settings에 추가)
+INSERT INTO admin_settings (key, value, description)
+VALUES
+    ('confirm_mech_enabled', 'true', '기구 실적확인 활성화'),
+    ('confirm_elec_enabled', 'true', '전장 실적확인 활성화'),
+    ('confirm_tm_enabled', 'true', 'Tank Module 실적확인 활성화'),
+    ('confirm_pi_enabled', 'false', 'PI 실적확인 활성화'),
+    ('confirm_qi_enabled', 'false', 'QI 실적확인 활성화'),
+    ('confirm_si_enabled', 'false', 'SI 실적확인 활성화'),
+    ('confirm_checklist_required', 'false', '실적확인 시 체크리스트 완료 필수 여부')
+ON CONFLICT (key) DO NOTHING;
+
+COMMIT;
+```
+
+### Task 2: `backend/app/routes/production.py` — 신규 라우트
+
+```python
+"""
+생산실적 라우트 (Sprint 33)
+엔드포인트: /api/admin/production/*
+VIEW 생산실적 페이지 전용
+"""
+
+production_bp = Blueprint("production", __name__, url_prefix="/api/admin/production")
+```
+
+#### 2-1. `GET /api/admin/production/performance`
+
+```python
+@production_bp.route("/performance", methods=["GET"])
+@jwt_required
+@view_access_required
+def get_performance():
+    """
+    생산실적 조회 — O/N 단위 공정별 progress + 실적확인 이력
+
+    Query Params:
+        week: ISO 주차 (W10~W53), default: 현재 주
+        month: YYYY-MM, default: 현재 월
+        view: weekly | monthly, default: weekly
+
+    응답: OPS_API_REQUESTS.md #23 참조
+    """
+    pass
+```
+
+핵심 쿼리 로직:
+```sql
+-- 1. 대상 S/N 조회 (월/주 기준)
+SELECT p.sales_order, p.serial_number, p.model,
+       p.mech_partner, p.elec_partner, p.line
+FROM plan.product_info p
+WHERE p.{date_field} >= %s AND p.{date_field} < %s
+
+-- 2. S/N별 공정 progress (app_task_details)
+SELECT serial_number, task_category,
+       COUNT(*) AS total,
+       COUNT(completed_at) AS completed
+FROM app_task_details
+WHERE serial_number = ANY(%s) AND is_applicable = TRUE
+GROUP BY serial_number, task_category
+
+-- 3. TM 세부 (TANK_MODULE / PRESSURE_TEST 개별)
+SELECT serial_number, task_id, completed_at
+FROM app_task_details
+WHERE serial_number = ANY(%s) AND task_category IN ('TMS', 'MECH')
+  AND task_id IN ('TANK_MODULE', 'PRESSURE_TEST')
+
+-- 4. 기존 실적확인 이력
+SELECT * FROM plan.production_confirm
+WHERE sales_order = ANY(%s) AND deleted_at IS NULL
+```
+
+O/N 그룹핑:
+```python
+# sales_order 기준 그룹핑
+from collections import defaultdict
+orders = defaultdict(list)
+for row in product_rows:
+    orders[row['sales_order']].append(row)
+```
+
+confirmable 판정:
+```python
+def _is_confirmable(sns_progress, process_type, settings):
+    """O/N 전체 S/N이 해당 공정 100% 완료인지"""
+    # admin_settings에서 해당 공정 enabled 확인
+    if not settings.get(f'confirm_{process_type}_enabled', False):
+        return False
+
+    for sn_data in sns_progress:
+        cat_data = sn_data['by_category'].get(process_type, {})
+        if cat_data.get('total', 0) == 0:
+            continue  # 해당 공정 없는 모델 (DRAGON의 TMS 등) → skip
+        if cat_data.get('completed', 0) < cat_data.get('total', 0):
+            return False  # 미완료 S/N 있음
+
+    # 체크리스트 조건 (추후)
+    if settings.get('confirm_checklist_required', False):
+        pass  # 체크리스트 완료 확인 로직 (skip for now)
+
+    return True
+```
+
+TM confirmable 특수 조건:
+```python
+# TM: TANK_MODULE 완료만 확인 (PRESSURE_TEST 무관)
+# SWS/GALLANT: MECH에서 TANK_MODULE → task_category='MECH', task_id='TANK_MODULE'
+def _is_tm_confirmable(sns_tm_tasks):
+    for sn, tasks in sns_tm_tasks.items():
+        tank_module = next((t for t in tasks if t['task_id'] == 'TANK_MODULE'), None)
+        if tank_module and not tank_module['completed_at']:
+            return False
+    return True
+```
+
+#### 2-2. `POST /api/admin/production/confirm`
+
+```python
+@production_bp.route("/confirm", methods=["POST"])
+@jwt_required
+@view_access_required
+def confirm_production():
+    """
+    실적확인 처리 — 조건 재검증 후 INSERT
+
+    Body: { sales_order, process_type, confirmed_week, confirmed_month }
+    """
+    # 1. confirmable 조건 재검증 (서버에서)
+    # 2. 조건 미충족 → 400 + 미충족 S/N 상세
+    # 3. 충족 → plan.production_confirm INSERT
+    # 4. UNIQUE 위반 → 409 (이미 확인됨)
+    pass
+```
+
+#### 2-3. `DELETE /api/admin/production/confirm/<int:confirm_id>`
+
+```python
+@production_bp.route("/confirm/<int:confirm_id>", methods=["DELETE"])
+@jwt_required
+@admin_required  # Admin만 취소 가능
+def cancel_confirm(confirm_id):
+    """
+    실적확인 취소 — soft delete (이력 보존)
+
+    deleted_at + deleted_by 기록 → UNIQUE 제약은 유지
+    (같은 O/N+공정+주차 재확인 필요 시 deleted_at IS NOT NULL 행은 무시)
+    """
+    pass
+```
+
+⚠️ soft delete 시 UNIQUE 충돌 주의:
+```sql
+-- UNIQUE(sales_order, process_type, confirmed_week)에서
+-- soft delete된 행이 있으면 재확인 INSERT가 UNIQUE 위반
+-- → partial unique index로 변경
+DROP INDEX IF EXISTS production_confirm_sales_order_process_type_confirmed_week_key;
+CREATE UNIQUE INDEX production_confirm_active_unique
+    ON plan.production_confirm(sales_order, process_type, confirmed_week)
+    WHERE deleted_at IS NULL;
+```
+
+#### 2-4. `GET /api/admin/production/monthly-summary`
+
+```python
+@production_bp.route("/monthly-summary", methods=["GET"])
+@jwt_required
+@view_access_required
+def get_monthly_summary():
+    """
+    월마감 집계 — 주차별 완료/확인 카운트
+
+    Query Params: month=YYYY-MM
+    응답: OPS_API_REQUESTS.md #26 참조
+    """
+    pass
+```
+
+### Task 3: Blueprint 등록
+
+`backend/app/__init__.py`에 production_bp 등록:
+```python
+from app.routes.production import production_bp
+app.register_blueprint(production_bp)
+```
+
+### Task 4: 테스트
+
+```python
+# tests/backend/test_production.py
+
+class TestProductionPerformance:
+    """GET /api/admin/production/performance"""
+    def test_weekly_view_groups_by_order(self, ...):
+        """O/N 단위 그룹핑 확인"""
+    def test_confirmable_all_complete(self, ...):
+        """전체 S/N 완료 시 confirmable=True"""
+    def test_confirmable_partial(self, ...):
+        """일부 S/N 미완료 시 confirmable=False"""
+    def test_dual_lr_integrated(self, ...):
+        """DUAL L/R이 통합 progress로 표시"""
+    def test_dragon_no_tm(self, ...):
+        """DRAGON은 TM process_status 없음"""
+
+class TestProductionConfirm:
+    """POST /api/admin/production/confirm"""
+    def test_confirm_success(self, ...):
+    def test_confirm_not_confirmable(self, ...):
+    def test_confirm_duplicate_409(self, ...):
+
+class TestProductionCancel:
+    """DELETE /api/admin/production/confirm/:id"""
+    def test_cancel_soft_delete(self, ...):
+    def test_cancel_admin_only(self, ...):
+    def test_reconfirm_after_cancel(self, ...):
+
+class TestMonthlySummary:
+    """GET /api/admin/production/monthly-summary"""
+    def test_weekly_breakdown(self, ...):
+    def test_completed_vs_confirmed(self, ...):
+```
+
+### 체크리스트
+
+**BE**:
+- [ ] Migration 027 작성 (production_confirm 테이블 + admin_settings + partial unique index)
+- [ ] Migration 027 Railway DB 실행
+- [ ] `routes/production.py` 신규 — 4개 엔드포인트
+- [ ] `__init__.py`에 production_bp 등록
+- [ ] confirmable 판정 로직 (공정별 + 체크리스트 skip 옵션)
+- [ ] TM confirmable 특수 조건 (TANK_MODULE만, SWS/GALLANT MECH 포함)
+- [ ] DUAL L/R 통합 (serial_number GROUP BY)
+- [ ] soft delete + partial unique index
+- [ ] admin_settings로 공정별 on/off 제어
+
+**TEST**:
+- [ ] 테스트 파일 작성 (10건+)
+- [ ] O/N 그룹핑 검증
+- [ ] confirmable 조건 검증 (완료/미완료/혼합)
+- [ ] DUAL/DRAGON/SWS 모델별 검증
+- [ ] soft delete 후 재확인 검증
+
+**검증 (배포 후)**:
+- [ ] VIEW 생산실적 페이지 연동 테스트
+- [ ] 실적확인 버튼 활성/비활성 확인
+- [ ] 월마감 집계 정합성 확인
