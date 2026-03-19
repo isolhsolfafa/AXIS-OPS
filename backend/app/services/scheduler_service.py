@@ -101,7 +101,16 @@ def init_scheduler() -> BackgroundScheduler:
         replace_existing=True
     )
 
-    logger.info("Scheduler initialized with 6 jobs")
+    # ── Sprint 32: Access Log 정리 — 매일 03:00 (30일 이상 삭제) ──
+    _scheduler.add_job(
+        func=_cleanup_access_logs,
+        trigger=CronTrigger(hour=3, minute=0),
+        id='cleanup_access_logs',
+        name='Access Log 정리 (30일+)',
+        replace_existing=True
+    )
+
+    logger.info("Scheduler initialized with 7 jobs")
     return _scheduler
 
 
@@ -762,3 +771,22 @@ def send_break_end_notifications(pause_type: str, message: str) -> None:
         f"send_break_end_notifications: notified {len(notified_workers)} workers, "
         f"auto-resumed {resumed_count} pause logs (pause_type={pause_type})"
     )
+
+
+def _cleanup_access_logs():
+    """Sprint 32: 30일 이상 된 access log 삭제"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM app_access_log WHERE created_at < NOW() - INTERVAL '30 days'")
+        deleted = cur.rowcount
+        conn.commit()
+        logger.info(f"[cleanup] Access log: {deleted} rows deleted (30d+)")
+    except Exception as e:
+        logger.error(f"[cleanup] Access log cleanup failed: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        if conn:
+            put_conn(conn)

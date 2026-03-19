@@ -1,8 +1,10 @@
 """
 JWT 인증 미들웨어
 Sprint 1: JWT 토큰 검증 및 관리자 권한 확인
+Sprint 32: 요청 시작 시각 기록 (access log용)
 """
 
+import time
 import logging
 from typing import Callable, Any
 from functools import wraps
@@ -41,6 +43,8 @@ def jwt_required(f: Callable) -> Callable:
     @wraps(f)
     def decorated_function(*args: Any, **kwargs: Any) -> Any:
         """JWT 검증 로직"""
+        g.request_start_time = time.time()  # Sprint 32: access log 측정용
+
         # Authorization 헤더 추출
         auth_header = request.headers.get('Authorization')
 

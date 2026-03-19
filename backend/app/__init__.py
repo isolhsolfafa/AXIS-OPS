@@ -6,7 +6,7 @@ Sprint 13: Flask-SocketIO → flask-sock 마이그레이션
 """
 
 import logging
-from flask import Flask, jsonify
+from flask import Flask, jsonify, g, request
 from flask_cors import CORS
 from flask_sock import Sock
 
@@ -65,11 +65,17 @@ def create_app(config_class: type = Config) -> Flask:
         atexit.register(close_pool)
 
     # 스케줄러 초기화 및 시작 (Sprint 4) — 테스트 환경에서는 비활성화
+    # Sprint 30-B: Gunicorn multi-worker에서 스케줄러 중복 실행 방지
+    import os
     if not app.config.get('TESTING', False):
-        from app.services.scheduler_service import init_scheduler, start_scheduler
-        init_scheduler()
-        start_scheduler()
-        logger.info("Scheduler initialized and started")
+        if not os.environ.get('_SCHEDULER_STARTED'):
+            os.environ['_SCHEDULER_STARTED'] = '1'
+            from app.services.scheduler_service import init_scheduler, start_scheduler
+            init_scheduler()
+            start_scheduler()
+            logger.info("Scheduler initialized and started")
+        else:
+            logger.info("Scheduler already running in another worker, skipping")
 
     # DB 스키마 자동 검증 (BUG-24: migration 누락 방지)
     if not app.config.get('TESTING', False):
@@ -89,6 +95,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.routes.notices import notices_bp  # Sprint 20-B: 공지사항
     from app.routes.qr import qr_bp            # Sprint 21: QR 관리
     from app.routes.factory import factory_bp  # Sprint 29: 공장 API
+    from app.routes.analytics import analytics_bp  # Sprint 32: 사용자 분석
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(work_bp)
@@ -102,7 +109,45 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(notices_bp)
     app.register_blueprint(qr_bp)
     app.register_blueprint(factory_bp)
-    logger.info("Blueprints registered: auth, work, product, alert, admin, sync, gst, checklist, hr, notices, qr, factory")
+    app.register_blueprint(analytics_bp)
+    logger.info("Blueprints registered: auth, work, product, alert, admin, sync, gst, checklist, hr, notices, qr, factory, analytics")
+
+    # Sprint 32: 사용자 행위 트래킹 (access log)
+    import time as _time
+    from app.db_pool import get_conn as _get_conn, put_conn as _put_conn
+
+    @app.after_request
+    def log_access(response):
+        worker_id = getattr(g, 'worker_id', None)
+        if worker_id is None:
+            return response
+        start = getattr(g, 'request_start_time', None)
+        duration_ms = int((_time.time() - start) * 1000) if start else None
+        try:
+            conn = _get_conn()
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO app_access_log
+                    (worker_id, worker_email, worker_role, endpoint, method,
+                     status_code, duration_ms, ip_address, user_agent, request_path)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                worker_id,
+                getattr(g, 'worker_email', None),
+                getattr(g, 'worker_role', None),
+                request.endpoint or request.path,
+                request.method,
+                response.status_code,
+                duration_ms,
+                request.remote_addr,
+                str(request.user_agent)[:500] if request.user_agent else None,
+                request.full_path[:500],
+            ))
+            conn.commit()
+            _put_conn(conn)
+        except Exception as e:
+            logger.warning(f"Access log failed: {e}")
+        return response
 
     # 헬스 체크 엔드포인트
     from version import VERSION, BUILD_DATE
