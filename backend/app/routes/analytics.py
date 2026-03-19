@@ -17,6 +17,49 @@ logger = logging.getLogger(__name__)
 
 analytics_bp = Blueprint("analytics", __name__, url_prefix="/api/admin/analytics")
 
+# 엔드포인트 → 한글 라벨 매핑
+_ENDPOINT_LABELS = {
+    'product.get_product_by_qr': 'QR 제품 조회',
+    'product.get_sn_progress': 'S/N 진행률',
+    'work.get_tasks_by_serial': '작업 목록',
+    'work.start_work': '작업 시작',
+    'work.complete_work': '작업 완료',
+    'work.complete_single_action': '단일 작업 완료',
+    'work.pause_work': '작업 일시정지',
+    'work.resume_work': '작업 재개',
+    'work.get_completion_by_serial': '공정 완료 현황',
+    'auth.get_me': '내 정보',
+    'auth.login': '로그인',
+    'auth.logout': '로그아웃',
+    'auth.pin_login': 'PIN 로그인',
+    'auth.pin_status': 'PIN 상태',
+    'auth.set_pin': 'PIN 등록',
+    'auth.refresh': '토큰 갱신',
+    'auth.update_active_role_endpoint': '담당공정 변경',
+    'alert.get_alerts': '알림 조회',
+    'alert.mark_alert_read': '알림 읽음',
+    'hr.check_attendance': '출퇴근 체크',
+    'hr.get_today_attendance': '오늘 출퇴근',
+    'admin.get_etl_changes': 'ETL 변경이력',
+    'admin.get_pending_workers': '승인 대기 목록',
+    'admin.approve_worker': '작업자 승인',
+    'admin.get_admin_settings': '관리자 설정',
+    'admin.update_admin_settings': '설정 변경',
+    'admin.get_managers': '관리자 목록',
+    'admin.toggle_manager': '매니저 권한',
+    'admin.force_close_task': '강제 종료',
+    'notices.get_notices': '공지사항',
+    'notices.create_notice': '공지 작성',
+    'qr.get_qr_list': 'QR 목록',
+    'factory.get_monthly_detail': '생산일정',
+    'factory.get_weekly_kpi': '주간 KPI',
+    'gst.get_gst_products': 'GST 제품 목록',
+    'analytics.get_summary': '분석 요약',
+    'analytics.get_by_worker': '사용자별 분석',
+    'analytics.get_by_endpoint': '기능별 분석',
+    'analytics.get_hourly': '시간대별 분석',
+}
+
 
 def _parse_period(period_str: str) -> int:
     """'7d', '30d' → 일수 반환. 기본 7."""
@@ -199,6 +242,7 @@ def get_by_endpoint() -> Tuple[Dict[str, Any], int]:
         endpoints = [
             {
                 'endpoint': row['endpoint'],
+                'label': _ENDPOINT_LABELS.get(row['endpoint'], row['endpoint']),
                 'count': row['count'],
                 'avg_ms': row['avg_ms'],
                 'error_rate': float(row['error_rate'] or 0),
