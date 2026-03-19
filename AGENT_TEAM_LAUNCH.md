@@ -11118,3 +11118,195 @@ grep -rn "fetchTasks" frontend/lib/ --include="*.dart"
 - [ ] GAIA SINGLE QR 스캔 → 기존과 동일 확인 — 실기기 테스트
 - [ ] DRAGON QR 스캔 → MECH(+TANK_MODULE+PRESSURE_TEST)+ELEC+QI+SI 확인 — 실기기 테스트
 - [x] flutter build web 에러 없음 + Netlify 배포 완료
+
+---
+
+## Sprint 32: 사용자 행위 트래킹 — API Access Log
+
+> **목적**: 모든 인증 API 호출을 기록하여 사용자 접속 횟수, 사용 시간, 기능 사용 패턴 분석
+> **범위**: BE — 미들웨어 + 테이블 + 조회 API
+> **관련**: AXIS-VIEW Sprint 7에서 분석 대시보드 구현
+
+### 배경
+
+현재 사용자 행동 데이터가 없어서 접속 빈도, 어떤 기능을 많이 쓰는지, 에러가 언제 발생하는지 알 수 없음.
+`@jwt_required` 미들웨어를 통과하는 모든 API 호출을 기록하면 비용 없이 전수 트래킹 가능.
+
+### Task 1: Migration — `app_access_log` 테이블 생성
+
+```sql
+-- Migration 026: 사용자 행위 트래킹
+CREATE TABLE IF NOT EXISTS app_access_log (
+    id BIGSERIAL PRIMARY KEY,
+    worker_id INTEGER REFERENCES workers(id) ON DELETE SET NULL,
+    worker_email VARCHAR(255),
+    worker_role VARCHAR(50),
+    endpoint VARCHAR(255),          -- /api/app/work/start
+    method VARCHAR(10),             -- GET, POST, PUT, DELETE
+    status_code INTEGER,            -- 200, 400, 500
+    duration_ms INTEGER,            -- 응답 소요 시간 (ms)
+    ip_address VARCHAR(45),
+    user_agent TEXT,
+    request_path VARCHAR(500),      -- 전체 path + query params
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 인덱스 (대시보드 쿼리 성능)
+CREATE INDEX idx_access_log_worker_created ON app_access_log(worker_id, created_at);
+CREATE INDEX idx_access_log_created ON app_access_log(created_at);
+CREATE INDEX idx_access_log_endpoint ON app_access_log(endpoint, created_at);
+
+-- 30일 이상 된 로그 자동 삭제 (선택적 — 데이터 크기 관리)
+-- 필요 시 scheduler_service에 cron job 추가
+```
+
+### Task 2: 미들웨어 수정 — `jwt_auth.py`
+
+`@jwt_required` 데코레이터에서 요청 시작/종료 시각을 측정하고 로그 기록:
+
+```python
+import time
+
+def jwt_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        g.request_start_time = time.time()  # ← 요청 시작 시각
+
+        # ... 기존 JWT 검증 로직 동일 ...
+
+        return f(*args, **kwargs)
+    return decorated_function
+```
+
+Flask `after_request`에서 로그 기록:
+
+```python
+# app/__init__.py 또는 별도 미들웨어 파일
+@app.after_request
+def log_access(response):
+    """모든 인증 API 호출 기록"""
+    # jwt_required를 거친 요청만 (g.worker_id가 있는 경우)
+    worker_id = getattr(g, 'worker_id', None)
+    if worker_id is None:
+        return response  # 비인증 API (로그인 등) 스킵
+
+    start_time = getattr(g, 'request_start_time', None)
+    duration_ms = int((time.time() - start_time) * 1000) if start_time else None
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO app_access_log
+                (worker_id, worker_email, worker_role, endpoint, method,
+                 status_code, duration_ms, ip_address, user_agent, request_path)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            worker_id,
+            getattr(g, 'email', None),
+            getattr(g, 'role', None),
+            request.endpoint or request.path,
+            request.method,
+            response.status_code,
+            duration_ms,
+            request.remote_addr,
+            request.user_agent.string[:500] if request.user_agent else None,
+            request.full_path[:500],
+        ))
+        conn.commit()
+        put_conn(conn)
+    except Exception as e:
+        logger.warning(f"Access log failed: {e}")
+        # 로깅 실패가 요청을 블로킹하지 않도록
+
+    return response
+```
+
+⚠️ 성능 주의: INSERT가 매 요청마다 실행되므로, 트래픽이 높으면 비동기 큐(메모리 버퍼 → 배치 INSERT)로 개선 가능. 현재 규모에서는 직접 INSERT로 충분.
+
+### Task 3: 조회 API — VIEW 대시보드용
+
+```
+GET /api/admin/analytics/summary?period=7d
+GET /api/admin/analytics/by-worker?period=30d
+GET /api/admin/analytics/by-endpoint?period=7d
+GET /api/admin/analytics/hourly?date=2026-03-18
+```
+
+**summary** 응답:
+```json
+{
+    "period": "7d",
+    "unique_users": 25,
+    "total_requests": 3420,
+    "avg_duration_ms": 145,
+    "error_rate": 2.3,
+    "daily": [
+        {"date": "2026-03-18", "users": 22, "requests": 520, "errors": 12},
+        ...
+    ]
+}
+```
+
+**by-worker** 응답:
+```json
+{
+    "workers": [
+        {
+            "worker_id": 3760,
+            "email": "user@example.com",
+            "role": "worker",
+            "total_requests": 156,
+            "first_access": "2026-03-18T08:02:00",
+            "last_access": "2026-03-18T17:45:00",
+            "usage_minutes": 583,
+            "top_endpoints": ["/api/app/work/start", "/api/app/product/{qr}"]
+        },
+        ...
+    ]
+}
+```
+
+**by-endpoint** 응답:
+```json
+{
+    "endpoints": [
+        {"endpoint": "/api/app/work/start", "count": 890, "avg_ms": 120, "error_rate": 0.5},
+        {"endpoint": "/api/app/product/{qr}", "count": 650, "avg_ms": 85, "error_rate": 1.2},
+        ...
+    ]
+}
+```
+
+### Task 4: 로그 정리 스케줄러 (선택적)
+
+`scheduler_service.py`에 30일 이상 된 로그 삭제 cron job 추가:
+
+```python
+# 매일 새벽 3시 실행
+scheduler.add_job(
+    _cleanup_access_logs,
+    CronTrigger(hour=3, minute=0),
+    id='cleanup_access_logs',
+    name='Access Log 정리 (30일 이상)',
+)
+
+def _cleanup_access_logs():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM app_access_log WHERE created_at < NOW() - INTERVAL '30 days'")
+    deleted = cur.rowcount
+    conn.commit()
+    put_conn(conn)
+    logger.info(f"[cleanup] Access log: {deleted} rows deleted (30d+)")
+```
+
+### 체크리스트
+
+- [ ] Migration 026 작성 + Railway DB 실행
+- [ ] `jwt_auth.py` — `g.request_start_time` 세팅
+- [ ] `__init__.py` — `after_request` access log 기록
+- [ ] analytics API 4개 엔드포인트 구현
+- [ ] 로그 정리 스케줄러 추가 (30일)
+- [ ] 기존 API 성능 영향 없음 확인 (응답시간 측정)
+- [ ] app_access_log 테이블 데이터 적재 확인
