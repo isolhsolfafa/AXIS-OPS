@@ -96,6 +96,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.routes.qr import qr_bp            # Sprint 21: QR 관리
     from app.routes.factory import factory_bp  # Sprint 29: 공장 API
     from app.routes.analytics import analytics_bp  # Sprint 32: 사용자 분석
+    from app.routes.production import production_bp  # Sprint 33: 생산실적
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(work_bp)
@@ -110,7 +111,8 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(qr_bp)
     app.register_blueprint(factory_bp)
     app.register_blueprint(analytics_bp)
-    logger.info("Blueprints registered: auth, work, product, alert, admin, sync, gst, checklist, hr, notices, qr, factory, analytics")
+    app.register_blueprint(production_bp)
+    logger.info("Blueprints registered: auth, work, product, alert, admin, sync, gst, checklist, hr, notices, qr, factory, analytics, production")
 
     # Sprint 32: 사용자 행위 트래킹 (access log)
     import time as _time
