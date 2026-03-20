@@ -24,6 +24,10 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
   bool _locationQrRequired = true; // Location QR 필수 여부 (기본: true)
   bool _isLoadingSettings = false;
 
+  // PI 위임 설정 (Sprint 34-A)
+  List<String> _piCapableMechPartners = [];
+  List<String> _piGstOverrideLines = [];
+
   // 위치 보안 설정 (Sprint 19-D)
   bool _geolocationEnabled = false;
   bool _geoStrictMode = false;
@@ -74,6 +78,12 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
   static const List<String> _companies = [
     'FNI', 'BAT', 'TMS(M)', 'TMS(E)', 'P&S', 'C&A', 'GST',
   ];
+
+  /// PI 위임 가능 MECH 협력사 옵션 (mech_partner 값 기준)
+  static const List<String> _mechPartnerOptions = ['TMS', 'FNI', 'BAT'];
+
+  /// GST Override 라인 옵션
+  static const List<String> _lineOptions = ['JP', 'P4', 'P5', 'FAB2'];
 
   /// company 필터 적용된 가입 대기 목록
   List<Map<String, dynamic>> get _filteredPendingWorkers {
@@ -245,6 +255,15 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
           _breakAfternoonEnd = response['break_afternoon_end'] as String? ?? '15:10';
           _dinnerStart = response['dinner_start'] as String? ?? '18:00';
           _dinnerEnd = response['dinner_end'] as String? ?? '19:00';
+          // PI 위임 설정 (Sprint 34-A)
+          final rawPartners = response['pi_capable_mech_partners'];
+          _piCapableMechPartners = (rawPartners is List)
+              ? rawPartners.map((e) => e.toString()).toList()
+              : <String>[];
+          final rawLines = response['pi_gst_override_lines'];
+          _piGstOverrideLines = (rawLines is List)
+              ? rawLines.map((e) => e.toString()).toList()
+              : <String>[];
           // 위치 보안 설정 (Sprint 19-D)
           _geolocationEnabled = response['geo_check_enabled'] as bool? ?? false;
           _geoStrictMode = response['geo_strict_mode'] as bool? ?? false;
@@ -292,6 +311,23 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
       final apiService = ref.read(apiServiceProvider);
       await apiService.put('/admin/settings', data: {key: value});
       if (mounted) {
+        _showSnack('설정이 저장되었습니다.', isError: false);
+      }
+    } catch (e) {
+      if (mounted) _showSnack('설정 저장에 실패했습니다.', isError: true);
+    }
+  }
+
+  /// Sprint 34-A: string_list 설정 업데이트 + 로컬 상태 반영
+  Future<void> _updateStringListSetting(String key, List<String> value) async {
+    try {
+      final apiService = ref.read(apiServiceProvider);
+      await apiService.put('/admin/settings', data: {key: value});
+      if (mounted) {
+        setState(() {
+          if (key == 'pi_capable_mech_partners') _piCapableMechPartners = value;
+          if (key == 'pi_gst_override_lines') _piGstOverrideLines = value;
+        });
         _showSnack('설정이 저장되었습니다.', isError: false);
       }
     } catch (e) {
@@ -681,6 +717,45 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
                         ],
                       ),
               ),
+              const SizedBox(height: 16),
+
+              // ===== PI 위임 설정 (Sprint 34-A) =====
+              _buildSectionHeader(
+                icon: Icons.assignment_ind,
+                iconBg: const Color(0xFFFEF3C7),
+                iconColor: const Color(0xFFD97706),
+                title: 'PI 위임 설정',
+                subtitle: 'PI 검사를 수행할 수 있는 협력사 / GST Override 라인',
+              ),
+              const SizedBox(height: 10),
+              Container(
+                decoration: GxGlass.cardSm(radius: GxRadius.lg),
+                child: _isLoadingSettings
+                    ? const Padding(
+                        padding: EdgeInsets.all(20),
+                        child: Center(child: CircularProgressIndicator(color: GxColors.accent, strokeWidth: 2)),
+                      )
+                    : Column(
+                        children: [
+                          _buildChipListSetting(
+                            title: 'PI 위임 가능 MECH 협력사',
+                            subtitle: '선택된 협력사의 MECH 작업자가 PI 검사 수행 가능',
+                            values: _piCapableMechPartners,
+                            allOptions: _mechPartnerOptions,
+                            settingKey: 'pi_capable_mech_partners',
+                            isFirst: true,
+                          ),
+                          const Divider(height: 1, color: GxColors.mist),
+                          _buildChipListSetting(
+                            title: 'PI GST Override 라인',
+                            subtitle: '선택된 라인은 협력사 위임 제외, GST PI 직접 검사',
+                            values: _piGstOverrideLines,
+                            allOptions: _lineOptions,
+                            settingKey: 'pi_gst_override_lines',
+                          ),
+                        ],
+                      ),
+              ),
               const SizedBox(height: 24),
 
               // ===== 섹션 2: 협력사 관리자 지정/해제 =====
@@ -1015,6 +1090,86 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
         ),
         if (trailing != null) trailing,
       ],
+    );
+  }
+
+  /// Sprint 34-A: string_list 설정을 Chip 목록으로 표시
+  Widget _buildChipListSetting({
+    required String title,
+    required String subtitle,
+    required List<String> values,
+    required List<String> allOptions,
+    required String settingKey,
+    bool isFirst = false,
+  }) {
+    return Padding(
+      padding: EdgeInsets.only(left: 16, right: 16, top: isFirst ? 14 : 10, bottom: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: GxColors.charcoal)),
+          const SizedBox(height: 2),
+          Text(subtitle, style: const TextStyle(fontSize: 11, color: GxColors.steel)),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 6,
+            runSpacing: 4,
+            children: [
+              ...values.map((v) => Chip(
+                label: Text(v, style: const TextStyle(fontSize: 12)),
+                deleteIcon: const Icon(Icons.close, size: 14),
+                onDeleted: () {
+                  final updated = List<String>.from(values)..remove(v);
+                  _updateStringListSetting(settingKey, updated);
+                },
+                backgroundColor: GxColors.accentSoft,
+                deleteIconColor: GxColors.steel,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                visualDensity: VisualDensity.compact,
+              )),
+              if (allOptions.where((o) => !values.contains(o)).isNotEmpty)
+                ActionChip(
+                  avatar: const Icon(Icons.add, size: 14, color: GxColors.accent),
+                  label: const Text('추가', style: TextStyle(fontSize: 12, color: GxColors.accent)),
+                  onPressed: () => _showAddOptionDialog(
+                    title: title,
+                    currentValues: values,
+                    allOptions: allOptions,
+                    settingKey: settingKey,
+                  ),
+                  backgroundColor: GxColors.cloud,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showAddOptionDialog({
+    required String title,
+    required List<String> currentValues,
+    required List<String> allOptions,
+    required String settingKey,
+  }) {
+    final available = allOptions.where((o) => !currentValues.contains(o)).toList();
+    if (available.isEmpty) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text('$title 추가', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.lg)),
+        children: available.map((option) => SimpleDialogOption(
+          onPressed: () {
+            Navigator.pop(ctx);
+            final updated = List<String>.from(currentValues)..add(option);
+            _updateStringListSetting(settingKey, updated);
+          },
+          child: Text(option, style: const TextStyle(fontSize: 14)),
+        )).toList(),
+      ),
     );
   }
 
