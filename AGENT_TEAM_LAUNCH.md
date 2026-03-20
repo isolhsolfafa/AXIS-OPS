@@ -11605,19 +11605,18 @@ class TestMonthlySummary:
 
 ### 체크리스트
 
-**BE**:
-- [ ] Migration 027 작성 (production_confirm 테이블 + admin_settings + partial unique index)
-- [ ] Migration 027 Railway DB 실행
-- [ ] `routes/production.py` 신규 — 4개 엔드포인트
-- [ ] `__init__.py`에 production_bp 등록
-- [ ] confirmable 판정 로직 (공정별 + 체크리스트 skip 옵션)
-- [ ] TM confirmable 특수 조건 (TANK_MODULE만, SWS/GALLANT MECH 포함)
-- [ ] DUAL L/R 통합 (serial_number GROUP BY)
-- [ ] soft delete + partial unique index
-- [ ] admin_settings로 공정별 on/off 제어
+**BE (✅ 완료)**:
+- [x] Migration 027 작성 + Railway DB 실행 ✅
+- [x] `routes/production.py` 신규 — 4개 엔드포인트 (performance, confirm, cancel, monthly-summary) ✅
+- [x] `__init__.py`에 production_bp 등록 (14번째 blueprint) ✅
+- [x] confirmable 판정 로직 — `_is_process_confirmable()` (공정별 + admin_settings 제어) ✅
+- [x] DUAL L/R 통합 — serial_number 기준 GROUP BY (`_calc_sn_progress`) ✅
+- [x] soft delete + partial unique index (`WHERE deleted_at IS NULL`) ✅
+- [x] admin_settings 7개 (confirm_*_enabled, confirm_checklist_required) ✅
+- [x] version.py v2.0.0 ✅
 
 **TEST**:
-- [ ] 테스트 파일 작성 (10건+)
+- [ ] 테스트 파일 작성 (10건+) — 배포 후 진행
 - [ ] O/N 그룹핑 검증
 - [ ] confirmable 조건 검증 (완료/미완료/혼합)
 - [ ] DUAL/DRAGON/SWS 모델별 검증
@@ -11627,3 +11626,721 @@ class TestMonthlySummary:
 - [ ] VIEW 생산실적 페이지 연동 테스트
 - [ ] 실적확인 버튼 활성/비활성 확인
 - [ ] 월마감 집계 정합성 확인
+
+---
+
+## Sprint 31C: PI 검사 협력사 위임 — 가시성 분기 + model_config 변경
+
+> **목적**: mech_partner가 PI 가능 협력사(현재 TMS(M))일 때, PI 검사 태스크를 해당 협력사 작업자에게 표시. GST PI 검사원은 예외 라인(현재 JP)에서만 PI 유지
+> **범위**: BE 4파일 수정 + migration 1건 + 테스트
+> **의존성**: Sprint 31A (model_config, PI task generation), Sprint 11 (get_task_categories_for_worker)
+> **버전**: v1.9.0 → v1.9.1 (패치 — 가시성 로직 변경, 스키마 변경 없음)
+
+### 배경
+
+현장 운영 변경: TMS(M) 협력사가 원패스(MECH → TANK MODULE → 가압검사)로 전 공정을 진행하는 체제로 전환.
+기존에는 PI 가압검사(LNG/UTIL, CHAMBER)가 GST 본사 PI 검사원 전담이었으나, mech_partner가 TMS(M)인 제품은 TMS(M) 작업자가 PI도 자체 검사하게 변경.
+
+적용 대상:
+- **GAIA 계열**: mech_partner=TMS → PI를 TMS(M) 작업자에게 표시 (단, line=JP → GST PI 유지)
+- **DRAGON 계열**: mech_partner=TMS → PI를 TMS(M) 작업자에게 표시 (JP 예외 해당 없음)
+  - ⚠️ DRAGON은 현재 model_config `pi_lng_util=FALSE, pi_chamber=FALSE` → **TRUE로 변경 필요**
+  - model_config 변경 시 task_seed에서 자동으로:
+    - PI_LNG_UTIL, PI_CHAMBER → `is_applicable=TRUE`
+    - MECH 쪽 PRESSURE_TEST 제거 (MECH_TANK_FULL → MECH_TANK_MODULE_ONLY)
+
+향후 확장:
+- FNI, BAT도 PI 검사 가능 협력사로 추가될 수 있음
+- JP 외 다른 라인도 GST PI 유지 대상으로 추가/제거될 수 있음
+- 모든 옵션은 admin_settings에서 제어 (코드 수정 없이 설정 변경만으로 운영)
+
+### 팀 구성
+
+```
+CLAUDE.md를 읽고 Sprint 31C를 진행해줘.
+
+팀 구성: 2명 teammate (Sonnet)
+1. **BE** — 소유: backend/**
+2. **TEST** — 소유: tests/**
+```
+
+### Task 1: Migration 026 — admin_settings 초기값 + DRAGON model_config 변경
+
+**파일**: `backend/migrations/026_pi_mech_partner_settings.sql`
+
+```sql
+-- Migration 026: PI 검사 협력사 위임 설정
+-- Sprint 31C: mech_partner 기준 PI 가시성 분기
+BEGIN;
+
+-- 1. PI 검사 가능 협력사 목록 (JSON array)
+-- 이 목록에 포함된 회사가 mech_partner일 때, 해당 협력사 작업자에게 PI 태스크 표시
+INSERT INTO admin_settings (setting_key, setting_value, description)
+VALUES (
+    'pi_capable_mech_partners',
+    '["TMS(M)"]',
+    'PI 검사 가능 협력사 목록 (mech_partner 매칭 시 PI 태스크 위임)'
+)
+ON CONFLICT (setting_key) DO NOTHING;
+
+-- 2. GST PI 유지 라인 prefix 목록 (JSON array)
+-- 이 prefix로 시작하는 line의 제품은 협력사 위임 대상에서 제외, GST PI가 기존대로 검사
+INSERT INTO admin_settings (setting_key, setting_value, description)
+VALUES (
+    'pi_gst_override_lines',
+    '["JP"]',
+    'GST PI 유지 라인 prefix (이 라인은 협력사 위임 제외, GST PI 직접 검사)'
+)
+ON CONFLICT (setting_key) DO NOTHING;
+
+-- 3. DRAGON model_config 변경: PI 활성화
+-- 기존: pi_lng_util=FALSE, pi_chamber=FALSE (가압검사를 MECH PRESSURE_TEST로 대체)
+-- 변경: pi_lng_util=TRUE, pi_chamber=TRUE (PI 카테고리로 정식 분리)
+-- ⚠️ task_seed.py Line 245 영향: MECH_TANK_FULL → MECH_TANK_MODULE_ONLY 자동 전환
+UPDATE model_config
+SET pi_lng_util = TRUE,
+    pi_chamber = TRUE,
+    updated_at = CURRENT_TIMESTAMP
+WHERE model_prefix = 'DRAGON';
+
+-- 4. 기존 DRAGON 제품 데이터 마이그레이션
+-- 4-1. PI 태스크 활성화 (기존 is_applicable=FALSE → TRUE)
+UPDATE app_task_details
+SET is_applicable = TRUE,
+    updated_at = CURRENT_TIMESTAMP
+WHERE task_category = 'PI'
+  AND is_applicable = FALSE
+  AND serial_number IN (
+      SELECT p.serial_number
+      FROM plan.product_info p
+      WHERE p.model ILIKE 'DRAGON%'
+  );
+
+-- 4-2. MECH PRESSURE_TEST 비활성화 (PI로 이관)
+-- DRAGON의 MECH PRESSURE_TEST는 PI_LNG_UTIL/PI_CHAMBER로 대체됨
+UPDATE app_task_details
+SET is_applicable = FALSE,
+    updated_at = CURRENT_TIMESTAMP
+WHERE task_category = 'MECH'
+  AND task_id = 'PRESSURE_TEST'
+  AND serial_number IN (
+      SELECT p.serial_number
+      FROM plan.product_info p
+      WHERE p.model ILIKE 'DRAGON%'
+  );
+
+COMMIT;
+```
+
+### Task 2: `backend/app/services/task_seed.py` 수정 — get_task_categories_for_worker 확장
+
+#### 2-1. 함수 시그니처 변경
+
+`get_task_categories_for_worker`에 `product_line` 파라미터 추가:
+
+```python
+def get_task_categories_for_worker(
+    worker_company: Optional[str],
+    worker_role: str,
+    product_mech_partner: Optional[str],
+    product_elec_partner: Optional[str],
+    product_module_outsourcing: Optional[str],
+    worker_active_role: Optional[str] = None,
+    product_line: Optional[str] = None           # ★ Sprint 31C 추가
+) -> Optional[List[str]]:
+```
+
+#### 2-2. GST PI 블록 수정 (Line 530~538 교체)
+
+기존:
+```python
+    # GST 사내직원: active_role > role 기반 (PI, QI, SI, ADMIN)
+    if worker_company == 'GST' or worker_role in ('PI', 'QI', 'SI', 'ADMIN'):
+        effective_role = worker_active_role if worker_active_role else worker_role
+        if effective_role in ('PI', 'QI', 'SI'):
+            categories.append(effective_role)
+        elif effective_role == 'ADMIN':
+            return None
+        return categories
+```
+
+변경:
+```python
+    # GST 사내직원: active_role > role 기반 (PI, QI, SI, ADMIN)
+    if worker_company == 'GST' or worker_role in ('PI', 'QI', 'SI', 'ADMIN'):
+        effective_role = worker_active_role if worker_active_role else worker_role
+        if effective_role == 'ADMIN':
+            return None
+        if effective_role == 'PI':
+            # Sprint 31C: PI 협력사 위임 분기
+            # mech_partner가 pi_capable 목록에 있으면 → GST PI 제외 (협력사가 담당)
+            # 단, override_lines에 해당하면 → GST PI 유지
+            pi_capable = get_setting('pi_capable_mech_partners', [])
+            if pi_capable and product_mech_partner and product_mech_partner in pi_capable:
+                # mech_partner가 PI 가능 협력사
+                override_lines = get_setting('pi_gst_override_lines', [])
+                line_upper = product_line.strip().upper() if product_line else ''
+                is_override = any(line_upper.startswith(prefix.upper()) for prefix in override_lines)
+                if is_override:
+                    # JP 등 예외 라인 → GST PI 유지
+                    categories.append('PI')
+                # else: 협력사 담당 → GST PI에서 PI 제외
+            else:
+                # 기존 동작: GST PI가 PI 담당
+                categories.append('PI')
+        elif effective_role in ('QI', 'SI'):
+            categories.append(effective_role)
+        return categories
+```
+
+#### 2-3. TMS(M) 블록 수정 (Line 541~549 확장)
+
+기존:
+```python
+    # TMS(M): TMS task + mech_partner 매칭 시 MECH task도
+    if worker_company == 'TMS(M)':
+        if product_module_outsourcing and 'TMS' in product_module_outsourcing.upper():
+            categories.append('TMS')
+        if product_mech_partner and worker_company == 'TMS(M)':
+            if product_mech_partner.upper() == 'TMS':
+                categories.append('MECH')
+        return categories if categories else []
+```
+
+변경:
+```python
+    # TMS(M): TMS task + mech_partner 매칭 시 MECH task도
+    if worker_company == 'TMS(M)':
+        if product_module_outsourcing and 'TMS' in product_module_outsourcing.upper():
+            categories.append('TMS')
+        if product_mech_partner and product_mech_partner.upper() == 'TMS':
+            categories.append('MECH')
+
+            # Sprint 31C: PI 협력사 위임 — TMS(M)이 mech이면 PI도 표시
+            pi_capable = get_setting('pi_capable_mech_partners', [])
+            if worker_company in pi_capable:
+                override_lines = get_setting('pi_gst_override_lines', [])
+                line_upper = product_line.strip().upper() if product_line else ''
+                is_override = any(line_upper.startswith(prefix.upper()) for prefix in override_lines)
+                if not is_override:
+                    categories.append('PI')
+                # override 라인이면 PI는 GST PI 담당 → 여기서 PI 추가 안 함
+
+        return categories if categories else []
+```
+
+#### 2-4. FNI/BAT 블록 확장 (Line 552~555 — 향후 대비)
+
+기존:
+```python
+    # FNI / BAT: mech_partner 매칭 → MECH only
+    if worker_company in ('FNI', 'BAT'):
+        if product_mech_partner and product_mech_partner.upper() == worker_company.upper():
+            categories.append('MECH')
+        return categories
+```
+
+변경:
+```python
+    # FNI / BAT: mech_partner 매칭 → MECH only
+    # Sprint 31C: pi_capable_mech_partners에 포함되면 PI도 표시
+    if worker_company in ('FNI', 'BAT'):
+        if product_mech_partner and product_mech_partner.upper() == worker_company.upper():
+            categories.append('MECH')
+
+            # PI 위임 확인 (현재 FNI/BAT는 미포함이지만 향후 추가 대비)
+            pi_capable = get_setting('pi_capable_mech_partners', [])
+            if worker_company in pi_capable:
+                override_lines = get_setting('pi_gst_override_lines', [])
+                line_upper = product_line.strip().upper() if product_line else ''
+                is_override = any(line_upper.startswith(prefix.upper()) for prefix in override_lines)
+                if not is_override:
+                    categories.append('PI')
+
+        return categories
+```
+
+#### 2-5. filter_tasks_for_worker 수정 (product.line 전달)
+
+기존 (Line 595~602):
+```python
+    visible_categories = get_task_categories_for_worker(
+        worker_company=worker_company,
+        worker_role=worker_role,
+        product_mech_partner=product.mech_partner if product else None,
+        product_elec_partner=product.elec_partner if product else None,
+        product_module_outsourcing=product.module_outsourcing if product else None,
+        worker_active_role=worker_active_role
+    )
+```
+
+변경:
+```python
+    visible_categories = get_task_categories_for_worker(
+        worker_company=worker_company,
+        worker_role=worker_role,
+        product_mech_partner=product.mech_partner if product else None,
+        product_elec_partner=product.elec_partner if product else None,
+        product_module_outsourcing=product.module_outsourcing if product else None,
+        worker_active_role=worker_active_role,
+        product_line=product.line if product else None  # ★ Sprint 31C
+    )
+```
+
+#### 2-6. task_seed.py 주석 업데이트
+
+Line 88~89 주석 변경:
+```python
+# Sprint 31A: DRAGON MECH 추가 태스크 (TANK_MODULE + PRESSURE_TEST)
+# DRAGON은 PI 불필요 → MECH에서 가압검사까지 전부 처리
+```
+→
+```python
+# Sprint 31A: tank_in_mech MECH 추가 태스크 (TANK_MODULE + PRESSURE_TEST)
+# Sprint 31C: DRAGON PI 활성화 → MECH_TANK_MODULE_ONLY로 전환 (PRESSURE_TEST는 PI로 이관)
+# MECH_TANK_FULL은 pi_lng_util=FALSE AND pi_chamber=FALSE인 모델에서만 사용
+```
+
+Line 101 주석 변경:
+```python
+# Sprint 11: PI Tasks (2개) — 모든 모델 공통 (GST PI 검사원 전용)
+```
+→
+```python
+# Sprint 11: PI Tasks (2개) — 모든 모델 공통
+# Sprint 31C: pi_capable_mech_partners 설정에 따라 협력사 작업자에게도 표시 가능
+```
+
+### Task 3: import 확인
+
+`task_seed.py` 상단에 `get_setting` import 확인:
+```python
+from app.models.admin_settings import get_setting
+```
+이미 `heating_jacket_enabled`에서 사용 중이므로 import는 존재할 것. 없으면 추가.
+
+### Task 4: version.py 업데이트
+
+```python
+VERSION = "1.9.1"
+BUILD_DATE = "2026-03-20"
+```
+
+### Task 5: 테스트
+
+**파일**: `tests/backend/test_sprint31c_pi_visibility.py`
+
+#### White-box 테스트 (DB 불필요 — mock 사용)
+
+```python
+"""
+Sprint 31C: PI 검사 협력사 위임 — 가시성 분기 테스트
+White-box: get_task_categories_for_worker 단위 테스트 (admin_settings mock)
+"""
+
+import unittest
+from unittest.mock import patch
+
+import sys
+sys.path.insert(0, 'backend')
+from app.services.task_seed import get_task_categories_for_worker
+
+
+class TestPIVisibilityTMS(unittest.TestCase):
+    """TMS(M) 작업자의 PI 가시성 테스트"""
+
+    @patch('app.services.task_seed.get_setting')
+    def test_tms_sees_pi_when_capable(self, mock_setting):
+        """TMS(M)이 pi_capable이고 mech_partner=TMS → PI 보임"""
+        mock_setting.side_effect = lambda key, default=None: {
+            'pi_capable_mech_partners': ['TMS(M)'],
+            'pi_gst_override_lines': ['JP'],
+        }.get(key, default)
+
+        cats = get_task_categories_for_worker(
+            worker_company='TMS(M)', worker_role='MECH',
+            product_mech_partner='TMS', product_elec_partner=None,
+            product_module_outsourcing='TMS',
+            product_line='P4-D'
+        )
+        self.assertIn('PI', cats)
+        self.assertIn('TMS', cats)
+        self.assertIn('MECH', cats)
+
+    @patch('app.services.task_seed.get_setting')
+    def test_tms_no_pi_on_jp_line(self, mock_setting):
+        """TMS(M)이 pi_capable이지만 line=JP → PI 안 보임 (GST PI 유지)"""
+        mock_setting.side_effect = lambda key, default=None: {
+            'pi_capable_mech_partners': ['TMS(M)'],
+            'pi_gst_override_lines': ['JP'],
+        }.get(key, default)
+
+        cats = get_task_categories_for_worker(
+            worker_company='TMS(M)', worker_role='MECH',
+            product_mech_partner='TMS', product_elec_partner=None,
+            product_module_outsourcing='TMS',
+            product_line='JP(F15)'
+        )
+        self.assertNotIn('PI', cats)
+        self.assertIn('TMS', cats)
+        self.assertIn('MECH', cats)
+
+    @patch('app.services.task_seed.get_setting')
+    def test_tms_no_pi_when_not_capable(self, mock_setting):
+        """pi_capable_mech_partners가 빈 리스트 → 기존 동작 (PI 없음)"""
+        mock_setting.side_effect = lambda key, default=None: {
+            'pi_capable_mech_partners': [],
+            'pi_gst_override_lines': ['JP'],
+        }.get(key, default)
+
+        cats = get_task_categories_for_worker(
+            worker_company='TMS(M)', worker_role='MECH',
+            product_mech_partner='TMS', product_elec_partner=None,
+            product_module_outsourcing='TMS',
+            product_line='P4-D'
+        )
+        self.assertNotIn('PI', cats)
+
+    @patch('app.services.task_seed.get_setting')
+    def test_tms_no_pi_when_mech_not_tms(self, mock_setting):
+        """mech_partner가 TMS가 아닌 경우 → PI 없음"""
+        mock_setting.side_effect = lambda key, default=None: {
+            'pi_capable_mech_partners': ['TMS(M)'],
+            'pi_gst_override_lines': ['JP'],
+        }.get(key, default)
+
+        cats = get_task_categories_for_worker(
+            worker_company='TMS(M)', worker_role='MECH',
+            product_mech_partner='FNI', product_elec_partner=None,
+            product_module_outsourcing='TMS',
+            product_line='P4-D'
+        )
+        self.assertNotIn('PI', cats)
+
+
+class TestPIVisibilityGST(unittest.TestCase):
+    """GST PI 작업자의 PI 가시성 테스트"""
+
+    @patch('app.services.task_seed.get_setting')
+    def test_gst_pi_no_pi_when_delegated(self, mock_setting):
+        """mech_partner=TMS, line=P4-D → GST PI에서 PI 제외"""
+        mock_setting.side_effect = lambda key, default=None: {
+            'pi_capable_mech_partners': ['TMS(M)'],
+            'pi_gst_override_lines': ['JP'],
+        }.get(key, default)
+
+        cats = get_task_categories_for_worker(
+            worker_company='GST', worker_role='PI',
+            product_mech_partner='TMS', product_elec_partner=None,
+            product_module_outsourcing=None,
+            product_line='P4-D'
+        )
+        self.assertNotIn('PI', cats)
+
+    @patch('app.services.task_seed.get_setting')
+    def test_gst_pi_keeps_pi_on_jp(self, mock_setting):
+        """mech_partner=TMS, line=JP(F15) → GST PI 유지"""
+        mock_setting.side_effect = lambda key, default=None: {
+            'pi_capable_mech_partners': ['TMS(M)'],
+            'pi_gst_override_lines': ['JP'],
+        }.get(key, default)
+
+        cats = get_task_categories_for_worker(
+            worker_company='GST', worker_role='PI',
+            product_mech_partner='TMS', product_elec_partner=None,
+            product_module_outsourcing=None,
+            product_line='JP(F15)'
+        )
+        self.assertIn('PI', cats)
+
+    @patch('app.services.task_seed.get_setting')
+    def test_gst_pi_keeps_pi_when_mech_not_capable(self, mock_setting):
+        """mech_partner=FNI (pi_capable 아님) → GST PI 유지"""
+        mock_setting.side_effect = lambda key, default=None: {
+            'pi_capable_mech_partners': ['TMS(M)'],
+            'pi_gst_override_lines': ['JP'],
+        }.get(key, default)
+
+        cats = get_task_categories_for_worker(
+            worker_company='GST', worker_role='PI',
+            product_mech_partner='FNI', product_elec_partner=None,
+            product_module_outsourcing=None,
+            product_line='P4-D'
+        )
+        self.assertIn('PI', cats)
+
+    @patch('app.services.task_seed.get_setting')
+    def test_gst_pi_keeps_pi_when_no_mech(self, mock_setting):
+        """mech_partner=NULL → GST PI 유지 (기존 동작)"""
+        mock_setting.side_effect = lambda key, default=None: {
+            'pi_capable_mech_partners': ['TMS(M)'],
+            'pi_gst_override_lines': ['JP'],
+        }.get(key, default)
+
+        cats = get_task_categories_for_worker(
+            worker_company='GST', worker_role='PI',
+            product_mech_partner=None, product_elec_partner=None,
+            product_module_outsourcing=None,
+            product_line='P4-D'
+        )
+        self.assertIn('PI', cats)
+
+    @patch('app.services.task_seed.get_setting')
+    def test_gst_pi_active_role_override(self, mock_setting):
+        """active_role=PI, role=QI → PI 기준으로 가시성 판단"""
+        mock_setting.side_effect = lambda key, default=None: {
+            'pi_capable_mech_partners': ['TMS(M)'],
+            'pi_gst_override_lines': ['JP'],
+        }.get(key, default)
+
+        cats = get_task_categories_for_worker(
+            worker_company='GST', worker_role='QI',
+            product_mech_partner='TMS', product_elec_partner=None,
+            product_module_outsourcing=None,
+            worker_active_role='PI',
+            product_line='P4-D'
+        )
+        self.assertNotIn('PI', cats)  # 위임 대상이므로 GST PI에서 제외
+
+
+class TestPIVisibilityFNI(unittest.TestCase):
+    """FNI/BAT 작업자의 PI 가시성 — 향후 확장 대비"""
+
+    @patch('app.services.task_seed.get_setting')
+    def test_fni_no_pi_by_default(self, mock_setting):
+        """FNI는 현재 pi_capable 아님 → PI 없음"""
+        mock_setting.side_effect = lambda key, default=None: {
+            'pi_capable_mech_partners': ['TMS(M)'],
+            'pi_gst_override_lines': ['JP'],
+        }.get(key, default)
+
+        cats = get_task_categories_for_worker(
+            worker_company='FNI', worker_role='MECH',
+            product_mech_partner='FNI', product_elec_partner=None,
+            product_module_outsourcing=None,
+            product_line='P4-D'
+        )
+        self.assertIn('MECH', cats)
+        self.assertNotIn('PI', cats)
+
+    @patch('app.services.task_seed.get_setting')
+    def test_fni_sees_pi_when_added_to_capable(self, mock_setting):
+        """FNI를 pi_capable에 추가하면 PI 보임"""
+        mock_setting.side_effect = lambda key, default=None: {
+            'pi_capable_mech_partners': ['TMS(M)', 'FNI'],
+            'pi_gst_override_lines': ['JP'],
+        }.get(key, default)
+
+        cats = get_task_categories_for_worker(
+            worker_company='FNI', worker_role='MECH',
+            product_mech_partner='FNI', product_elec_partner=None,
+            product_module_outsourcing=None,
+            product_line='P4-D'
+        )
+        self.assertIn('MECH', cats)
+        self.assertIn('PI', cats)
+
+
+class TestPIVisibilityNoChange(unittest.TestCase):
+    """기존 동작 유지 검증 (regression)"""
+
+    @patch('app.services.task_seed.get_setting')
+    def test_admin_sees_all(self, mock_setting):
+        """ADMIN → 전체 조회 (None 반환) — 변경 없음"""
+        cats = get_task_categories_for_worker(
+            worker_company='GST', worker_role='ADMIN',
+            product_mech_partner='TMS', product_elec_partner=None,
+            product_module_outsourcing=None,
+            product_line='P4-D'
+        )
+        self.assertIsNone(cats)
+
+    @patch('app.services.task_seed.get_setting')
+    def test_gst_qi_unchanged(self, mock_setting):
+        """GST QI → QI만 (PI 위임과 무관)"""
+        cats = get_task_categories_for_worker(
+            worker_company='GST', worker_role='QI',
+            product_mech_partner='TMS', product_elec_partner=None,
+            product_module_outsourcing=None,
+            product_line='P4-D'
+        )
+        self.assertIn('QI', cats)
+        self.assertNotIn('PI', cats)
+
+    @patch('app.services.task_seed.get_setting')
+    def test_gst_si_unchanged(self, mock_setting):
+        """GST SI → SI만 (PI 위임과 무관)"""
+        cats = get_task_categories_for_worker(
+            worker_company='GST', worker_role='SI',
+            product_mech_partner='TMS', product_elec_partner=None,
+            product_module_outsourcing=None,
+            product_line='P4-D'
+        )
+        self.assertIn('SI', cats)
+        self.assertNotIn('PI', cats)
+
+    @patch('app.services.task_seed.get_setting')
+    def test_elec_partner_unchanged(self, mock_setting):
+        """TMS(E) → ELEC만 (PI 위임과 무관)"""
+        cats = get_task_categories_for_worker(
+            worker_company='TMS(E)', worker_role='ELEC',
+            product_mech_partner='TMS', product_elec_partner='TMS',
+            product_module_outsourcing=None,
+            product_line='P4-D'
+        )
+        self.assertIn('ELEC', cats)
+        self.assertNotIn('PI', cats)
+
+    @patch('app.services.task_seed.get_setting')
+    def test_multiple_override_lines(self, mock_setting):
+        """override_lines에 여러 prefix 등록 시 정상 동작"""
+        mock_setting.side_effect = lambda key, default=None: {
+            'pi_capable_mech_partners': ['TMS(M)'],
+            'pi_gst_override_lines': ['JP', 'FAB2', 'AUSTRIA'],
+        }.get(key, default)
+
+        # FAB2 → GST PI 유지
+        cats = get_task_categories_for_worker(
+            worker_company='GST', worker_role='PI',
+            product_mech_partner='TMS', product_elec_partner=None,
+            product_module_outsourcing=None,
+            product_line='FAB2'
+        )
+        self.assertIn('PI', cats)
+
+        # P4-D → 협력사 위임
+        cats2 = get_task_categories_for_worker(
+            worker_company='GST', worker_role='PI',
+            product_mech_partner='TMS', product_elec_partner=None,
+            product_module_outsourcing=None,
+            product_line='P4-D'
+        )
+        self.assertNotIn('PI', cats2)
+```
+
+#### Gray-box 테스트 (DB 연결 필요 — Railway)
+
+```python
+class TestDragonModelConfigChanged(unittest.TestCase):
+    """DRAGON model_config 변경 후 task_seed 동작 검증"""
+
+    def test_dragon_pi_tasks_applicable(self):
+        """DRAGON → PI_LNG_UTIL, PI_CHAMBER is_applicable=TRUE"""
+        config = get_model_config_by_prefix('DRAGON')
+        self.assertTrue(config.pi_lng_util)
+        self.assertTrue(config.pi_chamber)
+
+    def test_dragon_mech_no_pressure_test(self):
+        """DRAGON → MECH에 PRESSURE_TEST 없음 (TANK_MODULE만)"""
+        # 테스트 제품으로 initialize_product_tasks 실행 후
+        # MECH 태스크에 PRESSURE_TEST is_applicable=False 확인
+        pass  # DB 연결 환경에서 구현
+
+    def test_gaia_pi_visibility_tms_worker(self):
+        """GAIA + mech_partner=TMS + line=P4-D → TMS(M) 작업자에게 PI 보임"""
+        pass  # 실제 product_info + worker로 filter_tasks_for_worker 호출
+
+    def test_gaia_pi_visibility_jp_gst(self):
+        """GAIA + mech_partner=TMS + line=JP(F15) → GST PI에게 PI 보임"""
+        pass  # 실제 product_info + worker로 filter_tasks_for_worker 호출
+```
+
+### Task 6: 기존 테스트 수정 (Regression 대응)
+
+**파일**: `tests/backend/test_sprint31a_multi_model.py` — 아래 테스트 수정 필요:
+
+1. **`TestModelConfigSprint31A::test_dragon_config_no_pi`** → 수정
+   ```python
+   # 변경 전: assert config.pi_lng_util == False
+   # 변경 후:
+   def test_dragon_config_has_pi(self):
+       """DRAGON → pi_lng_util=True, pi_chamber=True (Sprint 31C)"""
+       config = get_model_config_by_prefix('DRAGON')
+       self.assertTrue(config.pi_lng_util)
+       self.assertTrue(config.pi_chamber)
+   ```
+
+2. **`TestTaskSeedDragon::test_dragon_mech_extra_tasks`** → MECH 태스크 수 변경
+   ```python
+   # 변경 전: MECH 9개 (기본 7 + TANK_MODULE + PRESSURE_TEST)
+   # 변경 후: MECH 8개 (기본 7 + TANK_MODULE만, PRESSURE_TEST는 PI로 이관)
+   def test_dragon_mech_extra_tasks(self):
+       """DRAGON → MECH에 TANK_MODULE만 추가 (8개), PRESSURE_TEST는 PI"""
+       # ... MECH count = 8 확인
+       # ... PI_LNG_UTIL, PI_CHAMBER is_applicable=True 추가 확인
+   ```
+
+3. **기존 company filtering 테스트** — `test_company_task_filtering.py`
+   - `product_line` 파라미터 추가 (기본값 None이므로 기존 테스트는 깨지지 않지만 확인 필요)
+
+### 테스트 실행 명령어
+
+```bash
+cd ~/Desktop/GST/AXIS-OPS
+
+# Sprint 31C White-box 테스트
+python -m pytest tests/backend/test_sprint31c_pi_visibility.py -v
+
+# 기존 Sprint 31A 테스트 (regression 확인)
+python -m pytest tests/backend/test_sprint31a_multi_model.py -v
+
+# 기존 company filtering 테스트 (regression 확인)
+python -m pytest tests/backend/test_company_task_filtering.py -v
+
+# 전체 regression
+python -m pytest tests/ -v --tb=short -x
+```
+
+### 체크리스트
+
+**BE**:
+- [ ] Migration 026 작성 (admin_settings 2건 + DRAGON model_config + 기존 데이터 마이그레이션)
+- [ ] Migration 026 Railway DB 실행
+- [ ] `task_seed.py` — `get_task_categories_for_worker` 시그니처에 `product_line` 추가
+- [ ] `task_seed.py` — GST PI 블록에 PI 위임 분기 추가
+- [ ] `task_seed.py` — TMS(M) 블록에 PI 카테고리 추가
+- [ ] `task_seed.py` — FNI/BAT 블록에 PI 확장 대비 로직 추가
+- [ ] `task_seed.py` — `filter_tasks_for_worker`에서 `product.line` 전달
+- [ ] `task_seed.py` — 주석 업데이트 (DRAGON PI 활성화 반영)
+- [ ] `version.py` v1.9.1 업데이트
+
+**TEST**:
+- [ ] `test_sprint31c_pi_visibility.py` White-box 테스트 작성 (15건+)
+- [ ] TMS(M) PI 가시성 4개 시나리오 (capable+보임, JP+안보임, 미등록+안보임, mech≠TMS+안보임)
+- [ ] GST PI 가시성 5개 시나리오 (위임+제외, JP+유지, mech≠capable+유지, mech=NULL+유지, active_role)
+- [ ] FNI/BAT 확장 2개 시나리오 (기본 미포함, capable 추가 시 PI 보임)
+- [ ] Regression 4개 시나리오 (ADMIN, QI, SI, ELEC 변경 없음)
+- [ ] override_lines 복수 prefix 테스트
+- [ ] Gray-box 테스트 시나리오 작성 (DRAGON config 변경 + 태스크 생성 검증)
+
+**기존 테스트 수정**:
+- [ ] `test_sprint31a_multi_model.py` — `test_dragon_config_no_pi` → `test_dragon_config_has_pi` 변경
+- [ ] `test_sprint31a_multi_model.py` — `test_dragon_mech_extra_tasks` → MECH 8개로 수정
+- [ ] `test_company_task_filtering.py` — product_line 파라미터 호환성 확인
+- [ ] 전체 regression 테스트 통과 확인 (`python -m pytest tests/ -v --tb=short -x`)
+
+**검증 (배포 후)**:
+- [ ] TMS(M) 작업자 로그인 → GAIA(mech=TMS, line=P4-D) QR 스캔 → PI 태스크 보이는지 확인
+- [ ] TMS(M) 작업자 로그인 → GAIA(mech=TMS, line=JP(F15)) QR 스캔 → PI 태스크 안 보이는지 확인
+- [ ] GST PI 작업자 로그인 → GAIA(mech=TMS, line=P4-D) QR 스캔 → PI 태스크 안 보이는지 확인
+- [ ] GST PI 작업자 로그인 → GAIA(mech=TMS, line=JP(F15)) QR 스캔 → PI 태스크 보이는지 확인
+- [ ] TMS(M) 작업자 → DRAGON(mech=TMS) QR 스캔 → PI 태스크 보이는지 확인
+- [ ] DRAGON 제품 → MECH 태스크에 PRESSURE_TEST 없는지 확인
+- [ ] 기존 GAIA(mech=FNI) 제품 → GST PI에서 PI 태스크 정상 표시 확인 (변경 없음)
+- [ ] admin_settings에서 pi_capable_mech_partners 수정 후 즉시 반영 확인
+
+### 롤백 계획
+
+문제 발생 시:
+1. **model_config 복원**: `UPDATE model_config SET pi_lng_util=FALSE, pi_chamber=FALSE WHERE model_prefix='DRAGON';`
+2. **기존 데이터 복원**:
+   ```sql
+   -- PI 태스크 비활성화 복원
+   UPDATE app_task_details SET is_applicable = FALSE WHERE task_category = 'PI'
+     AND serial_number IN (SELECT serial_number FROM plan.product_info WHERE model ILIKE 'DRAGON%');
+   -- MECH PRESSURE_TEST 활성화 복원
+   UPDATE app_task_details SET is_applicable = TRUE WHERE task_category = 'MECH' AND task_id = 'PRESSURE_TEST'
+     AND serial_number IN (SELECT serial_number FROM plan.product_info WHERE model ILIKE 'DRAGON%');
+   ```
+3. **admin_settings 삭제**: `DELETE FROM admin_settings WHERE setting_key IN ('pi_capable_mech_partners', 'pi_gst_override_lines');`
+4. **코드 롤백**: `git revert` — `product_line` 파라미터는 기본값 None이므로 하위 호환 유지
