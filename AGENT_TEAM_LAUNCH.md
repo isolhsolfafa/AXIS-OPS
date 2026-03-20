@@ -12906,3 +12906,315 @@ class TestWorkersFilterIsManager(unittest.TestCase):
 **검증 (배포 후)**:
 - [ ] OPS Flutter 협력사 관리자 화면 — 기본 manager만 표시 확인
 - [ ] VIEW 권한 관리 페이지 — 기존 동작 유지
+
+---
+
+## Sprint 34-A: OPS Flutter — Admin 옵션 화면 PI 위임 설정 UI 추가
+
+**목표**: Sprint 31C에서 추가된 `pi_capable_mech_partners`, `pi_gst_override_lines` 설정을 OPS Flutter Admin 옵션 화면에서 편집할 수 있도록 UI 추가.
+
+**범위**: 1 FE 파일 수정 (`admin_options_screen.dart`)
+**의존성**: Sprint 31C (BE — 키 등록), Sprint 34 Task 1 (BE — `string_list` 타입 validation)
+**버전**: v1.9.1 (동일 패치)
+
+---
+
+### Task 1: `admin_options_screen.dart` — 상태 변수 + _loadSettings 확장
+
+**파일**: `frontend/lib/screens/admin/admin_options_screen.dart`
+
+**1-1. 상태 변수 추가** (Line 26 부근, 기존 `_isLoadingSettings` 아래):
+
+```dart
+  // PI 위임 설정 (Sprint 34-A)
+  List<String> _piCapableMechPartners = [];   // pi_capable_mech_partners
+  List<String> _piGstOverrideLines = [];      // pi_gst_override_lines
+```
+
+**1-2. _loadSettings() 확장** (Line 237 부근, `_locationQrRequired` 파싱 아래):
+
+기존 `_loadSettings()` 내부 setState 블록에 추가:
+
+```dart
+          // PI 위임 설정 (Sprint 34-A)
+          final rawPartners = response['pi_capable_mech_partners'];
+          _piCapableMechPartners = (rawPartners is List)
+              ? rawPartners.map((e) => e.toString()).toList()
+              : <String>[];
+          final rawLines = response['pi_gst_override_lines'];
+          _piGstOverrideLines = (rawLines is List)
+              ? rawLines.map((e) => e.toString()).toList()
+              : <String>[];
+```
+
+**참고**: `response['pi_capable_mech_partners']`는 JSON array(`["FNI","BAT"]`)로 반환됨.
+Flask BE에서 JSONB 필드이므로 Dart에서는 `List<dynamic>`으로 수신 → `.map((e) => e.toString()).toList()`.
+
+---
+
+### Task 2: `admin_options_screen.dart` — string_list 업데이트 메서드
+
+**2-1. _updateStringListSetting() 추가** (Line 287 부근, `_updateSetting()` 아래):
+
+```dart
+  /// string_list 타입 설정 업데이트 (PUT /admin/settings)
+  Future<void> _updateStringListSetting(String key, List<String> value) async {
+    try {
+      final apiService = ref.read(apiServiceProvider);
+      await apiService.put('/admin/settings', data: {key: value});
+      if (mounted) {
+        setState(() {
+          if (key == 'pi_capable_mech_partners') _piCapableMechPartners = value;
+          if (key == 'pi_gst_override_lines') _piGstOverrideLines = value;
+        });
+        _showSnack('설정이 저장되었습니다.', isError: false);
+      }
+    } catch (e) {
+      if (mounted) _showSnack('설정 저장에 실패했습니다.', isError: true);
+    }
+  }
+```
+
+**핵심**: `data: {key: value}` → value가 `List<String>`이므로 Dio가 자동으로 JSON array로 직렬화.
+BE `_validate_setting()`이 `string_list` 타입 검증 수행.
+
+---
+
+### Task 3: `admin_options_screen.dart` — _buildChipListSetting 위젯 메서드
+
+**3-1. 헬퍼 메서드 추가** (Line 1055 부근, `_buildSettingToggle()` 아래):
+
+```dart
+  /// string_list 설정을 Chip 목록 + 추가/삭제로 표시
+  Widget _buildChipListSetting({
+    required String title,
+    required String subtitle,
+    required List<String> values,
+    required List<String> allOptions,
+    required String settingKey,
+    bool isFirst = false,
+  }) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 16, right: 16,
+        top: isFirst ? 14 : 10,
+        bottom: 10,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 제목 + 설명
+          Text(title, style: const TextStyle(
+            fontSize: 13, fontWeight: FontWeight.w500, color: GxColors.charcoal,
+          )),
+          const SizedBox(height: 2),
+          Text(subtitle, style: const TextStyle(fontSize: 11, color: GxColors.steel)),
+          const SizedBox(height: 8),
+          // Chip 목록 (Wrap)
+          Wrap(
+            spacing: 6,
+            runSpacing: 4,
+            children: [
+              // 현재 선택된 값들 → 삭제 가능한 Chip
+              ...values.map((v) => Chip(
+                label: Text(v, style: const TextStyle(fontSize: 12)),
+                deleteIcon: const Icon(Icons.close, size: 14),
+                onDeleted: () {
+                  final updated = List<String>.from(values)..remove(v);
+                  _updateStringListSetting(settingKey, updated);
+                },
+                backgroundColor: GxColors.accentSoft,
+                deleteIconColor: GxColors.steel,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                visualDensity: VisualDensity.compact,
+              )),
+              // 추가 버튼 → 미선택 항목 중 고르기
+              if (allOptions.where((o) => !values.contains(o)).isNotEmpty)
+                ActionChip(
+                  avatar: const Icon(Icons.add, size: 14, color: GxColors.accent),
+                  label: const Text('추가', style: TextStyle(fontSize: 12, color: GxColors.accent)),
+                  onPressed: () => _showAddOptionDialog(
+                    title: title,
+                    currentValues: values,
+                    allOptions: allOptions,
+                    settingKey: settingKey,
+                  ),
+                  backgroundColor: GxColors.snowBg,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+```
+
+**3-2. _showAddOptionDialog() 추가** (바로 아래):
+
+```dart
+  /// 미선택 옵션 중 하나를 선택하여 추가하는 다이얼로그
+  void _showAddOptionDialog({
+    required String title,
+    required List<String> currentValues,
+    required List<String> allOptions,
+    required String settingKey,
+  }) {
+    final available = allOptions.where((o) => !currentValues.contains(o)).toList();
+    if (available.isEmpty) return;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text('$title 추가', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.lg)),
+        children: available.map((option) => SimpleDialogOption(
+          onPressed: () {
+            Navigator.pop(ctx);
+            final updated = List<String>.from(currentValues)..add(option);
+            _updateStringListSetting(settingKey, updated);
+          },
+          child: Text(option, style: const TextStyle(fontSize: 14)),
+        )).toList(),
+      ),
+    );
+  }
+```
+
+**디자인 패턴**:
+- 선택된 값 → `Chip` (× 버튼으로 삭제)
+- 미선택 항목 있으면 `ActionChip(+ 추가)` 표시
+- "추가" 탭 → `SimpleDialog`에서 미선택 항목 리스트 표시
+- 선택 즉시 PUT → setState 반영
+
+**allOptions 값**:
+- `pi_capable_mech_partners` → `_companies` (기존 상수: `['FNI', 'BAT', 'TMS(M)', 'TMS(E)', 'P&S', 'C&A', 'GST']`)
+- `pi_gst_override_lines` → 라인 리스트 상수 추가 필요 (Task 4)
+
+---
+
+### Task 4: `admin_options_screen.dart` — 라인 상수 + 섹션 UI 배치
+
+**4-1. 라인 상수 추가** (Line 76 부근, `_companies` 아래):
+
+```dart
+  /// GST Override 가능한 라인 목록
+  static const List<String> _gstLines = [
+    'LINE-1', 'LINE-2', 'LINE-3', 'LINE-4', 'LINE-5', 'LINE-6',
+  ];
+```
+
+> **참고**: 실제 라인 값은 현재 운영 중인 라인명으로 교체. GST 공장 라인 구성에 맞춰 조정.
+
+**4-2. 섹션 UI — PI 위임 설정** (Section 1 `Admin Settings` 영역, Line 682 `SizedBox(height: 24)` 위에 삽입):
+
+기존 구조:
+```
+Section 1: Admin Settings (heating_jacket, phase_block, location_qr)
+   └─ GxGlass.cardSm 컨테이너
+       ├─ Heating Jacket 토글
+       ├─ Phase Block 토글
+       └─ Location QR 필수 토글
+SizedBox(height: 24)
+Section 2: 협력사 관리자 관리
+```
+
+변경 후:
+```
+Section 1: Admin Settings (기존 토글 유지)
+   └─ GxGlass.cardSm 컨테이너
+       ├─ Heating Jacket 토글
+       ├─ Phase Block 토글
+       └─ Location QR 필수 토글
+SizedBox(height: 16)          ← 간격 추가
+PI 위임 설정 서브섹션          ← 새로 추가
+   └─ GxGlass.cardSm 컨테이너
+       ├─ _buildChipListSetting (PI 위임 가능 MECH 협력사)
+       ├─ Divider
+       └─ _buildChipListSetting (PI GST Override 라인)
+SizedBox(height: 24)
+Section 2: 협력사 관리자 관리 (기존 유지)
+```
+
+**삽입 코드** (Line 683 `),` 직후, `const SizedBox(height: 24)` 직전):
+
+```dart
+              const SizedBox(height: 16),
+              // PI 위임 설정 (Sprint 34-A)
+              _buildSectionHeader(
+                icon: Icons.assignment_ind,
+                iconBg: GxColors.warningBg,
+                iconColor: GxColors.warning,
+                title: 'PI 위임 설정',
+                subtitle: 'PI 검사를 수행할 수 있는 협력사 / GST Override 라인',
+              ),
+              const SizedBox(height: 10),
+              Container(
+                decoration: GxGlass.cardSm(radius: GxRadius.lg),
+                child: _isLoadingSettings
+                    ? const Padding(
+                        padding: EdgeInsets.all(20),
+                        child: Center(child: CircularProgressIndicator(
+                          color: GxColors.accent, strokeWidth: 2,
+                        )),
+                      )
+                    : Column(
+                        children: [
+                          _buildChipListSetting(
+                            title: 'PI 위임 가능 MECH 협력사',
+                            subtitle: '선택된 협력사의 MECH 작업자가 PI 검사 수행 가능',
+                            values: _piCapableMechPartners,
+                            allOptions: _companies,
+                            settingKey: 'pi_capable_mech_partners',
+                            isFirst: true,
+                          ),
+                          const Divider(height: 1, color: GxColors.mist),
+                          _buildChipListSetting(
+                            title: 'PI GST Override 라인',
+                            subtitle: '선택된 라인에서 GST PI 담당자도 PI 검사 수행 가능',
+                            values: _piGstOverrideLines,
+                            allOptions: _gstLines,
+                            settingKey: 'pi_gst_override_lines',
+                          ),
+                        ],
+                      ),
+              ),
+```
+
+---
+
+### Task 5: 테스트 — 수동 검증 체크리스트
+
+Sprint 34-A는 Flutter FE 전용이므로 자동화 테스트 대신 수동 검증:
+
+```
+[ ] Admin 옵션 화면 진입 시 PI 위임 설정 섹션 표시
+[ ] _loadSettings() → pi_capable_mech_partners, pi_gst_override_lines 정상 로드
+[ ] 빈 배열일 때 → Chip 없이 "추가" ActionChip만 표시
+[ ] "추가" 탭 → SimpleDialog에 미선택 항목 표시
+[ ] 항목 선택 → PUT /admin/settings 호출 → Chip 즉시 반영
+[ ] Chip × 버튼 → 삭제 PUT 호출 → Chip 제거 반영
+[ ] 모든 옵션 선택 시 → "추가" ActionChip 숨김
+[ ] 저장 성공 → "설정이 저장되었습니다." 스낵바
+[ ] 저장 실패 → "설정 저장에 실패했습니다." 에러 스낵바
+[ ] 기존 섹션 (heating_jacket, phase_block, location_qr) 영향 없음
+```
+
+---
+
+### 체크리스트
+
+**FE (✅ 완료)**:
+- [x] 상태 변수: `_piCapableMechPartners`, `_piGstOverrideLines` ✅
+- [x] `_loadSettings()` — 두 키 파싱 추가 ✅
+- [x] `_updateStringListSetting()` — List<String> PUT 메서드 ✅
+- [x] `_buildChipListSetting()` — Chip 목록 + 추가/삭제 위젯 ✅
+- [x] `_showAddOptionDialog()` — 미선택 항목 선택 다이얼로그 ✅
+- [x] `_mechPartnerOptions`, `_lineOptions` 상수 ✅
+- [x] Section UI — PI 위임 설정 카드 배치 + Netlify 배포 ✅
+
+**검증**:
+- [ ] PI 위임 설정 Chip 추가/삭제 동작 확인 — 실기기
+- [ ] PUT /admin/settings → BE `string_list` validation 통과 확인
+- [ ] 기존 Admin Settings 토글 영향 없음 확인
