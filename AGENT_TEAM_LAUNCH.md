@@ -11615,12 +11615,13 @@ class TestMonthlySummary:
 - [x] admin_settings 7개 (confirm_*_enabled, confirm_checklist_required) ✅
 - [x] version.py v2.0.0 ✅
 
-**TEST**:
-- [ ] 테스트 파일 작성 (10건+) — 배포 후 진행
-- [ ] O/N 그룹핑 검증
-- [ ] confirmable 조건 검증 (완료/미완료/혼합)
-- [ ] DUAL/DRAGON/SWS 모델별 검증
-- [ ] soft delete 후 재확인 검증
+**TEST (✅ 완료 — 9/9 passed)**:
+- [x] 테스트 파일 작성 — `tests/backend/test_production.py` 9건 ✅
+- [x] O/N 그룹핑 검증 (2개 O/N, 3개 S/N 묶임 확인) ✅
+- [x] confirmable 조건 검증 — 전체 완료 True, 부분 미완료 False ✅
+- [x] soft delete 후 재확인 검증 (취소 → 재확인 201) ✅
+- [x] 중복 확인 409 + 미완료 거부 400 ✅
+- [ ] DUAL/DRAGON/SWS 모델별 검증 — 추후 추가
 
 **검증 (배포 후)**:
 - [ ] VIEW 생산실적 페이지 연동 테스트
