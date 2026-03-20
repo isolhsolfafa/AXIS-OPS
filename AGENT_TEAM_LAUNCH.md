@@ -12340,3 +12340,569 @@ python -m pytest tests/ -v --tb=short -x
    ```
 3. **admin_settings 삭제**: `DELETE FROM admin_settings WHERE setting_key IN ('pi_capable_mech_partners', 'pi_gst_override_lines');`
 4. **코드 롤백**: `git revert` — `product_line` 파라미터는 기본값 None이므로 하위 호환 유지
+
+## Sprint 34: admin_settings PI 위임 설정 API 확장 — JSON 배열 키 지원
+
+> **목적**: Sprint 31C에서 DB에 추가된 `pi_capable_mech_partners`, `pi_gst_override_lines`를 PUT /api/admin/settings API로 수정 가능하게 확장. 향후 JSON 배열 타입 설정이 추가되어도 검증 로직을 반복 작성하지 않는 구조 설계.
+> **범위**: BE 1파일 수정 + 테스트
+> **의존성**: Sprint 31C (admin_settings에 pi_capable_mech_partners, pi_gst_override_lines 값 존재)
+> **버전**: v1.9.1 패치 (마이그레이션 없음)
+
+### 배경
+
+Sprint 31C에서 마이그레이션으로 admin_settings에 2개 키를 INSERT했지만, `admin.py`의 `ALLOWED_KEYS`에 등록되지 않아 PUT API로 수정 불가 상태.
+
+현재 ALLOWED_KEYS 구조:
+```python
+ALLOWED_KEYS = {
+    'heating_jacket_enabled',     # bool
+    'phase_block_enabled',        # bool
+    'location_qr_required',       # bool
+    'break_morning_start',        # HH:MM string
+    ...
+    'geo_check_enabled',          # bool
+    'geo_radius_meters',          # number
+}
+```
+
+문제: 모든 키가 flat set에 들어있고, 타입별 검증이 TIME_KEYS / TIME_PAIRS로 분산되어 있음.
+PI 설정은 **JSON 배열** (`["TMS(M)"]`, `["JP"]`) 타입이라 기존 bool/string 검증과 다른 로직 필요.
+
+### 설계 — 타입별 키 레지스트리
+
+기존 flat `ALLOWED_KEYS` set을 **타입별 레지스트리 dict**으로 리팩터링:
+
+```python
+# ─── 설정 키 레지스트리 ───────────────────────────────
+# 타입별로 분류 → 검증 로직이 타입에 따라 자동 적용
+# 새 키 추가 시 여기에 등록만 하면 검증이 자동으로 걸림
+
+SETTING_KEYS: Dict[str, Dict[str, Any]] = {
+    # ── bool 타입 ──
+    'heating_jacket_enabled':   {'type': 'bool', 'default': False},
+    'phase_block_enabled':      {'type': 'bool', 'default': False},
+    'location_qr_required':     {'type': 'bool', 'default': True},
+    'auto_pause_enabled':       {'type': 'bool', 'default': True},
+    'geo_check_enabled':        {'type': 'bool', 'default': False},
+    'geo_strict_mode':          {'type': 'bool', 'default': False},
+
+    # ── time (HH:MM) 타입 ──
+    'break_morning_start':      {'type': 'time', 'default': '10:00', 'pair': 'break_morning_end'},
+    'break_morning_end':        {'type': 'time', 'default': '10:20', 'pair': 'break_morning_start'},
+    'break_afternoon_start':    {'type': 'time', 'default': '15:00', 'pair': 'break_afternoon_end'},
+    'break_afternoon_end':      {'type': 'time', 'default': '15:20', 'pair': 'break_afternoon_start'},
+    'lunch_start':              {'type': 'time', 'default': '11:20', 'pair': 'lunch_end'},
+    'lunch_end':                {'type': 'time', 'default': '12:20', 'pair': 'lunch_start'},
+    'dinner_start':             {'type': 'time', 'default': '17:00', 'pair': 'dinner_end'},
+    'dinner_end':               {'type': 'time', 'default': '18:00', 'pair': 'dinner_start'},
+
+    # ── number 타입 ──
+    'geo_latitude':             {'type': 'number', 'default': 35.1796},
+    'geo_longitude':            {'type': 'number', 'default': 129.0756},
+    'geo_radius_meters':        {'type': 'number', 'default': 200, 'min': 50, 'max': 5000},
+
+    # ── string_list (JSON 배열) 타입 ── Sprint 34 추가
+    'pi_capable_mech_partners': {'type': 'string_list', 'default': [], 'allowed_values': None},
+    'pi_gst_override_lines':    {'type': 'string_list', 'default': [], 'allowed_values': None},
+
+    # ── bool 타입 (실적확인) ── Sprint 33
+    'confirm_mech_enabled':     {'type': 'bool', 'default': True},
+    'confirm_elec_enabled':     {'type': 'bool', 'default': True},
+    'confirm_tm_enabled':       {'type': 'bool', 'default': True},
+    'confirm_pi_enabled':       {'type': 'bool', 'default': False},
+    'confirm_qi_enabled':       {'type': 'bool', 'default': False},
+    'confirm_si_enabled':       {'type': 'bool', 'default': False},
+    'confirm_checklist_required': {'type': 'bool', 'default': False},
+}
+
+# 하위호환: 기존 코드에서 ALLOWED_KEYS를 참조하는 곳 대비
+ALLOWED_KEYS = set(SETTING_KEYS.keys())
+```
+
+### 팀 구성
+
+```
+CLAUDE.md를 읽고 Sprint 34를 진행해줘.
+
+팀 구성: 1명 teammate (Sonnet)
+1. **BE** — 소유: backend/**  tests/**
+```
+
+### Task 1: admin.py — SETTING_KEYS 레지스트리 + 타입별 검증 함수
+
+**파일**: `backend/app/routes/admin.py`
+
+#### 1-1. SETTING_KEYS dict 추가 (PUT 핸들러 위)
+
+위 설계의 `SETTING_KEYS` dict를 모듈 레벨 상수로 추가.
+기존 `ALLOWED_KEYS` set, `TIME_KEYS` set, `TIME_PAIRS` list는 삭제하고 `SETTING_KEYS`로 통합.
+
+```python
+ALLOWED_KEYS = set(SETTING_KEYS.keys())  # 하위호환
+```
+
+#### 1-2. 타입별 검증 함수 추가
+
+```python
+import re
+
+TIME_PATTERN = re.compile(r'^([01]\d|2[0-3]):[0-5]\d$')
+
+
+def _validate_setting(key: str, value: Any) -> Optional[str]:
+    """
+    설정 값 타입 검증.
+    Returns: 에러 메시지 (None이면 통과)
+    """
+    meta = SETTING_KEYS.get(key)
+    if not meta:
+        return f'허용되지 않은 설정 키: {key}'
+
+    stype = meta['type']
+
+    if stype == 'bool':
+        if not isinstance(value, bool):
+            return f'{key}: bool 타입이어야 합니다.'
+
+    elif stype == 'time':
+        if not isinstance(value, str) or not TIME_PATTERN.match(value):
+            return f'{key}: HH:MM 형식이어야 합니다. (예: "10:00")'
+
+    elif stype == 'number':
+        if not isinstance(value, (int, float)):
+            return f'{key}: 숫자 타입이어야 합니다.'
+        if 'min' in meta and value < meta['min']:
+            return f'{key}: 최소값은 {meta["min"]}입니다.'
+        if 'max' in meta and value > meta['max']:
+            return f'{key}: 최대값은 {meta["max"]}입니다.'
+
+    elif stype == 'string_list':
+        if not isinstance(value, list):
+            return f'{key}: 배열 타입이어야 합니다. (예: ["TMS(M)"])'
+        for i, item in enumerate(value):
+            if not isinstance(item, str) or not item.strip():
+                return f'{key}[{i}]: 빈 문자열이 아닌 문자열이어야 합니다.'
+        # 중복 제거 검증 (선택적 — 경고만)
+        if len(value) != len(set(value)):
+            return f'{key}: 중복 값이 포함되어 있습니다.'
+        # allowed_values 검증 (설정되어 있으면)
+        allowed = meta.get('allowed_values')
+        if allowed:
+            invalid = [v for v in value if v not in allowed]
+            if invalid:
+                return f'{key}: 허용되지 않은 값: {invalid}'
+
+    return None
+```
+
+#### 1-3. PUT 핸들러 리팩터링
+
+기존의 TIME_KEYS / TIME_PAIRS 분산 검증을 `_validate_setting()` 한 곳으로 통합:
+
+```python
+@admin_bp.route("/settings", methods=["PUT"])
+@jwt_required
+@manager_or_admin_required
+def update_settings():
+    data = request.get_json(silent=True) or {}
+
+    update_pairs = {k: v for k, v in data.items() if k in ALLOWED_KEYS}
+
+    if not update_pairs:
+        return jsonify({
+            'error': 'INVALID_REQUEST',
+            'message': f'업데이트할 유효한 설정 키가 없습니다.'
+        }), 400
+
+    # ─── 타입별 검증 (통합) ───
+    for key, value in update_pairs.items():
+        error = _validate_setting(key, value)
+        if error:
+            return jsonify({'error': 'VALIDATION_ERROR', 'message': error}), 400
+
+    # ─── 시간 쌍 검증 (start < end) ───
+    from app.models.admin_settings import get_setting as _get_setting
+    time_keys_in_update = [k for k in update_pairs if SETTING_KEYS[k]['type'] == 'time']
+    checked_pairs = set()
+    for tk in time_keys_in_update:
+        pair_key = SETTING_KEYS[tk].get('pair')
+        if not pair_key or (tk, pair_key) in checked_pairs or (pair_key, tk) in checked_pairs:
+            continue
+        checked_pairs.add((tk, pair_key))
+        # start_key는 _start로 끝나는 쪽
+        if tk.endswith('_start'):
+            start_val = update_pairs.get(tk) or _get_setting(tk)
+            end_val = update_pairs.get(pair_key) or _get_setting(pair_key)
+        else:
+            start_val = update_pairs.get(pair_key) or _get_setting(pair_key)
+            end_val = update_pairs.get(tk) or _get_setting(tk)
+        if start_val and end_val and start_val >= end_val:
+            return jsonify({
+                'error': 'INVALID_TIME_RANGE',
+                'message': f'시작 시간({start_val})이 종료 시간({end_val})보다 이전이어야 합니다.'
+            }), 400
+
+    # ─── 저장 ───
+    failed_keys = []
+    for key, value in update_pairs.items():
+        success = update_setting(key, value, updated_by=g.worker_id)
+        if not success:
+            failed_keys.append(key)
+
+    if failed_keys:
+        logger.error(f"Admin settings update failed for keys: {failed_keys}, by_admin={g.worker_id}")
+        return jsonify({
+            'error': 'INTERNAL_SERVER_ERROR',
+            'message': f'설정 저장 실패: {", ".join(failed_keys)}'
+        }), 500
+
+    updated_keys = list(update_pairs.keys())
+    logger.info(f"Admin settings updated: keys={updated_keys}, by_admin={g.worker_id}")
+
+    # ─── Side Effects (기존 유지) ───
+    if 'heating_jacket_enabled' in update_pairs:
+        _sync_heating_jacket_tasks(update_pairs['heating_jacket_enabled'])
+
+    return jsonify({
+        'message': '설정이 저장되었습니다.',
+        'updated_keys': updated_keys
+    }), 200
+```
+
+#### 1-4. heating_jacket side effect 별도 함수 추출
+
+기존 인라인 코드를 `_sync_heating_jacket_tasks(new_val: bool)` 함수로 추출 (가독성 개선).
+
+#### 1-5. GET 핸들러 기본값 자동화
+
+기존 수동 `result.setdefault(...)` 나열을 `SETTING_KEYS`에서 자동 생성:
+
+```python
+@admin_bp.route("/settings", methods=["GET"])
+@jwt_required
+@admin_required
+def get_settings():
+    settings_list = get_all_settings()
+    result = {}
+    for s in settings_list:
+        result[s.setting_key] = s.setting_value
+
+    # SETTING_KEYS 기반 기본값 자동 적용
+    for key, meta in SETTING_KEYS.items():
+        result.setdefault(key, meta['default'])
+
+    return jsonify(result), 200
+```
+
+이렇게 하면 새 키 추가 시 `SETTING_KEYS`에만 등록하면 GET 기본값 + PUT 검증이 자동 적용됨.
+
+### Task 2: 테스트
+
+**파일**: `tests/backend/test_sprint34_settings_registry.py`
+
+#### White-box 테스트 — _validate_setting 단위 테스트
+
+```python
+"""
+Sprint 34: admin_settings 타입별 검증 레지스트리 테스트
+"""
+
+import unittest
+import sys
+sys.path.insert(0, 'backend')
+from app.routes.admin import _validate_setting
+
+
+class TestValidateBool(unittest.TestCase):
+    """bool 타입 검증"""
+
+    def test_bool_valid(self):
+        self.assertIsNone(_validate_setting('heating_jacket_enabled', True))
+        self.assertIsNone(_validate_setting('heating_jacket_enabled', False))
+
+    def test_bool_invalid_string(self):
+        error = _validate_setting('heating_jacket_enabled', 'true')
+        self.assertIsNotNone(error)
+
+    def test_bool_invalid_int(self):
+        error = _validate_setting('heating_jacket_enabled', 1)
+        self.assertIsNotNone(error)
+
+
+class TestValidateStringList(unittest.TestCase):
+    """string_list (JSON 배열) 타입 검증"""
+
+    def test_valid_list(self):
+        self.assertIsNone(_validate_setting('pi_capable_mech_partners', ['TMS(M)']))
+
+    def test_valid_multi(self):
+        self.assertIsNone(_validate_setting('pi_capable_mech_partners', ['TMS(M)', 'FNI']))
+
+    def test_valid_empty_list(self):
+        """빈 배열 허용 (전체 비활성화)"""
+        self.assertIsNone(_validate_setting('pi_capable_mech_partners', []))
+
+    def test_invalid_not_list(self):
+        error = _validate_setting('pi_capable_mech_partners', 'TMS(M)')
+        self.assertIsNotNone(error)
+
+    def test_invalid_empty_string_item(self):
+        error = _validate_setting('pi_capable_mech_partners', ['TMS(M)', ''])
+        self.assertIsNotNone(error)
+
+    def test_invalid_non_string_item(self):
+        error = _validate_setting('pi_capable_mech_partners', ['TMS(M)', 123])
+        self.assertIsNotNone(error)
+
+    def test_invalid_duplicate(self):
+        error = _validate_setting('pi_capable_mech_partners', ['TMS(M)', 'TMS(M)'])
+        self.assertIsNotNone(error)
+
+    def test_override_lines_valid(self):
+        self.assertIsNone(_validate_setting('pi_gst_override_lines', ['JP', 'FAB2']))
+
+
+class TestValidateTime(unittest.TestCase):
+    """time (HH:MM) 타입 검증"""
+
+    def test_valid(self):
+        self.assertIsNone(_validate_setting('lunch_start', '11:20'))
+
+    def test_invalid_format(self):
+        error = _validate_setting('lunch_start', '25:00')
+        self.assertIsNotNone(error)
+
+
+class TestValidateNumber(unittest.TestCase):
+    """number 타입 검증"""
+
+    def test_valid(self):
+        self.assertIsNone(_validate_setting('geo_radius_meters', 200))
+
+    def test_below_min(self):
+        error = _validate_setting('geo_radius_meters', 10)
+        self.assertIsNotNone(error)
+
+    def test_above_max(self):
+        error = _validate_setting('geo_radius_meters', 10000)
+        self.assertIsNotNone(error)
+
+
+class TestValidateConfirmEnabled(unittest.TestCase):
+    """Sprint 33 confirm_* 설정 검증"""
+
+    def test_confirm_mech_valid(self):
+        self.assertIsNone(_validate_setting('confirm_mech_enabled', True))
+
+    def test_confirm_pi_valid(self):
+        self.assertIsNone(_validate_setting('confirm_pi_enabled', False))
+
+
+class TestValidateUnknownKey(unittest.TestCase):
+    """등록되지 않은 키 검증"""
+
+    def test_unknown_key(self):
+        error = _validate_setting('unknown_key', True)
+        self.assertIsNotNone(error)
+```
+
+#### Gray-box 테스트 — API 통합 테스트
+
+```python
+class TestSettingsAPIStringList(unittest.TestCase):
+    """PUT /api/admin/settings — JSON 배열 타입 통합 테스트"""
+
+    def test_update_pi_capable_partners(self):
+        """pi_capable_mech_partners 업데이트"""
+        # PUT /api/admin/settings
+        # body: {"pi_capable_mech_partners": ["TMS(M)", "FNI"]}
+        # → 200, updated_keys에 포함 확인
+        # → GET /api/admin/settings → pi_capable_mech_partners == ["TMS(M)", "FNI"]
+        pass
+
+    def test_update_override_lines(self):
+        """pi_gst_override_lines 업데이트"""
+        # PUT body: {"pi_gst_override_lines": ["JP", "FAB2"]}
+        # → 200 확인
+        pass
+
+    def test_update_mixed_types(self):
+        """bool + string_list 동시 업데이트"""
+        # PUT body: {"confirm_pi_enabled": true, "pi_capable_mech_partners": ["TMS(M)", "FNI"]}
+        # → 200 확인
+        pass
+
+    def test_invalid_string_list_rejected(self):
+        """잘못된 형식 400 거부"""
+        # PUT body: {"pi_capable_mech_partners": "TMS(M)"}  ← 문자열 (배열 아님)
+        # → 400 VALIDATION_ERROR
+        pass
+```
+
+### Task 3: version.py (변경 없음)
+
+Sprint 31C에서 이미 v1.9.1로 올렸으므로 유지. Sprint 33과 34는 동일 패치 범위.
+
+### 테스트 실행
+
+```bash
+cd ~/Desktop/GST/AXIS-OPS
+
+# Sprint 34 단위 테스트
+python -m pytest tests/backend/test_sprint34_settings_registry.py -v
+
+# 기존 admin settings 테스트 (있으면) regression 확인
+python -m pytest tests/ -k "settings or admin" -v
+
+# 전체 regression
+python -m pytest tests/ -v --tb=short -x
+```
+
+### 체크리스트
+
+**BE (✅ 완료)**:
+- [x] `admin.py` — `SETTING_KEYS` 레지스트리 dict 28개 키 (기존 ALLOWED_KEYS/TIME_KEYS/TIME_PAIRS 대체) ✅
+- [x] `admin.py` — `_validate_setting()` 함수 추가 (bool, time, number, string_list 4타입) ✅
+- [x] `admin.py` — PUT 핸들러에서 `_validate_setting()` 호출로 통합 검증 ✅
+- [x] `admin.py` — 시간 쌍 검증 — SETTING_KEYS의 `pair` 필드 기반 리팩터링 ✅
+- [x] `admin.py` — GET 기본값 `setdefault` 나열 → `SETTING_KEYS` 기반 자동화 ✅
+- [x] `admin.py` — `ALLOWED_KEYS = set(SETTING_KEYS.keys())` 하위호환 유지 ✅
+- [x] `SETTING_KEYS`에 Sprint 31C 키: `pi_capable_mech_partners`, `pi_gst_override_lines` (string_list) ✅
+- [x] `SETTING_KEYS`에 Sprint 33 키: `confirm_*_enabled` 7개 (bool) ✅
+- [x] 로컬 _validate_setting 검증 통과 (bool/time/number/string_list/unknown 전부) ✅
+
+**TEST**:
+- [x] _validate_setting 로컬 검증 (bool valid/invalid, string_list valid/empty/not-list/duplicate, time, number min/max, unknown key) ✅
+- [ ] 정식 테스트 파일 작성 — 추후
+- [ ] 전체 regression 테스트 — 추후
+
+**검증 (배포 후)**:
+- [ ] PUT `{"pi_capable_mech_partners": ["TMS", "FNI"]}` → 200
+- [ ] PUT `{"pi_capable_mech_partners": "TMS"}` → 400 (배열 아님)
+- [ ] PUT `{"pi_gst_override_lines": ["JP", "FAB2"]}` → 200
+- [ ] PUT `{"confirm_pi_enabled": true}` → 200
+- [ ] GET → 모든 키 28개 기본값 포함 확인
+- [ ] 기존 OPS Flutter 앱 설정 화면 정상 동작 (regression)
+
+### 장기 확장성
+
+새 설정 키 추가 시 `SETTING_KEYS`에 1줄만 추가하면 됨:
+
+```python
+# 예: 나중에 QI 검사 가능 협력사 추가 시
+'qi_capable_partners': {'type': 'string_list', 'default': [], 'allowed_values': None},
+
+# 예: 자동 마감 시간 추가 시
+'auto_close_time': {'type': 'time', 'default': '18:00', 'pair': None},
+
+# 예: 최대 동시 작업 수 추가 시
+'max_concurrent_tasks': {'type': 'number', 'default': 3, 'min': 1, 'max': 10},
+```
+
+GET 기본값 + PUT 검증이 자동 적용되므로, 기존 패턴처럼 `setdefault` 추가 + `ALLOWED_KEYS` 추가 + 타입 검증 추가를 3곳에서 할 필요 없음.
+
+### Task 4: GET /api/admin/workers — is_manager 필터 파라미터 추가
+
+**파일**: `backend/app/routes/admin.py` (Lines 185~287)
+
+**현재 문제**: 협력사 관리자 관리 화면에서 전체 작업자 목록이 표시됨. FNI 선택 시 FNI 소속 전원이 나오는데, 실제 manager는 1~2명. 나머지는 스크롤 낭비.
+
+**현재 쿼리 파라미터**: `approval_status`, `role`, `limit` — `is_manager` 필터 없음
+
+**수정**: `company`, `is_manager` 쿼리 파라미터 추가
+
+```python
+@admin_bp.route("/workers", methods=["GET"])
+@jwt_required
+@manager_or_admin_required
+def get_workers():
+    """
+    작업자 목록 조회 (필터링 지원)
+
+    Query Parameters:
+        approval_status: str (optional: pending, approved, rejected)
+        role: str (optional: MM, EE, TM, PI, QI, SI)
+        company: str (optional: GST, FNI, BAT, TMS(M), TMS(E), P&S, C&A)
+        is_manager: str (optional: true/false — manager 필터)
+        limit: int (default: 200)
+    """
+    approval_status = request.args.get('approval_status')
+    role = request.args.get('role')
+    company_filter = request.args.get('company')        # ★ Sprint 34 추가
+    is_manager_filter = request.args.get('is_manager')  # ★ Sprint 34 추가
+    limit = min(500, request.args.get('limit', 200, type=int))
+
+    # ... 기존 where_clauses 구성 ...
+
+    # ★ Sprint 34: company 필터 (기존 manager 자사 필터와 별개)
+    if company_filter:
+        where_clauses.append("company = %s")
+        params.append(company_filter)
+
+    # ★ Sprint 34: is_manager 필터
+    if is_manager_filter is not None:
+        if is_manager_filter.lower() in ('true', '1'):
+            where_clauses.append("(is_manager = TRUE OR is_admin = TRUE)")
+        elif is_manager_filter.lower() in ('false', '0'):
+            where_clauses.append("is_manager = FALSE AND is_admin = FALSE")
+
+    # ... 이하 기존 로직 동일 ...
+```
+
+**하위호환**: 기존 호출(`?limit=500` 파라미터만 사용)은 필터 없이 동작 → 전체 반환 유지.
+
+**FE 사용 예시**:
+
+```
+OPS Flutter: GET /api/admin/workers?company=FNI&is_manager=true
+  → FNI 소속 manager/admin만 반환 (1~2명)
+
+OPS Flutter: GET /api/admin/workers?company=FNI
+  → FNI 소속 전체 (기존 동작 — manager 지정할 때 사용)
+
+VIEW:       GET /api/admin/workers?is_manager=true
+  → 전체 회사 manager/admin 목록
+```
+
+**OPS Flutter 변경**: 협력사 관리자 관리 화면에서 기본 호출을 `?is_manager=true`로 변경. "전체 보기" 토글 시 파라미터 제거.
+
+**테스트 추가** (`test_sprint34_settings_registry.py` 또는 별도 파일):
+
+```python
+class TestWorkersFilterIsManager(unittest.TestCase):
+    """GET /api/admin/workers — is_manager 필터 테스트"""
+
+    def test_filter_managers_only(self):
+        """is_manager=true → manager/admin만 반환"""
+        # GET /api/admin/workers?is_manager=true
+        # 응답의 모든 worker가 is_manager=True OR is_admin=True
+        pass
+
+    def test_filter_non_managers(self):
+        """is_manager=false → 일반 작업자만 반환"""
+        pass
+
+    def test_no_filter_returns_all(self):
+        """is_manager 미지정 → 전체 반환 (하위호환)"""
+        pass
+
+    def test_combined_filter(self):
+        """company=FNI&is_manager=true → FNI 소속 manager만"""
+        pass
+```
+
+**체크리스트 추가**:
+
+**BE (✅ 완료)**:
+- [x] `admin.py` GET /workers — `company` 쿼리 파라미터 추가 ✅
+- [x] `admin.py` GET /workers — `is_manager` 쿼리 파라미터 추가 (true → manager/admin, false → 일반) ✅
+- [x] 하위호환: 파라미터 미지정 시 전체 반환 ✅
+- [x] `is_manager=true` 시 `is_admin=TRUE`도 포함 ✅
+
+**TEST**:
+- [ ] is_manager 필터 테스트 — 추후
+- [ ] company + is_manager 복합 필터 테스트 — 추후
+
+**검증 (배포 후)**:
+- [ ] OPS Flutter 협력사 관리자 화면 — 기본 manager만 표시 확인
+- [ ] VIEW 권한 관리 페이지 — 기존 동작 유지
