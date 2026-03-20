@@ -18,6 +18,80 @@ from app.middleware.jwt_auth import jwt_required, admin_required, manager_or_adm
 from app.models.worker import get_db_connection, update_approval_status, get_worker_by_id
 from app.models.admin_settings import get_all_settings, update_setting
 from app.services.alert_service import create_and_broadcast_alert
+
+# ─── Sprint 34: 설정 키 레지스트리 ───────────────────────────────
+SETTING_KEYS: Dict[str, Dict[str, Any]] = {
+    # bool
+    'heating_jacket_enabled':     {'type': 'bool', 'default': False},
+    'phase_block_enabled':        {'type': 'bool', 'default': False},
+    'location_qr_required':       {'type': 'bool', 'default': True},
+    'auto_pause_enabled':         {'type': 'bool', 'default': True},
+    'geo_check_enabled':          {'type': 'bool', 'default': False},
+    'geo_strict_mode':            {'type': 'bool', 'default': False},
+    'confirm_mech_enabled':       {'type': 'bool', 'default': True},
+    'confirm_elec_enabled':       {'type': 'bool', 'default': True},
+    'confirm_tm_enabled':         {'type': 'bool', 'default': True},
+    'confirm_pi_enabled':         {'type': 'bool', 'default': False},
+    'confirm_qi_enabled':         {'type': 'bool', 'default': False},
+    'confirm_si_enabled':         {'type': 'bool', 'default': False},
+    'confirm_checklist_required': {'type': 'bool', 'default': False},
+    # time (HH:MM)
+    'break_morning_start':    {'type': 'time', 'default': '10:00', 'pair': 'break_morning_end'},
+    'break_morning_end':      {'type': 'time', 'default': '10:20', 'pair': 'break_morning_start'},
+    'break_afternoon_start':  {'type': 'time', 'default': '15:00', 'pair': 'break_afternoon_end'},
+    'break_afternoon_end':    {'type': 'time', 'default': '15:20', 'pair': 'break_afternoon_start'},
+    'lunch_start':            {'type': 'time', 'default': '11:20', 'pair': 'lunch_end'},
+    'lunch_end':              {'type': 'time', 'default': '12:20', 'pair': 'lunch_start'},
+    'dinner_start':           {'type': 'time', 'default': '17:00', 'pair': 'dinner_end'},
+    'dinner_end':             {'type': 'time', 'default': '18:00', 'pair': 'dinner_start'},
+    # number
+    'geo_latitude':           {'type': 'number', 'default': 35.1796},
+    'geo_longitude':          {'type': 'number', 'default': 129.0756},
+    'geo_radius_meters':      {'type': 'number', 'default': 200, 'min': 50, 'max': 5000},
+    # string_list (JSON 배열) — Sprint 31C PI 위임
+    'pi_capable_mech_partners': {'type': 'string_list', 'default': []},
+    'pi_gst_override_lines':    {'type': 'string_list', 'default': []},
+}
+
+ALLOWED_KEYS = set(SETTING_KEYS.keys())
+
+_TIME_PATTERN = re.compile(r'^([01]\d|2[0-3]):[0-5]\d$')
+
+
+def _validate_setting(key: str, value: Any) -> str | None:
+    """설정 값 타입 검증. 에러 시 메시지 반환, 정상이면 None."""
+    meta = SETTING_KEYS.get(key)
+    if not meta:
+        return f'허용되지 않은 설정 키: {key}'
+
+    stype = meta['type']
+
+    if stype == 'bool':
+        if not isinstance(value, bool):
+            return f'{key}: bool 타입이어야 합니다.'
+
+    elif stype == 'time':
+        if not isinstance(value, str) or not _TIME_PATTERN.match(value):
+            return f'{key}: HH:MM 형식이어야 합니다. (예: "10:00")'
+
+    elif stype == 'number':
+        if not isinstance(value, (int, float)):
+            return f'{key}: 숫자 타입이어야 합니다.'
+        if 'min' in meta and value < meta['min']:
+            return f'{key}: 최소값은 {meta["min"]}입니다.'
+        if 'max' in meta and value > meta['max']:
+            return f'{key}: 최대값은 {meta["max"]}입니다.'
+
+    elif stype == 'string_list':
+        if not isinstance(value, list):
+            return f'{key}: 배열 타입이어야 합니다. (예: ["TMS"])'
+        for i, item in enumerate(value):
+            if not isinstance(item, str) or not item.strip():
+                return f'{key}[{i}]: 빈 문자열이 아닌 문자열이어야 합니다.'
+        if len(value) != len(set(value)):
+            return f'{key}: 중복 값이 포함되어 있습니다.'
+
+    return None
 from app.services.scheduler_service import trigger_unfinished_task_check_manually
 from app.services.task_service import _calculate_working_minutes
 from psycopg2 import Error as PsycopgError
@@ -215,6 +289,8 @@ def get_workers() -> Tuple[Dict[str, Any], int]:
     """
     approval_status = request.args.get('approval_status')
     role = request.args.get('role')
+    company_filter = request.args.get('company')
+    is_manager_filter = request.args.get('is_manager')
     limit = min(500, request.args.get('limit', 200, type=int))
 
     conn = None
@@ -239,6 +315,18 @@ def get_workers() -> Tuple[Dict[str, Any], int]:
         if role:
             where_clauses.append("role = %s")
             params.append(role)
+
+        # Sprint 34: company 필터
+        if company_filter:
+            where_clauses.append("company = %s")
+            params.append(company_filter)
+
+        # Sprint 34: is_manager 필터
+        if is_manager_filter is not None:
+            if is_manager_filter.lower() in ('true', '1'):
+                where_clauses.append("(is_manager = TRUE OR is_admin = TRUE)")
+            elif is_manager_filter.lower() in ('false', '0'):
+                where_clauses.append("is_manager = FALSE AND is_admin = FALSE")
 
         where_sql = " AND ".join(where_clauses) if where_clauses else "TRUE"
         params.append(limit)
@@ -1364,26 +1452,9 @@ def get_settings() -> Tuple[Dict[str, Any], int]:
     for s in settings_list:
         result[s.setting_key] = s.setting_value
 
-    # 기본값 보장 (테이블에 없을 경우)
-    result.setdefault('heating_jacket_enabled', False)
-    result.setdefault('phase_block_enabled', False)
-    result.setdefault('location_qr_required', True)
-    # Sprint 9: 휴게시간 기본값
-    result.setdefault('break_morning_start', '10:00')
-    result.setdefault('break_morning_end', '10:20')
-    result.setdefault('break_afternoon_start', '15:00')
-    result.setdefault('break_afternoon_end', '15:20')
-    result.setdefault('lunch_start', '11:20')
-    result.setdefault('lunch_end', '12:20')
-    result.setdefault('dinner_start', '17:00')
-    result.setdefault('dinner_end', '18:00')
-    result.setdefault('auto_pause_enabled', True)
-    # Sprint 19-D: 위치 보안 기본값
-    result.setdefault('geo_check_enabled', False)
-    result.setdefault('geo_strict_mode', False)
-    result.setdefault('geo_latitude', 35.1796)
-    result.setdefault('geo_longitude', 129.0756)
-    result.setdefault('geo_radius_meters', 200)
+    # Sprint 34: SETTING_KEYS 기반 기본값 자동 적용
+    for key, meta in SETTING_KEYS.items():
+        result.setdefault(key, meta['default'])
 
     return jsonify(result), 200
 
@@ -1411,76 +1482,43 @@ def update_settings() -> Tuple[Dict[str, Any], int]:
     """
     data = request.get_json(silent=True) or {}
 
-    # 허용된 설정 키 목록 (Sprint 9: 휴게시간 설정 추가)
-    ALLOWED_KEYS = {
-        'heating_jacket_enabled',
-        'phase_block_enabled',
-        'location_qr_required',
-        # Sprint 9: 휴게시간 설정
-        'break_morning_start',
-        'break_morning_end',
-        'break_afternoon_start',
-        'break_afternoon_end',
-        'lunch_start',
-        'lunch_end',
-        'dinner_start',
-        'dinner_end',
-        'auto_pause_enabled',
-        # Sprint 19-D: 위치 보안 설정
-        'geo_check_enabled',
-        'geo_strict_mode',
-        'geo_latitude',
-        'geo_longitude',
-        'geo_radius_meters',
-    }
-
-    # Sprint 9: HH:MM 형식 검증이 필요한 시간 설정 키
-    TIME_KEYS = {
-        'break_morning_start', 'break_morning_end',
-        'break_afternoon_start', 'break_afternoon_end',
-        'lunch_start', 'lunch_end',
-        'dinner_start', 'dinner_end',
-    }
-
-    # Sprint 9: 쌍으로 검증할 시작/종료 시간 (start_key, end_key)
-    TIME_PAIRS = [
-        ('break_morning_start', 'break_morning_end'),
-        ('break_afternoon_start', 'break_afternoon_end'),
-        ('lunch_start', 'lunch_end'),
-        ('dinner_start', 'dinner_end'),
-    ]
-
-    TIME_PATTERN = re.compile(r'^([01]\d|2[0-3]):[0-5]\d$')
-
+    # Sprint 34: SETTING_KEYS 레지스트리 기반 검증
     update_pairs = {k: v for k, v in data.items() if k in ALLOWED_KEYS}
 
     if not update_pairs:
         return jsonify({
             'error': 'INVALID_REQUEST',
-            'message': f'업데이트할 유효한 설정 키가 없습니다. 허용된 키: {", ".join(sorted(ALLOWED_KEYS))}'
+            'message': '업데이트할 유효한 설정 키가 없습니다.'
         }), 400
 
-    # Sprint 9: HH:MM 형식 검증
-    for key in TIME_KEYS:
-        if key in update_pairs:
-            value = update_pairs[key]
-            if not isinstance(value, str) or not TIME_PATTERN.match(value):
-                return jsonify({
-                    'error': 'INVALID_TIME_FORMAT',
-                    'message': f'{key} 값은 HH:MM 형식이어야 합니다. (예: "10:00")'
-                }), 400
+    # 타입별 검증 (통합)
+    for key, value in update_pairs.items():
+        error = _validate_setting(key, value)
+        if error:
+            return jsonify({'error': 'VALIDATION_ERROR', 'message': error}), 400
 
-    # Sprint 9: 시작 < 종료 검증 (양쪽 모두 업데이트 대상일 때만)
+    # 시간 쌍 검증 (start < end)
     from app.models.admin_settings import get_setting as _get_setting
-    for start_key, end_key in TIME_PAIRS:
-        start_val = update_pairs.get(start_key) or _get_setting(start_key)
-        end_val = update_pairs.get(end_key) or _get_setting(end_key)
-        if start_key in update_pairs or end_key in update_pairs:
-            if start_val and end_val and start_val >= end_val:
-                return jsonify({
-                    'error': 'INVALID_TIME_RANGE',
-                    'message': f'{start_key}({start_val})는 {end_key}({end_val})보다 이전이어야 합니다.'
-                }), 400
+    checked_pairs = set()
+    for tk in update_pairs:
+        meta = SETTING_KEYS.get(tk, {})
+        if meta.get('type') != 'time':
+            continue
+        pair_key = meta.get('pair')
+        if not pair_key or frozenset({tk, pair_key}) in checked_pairs:
+            continue
+        checked_pairs.add(frozenset({tk, pair_key}))
+        if tk.endswith('_start'):
+            start_val = update_pairs.get(tk) or _get_setting(tk)
+            end_val = update_pairs.get(pair_key) or _get_setting(pair_key)
+        else:
+            start_val = update_pairs.get(pair_key) or _get_setting(pair_key)
+            end_val = update_pairs.get(tk) or _get_setting(tk)
+        if start_val and end_val and start_val >= end_val:
+            return jsonify({
+                'error': 'INVALID_TIME_RANGE',
+                'message': f'시작 시간({start_val})이 종료 시간({end_val})보다 이전이어야 합니다.'
+            }), 400
 
     failed_keys = []
     for key, value in update_pairs.items():
