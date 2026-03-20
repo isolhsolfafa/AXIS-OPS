@@ -497,21 +497,23 @@ def get_task_categories_for_worker(
     product_mech_partner: Optional[str],
     product_elec_partner: Optional[str],
     product_module_outsourcing: Optional[str],
-    worker_active_role: Optional[str] = None
+    worker_active_role: Optional[str] = None,
+    product_line: Optional[str] = None
 ) -> Optional[List[str]]:
     """
     작업자의 company + role + 제품 협력사 정보를 기반으로
     해당 작업자가 볼 수 있는 task_category 목록을 반환.
 
     Sprint 11: active_role 파라미터 추가.
-    GST 작업자는 active_role(PI/QI/SI)이 있으면 해당 category만 반환.
+    Sprint 31C: product_line 추가 — PI 협력사 위임 분기.
 
-    필터링 규칙 (CLAUDE.md 기준):
-      - TMS(M): module_outsourcing='TMS' → TMS task
-                + mech_partner 매칭 → MECH task도 표시
-      - FNI/BAT: mech_partner 매칭 → MECH task만
-      - TMS(E)/P&S/C&A: elec_partner 매칭 → ELEC task만
-      - GST(PI/QI/SI): active_role > role 순으로 → 해당 검사 category
+    필터링 규칙:
+      - TMS(M): TMS + MECH + PI(pi_capable이면, JP 제외)
+      - FNI/BAT: MECH + PI(pi_capable이면, JP 제외)
+      - TMS(E)/P&S/C&A: ELEC only
+      - GST PI: PI (단, pi_capable 협력사 담당이면 제외, JP이면 유지)
+      - GST QI/SI: 해당 검사 category
+      - ADMIN: 전체 조회
 
     Args:
         worker_company: workers.company
@@ -519,39 +521,66 @@ def get_task_categories_for_worker(
         product_mech_partner: plan.product_info.mech_partner
         product_elec_partner: plan.product_info.elec_partner
         product_module_outsourcing: plan.product_info.module_outsourcing
-        worker_active_role: workers.active_role (Sprint 11, optional)
+        worker_active_role: workers.active_role (Sprint 11)
+        product_line: plan.product_info.line (Sprint 31C)
 
     Returns:
-        보여줄 task_category 리스트 (예: ['MECH'], ['ELEC'], ['TMS', 'MECH'], ['PI'])
+        보여줄 task_category 리스트 (예: ['MECH'], ['ELEC'], ['TMS', 'MECH', 'PI'])
     """
     categories: List[str] = []
 
     # GST 사내직원: active_role > role 기반 (PI, QI, SI, ADMIN)
     if worker_company == 'GST' or worker_role in ('PI', 'QI', 'SI', 'ADMIN'):
-        # active_role이 있으면 우선 적용 (Sprint 11)
         effective_role = worker_active_role if worker_active_role else worker_role
-        if effective_role in ('PI', 'QI', 'SI'):
-            categories.append(effective_role)
-        elif effective_role == 'ADMIN':
-            # 관리자는 전체 조회 → None 반환 = 필터 없음
+        if effective_role == 'ADMIN':
             return None
+        if effective_role == 'PI':
+            # Sprint 31C: PI 협력사 위임 분기
+            # pi_capable_mech_partners: mech_partner 컬럼 값 기준 (예: ["TMS"])
+            pi_capable = get_setting('pi_capable_mech_partners', [])
+            mech_upper = product_mech_partner.upper() if product_mech_partner else ''
+            if pi_capable and mech_upper and mech_upper in [p.upper() for p in pi_capable]:
+                # mech_partner가 PI 가능 협력사 → GST PI 제외 (단, override 라인이면 유지)
+                override_lines = get_setting('pi_gst_override_lines', [])
+                line_upper = product_line.strip().upper() if product_line else ''
+                is_override = any(line_upper.startswith(p.upper()) for p in override_lines)
+                if is_override:
+                    categories.append('PI')
+                # else: 협력사 담당 → GST PI에서 PI 제외
+            else:
+                categories.append('PI')
+        elif effective_role in ('QI', 'SI'):
+            categories.append(effective_role)
         return categories
 
-    # TMS(M): TMS task + mech_partner 매칭 시 MECH task도
+    # TMS(M): TMS task + mech_partner 매칭 시 MECH + PI(위임 시)
     if worker_company == 'TMS(M)':
         if product_module_outsourcing and 'TMS' in product_module_outsourcing.upper():
             categories.append('TMS')
-        if product_mech_partner and worker_company == 'TMS(M)':
-            # DRAGON 케이스: TMS(M)이 mech_partner일 수도 있음
-            # product_info에 mech_partner='TMS'로 등록된 경우 MECH도 표시
-            if product_mech_partner.upper() == 'TMS':
-                categories.append('MECH')
+        if product_mech_partner and product_mech_partner.upper() == 'TMS':
+            categories.append('MECH')
+            # Sprint 31C: PI 위임 — worker_company가 pi_capable 회사인지 확인
+            pi_capable = get_setting('pi_capable_mech_partners', [])
+            if product_mech_partner.upper() in [p.upper() for p in pi_capable]:
+                override_lines = get_setting('pi_gst_override_lines', [])
+                line_upper = product_line.strip().upper() if product_line else ''
+                is_override = any(line_upper.startswith(p.upper()) for p in override_lines)
+                if not is_override:
+                    categories.append('PI')
         return categories if categories else []
 
-    # FNI / BAT: mech_partner 매칭 → MECH only
+    # FNI / BAT: mech_partner 매칭 → MECH + PI(위임 시)
     if worker_company in ('FNI', 'BAT'):
         if product_mech_partner and product_mech_partner.upper() == worker_company.upper():
             categories.append('MECH')
+            # Sprint 31C: PI 위임 (향후 확장 대비)
+            pi_capable = get_setting('pi_capable_mech_partners', [])
+            if product_mech_partner.upper() in [p.upper() for p in pi_capable]:
+                override_lines = get_setting('pi_gst_override_lines', [])
+                line_upper = product_line.strip().upper() if product_line else ''
+                is_override = any(line_upper.startswith(p.upper()) for p in override_lines)
+                if not is_override:
+                    categories.append('PI')
         return categories
 
     # TMS(E) / P&S / C&A: elec_partner 매칭 → ELEC only
@@ -598,7 +627,8 @@ def filter_tasks_for_worker(
         product_mech_partner=product.mech_partner if product else None,
         product_elec_partner=product.elec_partner if product else None,
         product_module_outsourcing=product.module_outsourcing if product else None,
-        worker_active_role=worker_active_role
+        worker_active_role=worker_active_role,
+        product_line=product.line if product else None,
     )
 
     # None = 필터 없음 (ADMIN), 빈 리스트면 매칭 없음 → 빈 결과
