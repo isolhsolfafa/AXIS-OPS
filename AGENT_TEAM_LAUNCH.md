@@ -12316,14 +12316,14 @@ python -m pytest tests/ -v --tb=short -x
 - [ ] `test_company_task_filtering.py` — product_line 파라미터 호환성 (기본값 None → 기존 동작 유지)
 - [ ] 전체 regression 테스트 통과 확인
 
-**검증 (배포 후)**:
-- [ ] TMS(M) 작업자 → GAIA(mech=TMS, line=P4-D) QR 스캔 → PI 보임
-- [ ] TMS(M) 작업자 → GAIA(mech=TMS, line=JP(F15)) QR 스캔 → PI 안 보임
-- [ ] GST PI 작업자 → GAIA(mech=TMS, line=P4-D) QR 스캔 → PI 안 보임
-- [ ] GST PI 작업자 → GAIA(mech=TMS, line=JP(F15)) QR 스캔 → PI 보임
-- [ ] TMS(M) → DRAGON(mech=TMS) QR 스캔 → PI 보임
-- [ ] 기존 GAIA(mech=FNI) → GST PI에서 PI 정상 표시 (변경 없음)
-- [ ] admin_settings 수정 후 즉시 반영 확인
+**검증 (✅ 배포 후 실기기 확인 완료)**:
+- [x] TMS(M) 작업자 → GAIA(mech=TMS, line=P4-D) QR 스캔 → PI 보임 ✅
+- [x] TMS(M) 작업자 → GAIA(mech=TMS, line=JP(F15)) QR 스캔 → PI 안 보임 ✅
+- [x] GST PI 작업자 → GAIA(mech=TMS, line=P4-D) QR 스캔 → PI 안 보임 ✅
+- [x] GST PI 작업자 → GAIA(mech=TMS, line=JP(F15)) QR 스캔 → PI 보임 ✅
+- [x] TMS(M) → DRAGON(mech=TMS) QR 스캔 → PI 보임 ✅
+- [x] 기존 GAIA(mech=FNI) → GST PI에서 PI 정상 표시 (변경 없음) ✅
+- [x] admin_settings 수정 후 즉시 반영 확인 ✅
 
 ### 롤백 계획
 
