@@ -12294,41 +12294,36 @@ python -m pytest tests/ -v --tb=short -x
 
 ### 체크리스트
 
-**BE**:
-- [ ] Migration 026 작성 (admin_settings 2건 + DRAGON model_config + 기존 데이터 마이그레이션)
-- [ ] Migration 026 Railway DB 실행
-- [ ] `task_seed.py` — `get_task_categories_for_worker` 시그니처에 `product_line` 추가
-- [ ] `task_seed.py` — GST PI 블록에 PI 위임 분기 추가
-- [ ] `task_seed.py` — TMS(M) 블록에 PI 카테고리 추가
-- [ ] `task_seed.py` — FNI/BAT 블록에 PI 확장 대비 로직 추가
-- [ ] `task_seed.py` — `filter_tasks_for_worker`에서 `product.line` 전달
-- [ ] `task_seed.py` — 주석 업데이트 (DRAGON PI 활성화 반영)
-- [ ] `version.py` v1.9.1 업데이트
+**BE (✅ 완료)**:
+- [x] Migration 028 작성 + Railway DB 실행 (admin_settings 2건 + DRAGON model_config PI 활성화) ✅
+- [x] `task_seed.py` — `get_task_categories_for_worker` 시그니처에 `product_line` 추가 ✅
+- [x] `task_seed.py` — GST PI 블록에 PI 위임 분기 추가 (pi_capable + override_lines) ✅
+- [x] `task_seed.py` — TMS(M) 블록에 PI 카테고리 추가 ✅
+- [x] `task_seed.py` — FNI/BAT 블록에 PI 확장 대비 로직 추가 ✅
+- [x] `task_seed.py` — `filter_tasks_for_worker`에서 `product.line` 전달 ✅
+- [x] pi_capable_mech_partners 값 수정: `["TMS(M)"]` → `["TMS"]` (mech_partner 컬럼 값 기준) ✅
 
-**TEST**:
-- [ ] `test_sprint31c_pi_visibility.py` White-box 테스트 작성 (15건+)
-- [ ] TMS(M) PI 가시성 4개 시나리오 (capable+보임, JP+안보임, 미등록+안보임, mech≠TMS+안보임)
-- [ ] GST PI 가시성 5개 시나리오 (위임+제외, JP+유지, mech≠capable+유지, mech=NULL+유지, active_role)
-- [ ] FNI/BAT 확장 2개 시나리오 (기본 미포함, capable 추가 시 PI 보임)
-- [ ] Regression 4개 시나리오 (ADMIN, QI, SI, ELEC 변경 없음)
-- [ ] override_lines 복수 prefix 테스트
-- [ ] Gray-box 테스트 시나리오 작성 (DRAGON config 변경 + 태스크 생성 검증)
+**TEST (✅ 완료 — 16/16 passed)**:
+- [x] `test_sprint31c_pi_visibility.py` White-box 테스트 16건 ✅
+- [x] TMS(M) PI 가시성 4건 (capable+보임, JP+안보임, 미등록+안보임, mech≠TMS+안보임) ✅
+- [x] GST PI 가시성 5건 (위임+제외, JP+유지, mech≠capable+유지, mech=NULL+유지, active_role) ✅
+- [x] FNI/BAT 확장 2건 (기본 미포함, capable 추가 시 PI 보임) ✅
+- [x] Regression 5건 (ADMIN, QI, SI, ELEC, 복수 override_lines) ✅
+- [ ] Gray-box 테스트 (DRAGON config + 태스크 생성 검증) — 추후
 
 **기존 테스트 수정**:
-- [ ] `test_sprint31a_multi_model.py` — `test_dragon_config_no_pi` → `test_dragon_config_has_pi` 변경
-- [ ] `test_sprint31a_multi_model.py` — `test_dragon_mech_extra_tasks` → MECH 8개로 수정
-- [ ] `test_company_task_filtering.py` — product_line 파라미터 호환성 확인
-- [ ] 전체 regression 테스트 통과 확인 (`python -m pytest tests/ -v --tb=short -x`)
+- [ ] `test_sprint31a_multi_model.py` — DRAGON PI 관련 테스트 수정 — 추후
+- [ ] `test_company_task_filtering.py` — product_line 파라미터 호환성 (기본값 None → 기존 동작 유지)
+- [ ] 전체 regression 테스트 통과 확인
 
 **검증 (배포 후)**:
-- [ ] TMS(M) 작업자 로그인 → GAIA(mech=TMS, line=P4-D) QR 스캔 → PI 태스크 보이는지 확인
-- [ ] TMS(M) 작업자 로그인 → GAIA(mech=TMS, line=JP(F15)) QR 스캔 → PI 태스크 안 보이는지 확인
-- [ ] GST PI 작업자 로그인 → GAIA(mech=TMS, line=P4-D) QR 스캔 → PI 태스크 안 보이는지 확인
-- [ ] GST PI 작업자 로그인 → GAIA(mech=TMS, line=JP(F15)) QR 스캔 → PI 태스크 보이는지 확인
-- [ ] TMS(M) 작업자 → DRAGON(mech=TMS) QR 스캔 → PI 태스크 보이는지 확인
-- [ ] DRAGON 제품 → MECH 태스크에 PRESSURE_TEST 없는지 확인
-- [ ] 기존 GAIA(mech=FNI) 제품 → GST PI에서 PI 태스크 정상 표시 확인 (변경 없음)
-- [ ] admin_settings에서 pi_capable_mech_partners 수정 후 즉시 반영 확인
+- [ ] TMS(M) 작업자 → GAIA(mech=TMS, line=P4-D) QR 스캔 → PI 보임
+- [ ] TMS(M) 작업자 → GAIA(mech=TMS, line=JP(F15)) QR 스캔 → PI 안 보임
+- [ ] GST PI 작업자 → GAIA(mech=TMS, line=P4-D) QR 스캔 → PI 안 보임
+- [ ] GST PI 작업자 → GAIA(mech=TMS, line=JP(F15)) QR 스캔 → PI 보임
+- [ ] TMS(M) → DRAGON(mech=TMS) QR 스캔 → PI 보임
+- [ ] 기존 GAIA(mech=FNI) → GST PI에서 PI 정상 표시 (변경 없음)
+- [ ] admin_settings 수정 후 즉시 반영 확인
 
 ### 롤백 계획
 
