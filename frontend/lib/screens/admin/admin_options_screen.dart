@@ -65,6 +65,7 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
   List<Map<String, dynamic>> _managers = [];
   bool _isLoadingManagers = false;
   String? _selectedManagerCompany; // 필터
+  bool _showAllWorkers = false; // false: manager만, true: 전체 인원
 
   // 가입 승인 대기 목록
   List<Map<String, dynamic>> _pendingWorkers = [];
@@ -339,10 +340,18 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
     setState(() => _isLoadingManagers = true);
     try {
       final apiService = ref.read(apiServiceProvider);
-      final queryParams = _selectedManagerCompany != null
-          ? '?company=${Uri.encodeComponent(_selectedManagerCompany!)}'
-          : '';
-      final response = await apiService.get('/admin/managers$queryParams');
+      final params = <String, String>{};
+      if (_selectedManagerCompany != null) {
+        params['company'] = _selectedManagerCompany!;
+      }
+      if (!_showAllWorkers) {
+        params['is_manager'] = 'true';
+      }
+      final queryString = params.entries
+          .map((e) => '${e.key}=${Uri.encodeComponent(e.value)}')
+          .join('&');
+      final url = queryString.isEmpty ? '/admin/workers' : '/admin/workers?$queryString';
+      final response = await apiService.get(url);
       if (mounted) {
         setState(() {
           _managers = List<Map<String, dynamic>>.from(response['workers'] as List? ?? []);
@@ -764,7 +773,26 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
                 iconBg: GxColors.infoBg,
                 iconColor: GxColors.info,
                 title: '협력사 관리자 관리',
-                subtitle: 'is_manager 토글 (company 필터)',
+                subtitle: _showAllWorkers ? '전체 인원 표시 중' : '관리자만 표시 중',
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text('전체', style: TextStyle(fontSize: 11, color: _showAllWorkers ? GxColors.accent : GxColors.steel)),
+                    const SizedBox(width: 2),
+                    SizedBox(
+                      height: 24,
+                      child: Switch(
+                        value: _showAllWorkers,
+                        onChanged: (v) {
+                          setState(() => _showAllWorkers = v);
+                          _loadManagers();
+                        },
+                        activeColor: GxColors.accent,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ),
+                  ],
+                ),
               ),
               const SizedBox(height: 10),
 
