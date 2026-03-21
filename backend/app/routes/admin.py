@@ -9,8 +9,8 @@ Sprint 19-E: VIEW용 Admin 출퇴근 API 3개 추가
 import logging
 import re
 from flask import Blueprint, request, jsonify, g
-from typing import Tuple, Dict, Any, List
-from datetime import datetime, timezone, timedelta
+from typing import Tuple, Dict, Any, List, Optional
+from datetime import date, datetime, timezone, timedelta
 from collections import defaultdict
 
 from app.config import Config
@@ -1938,6 +1938,119 @@ def get_attendance_summary() -> Tuple[Dict[str, Any], int]:
             'error': 'INTERNAL_SERVER_ERROR',
             'message': '출퇴근 요약 조회에 실패했습니다.'
         }), 500
+
+
+# ============================================================
+# Sprint 35: 기간별 출입 추이 API
+# ============================================================
+
+def _get_attendance_trend_data(
+    date_from: date,
+    date_to: date,
+    company_filter: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """기간별 일별 출입 집계 — 단일 SQL"""
+    range_start = datetime(date_from.year, date_from.month, date_from.day, tzinfo=_KST)
+    range_end = datetime(date_to.year, date_to.month, date_to.day, tzinfo=_KST) + timedelta(days=1)
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # 일별 출근 집계
+        checkin_query = """
+            SELECT
+                DATE(pa.check_time AT TIME ZONE 'Asia/Seoul') AS check_date,
+                COUNT(DISTINCT pa.worker_id) AS checked_in,
+                COUNT(DISTINCT CASE WHEN pa.work_site = 'HQ' THEN pa.worker_id END) AS hq_count,
+                COUNT(DISTINCT CASE WHEN pa.work_site != 'HQ' THEN pa.worker_id END) AS site_count
+            FROM hr.partner_attendance pa
+            INNER JOIN workers w ON w.id = pa.worker_id
+            WHERE pa.check_type = 'in'
+              AND pa.check_time >= %s AND pa.check_time < %s
+              AND w.company != 'GST'
+              AND w.approval_status = 'approved'
+        """
+        params: List[Any] = [range_start, range_end]
+        if company_filter:
+            checkin_query += " AND w.company = %s"
+            params.append(company_filter)
+        checkin_query += " GROUP BY check_date ORDER BY check_date"
+
+        cur.execute(checkin_query, params)
+        checkin_rows = {row['check_date']: row for row in cur.fetchall()}
+
+        # 전체 등록 인원
+        reg_query = "SELECT COUNT(*) AS cnt FROM workers WHERE company != 'GST' AND approval_status = 'approved'"
+        reg_params: List[Any] = []
+        if company_filter:
+            reg_query += " AND company = %s"
+            reg_params.append(company_filter)
+        cur.execute(reg_query, reg_params)
+        total_registered = cur.fetchone()['cnt']
+
+        # 빈 날짜 채우기
+        trend = []
+        current = date_from
+        while current <= date_to:
+            row = checkin_rows.get(current)
+            trend.append({
+                'date': current.strftime('%Y-%m-%d'),
+                'total_registered': total_registered,
+                'checked_in': row['checked_in'] if row else 0,
+                'hq_count': row['hq_count'] if row else 0,
+                'site_count': row['site_count'] if row else 0,
+            })
+            current += timedelta(days=1)
+        return trend
+    finally:
+        if conn:
+            put_conn(conn)
+
+
+@admin_bp.route("/hr/attendance/trend", methods=["GET"])
+@jwt_required
+@manager_or_admin_required
+def get_attendance_trend() -> Tuple[Dict[str, Any], int]:
+    """
+    기간별 일별 출입 인원 추이
+
+    Query: date_from=YYYY-MM-DD&date_to=YYYY-MM-DD (필수, 최대 90일)
+    """
+    date_from_str = request.args.get('date_from')
+    date_to_str = request.args.get('date_to')
+
+    if not date_from_str or not date_to_str:
+        return jsonify({
+            'error': 'INVALID_PARAMS',
+            'message': 'date_from, date_to 파라미터가 필요합니다. (YYYY-MM-DD)'
+        }), 400
+
+    try:
+        dt_from = datetime.strptime(date_from_str, '%Y-%m-%d').date()
+        dt_to = datetime.strptime(date_to_str, '%Y-%m-%d').date()
+    except ValueError:
+        return jsonify({'error': 'INVALID_DATE', 'message': 'date 형식: YYYY-MM-DD'}), 400
+
+    if dt_from > dt_to:
+        return jsonify({'error': 'INVALID_PARAMS', 'message': 'date_from은 date_to보다 이전이어야 합니다.'}), 400
+
+    if (dt_to - dt_from).days > 90:
+        return jsonify({'error': 'INVALID_PARAMS', 'message': '조회 범위는 최대 90일입니다.'}), 400
+
+    company_filter = _get_manager_company_filter()
+
+    try:
+        trend = _get_attendance_trend_data(dt_from, dt_to, company_filter)
+        return jsonify({
+            'date_from': date_from_str,
+            'date_to': date_to_str,
+            'trend': trend,
+        }), 200
+    except Exception as e:
+        logger.error(f"attendance trend error: {e}")
+        return jsonify({'error': 'INTERNAL_SERVER_ERROR', 'message': '출입 추이 조회 실패'}), 500
 
 
 # ============================================================
