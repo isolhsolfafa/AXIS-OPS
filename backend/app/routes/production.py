@@ -127,6 +127,8 @@ def _build_order_item(
     elec_partner = products[0].get('elec_partner', '')
 
     # 공정별 상태
+    # DB task_category → API 응답 키 매핑 (TMS→TM: 시스템 표준 통일)
+    _CAT_TO_PROC = {'TMS': 'TM'}
     process_types = ['MECH', 'ELEC', 'TMS', 'PI', 'QI', 'SI']
     processes = {}
 
@@ -141,10 +143,11 @@ def _build_order_item(
         if total == 0:
             continue
 
-        confirm_key = f"{sales_order}:{pt}"
+        proc_key = _CAT_TO_PROC.get(pt, pt)
+        confirm_key = f"{sales_order}:{proc_key}"
         confirm = confirms.get(confirm_key)
 
-        processes[pt] = {
+        processes[proc_key] = {
             'total': total,
             'completed': completed,
             'pct': round(completed / total * 100, 1),
@@ -162,7 +165,7 @@ def _build_order_item(
         for pt in process_types:
             cat = sns_progress.get(sn, {}).get(pt, {})
             if cat.get('total', 0) > 0:
-                sn_prog[pt] = {
+                sn_prog[_CAT_TO_PROC.get(pt, pt)] = {
                     'total': cat['total'],
                     'done': cat['completed'],
                     'pct': cat.get('pct', 0.0),
