@@ -13878,7 +13878,11 @@ def _is_process_confirmable(sns_progress, process_type, settings, proc_key=None)
   - 근본 원인: `sns_progress`가 주차 내 전체 S/N을 포함 → 다른 O/N 미완료 S/N이 현재 O/N 판정에 영향
   - `has_data` 플래그 추가: 해당 공정 데이터 0건이면 False 반환
 - [x] `api/production.ts` — `partner_info.mixed` 혼재 판정 수정 (S/N 배열 기반) ✅ 2026-03-23
-- [ ] `admin_settings` — `confirm_mech_enabled=true` 설정 후 confirmable=true 배포 확인
+- [x] MECH/ELEC `✓ 확인` 정상 ✅ 2026-03-23
+- [x] `production.py` — `confirm_production()` TM→TMS 역방향 매핑 추가 ✅ 2026-03-23
+  - 원인: FE가 `process_type='TM'` 전송 → `sns_progress`는 DB키 `'TMS'` → `cats.get('TM')` = 빈 dict → NOT_CONFIRMABLE
+  - `_PROC_TO_CAT = {'TM': 'TMS'}` 역매핑으로 DB category 변환 후 호출
+- [ ] TM 실적확인 배포 후 확인
 - [ ] FE 확인 버튼 활성화 확인 (enabled + confirmable + !confirmed)
 
 ---

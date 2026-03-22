@@ -373,10 +373,14 @@ def confirm_production() -> Tuple[Dict[str, Any], int]:
             return jsonify({'error': 'NOT_FOUND', 'message': 'O/N에 해당하는 제품이 없습니다.'}), 404
 
         # 2. confirmable 조건 재검증
+        # FE는 시스템 표준 키(TM)를 전송하지만, sns_progress는 DB category(TMS) 기준
+        _PROC_TO_CAT = {'TM': 'TMS'}  # _CAT_TO_PROC의 역방향
+        db_category = _PROC_TO_CAT.get(process_type, process_type)
+
         sns_progress = _calc_sn_progress(cur, serial_numbers)
         settings = _get_confirm_settings(cur)
 
-        if not _is_process_confirmable(sns_progress, process_type, settings):
+        if not _is_process_confirmable(sns_progress, db_category, settings, proc_key=process_type, serial_numbers=serial_numbers):
             return jsonify({
                 'error': 'NOT_CONFIRMABLE',
                 'message': f'{process_type} 공정이 아직 완료되지 않은 S/N이 있습니다.',
