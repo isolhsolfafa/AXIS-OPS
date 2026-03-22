@@ -154,6 +154,32 @@ def _build_order_item(
             'confirm_id': confirm['id'] if confirm else None,
         }
 
+    # S/N 상세 배열 구성 (FE expand용)
+    sns_detail = []
+    for p in products:
+        sn = p['serial_number']
+        sn_prog = {}
+        for pt in process_types:
+            cat = sns_progress.get(sn, {}).get(pt, {})
+            if cat.get('total', 0) > 0:
+                sn_prog[pt] = {
+                    'total': cat['total'],
+                    'done': cat['completed'],
+                    'pct': cat.get('pct', 0.0),
+                }
+        sns_detail.append({
+            'serial_number': sn,
+            'mech_partner': p.get('mech_partner', ''),
+            'elec_partner': p.get('elec_partner', ''),
+            'progress': sn_prog,
+        })
+
+    # sn_summary: 첫 S/N 표시 (2대 이상이면 "외 N대")
+    if len(serial_numbers) == 1:
+        sn_summary = serial_numbers[0]
+    else:
+        sn_summary = f"{serial_numbers[0]} 외 {len(serial_numbers) - 1}대"
+
     # 전체 진행률
     all_total = sum(p.get('total', 0) for p in processes.values())
     all_completed = sum(p.get('completed', 0) for p in processes.values())
@@ -164,7 +190,9 @@ def _build_order_item(
         'mech_partner': mech_partner,
         'elec_partner': elec_partner,
         'sn_count': len(serial_numbers),
+        'sn_summary': sn_summary,
         'serial_numbers': serial_numbers,
+        'sns': sns_detail,
         'progress_pct': round(all_completed / all_total * 100, 1) if all_total > 0 else 0.0,
         'processes': processes,
     }
