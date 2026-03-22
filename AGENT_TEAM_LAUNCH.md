@@ -13882,6 +13882,9 @@ def _is_process_confirmable(sns_progress, process_type, settings, proc_key=None)
 - [x] `production.py` — `confirm_production()` TM→TMS 역방향 매핑 추가 ✅ 2026-03-23
   - 원인: FE가 `process_type='TM'` 전송 → `sns_progress`는 DB키 `'TMS'` → `cats.get('TM')` = 빈 dict → NOT_CONFIRMABLE
   - `_PROC_TO_CAT = {'TM': 'TMS'}` 역매핑으로 DB category 변환 후 호출
+- [x] `ProductionPerformancePage.tsx` — ProcessCell N/A 상태에서 협력사 + 혼재 마크 표시 ✅ 2026-03-23
+  - O/N 6587 (5대, 미착수): 기구 FNI/BAT 혼재, 전장 C&A/TMS 혼재인데 마크 미표시
+  - `total===0` early return에 partnerDisplay + mixed 렌더링 추가
 - [ ] TM 실적확인 배포 후 확인
 - [ ] FE 확인 버튼 활성화 확인 (enabled + confirmable + !confirmed)
 
