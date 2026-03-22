@@ -99,19 +99,32 @@ def _is_process_confirmable(
     process_type: str,
     settings: Dict[str, bool],
     proc_key: Optional[str] = None,
+    serial_numbers: Optional[List[str]] = None,
 ) -> bool:
-    """O/N 전체 S/N이 해당 공정 100% 완료인지 판정"""
+    """O/N 전체 S/N이 해당 공정 100% 완료인지 판정
+
+    Args:
+        sns_progress: 전체 S/N progress (여러 O/N 포함 가능)
+        process_type: DB task_category (MECH, ELEC, TMS 등)
+        settings: confirm_*_enabled 설정값
+        proc_key: 시스템 표준 공정키 (TM 등). 없으면 process_type 사용
+        serial_numbers: 현재 O/N에 속하는 S/N 목록. 없으면 전체 순회 (하위호환)
+    """
     key = f'confirm_{(proc_key or process_type).lower()}_enabled'
     if not settings.get(key, False):
         return False
 
-    for sn, cats in sns_progress.items():
-        cat_data = cats.get(process_type, {})
+    # 현재 O/N의 S/N만 필터링하여 판정
+    check_sns = serial_numbers or list(sns_progress.keys())
+    has_data = False
+    for sn in check_sns:
+        cat_data = sns_progress.get(sn, {}).get(process_type, {})
         if cat_data.get('total', 0) == 0:
             continue
+        has_data = True
         if cat_data.get('completed', 0) < cat_data.get('total', 0):
             return False
-    return True
+    return has_data
 
 
 def _build_order_item(
@@ -153,7 +166,7 @@ def _build_order_item(
             'completed': completed,
             'ready': completed,
             'pct': round(completed / total * 100, 1),
-            'confirmable': _is_process_confirmable(sns_progress, pt, settings, proc_key),
+            'confirmable': _is_process_confirmable(sns_progress, pt, settings, proc_key, serial_numbers),
             'confirmed': confirm is not None,
             'confirmed_at': confirm['confirmed_at'].isoformat() if confirm and confirm.get('confirmed_at') else None,
             'confirm_id': confirm['id'] if confirm else None,

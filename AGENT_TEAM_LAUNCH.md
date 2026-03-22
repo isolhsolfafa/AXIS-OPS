@@ -13873,6 +13873,50 @@ def _is_process_confirmable(sns_progress, process_type, settings, proc_key=None)
 
 - [x] `production.py` — processes dict에 `ready` alias 추가 ✅ 2026-03-22
 - [x] `production.py` — `_is_process_confirmable`에 `proc_key` 파라미터 전달 ✅ 2026-03-22
-- [ ] `admin_settings` — `confirm_mech_enabled=true` 설정 후 confirmable=true 확인
-- [ ] FE `6/6` 정상 표시 확인
+- [x] FE `6/6` 정상 표시 확인 ✅ 2026-03-22
+- [x] `production.py` — `_is_process_confirmable`에 `serial_numbers` 파라미터 추가 (O/N 스코프 필터) ✅ 2026-03-23
+  - 근본 원인: `sns_progress`가 주차 내 전체 S/N을 포함 → 다른 O/N 미완료 S/N이 현재 O/N 판정에 영향
+  - `has_data` 플래그 추가: 해당 공정 데이터 0건이면 False 반환
+- [x] `api/production.ts` — `partner_info.mixed` 혼재 판정 수정 (S/N 배열 기반) ✅ 2026-03-23
+- [ ] `admin_settings` — `confirm_mech_enabled=true` 설정 후 confirmable=true 배포 확인
 - [ ] FE 확인 버튼 활성화 확인 (enabled + confirmable + !confirmed)
+
+---
+
+## BACKLOG: SAP I/F 대비 실적확인 데이터 구조 보강
+
+> **시급도**: 낮음 — SAP 연동 설계 확정 시 착수
+> **참조**: OPS_API_REQUESTS.md #34
+
+### 배경
+
+현재 `plan.production_confirm`은 O/N + 공정 단위로만 저장. SAP PP/CO (CO11N 공정실적확인) 연동 시 S/N 단위 실적, 수량 구분, 전송 상태 추적이 필요.
+
+### 필요 작업
+
+**마이그레이션 (SAP 설계 확정 후)**:
+
+1. `plan.production_confirm_detail` 테이블 신설
+   - `confirm_id` FK → `production_confirm`
+   - `serial_number`, `process_type`, `yield_qty`, `scrap_qty`, `rework_qty`
+   - `sap_operation` (SAP 공정번호), `sap_work_center` (SAP 작업장)
+
+2. `plan.sap_interface_log` 테이블 신설
+   - `confirm_id` FK, `interface_type` (CO11N/REVERSAL)
+   - `sap_doc_number`, `status` (PENDING/SENT/SUCCESS/FAILED/REVERSED)
+   - `request_payload` JSONB, `response_payload` JSONB
+   - `retry_count`, `sent_at`, `completed_at`
+
+3. `plan.production_confirm` 컬럼 추가
+   - `sap_status` VARCHAR(20) DEFAULT 'NOT_SENT'
+   - `sap_doc_number` VARCHAR(50)
+   - `sap_sent_at` TIMESTAMPTZ
+
+**BE 로직 변경**:
+
+4. `confirm_production()` — INSERT 시 `production_confirm_detail` 동시 생성 (S/N별 1건씩)
+5. `cancel_confirm()` — `sap_status = 'CONFIRMED'`이면 역전기 요청 로직 추가
+6. SAP 배치 스케줄러 — `sap_status = 'NOT_SENT'` 건 주기적 전송
+
+**선제 적용 가능 (현재)**:
+- `production_confirm`에 `sap_status` 컬럼만 먼저 추가 (기존 로직 무영향, DEFAULT 'NOT_SENT')
