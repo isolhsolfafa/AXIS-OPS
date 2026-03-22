@@ -13826,3 +13826,53 @@ __version__ = '1.9.2'
 - [ ] 주말 날짜 포함 (checked_in=0)
 - [ ] Manager → 자사 데이터만 반환
 - [ ] VIEW 연동 → 주간/월간 라인 차트 표시
+
+---
+
+## BUG-26-B: production processes 필드 불일치 — ready alias + confirmable 매핑 수정
+
+> **목적**: production API processes 내부 필드를 FE 타입과 일치시키고, confirmable 판정 시 매핑 후 키(proc_key) 전달
+> **범위**: BE `production.py` 2곳 수정
+> **의존성**: BUG-26 (TMS→TM 매핑) 완료
+
+### 배경
+
+BUG-26에서 `_CAT_TO_PROC` 매핑을 추가했으나, 2가지 후속 문제 발생:
+1. O/N processes에 `completed` 필드만 있고 FE가 참조하는 `ready` 없음 → `/6` 표시
+2. `_is_process_confirmable` 호출 시 매핑 전 DB키(`pt='TMS'`) 전달 → `confirm_tms_enabled` 조회 실패
+
+### 수정 내용
+
+**1. processes dict에 `ready` alias 추가:**
+```python
+processes[proc_key] = {
+    'total': total,
+    'completed': completed,
+    'ready': completed,           # ← FE 호환 alias
+    'pct': ...,
+    'confirmable': ...,
+}
+```
+
+**2. `_is_process_confirmable` 호출 시 `proc_key` 전달:**
+```python
+# 변경 전
+'confirmable': _is_process_confirmable(sns_progress, pt, settings),
+# 변경 후
+'confirmable': _is_process_confirmable(sns_progress, pt, settings, proc_key),
+```
+
+`_is_process_confirmable`에서 admin_settings 조회 키를 `proc_key` 기반으로:
+```python
+def _is_process_confirmable(sns_progress, process_type, settings, proc_key=None):
+    key = f'confirm_{(proc_key or process_type).lower()}_enabled'
+    ...
+```
+
+### 체크리스트
+
+- [ ] `production.py` — processes dict에 `ready` alias 추가
+- [ ] `production.py` — `_is_process_confirmable`에 `proc_key` 파라미터 전달
+- [ ] `admin_settings` — `confirm_mech_enabled=true` 설정 후 confirmable=true 확인
+- [ ] FE `6/6` 정상 표시 확인
+- [ ] FE 확인 버튼 활성화 확인 (enabled + confirmable + !confirmed)
