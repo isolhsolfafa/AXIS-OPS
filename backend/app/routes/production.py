@@ -98,9 +98,10 @@ def _is_process_confirmable(
     sns_progress: Dict[str, Dict],
     process_type: str,
     settings: Dict[str, bool],
+    proc_key: Optional[str] = None,
 ) -> bool:
     """O/N 전체 S/N이 해당 공정 100% 완료인지 판정"""
-    key = f'confirm_{process_type.lower()}_enabled'
+    key = f'confirm_{(proc_key or process_type).lower()}_enabled'
     if not settings.get(key, False):
         return False
 
@@ -150,8 +151,9 @@ def _build_order_item(
         processes[proc_key] = {
             'total': total,
             'completed': completed,
+            'ready': completed,
             'pct': round(completed / total * 100, 1),
-            'confirmable': _is_process_confirmable(sns_progress, pt, settings),
+            'confirmable': _is_process_confirmable(sns_progress, pt, settings, proc_key),
             'confirmed': confirm is not None,
             'confirmed_at': confirm['confirmed_at'].isoformat() if confirm and confirm.get('confirmed_at') else None,
             'confirm_id': confirm['id'] if confirm else None,

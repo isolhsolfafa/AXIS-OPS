@@ -13859,7 +13859,7 @@ processes[proc_key] = {
 # 변경 전
 'confirmable': _is_process_confirmable(sns_progress, pt, settings),
 # 변경 후
-'confirmable': _is_process_confirmable(sns_progress, pt, settings, proc_key),
+'confirmable': _is_process_confirmable(sns_progress, pt, settings, proc_key), 
 ```
 
 `_is_process_confirmable`에서 admin_settings 조회 키를 `proc_key` 기반으로:
@@ -13871,8 +13871,8 @@ def _is_process_confirmable(sns_progress, process_type, settings, proc_key=None)
 
 ### 체크리스트
 
-- [ ] `production.py` — processes dict에 `ready` alias 추가
-- [ ] `production.py` — `_is_process_confirmable`에 `proc_key` 파라미터 전달
+- [x] `production.py` — processes dict에 `ready` alias 추가 ✅ 2026-03-22
+- [x] `production.py` — `_is_process_confirmable`에 `proc_key` 파라미터 전달 ✅ 2026-03-22
 - [ ] `admin_settings` — `confirm_mech_enabled=true` 설정 후 confirmable=true 확인
 - [ ] FE `6/6` 정상 표시 확인
 - [ ] FE 확인 버튼 활성화 확인 (enabled + confirmable + !confirmed)
