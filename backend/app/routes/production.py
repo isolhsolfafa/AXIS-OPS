@@ -692,7 +692,7 @@ def get_monthly_summary() -> Tuple[Dict[str, Any], int]:
         # 실적확인 이력 (해당 월)
         cur.execute("""
             SELECT process_type, confirmed_week, COUNT(*) AS confirm_count,
-                   SUM(sn_count) AS confirmed_sn_count
+                   COUNT(*) AS confirmed_sn_count
             FROM plan.production_confirm
             WHERE confirmed_month = %s AND deleted_at IS NULL
             GROUP BY process_type, confirmed_week
