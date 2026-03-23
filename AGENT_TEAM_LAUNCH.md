@@ -14697,3 +14697,669 @@ def _is_tm_pressure_test_required(self) -> bool:
 - FE 코드 — VIEW Sprint 13에서 별도 진행
 - Sprint 37 partner 혼재 로직 (`_PROC_PARTNER_COL`, `partner_confirms`) — 구조 변경 없음
 ```
+
+---
+
+## Sprint 37-B: S/N별 실적확인 + TM 혼재 제거 + 탭별 End 필터 (2026-03-24) — #38
+
+> **목적**: ① TM partner_confirms에서 FNI 혼입 버그 수정 (TM 혼재 제거) ② 전 공정 S/N별 실적확인 ③ 탭별 end 날짜 필터
+> **참조**: OPS_API_REQUESTS.md #38
+> **대상**: `AXIS-OPS/backend/app/routes/production.py`, DB migration
+> **선행**: Sprint 37 완료 (partner별 실적확인), Sprint 37-A 완료 (tm_pressure_test_required)
+
+### 배경
+
+**문제 (#38)**: `_PROC_PARTNER_COL = {'TM': 'mech_partner'}`로 TM 혼재 판정 시 `mech_partner` 기준으로 FNI(기구 협력사)가 TM partner_confirms에 혼입. FNI는 tank을 제작하지 않으므로 TM 실적과 무관. TM 작업은 TMS(M)에서 전부 수행.
+
+**해결**: 3가지 변경
+1. **TM 혼재 제거** — `_PROC_PARTNER_COL`에서 `'TM'` 삭제. TM은 `is_tms=true` 모델 S/N만 자연 필터링 (TMS tasks 유무)
+2. **S/N별 실적확인** — `production_confirm`에 `serial_number` 추가. 모든 공정(MECH/ELEC/TM)에서 S/N 단위 확인. 일괄확인 = 여러 S/N rows 한 번에 INSERT
+3. **탭별 End 필터** — 기구전장 탭: `mech_end`/`elec_end`, TM 탭: `module_end` 기준. BE 응답에 end 날짜 포함
+
+### 분리 규칙 (Sprint 37에서 변경)
+
+| 공정 | 분리 기준 | 혼재 O/N | 비혼재 O/N | S/N별 확인 | 비고 |
+|------|----------|---------|----------|-----------|------|
+| MECH | `mech_partner` | partner 그룹 내 S/N별 버튼 | S/N별 버튼 | ✅ | 전체 완료 시 일괄확인 |
+| ELEC | `elec_partner` | partner 그룹 내 S/N별 버튼 | S/N별 버튼 | ✅ | 전체 완료 시 일괄확인 |
+| TM | ~~`mech_partner`~~ 제거 | — | S/N별 버튼 | ✅ | partner 혼재 미적용 |
+| PI/QI/SI | 분리 안함 | — | 기존 O/N 단위 | ❌ | 변경 없음 |
+
+### BE 작업 — Task 정의
+
+#### Task 1: DB Migration 032 (`backend/migrations/032_production_confirm_serial_number.sql`)
+
+- `production_confirm`에 `serial_number VARCHAR(20) DEFAULT NULL` 컬럼 추가
+- `sn_count` 컬럼 제거 (S/N별 1 row이므로 불필요)
+- unique index 변경: `(sales_order, process_type, COALESCE(partner, ''), serial_number)` WHERE `deleted_at IS NULL`
+- 기존 데이터 마이그레이션: 기존 rows (serial_number=NULL)는 유지 (하위호환)
+
+```sql
+BEGIN;
+
+-- 1. serial_number 컬럼 추가
+ALTER TABLE plan.production_confirm
+    ADD COLUMN IF NOT EXISTS serial_number VARCHAR(20) DEFAULT NULL;
+
+-- 2. sn_count 컬럼 제거
+ALTER TABLE plan.production_confirm
+    DROP COLUMN IF EXISTS sn_count;
+
+-- 3. unique index 변경
+DROP INDEX IF EXISTS production_confirm_active_unique;
+
+CREATE UNIQUE INDEX production_confirm_active_unique
+    ON plan.production_confirm(sales_order, process_type, COALESCE(partner, ''), serial_number)
+    WHERE deleted_at IS NULL;
+
+-- 4. serial_number 검색 인덱스
+CREATE INDEX IF NOT EXISTS idx_production_confirm_serial_number
+    ON plan.production_confirm(serial_number)
+    WHERE deleted_at IS NULL;
+
+COMMIT;
+```
+
+#### Task 2: `_PROC_PARTNER_COL` 수정 — TM 제거
+
+현재:
+```python
+_PROC_PARTNER_COL = {'MECH': 'mech_partner', 'ELEC': 'elec_partner', 'TM': 'mech_partner'}
+```
+
+변경:
+```python
+_PROC_PARTNER_COL = {'MECH': 'mech_partner', 'ELEC': 'elec_partner'}
+```
+
+→ TM은 partner 기반 혼재 판정 안 함. TMS tasks가 있는 S/N만 자연 필터링 (`is_tms=true` 모델).
+
+#### Task 3: `get_performance()` — product_info SELECT에 end 날짜 + model_config JOIN
+
+현재 SELECT:
+```python
+SELECT p.sales_order, p.serial_number, p.model,
+       p.mech_partner, p.elec_partner, p.line
+FROM plan.product_info p
+```
+
+변경:
+```python
+SELECT p.sales_order, p.serial_number, p.model,
+       p.mech_partner, p.elec_partner, p.line,
+       p.mech_end, p.elec_end,
+       COALESCE(p.module_end, p.module_start) AS module_end
+FROM plan.product_info p
+```
+
+→ FE에서 탭별 end 날짜 필터링에 사용
+
+confirms 조회 변경 — serial_number 포함:
+```python
+SELECT id, sales_order, process_type, partner, serial_number,
+       confirmed_week, confirmed_month, confirmed_by, confirmed_at
+FROM plan.production_confirm
+WHERE sales_order = ANY(%s) AND deleted_at IS NULL
+```
+
+confirms dict 키 변경:
+- partner + serial_number: `{sales_order}:{process_type}:{partner}:{serial_number}`
+- partner만: `{sales_order}:{process_type}:{partner}:` (하위호환)
+- 둘 다 없음: `{sales_order}:{process_type}::` (하위호환)
+
+#### Task 4: `_build_order_item()` — S/N별 confirmable/confirmed 구조
+
+**MECH/ELEC (혼재)**: partner_confirms 안에 sn_confirms 배열 추가
+
+```python
+partner_confirms_list.append({
+    'partner': ptnr,
+    'sn_confirms': [
+        {
+            'serial_number': sn,
+            'total': sn_total,
+            'completed': sn_completed,
+            'pct': round(sn_completed / sn_total * 100, 1) if sn_total > 0 else 0.0,
+            'confirmable': _is_sn_process_confirmable(sns_progress, pt, settings, proc_key, sn),
+            'confirmed': confirm is not None,
+            'confirmed_at': ...,
+            'confirm_id': ...,
+        }
+        for sn in ptnr_sns
+    ],
+    'all_confirmable': all(sn['confirmable'] for sn in sn_confirms),  # 일괄확인 가능 여부
+    'all_confirmed': all(sn['confirmed'] for sn in sn_confirms),
+})
+```
+
+**MECH/ELEC (비혼재) + TM**: sn_confirms 배열 직접 추가
+
+```python
+processes[proc_key] = {
+    'total': total,
+    'completed': completed,
+    'pct': ...,
+    'mixed': False,
+    'sn_confirms': [
+        {
+            'serial_number': sn,
+            'total': sn_total,
+            'completed': sn_completed,
+            'pct': ...,
+            'confirmable': _is_sn_process_confirmable(sns_progress, pt, settings, proc_key, sn),
+            'confirmed': ...,
+            'confirmed_at': ...,
+            'confirm_id': ...,
+        }
+        for sn in serial_numbers
+    ],
+    'all_confirmable': ...,
+    'all_confirmed': ...,
+}
+```
+
+**PI/QI/SI**: 기존 O/N 단위 유지 (sn_confirms 없음)
+
+**`_is_sn_process_confirmable()` 헬퍼 추가** — 단일 S/N 판정:
+```python
+def _is_sn_process_confirmable(
+    sns_progress: Dict, process_type: str, settings: Dict,
+    proc_key: str, serial_number: str
+) -> bool:
+    """단일 S/N의 해당 공정 confirmable 판정"""
+    key = f'confirm_{proc_key.lower()}_enabled'
+    if not settings.get(key, False):
+        return False
+    cat_data = sns_progress.get(serial_number, {}).get(process_type, {})
+    confirm_task = _CONFIRM_TASK_FILTER.get(process_type)
+    if confirm_task:
+        task_data = cat_data.get('tasks', {}).get(confirm_task, {})
+        return task_data.get('total', 0) > 0 and task_data.get('completed', 0) >= task_data.get('total', 0)
+    else:
+        return cat_data.get('total', 0) > 0 and cat_data.get('completed', 0) >= cat_data.get('total', 0)
+```
+
+**sns_detail에 end 날짜 추가**:
+```python
+sns_detail.append({
+    'serial_number': sn,
+    'mech_partner': p.get('mech_partner', ''),
+    'elec_partner': p.get('elec_partner', ''),
+    'mech_end': p.get('mech_end').isoformat() if p.get('mech_end') else None,
+    'elec_end': p.get('elec_end').isoformat() if p.get('elec_end') else None,
+    'module_end': p.get('module_end').isoformat() if p.get('module_end') else None,
+    'progress': sn_prog,
+})
+```
+
+#### Task 5: `confirm_production()` — serial_numbers 배열 처리
+
+요청 Body 변경:
+- 기존: `{ sales_order, process_type, partner?, confirmed_week, confirmed_month }`
+- 변경: `{ sales_order, process_type, partner?, serial_numbers: [str], confirmed_week, confirmed_month }`
+
+```python
+serial_numbers_req = data.get('serial_numbers', [])
+if not serial_numbers_req:
+    return jsonify({'error': 'INVALID_REQUEST', 'message': 'serial_numbers 필수'}), 400
+```
+
+S/N별 confirmable 검증 + multi-row INSERT:
+```python
+# 각 S/N별 confirmable 체크
+for sn in serial_numbers_req:
+    if not _is_sn_process_confirmable(sns_progress, db_category, settings, process_type, sn):
+        return jsonify({
+            'error': 'NOT_CONFIRMABLE',
+            'message': f'{sn}: {process_type} 공정이 아직 완료되지 않았습니다.',
+        }), 400
+
+# multi-row INSERT
+values = []
+for sn in serial_numbers_req:
+    values.append((sales_order, process_type, partner, sn,
+                    confirmed_week, confirmed_month, g.worker_id))
+
+cur.executemany("""
+    INSERT INTO plan.production_confirm
+        (sales_order, process_type, partner, serial_number,
+         confirmed_week, confirmed_month, confirmed_by)
+    VALUES (%s, %s, %s, %s, %s, %s, %s)
+""", values)
+
+# RETURNING 대신 별도 조회 (executemany는 RETURNING 미지원)
+cur.execute("""
+    SELECT id, serial_number, confirmed_at
+    FROM plan.production_confirm
+    WHERE sales_order = %s AND process_type = %s
+      AND COALESCE(partner, '') = COALESCE(%s, '')
+      AND serial_number = ANY(%s)
+      AND deleted_at IS NULL
+    ORDER BY serial_number
+""", (sales_order, process_type, partner, serial_numbers_req))
+```
+
+응답:
+```python
+return jsonify({
+    'message': '실적확인 완료',
+    'confirmed': [dict(r) for r in cur.fetchall()],
+    'count': len(serial_numbers_req),
+}), 201
+```
+
+#### Task 6: `cancel_confirm()` — 변경 없음
+
+기존 `confirm_id` 기반 soft delete 유지. S/N별 confirm이므로 개별 취소는 confirm_id로 충분.
+응답에 `serial_number` 추가:
+```python
+RETURNING id, sales_order, process_type, partner, serial_number
+```
+
+#### Task 7: 테스트 코드 작성
+
+`AGENT_TEAM_LAUNCH.md`의 "TEST 작업 — Sprint 37-B" 섹션 참조.
+
+### 배포 순서
+
+1. **DB migration**: Migration 032 실행 (Railway) — serial_number 컬럼 + unique index 변경
+2. **BE push**: Task 2~6 (TM 혼재 제거 + S/N별 확인 + end 날짜)
+3. **FE push**: VIEW Sprint에서 S/N별 버튼 UI 변경 (별도)
+
+### 체크리스트
+
+**BE (✅ 완료)**:
+- [x] Migration 032 작성 + Railway DB 적용 ✅
+- [x] `_PROC_PARTNER_COL` TM 제거 ✅
+- [x] `get_performance()` SELECT에 `mech_end`, `elec_end`, `module_end` 추가 ✅
+- [x] confirms 조회에 `serial_number` 포함 + dict 키 `{so}:{proc}:{ptnr}:{sn}` ✅
+- [x] `_is_sn_process_confirmable()` 헬퍼 추가 ✅
+- [x] `_build_order_item()` sn_confirms 배열 (혼재/비혼재/TM/PI분리) ✅
+- [x] `sns_detail`에 end 날짜 추가 ✅
+- [x] `confirm_production()` serial_numbers 배열 + multi-row INSERT ✅
+- [x] `cancel_confirm()` RETURNING serial_number ✅
+
+**TEST**:
+- [ ] 테스트 파일 작성 — 추후
+
+**검증 (배포 후)**:
+- [ ] 🔴 TM 혼재 제거: `processes.TM.mixed` 없음, `partner_confirms` 없음
+- [ ] 🔴 TM S/N별 확인: `processes.TM.sn_confirms` 배열 정상
+- [ ] 🔴 MECH 혼재 + S/N별: `partner_confirms[].sn_confirms` 배열 정상
+- [ ] 🔴 MECH 비혼재 + S/N별: `processes.MECH.sn_confirms` 배열 정상
+- [ ] 🔴 일괄확인: 전체 S/N 완료 시 `all_confirmable=true` + multi-row INSERT
+- [ ] 🔴 개별확인: 완료된 S/N만 개별 confirm
+- [ ] 🔴 탭별 End 필터: `sns[].mech_end`, `elec_end`, `module_end` 정상 반환
+- [ ] PI/QI/SI → 기존 O/N 단위 유지 (sn_confirms 없음)
+- [ ] 기존 serial_number=NULL 데이터 하위호환
+
+---
+
+## TEST 작업 (tests/backend/) — Sprint 37-B
+
+### test_sprint37b_sn_confirm.py (신규) — 🔴 S/N별 실적확인 + TM 혼재 제거
+
+**White-box: _PROC_PARTNER_COL TM 제거**
+1. TC-SC-01: TM 공정 — `_PROC_PARTNER_COL`에 `'TM'` 없음 확인 → TM은 비혼재 경로
+2. TC-SC-02: O/N에 mech_partner TMS(1대)+FNI(4대) — TM processes에 `partner_confirms` 없음, `sn_confirms` 배열만 존재
+3. TC-SC-03: O/N에 mech_partner TMS 단독 — TM `sn_confirms` 정상 (is_tms=true S/N만 TMS tasks 존재)
+
+**White-box: _is_sn_process_confirmable() 단일 S/N 판정**
+4. TC-SC-04: S/N의 MECH 공정 100% 완료 → confirmable=true
+5. TC-SC-05: S/N의 MECH 공정 80% 완료 → confirmable=false
+6. TC-SC-06: S/N의 TMS 공정 TANK_MODULE 100% + PRESSURE_TEST 0% → confirmable=true (`_CONFIRM_TASK_FILTER` TANK_MODULE only)
+7. TC-SC-07: `confirm_mech_enabled=false` 설정 시 → confirmable=false (설정 비활성)
+
+**White-box: _build_order_item() S/N별 sn_confirms 구조**
+8. TC-SC-08: MECH 비혼재 O/N 3대 — `processes.MECH.sn_confirms` 길이 3, 각 S/N별 confirmable/confirmed
+9. TC-SC-09: MECH 혼재 O/N (TMS 2대+FNI 3대) — `partner_confirms[TMS].sn_confirms` 길이 2, `partner_confirms[FNI].sn_confirms` 길이 3
+10. TC-SC-10: ELEC 비혼재 O/N — `processes.ELEC.sn_confirms` 정상
+11. TC-SC-11: TM O/N 5대 — `processes.TM.sn_confirms` 길이 5 (partner_confirms 없음)
+12. TC-SC-12: PI/QI/SI — `sn_confirms` 없음, 기존 O/N 단위 confirmable/confirmed
+13. TC-SC-13: `all_confirmable` — S/N 5대 중 5대 모두 완료 → `all_confirmable=true`
+14. TC-SC-14: `all_confirmable` — S/N 5대 중 3대만 완료 → `all_confirmable=false`, 완료된 3대 confirmable=true
+
+**White-box: confirm_production() serial_numbers 배열 처리**
+15. TC-SC-15: serial_numbers=['SN001','SN002'] → 2 rows INSERT, confirmed count=2
+16. TC-SC-16: serial_numbers=['SN001'] 개별 확인 → 1 row INSERT
+17. TC-SC-17: serial_numbers 빈 배열 → 400 에러 (INVALID_REQUEST)
+18. TC-SC-18: serial_numbers에 미완료 S/N 포함 → 400 에러 (NOT_CONFIRMABLE, 해당 S/N 명시)
+19. TC-SC-19: MECH 혼재 + partner='TMS' + serial_numbers → mech_partner='TMS'인 S/N만 대상 확인
+
+**White-box: cancel_confirm() serial_number 응답**
+20. TC-SC-20: S/N별 confirm 취소 → 해당 S/N confirm만 soft delete, 같은 O/N 다른 S/N confirm 유지
+21. TC-SC-21: RETURNING에 serial_number 포함 확인
+
+**White-box: get_performance() end 날짜 + confirms dict 키**
+22. TC-SC-22: sns_detail에 `mech_end`, `elec_end`, `module_end` 포함 확인
+23. TC-SC-23: confirms dict 키 — `{so}:{proc}:{partner}:{sn}` 형식 정상
+24. TC-SC-24: 기존 serial_number=NULL 데이터 → dict 키 하위호환
+
+### test_sprint37b_graybox.py (신규) — Gray-box 테스트
+
+25. TC-SG-01: Migration 032 적용 후 → serial_number 컬럼 존재 + sn_count 컬럼 없음 + unique index 정상
+26. TC-SG-02: S/N별 confirm → cancel → 재confirm E2E 흐름
+27. TC-SG-03: 혼재 O/N — TMS partner S/N 2대 일괄확인 → FNI partner S/N 3대 중 1대 개별확인 → API 응답에 TMS 2대 confirmed, FNI 1대 confirmed + 2대 미확인
+28. TC-SG-04: TM S/N 5대 중 3대 개별확인 → API 응답에 3대 confirmed + 2대 미확인 + FNI 미포함(TM 혼재 제거)
+29. TC-SG-05: duplicate INSERT (동일 sales_order+process_type+partner+serial_number) → unique constraint 에러 처리
+
+### test_sprint37b_regression.py (신규) — Regression 테스트
+
+30. TC-SR-01: Sprint 37 `_PROC_PARTNER_COL` — MECH/ELEC partner 혼재 기존 동작 유지 (TM만 제거)
+31. TC-SR-02: Sprint 37-A `tm_pressure_test_required=false` → TMS progress TANK_MODULE only 유지
+32. TC-SR-03: `_CONFIRM_TASK_FILTER` TMS→TANK_MODULE only confirmable 미변경
+33. TC-SR-04: `_is_process_confirmable()` — 기존 O/N 전체 판정 로직 미변경 (PI/QI/SI용)
+34. TC-SR-05: `_calc_sn_progress()` task_id 레벨 GROUP BY 정상
+35. TC-SR-06: `cancel_confirm()` id 기반 soft delete 기존 동작 유지
+36. TC-SR-07: admin_settings `confirm_*_enabled=false` → confirmable=false (설정 비활성 차단)
+
+---
+
+## 변경 파일 — Sprint 37-B
+
+| 파일 | 변경 |
+|------|------|
+| `backend/migrations/032_production_confirm_serial_number.sql` | serial_number 컬럼 추가 + sn_count 제거 + unique index 변경 (신규) |
+| `backend/app/routes/production.py` | `_PROC_PARTNER_COL` TM 제거 + `_is_sn_process_confirmable()` 헬퍼 + `_build_order_item()` sn_confirms 구조 + `get_performance()` end 날짜/confirms 키 + `confirm_production()` serial_numbers 배열 + `cancel_confirm()` serial_number 응답 |
+| `tests/backend/test_sprint37b_sn_confirm.py` | White-box 테스트 24건 (신규) |
+| `tests/backend/test_sprint37b_graybox.py` | Gray-box 테스트 5건 (신규) |
+| `tests/backend/test_sprint37b_regression.py` | Regression 테스트 7건 (신규) |
+
+## 규칙 — Sprint 37-B
+
+- CLAUDE.md의 "DB 테이블 정확한 컬럼 명세" 반드시 참조 — `production_confirm`, `product_info`, `admin_settings` 컬럼명 실수 방지
+- `admin_settings` 컬럼은 `setting_key`, `setting_value`, `description` (NOT `key`, `value`)
+- `production_confirm`은 plan 스키마 — unique index: `(sales_order, process_type, COALESCE(partner, ''), serial_number)` WHERE `deleted_at IS NULL`
+- `product_info.mech_partner`, `elec_partner` 컬럼값은 DB에 `'TMS'`로 저장 (NOT `'TMS(M)'`/`'TMS(E)'`)
+- `product_info`의 end 날짜: `mech_end`, `elec_end`, `module_end` — `module_end` NULL 시 `module_start` fallback
+- `_is_sn_process_confirmable()`는 `_is_process_confirmable()`와 독립 — SN 단일 판정 전용, 기존 함수 수정 금지
+- `_PROC_TO_CAT = {'TM': 'TMS'}` 역매핑은 confirmable 체크 전용 유지
+- confirms dict 키: `{so}:{proc}:{partner}:{sn}` — partner/sn NULL이면 빈문자열로 처리 (하위호환)
+- `executemany`는 `RETURNING` 미지원 — multi-row INSERT 후 별도 SELECT로 결과 조회
+- PI/QI/SI는 S/N별 확인 미적용 — 기존 O/N 단위 유지, `_is_process_confirmable()` 사용
+- BE가 코드를 완성하면 TEST가 먼저 CLAUDE.md 기준으로 코드 리뷰 진행
+- 리뷰 통과 후에만 테스트 코드 작성
+- 각 teammate는 자신의 소유 파일만 수정 가능
+- ⚠️ `_calc_sn_progress()` 수정 금지 — #36에서 task_id 레벨로 확장 완료
+- ⚠️ `_is_process_confirmable()` 수정 금지 — PI/QI/SI에서 계속 사용
+- ⚠️ `_CONFIRM_TASK_FILTER` 수정 금지
+- ⚠️ `task_seed.py` 수정 금지
+- ⚠️ `task_service.py` 수정 금지 — Sprint 37-A에서 완료
+- ⚠️ FE 코드 수정 금지 — VIEW Sprint에서 별도 진행
+- .env 파일 절대 커밋 금지
+- N+1 쿼리 금지 — batch 조회(ANY 사용)
+- 완료 시 AGENT_TEAM_LAUNCH.md 체크리스트 업데이트
+
+---
+
+### Teammate 프롬프트 — Sprint 37-B (#38 S/N별 실적확인 + TM 혼재 제거 + 탭별 End 필터)
+
+> **이 프롬프트를 Claude Code teammate에게 전달하여 실행**
+> 선행 조건: Sprint 37 완료, Sprint 37-A 완료, DB Migration 032 실행 완료
+
+```
+## Sprint 37-B: S/N별 실적확인 + TM 혼재 제거 + 탭별 End 필터
+
+### 컨텍스트
+- 참조: `AXIS-VIEW/docs/OPS_API_REQUESTS.md` #38 (버그 리포트)
+- 참조: `AXIS-OPS/AGENT_TEAM_LAUNCH.md` Sprint 37-B 섹션
+- 대상 파일: `backend/app/routes/production.py`
+- DB: `plan.production_confirm` 테이블에 `serial_number VARCHAR(20)` 컬럼 추가 완료, `sn_count` 컬럼 제거 완료
+
+### 배경
+1. TM partner_confirms에 FNI 혼입 버그 — `_PROC_PARTNER_COL`에서 `'TM': 'mech_partner'` 삭제로 해결
+2. 모든 공정(MECH/ELEC/TM)에서 S/N별 실적확인 — O/N 내 S/N 완료 시점이 다를 수 있으므로 개별 확인 필요
+3. 탭별 End 날짜 필터 — 기구전장: `mech_end`/`elec_end`, TM: `module_end` 기준
+
+### Task 순서 (반드시 이 순서대로)
+
+#### Task 1: Migration 032 작성 (`backend/migrations/032_production_confirm_serial_number.sql`)
+
+```sql
+BEGIN;
+
+ALTER TABLE plan.production_confirm
+    ADD COLUMN IF NOT EXISTS serial_number VARCHAR(20) DEFAULT NULL;
+
+ALTER TABLE plan.production_confirm
+    DROP COLUMN IF EXISTS sn_count;
+
+DROP INDEX IF EXISTS production_confirm_active_unique;
+
+CREATE UNIQUE INDEX production_confirm_active_unique
+    ON plan.production_confirm(sales_order, process_type, COALESCE(partner, ''), serial_number)
+    WHERE deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_production_confirm_serial_number
+    ON plan.production_confirm(serial_number)
+    WHERE deleted_at IS NULL;
+
+COMMIT;
+```
+
+#### Task 2: `_PROC_PARTNER_COL` 수정 — TM 제거
+
+```python
+# 변경 전
+_PROC_PARTNER_COL = {'MECH': 'mech_partner', 'ELEC': 'elec_partner', 'TM': 'mech_partner'}
+
+# 변경 후
+_PROC_PARTNER_COL = {'MECH': 'mech_partner', 'ELEC': 'elec_partner'}
+```
+
+#### Task 3: `_is_sn_process_confirmable()` 헬퍼 추가
+
+`_is_process_confirmable()` 아래에 추가 (기존 함수 수정 금지):
+
+```python
+def _is_sn_process_confirmable(
+    sns_progress: Dict[str, Dict],
+    process_type: str,
+    settings: Dict[str, bool],
+    proc_key: str,
+    serial_number: str,
+) -> bool:
+    """단일 S/N의 해당 공정 confirmable 판정
+
+    _is_process_confirmable()과 동일 로직이나 S/N 1개만 대상.
+    _CONFIRM_TASK_FILTER 적용 (TMS → TANK_MODULE only).
+    """
+    key = f'confirm_{proc_key.lower()}_enabled'
+    if not settings.get(key, False):
+        return False
+
+    cat_data = sns_progress.get(serial_number, {}).get(process_type, {})
+    confirm_task = _CONFIRM_TASK_FILTER.get(process_type)
+
+    if confirm_task:
+        task_data = cat_data.get('tasks', {}).get(confirm_task, {})
+        if task_data.get('total', 0) == 0:
+            return False
+        return task_data.get('completed', 0) >= task_data.get('total', 0)
+    else:
+        if cat_data.get('total', 0) == 0:
+            return False
+        return cat_data.get('completed', 0) >= cat_data.get('total', 0)
+```
+
+#### Task 4: `get_performance()` 수정 — end 날짜 + confirms dict 키
+
+product_info SELECT 변경:
+```python
+cur.execute("""
+    SELECT p.sales_order, p.serial_number, p.model,
+           p.mech_partner, p.elec_partner, p.line,
+           p.mech_end, p.elec_end,
+           COALESCE(p.module_end, p.module_start) AS module_end
+    FROM plan.product_info p
+    WHERE (p.mech_end >= %s AND p.mech_end < %s)
+       OR (p.elec_end >= %s AND p.elec_end < %s)
+       OR (COALESCE(p.module_end, p.module_start) >= %s
+           AND COALESCE(p.module_end, p.module_start) < %s)
+    ORDER BY p.sales_order, p.serial_number
+""", (start_date, end_date, start_date, end_date, start_date, end_date))
+```
+
+confirms 조회에 serial_number 포함:
+```python
+cur.execute("""
+    SELECT id, sales_order, process_type, partner, serial_number,
+           confirmed_week, confirmed_month, confirmed_by, confirmed_at
+    FROM plan.production_confirm
+    WHERE sales_order = ANY(%s) AND deleted_at IS NULL
+""", (order_list,))
+confirms = {}
+for row in cur.fetchall():
+    r = dict(row)
+    ptnr = r.get('partner') or ''
+    sn = r.get('serial_number') or ''
+    key = f"{r['sales_order']}:{r['process_type']}:{ptnr}:{sn}"
+    confirms[key] = r
+```
+
+#### Task 5: `_build_order_item()` 수정 — S/N별 sn_confirms 구조
+
+**혼재 경로** (mixed=True, MECH/ELEC만 해당):
+- 기존 `partner_confirms` 배열 유지
+- 각 partner 내부에 `sn_confirms` 배열 추가 (partner S/N별 confirmable/confirmed)
+- confirms dict 키: `{so}:{proc_key}:{ptnr}:{sn}`
+- `all_confirmable`: 해당 partner의 모든 S/N confirmable
+- `all_confirmed`: 해당 partner의 모든 S/N confirmed
+
+**비혼재 경로** (MECH/ELEC 비혼재, TM):
+- 기존 confirmable/confirmed → `sn_confirms` 배열로 대체
+- `all_confirmable`: 전체 S/N confirmable
+- `all_confirmed`: 전체 S/N confirmed
+
+**PI/QI/SI**: 기존 로직 유지 (S/N별 미적용). `_is_process_confirmable()` 사용.
+
+**sns_detail에 end 날짜 추가**:
+- `mech_end`, `elec_end`, `module_end` 필드 추가 (ISO format string 또는 null)
+
+#### Task 6: `confirm_production()` 수정 — serial_numbers 배열 처리
+
+요청 Body 필수 필드 추가: `serial_numbers` (string 배열)
+```python
+serial_numbers_req = data.get('serial_numbers', [])
+if not serial_numbers_req:
+    return jsonify({'error': 'INVALID_REQUEST', 'message': 'serial_numbers 필수'}), 400
+```
+
+partner 지정 시 해당 partner S/N인지 검증:
+```python
+if partner and process_type in _PROC_PARTNER_COL:
+    partner_col = _PROC_PARTNER_COL[process_type]
+    cur.execute(f"""
+        SELECT serial_number FROM plan.product_info
+        WHERE sales_order = %s AND {partner_col} = %s
+          AND serial_number = ANY(%s)
+    """, (sales_order, partner, serial_numbers_req))
+    valid_sns = [r['serial_number'] for r in cur.fetchall()]
+    if len(valid_sns) != len(serial_numbers_req):
+        return jsonify({'error': 'INVALID_SN', 'message': '요청 S/N이 해당 partner에 속하지 않습니다.'}), 400
+```
+
+S/N별 confirmable 검증:
+```python
+sns_progress = _calc_sn_progress(cur, serial_numbers_req)
+settings = _get_confirm_settings(cur)
+_PROC_TO_CAT = {'TM': 'TMS'}
+db_category = _PROC_TO_CAT.get(process_type, process_type)
+
+for sn in serial_numbers_req:
+    if not _is_sn_process_confirmable(sns_progress, db_category, settings, process_type, sn):
+        return jsonify({
+            'error': 'NOT_CONFIRMABLE',
+            'message': f'{sn}: {process_type} 공정 미완료',
+        }), 400
+```
+
+multi-row INSERT:
+```python
+values = [(sales_order, process_type, partner, sn,
+           confirmed_week, confirmed_month, g.worker_id)
+          for sn in serial_numbers_req]
+
+cur.executemany("""
+    INSERT INTO plan.production_confirm
+        (sales_order, process_type, partner, serial_number,
+         confirmed_week, confirmed_month, confirmed_by)
+    VALUES (%s, %s, %s, %s, %s, %s, %s)
+""", values)
+
+cur.execute("""
+    SELECT id, serial_number, confirmed_at
+    FROM plan.production_confirm
+    WHERE sales_order = %s AND process_type = %s
+      AND COALESCE(partner, '') = COALESCE(%s, '')
+      AND serial_number = ANY(%s)
+      AND deleted_at IS NULL
+""", (sales_order, process_type, partner, serial_numbers_req))
+conn.commit()
+```
+
+#### Task 7: `cancel_confirm()` 수정 — RETURNING에 serial_number 추가
+
+```python
+RETURNING id, sales_order, process_type, partner, serial_number
+```
+
+#### Task 8: 테스트 코드 작성
+
+`AGENT_TEAM_LAUNCH.md`의 "TEST 작업 — Sprint 37-B" 섹션 참조.
+아래 3개 테스트 파일을 `tests/backend/`에 작성:
+
+1. `test_sprint37b_sn_confirm.py` — White-box 24건 (TC-SC-01 ~ TC-SC-24)
+2. `test_sprint37b_graybox.py` — Gray-box 5건 (TC-SG-01 ~ TC-SG-05)
+3. `test_sprint37b_regression.py` — Regression 7건 (TC-SR-01 ~ TC-SR-07)
+
+테스트 전체 PASSED (36건 이상) 확인 후 완료.
+
+### 검증 체크리스트
+
+1. **TM 혼재 제거**: `_PROC_PARTNER_COL`에 `'TM'` 없음 → TM은 비혼재 경로 → `partner_confirms` 없음
+2. **S/N별 확인 (비혼재 MECH)**: `processes.MECH.sn_confirms` 길이 = S/N 수
+3. **S/N별 확인 (혼재 MECH)**: `partner_confirms[TMS].sn_confirms` + `partner_confirms[FNI].sn_confirms`
+4. **S/N별 확인 (TM)**: `processes.TM.sn_confirms` 길이 = S/N 수 (TMS tasks 있는 S/N만)
+5. **일괄확인**: 전체 S/N 완료 → `all_confirmable=true` → serial_numbers 배열로 multi-row INSERT
+6. **개별확인**: 완료 S/N만 → serial_numbers=[해당SN] → 1 row INSERT
+7. **End 날짜**: `sns[].mech_end`, `elec_end`, `module_end` 정상 반환
+8. **PI/QI/SI**: 기존 O/N 단위 유지 (sn_confirms 없음)
+9. **하위호환**: 기존 serial_number=NULL 데이터 정상 조회
+
+### 수정 대상 파일 목록
+
+- `backend/migrations/032_production_confirm_serial_number.sql` (신규)
+- `backend/app/routes/production.py` (수정)
+- `tests/backend/test_sprint37b_sn_confirm.py` (신규)
+- `tests/backend/test_sprint37b_graybox.py` (신규)
+- `tests/backend/test_sprint37b_regression.py` (신규)
+
+### 규칙
+
+- CLAUDE.md의 "DB 테이블 정확한 컬럼 명세" 반드시 참조 — `production_confirm`, `product_info`, `admin_settings`
+- `admin_settings` 컬럼은 `setting_key`, `setting_value`, `description` (NOT `key`, `value`)
+- `production_confirm`은 plan 스키마 — unique index: `(sales_order, process_type, COALESCE(partner, ''), serial_number)` WHERE `deleted_at IS NULL`
+- `product_info.mech_partner`, `elec_partner` 컬럼값은 DB에 `'TMS'`로 저장 (NOT `'TMS(M)'`/`'TMS(E)'`)
+- `product_info`의 end 날짜: `mech_end`, `elec_end`, `module_end` — `module_end` NULL 시 `module_start` fallback
+- `_is_sn_process_confirmable()`는 신규 헬퍼 — `_is_process_confirmable()` 수정 금지 (PI/QI/SI에서 계속 사용)
+- `_PROC_TO_CAT = {'TM': 'TMS'}` 역매핑 유지
+- confirms dict 키: `{so}:{proc}:{partner}:{sn}` — partner/sn 없으면 빈문자열
+- `executemany`는 `RETURNING` 미지원 — INSERT 후 별도 SELECT
+- PI/QI/SI는 S/N별 미적용 — 기존 `_is_process_confirmable()` + O/N 단위 유지
+- BE가 코드를 완성하면 TEST가 먼저 CLAUDE.md 기준으로 코드 리뷰 진행
+- 리뷰 통과 후에만 테스트 코드 작성
+- 각 teammate는 자신의 소유 파일만 수정 가능
+- N+1 쿼리 금지 — batch 조회(ANY 사용)
+- .env 파일 절대 커밋 금지
+
+### 절대 수정 금지
+
+- `_calc_sn_progress()` — task_id 레벨 구조 변경 없음
+- `_is_process_confirmable()` — PI/QI/SI에서 계속 사용, 수정 금지
+- `_CONFIRM_TASK_FILTER` — 변경 없음
+- `task_seed.py` — task 생성 로직 변경 없음
+- `task_service.py` — Sprint 37-A에서 완료, 변경 없음
+- FE 코드 — VIEW Sprint에서 별도 진행
+- Sprint 37 MECH/ELEC partner 혼재 판정 로직 — `_PROC_PARTNER_COL`에서 TM만 제거, MECH/ELEC 유지
+```

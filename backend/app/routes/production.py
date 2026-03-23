@@ -127,7 +127,7 @@ _CONFIRM_TASK_FILTER: Dict[str, str] = {
 _PROC_PARTNER_COL: Dict[str, str] = {
     'MECH': 'mech_partner',
     'ELEC': 'elec_partner',
-    'TM': 'mech_partner',
+    # TM 제거 (#38): TMS tasks 유무로 자연 필터링, mech_partner 기준 혼재는 FNI 혼입 버그 유발
 }
 
 
@@ -182,6 +182,32 @@ def _is_process_confirmable(
     return has_data
 
 
+def _is_sn_process_confirmable(
+    sns_progress: Dict[str, Dict],
+    process_type: str,
+    settings: Dict[str, bool],
+    proc_key: str,
+    serial_number: str,
+) -> bool:
+    """단일 S/N의 해당 공정 confirmable 판정"""
+    key = f'confirm_{proc_key.lower()}_enabled'
+    if not settings.get(key, False):
+        return False
+
+    cat_data = sns_progress.get(serial_number, {}).get(process_type, {})
+    confirm_task = _CONFIRM_TASK_FILTER.get(process_type)
+
+    if confirm_task:
+        task_data = cat_data.get('tasks', {}).get(confirm_task, {})
+        if task_data.get('total', 0) == 0:
+            return False
+        return task_data.get('completed', 0) >= task_data.get('total', 0)
+    else:
+        if cat_data.get('total', 0) == 0:
+            return False
+        return cat_data.get('completed', 0) >= cat_data.get('total', 0)
+
+
 def _build_order_item(
     sales_order: str,
     products: List[Dict],
@@ -223,74 +249,92 @@ def _build_order_item(
         proc_key = _CAT_TO_PROC.get(pt, pt)
         partner_col = _PROC_PARTNER_COL.get(proc_key)
 
-        # 혼재 판정
+        # 혼재 판정 (MECH/ELEC만 — TM은 #38에서 제거)
         mixed = False
-        partner_confirms_list = None
         if partner_col:
             partners = list(set(p.get(partner_col, '') or '' for p in products))
-            partners = [p for p in partners if p]  # 빈 문자열 제거
+            partners = [p for p in partners if p]
             mixed = len(partners) >= 2
 
-        if mixed and partner_col:
-            # 혼재: partner별 confirmable/confirmed 분리
-            partner_confirms_list = []
-            for ptnr in sorted(partners):
-                ptnr_sns = [p['serial_number'] for p in products if (p.get(partner_col, '') or '') == ptnr]
-                ptnr_total = 0
-                ptnr_completed = 0
-                for sn in ptnr_sns:
-                    cat = sns_progress.get(sn, {}).get(pt, {})
-                    if pt == 'TMS' and not tm_pt_required:
-                        tm_task = cat.get('tasks', {}).get('TANK_MODULE', {})
-                        ptnr_total += tm_task.get('total', 0)
-                        ptnr_completed += tm_task.get('completed', 0)
-                    else:
-                        ptnr_total += cat.get('total', 0)
-                        ptnr_completed += cat.get('completed', 0)
+        # S/N별 confirm 조회 헬퍼
+        def _sn_confirm(ptnr, sn):
+            return confirms.get(f"{sales_order}:{proc_key}:{ptnr or ''}:{sn}")
 
-                ptnr_confirm_key = f"{sales_order}:{proc_key}:{ptnr}"
-                ptnr_confirm = confirms.get(ptnr_confirm_key)
+        # S/N별 progress 계산 헬퍼
+        def _sn_progress_vals(sn):
+            cat = sns_progress.get(sn, {}).get(pt, {})
+            if pt == 'TMS' and not tm_pt_required:
+                t = cat.get('tasks', {}).get('TANK_MODULE', {})
+                return t.get('total', 0), t.get('completed', 0)
+            return cat.get('total', 0), cat.get('completed', 0)
 
-                partner_confirms_list.append({
-                    'partner': ptnr,
-                    'sn_count': len(ptnr_sns),
-                    'total': ptnr_total,
-                    'completed': ptnr_completed,
-                    'ready': ptnr_completed,
-                    'confirmable': _is_process_confirmable(sns_progress, pt, settings, proc_key, ptnr_sns),
-                    'confirmed': ptnr_confirm is not None,
-                    'confirmed_at': ptnr_confirm['confirmed_at'].isoformat() if ptnr_confirm and ptnr_confirm.get('confirmed_at') else None,
-                    'confirm_id': ptnr_confirm['id'] if ptnr_confirm else None,
-                })
-
-            processes[proc_key] = {
-                'total': total,
-                'completed': completed,
-                'ready': completed,
-                'pct': round(completed / total * 100, 1),
-                'mixed': True,
-                'confirmable': None,
-                'confirmed': None,
-                'confirmed_at': None,
-                'confirm_id': None,
-                'partner_confirms': partner_confirms_list,
-            }
-        else:
-            # 비혼재: 기존 로직
-            confirm_key = f"{sales_order}:{proc_key}"
+        # PI/QI/SI: 기존 O/N 단위 (sn_confirms 없음)
+        if proc_key not in _PROC_PARTNER_COL and proc_key != 'TM':
+            confirm_key = f"{sales_order}:{proc_key}::"
             confirm = confirms.get(confirm_key)
-
             processes[proc_key] = {
-                'total': total,
-                'completed': completed,
-                'ready': completed,
+                'total': total, 'completed': completed, 'ready': completed,
                 'pct': round(completed / total * 100, 1),
                 'mixed': False,
                 'confirmable': _is_process_confirmable(sns_progress, pt, settings, proc_key, serial_numbers),
                 'confirmed': confirm is not None,
                 'confirmed_at': confirm['confirmed_at'].isoformat() if confirm and confirm.get('confirmed_at') else None,
                 'confirm_id': confirm['id'] if confirm else None,
-                'partner_confirms': None,
+            }
+        elif mixed and partner_col:
+            # 혼재 MECH/ELEC: partner → sn_confirms
+            partner_confirms_list = []
+            for ptnr in sorted(partners):
+                ptnr_sns = [p['serial_number'] for p in products if (p.get(partner_col, '') or '') == ptnr]
+                sn_confs = []
+                for sn in ptnr_sns:
+                    sn_t, sn_c = _sn_progress_vals(sn)
+                    sc = _sn_confirm(ptnr, sn)
+                    sn_confs.append({
+                        'serial_number': sn,
+                        'total': sn_t, 'completed': sn_c, 'ready': sn_c,
+                        'pct': round(sn_c / sn_t * 100, 1) if sn_t > 0 else 0.0,
+                        'confirmable': _is_sn_process_confirmable(sns_progress, pt, settings, proc_key, sn),
+                        'confirmed': sc is not None,
+                        'confirmed_at': sc['confirmed_at'].isoformat() if sc and sc.get('confirmed_at') else None,
+                        'confirm_id': sc['id'] if sc else None,
+                    })
+                partner_confirms_list.append({
+                    'partner': ptnr,
+                    'sn_confirms': sn_confs,
+                    'all_confirmable': all(s['confirmable'] for s in sn_confs),
+                    'all_confirmed': all(s['confirmed'] for s in sn_confs),
+                })
+            processes[proc_key] = {
+                'total': total, 'completed': completed, 'ready': completed,
+                'pct': round(completed / total * 100, 1),
+                'mixed': True,
+                'partner_confirms': partner_confirms_list,
+            }
+        else:
+            # 비혼재 MECH/ELEC + TM: sn_confirms 직접
+            sn_confs = []
+            for sn in serial_numbers:
+                sn_t, sn_c = _sn_progress_vals(sn)
+                if sn_t == 0:
+                    continue
+                sc = _sn_confirm('', sn)
+                sn_confs.append({
+                    'serial_number': sn,
+                    'total': sn_t, 'completed': sn_c, 'ready': sn_c,
+                    'pct': round(sn_c / sn_t * 100, 1) if sn_t > 0 else 0.0,
+                    'confirmable': _is_sn_process_confirmable(sns_progress, pt, settings, proc_key, sn),
+                    'confirmed': sc is not None,
+                    'confirmed_at': sc['confirmed_at'].isoformat() if sc and sc.get('confirmed_at') else None,
+                    'confirm_id': sc['id'] if sc else None,
+                })
+            processes[proc_key] = {
+                'total': total, 'completed': completed, 'ready': completed,
+                'pct': round(completed / total * 100, 1),
+                'mixed': False,
+                'sn_confirms': sn_confs,
+                'all_confirmable': all(s['confirmable'] for s in sn_confs) if sn_confs else False,
+                'all_confirmed': all(s['confirmed'] for s in sn_confs) if sn_confs else False,
             }
 
     # S/N 상세 배열 구성 (FE expand용)
@@ -310,6 +354,9 @@ def _build_order_item(
             'serial_number': sn,
             'mech_partner': p.get('mech_partner', ''),
             'elec_partner': p.get('elec_partner', ''),
+            'mech_end': p['mech_end'].isoformat() if p.get('mech_end') else None,
+            'elec_end': p['elec_end'].isoformat() if p.get('elec_end') else None,
+            'module_end': p['module_end'].isoformat() if p.get('module_end') else None,
             'progress': sn_prog,
         })
 
@@ -392,7 +439,9 @@ def get_performance() -> Tuple[Dict[str, Any], int]:
         # module_end NULL인 경우 module_start fallback (ETL 미적재 과도기)
         cur.execute("""
             SELECT p.sales_order, p.serial_number, p.model,
-                   p.mech_partner, p.elec_partner, p.line
+                   p.mech_partner, p.elec_partner, p.line,
+                   p.mech_end, p.elec_end,
+                   COALESCE(p.module_end, p.module_start) AS module_end
             FROM plan.product_info p
             WHERE (p.mech_end >= %s AND p.mech_end < %s)
                OR (p.elec_end >= %s AND p.elec_end < %s)
@@ -424,18 +473,17 @@ def get_performance() -> Tuple[Dict[str, Any], int]:
         # 3. 실적확인 이력
         order_list = list(orders.keys())
         cur.execute("""
-            SELECT id, sales_order, process_type, partner, confirmed_week, confirmed_month,
-                   sn_count, confirmed_by, confirmed_at
+            SELECT id, sales_order, process_type, partner, serial_number,
+                   confirmed_week, confirmed_month, confirmed_by, confirmed_at
             FROM plan.production_confirm
             WHERE sales_order = ANY(%s) AND deleted_at IS NULL
         """, (order_list,))
         confirms = {}
         for row in cur.fetchall():
             r = dict(row)
-            if r.get('partner'):
-                key = f"{r['sales_order']}:{r['process_type']}:{r['partner']}"
-            else:
-                key = f"{r['sales_order']}:{r['process_type']}"
+            ptnr = r.get('partner') or ''
+            sn = r.get('serial_number') or ''
+            key = f"{r['sales_order']}:{r['process_type']}:{ptnr}:{sn}"
             confirms[key] = r
 
         # 4. 설정
@@ -470,76 +518,81 @@ def get_performance() -> Tuple[Dict[str, Any], int]:
 @view_access_required
 def confirm_production() -> Tuple[Dict[str, Any], int]:
     """
-    실적확인 처리 — 조건 재검증 후 INSERT
+    실적확인 처리 — S/N별 조건 재검증 후 multi-row INSERT
 
-    Body: { sales_order, process_type, confirmed_week, confirmed_month }
+    Body: { sales_order, process_type, serial_numbers: [str], partner?, confirmed_week, confirmed_month }
     """
     data = request.get_json()
-    if not data or not all(k in data for k in ['sales_order', 'process_type', 'confirmed_week', 'confirmed_month']):
+    if not data or not all(k in data for k in ['sales_order', 'process_type', 'serial_numbers', 'confirmed_week', 'confirmed_month']):
         return jsonify({
             'error': 'INVALID_REQUEST',
-            'message': '필수 필드: sales_order, process_type, confirmed_week, confirmed_month'
+            'message': '필수 필드: sales_order, process_type, serial_numbers, confirmed_week, confirmed_month'
         }), 400
 
     sales_order = data['sales_order']
     process_type = data['process_type'].upper()
+    serial_numbers_req = data.get('serial_numbers', [])
     confirmed_week = data['confirmed_week']
     confirmed_month = data['confirmed_month']
-    partner = data.get('partner')  # nullable — 혼재 O/N partner별 확인
+    partner = data.get('partner')
+
+    if not serial_numbers_req:
+        return jsonify({'error': 'INVALID_REQUEST', 'message': 'serial_numbers 필수'}), 400
 
     conn = None
     try:
         conn = get_conn()
         cur = conn.cursor()
 
-        # 1. 대상 S/N 조회 (partner 지정 시 해당 partner S/N만)
-        if partner and process_type in _PROC_PARTNER_COL:
-            partner_col = _PROC_PARTNER_COL[process_type]
-            cur.execute(f"""
-                SELECT serial_number FROM plan.product_info
-                WHERE sales_order = %s AND {partner_col} = %s
-            """, (sales_order, partner))
-        else:
-            cur.execute("""
-                SELECT serial_number FROM plan.product_info
-                WHERE sales_order = %s
-            """, (sales_order,))
-        sn_rows = cur.fetchall()
-        serial_numbers = [r['serial_number'] for r in sn_rows]
-
-        if not serial_numbers:
-            return jsonify({'error': 'NOT_FOUND', 'message': 'O/N에 해당하는 제품이 없습니다.'}), 404
-
-        # 2. confirmable 조건 재검증
-        # FE는 시스템 표준 키(TM)를 전송하지만, sns_progress는 DB category(TMS) 기준
-        _PROC_TO_CAT = {'TM': 'TMS'}  # _CAT_TO_PROC의 역방향
+        # 1. S/N별 confirmable 검증
+        _PROC_TO_CAT = {'TM': 'TMS'}
         db_category = _PROC_TO_CAT.get(process_type, process_type)
 
-        sns_progress = _calc_sn_progress(cur, serial_numbers)
+        sns_progress = _calc_sn_progress(cur, serial_numbers_req)
         settings = _get_confirm_settings(cur)
 
-        if not _is_process_confirmable(sns_progress, db_category, settings, proc_key=process_type, serial_numbers=serial_numbers):
-            return jsonify({
-                'error': 'NOT_CONFIRMABLE',
-                'message': f'{process_type} 공정이 아직 완료되지 않은 S/N이 있습니다.',
-            }), 400
+        for sn in serial_numbers_req:
+            if not _is_sn_process_confirmable(sns_progress, db_category, settings, process_type, sn):
+                return jsonify({
+                    'error': 'NOT_CONFIRMABLE',
+                    'message': f'{sn}: {process_type} 공정 미완료',
+                }), 400
 
-        # 3. INSERT (partner 포함)
-        cur.execute("""
+        # 2. multi-row INSERT
+        values = [(sales_order, process_type, partner, sn,
+                    confirmed_week, confirmed_month, g.worker_id)
+                   for sn in serial_numbers_req]
+
+        cur.executemany("""
             INSERT INTO plan.production_confirm
-                (sales_order, process_type, partner, confirmed_week, confirmed_month, sn_count, confirmed_by)
+                (sales_order, process_type, partner, serial_number,
+                 confirmed_week, confirmed_month, confirmed_by)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
-            RETURNING id, confirmed_at
-        """, (sales_order, process_type, partner, confirmed_week, confirmed_month, len(serial_numbers), g.worker_id))
-        row = cur.fetchone()
+        """, values)
+
+        # 3. 결과 조회 (executemany는 RETURNING 미지원)
+        cur.execute("""
+            SELECT id, serial_number, confirmed_at
+            FROM plan.production_confirm
+            WHERE sales_order = %s AND process_type = %s
+              AND COALESCE(partner, '') = COALESCE(%s, '')
+              AND serial_number = ANY(%s)
+              AND deleted_at IS NULL
+            ORDER BY serial_number
+        """, (sales_order, process_type, partner, serial_numbers_req))
+        confirmed_rows = [dict(r) for r in cur.fetchall()]
         conn.commit()
 
-        logger.info(f"Production confirmed: O/N={sales_order}, {process_type}, partner={partner}, {confirmed_week}")
+        logger.info(f"Production confirmed: O/N={sales_order}, {process_type}, partner={partner}, sns={serial_numbers_req}")
 
         return jsonify({
             'message': '실적확인 완료',
-            'confirm_id': row['id'],
-            'confirmed_at': row['confirmed_at'].isoformat(),
+            'confirmed': [{
+                'id': r['id'],
+                'serial_number': r['serial_number'],
+                'confirmed_at': r['confirmed_at'].isoformat() if r.get('confirmed_at') else None,
+            } for r in confirmed_rows],
+            'count': len(serial_numbers_req),
         }), 201
 
     except PsycopgError as e:
@@ -571,7 +624,7 @@ def cancel_confirm(confirm_id: int) -> Tuple[Dict[str, Any], int]:
             UPDATE plan.production_confirm
             SET deleted_at = NOW(), deleted_by = %s
             WHERE id = %s AND deleted_at IS NULL
-            RETURNING id, sales_order, process_type, partner
+            RETURNING id, sales_order, process_type, partner, serial_number
         """, (g.worker_id, confirm_id))
         row = cur.fetchone()
         conn.commit()
