@@ -365,6 +365,11 @@ class TaskService:
                 # DRAGON: MECH 가압검사 완료 → QI 매니저
                 trigger = ('TMS_TANK_COMPLETE', 'QI', 'MECH 가압검사 완료')
 
+        # Sprint 37-A: TANK_MODULE 완료 + tm_pressure_test_required=false → 알람
+        elif task.task_id == 'TANK_MODULE' and task.task_category == 'TMS':
+            if not self._is_tm_pressure_test_required():
+                trigger = ('TMS_TANK_COMPLETE', 'MECH', 'TMS 탱크모듈 완료 (가압검사 제외)')
+
         elif task.task_category == 'MECH' and task.task_id == 'TANK_DOCKING':
             trigger = ('TANK_DOCKING_COMPLETE', 'ELEC', 'Tank Docking 완료')
 
@@ -433,6 +438,28 @@ class TaskService:
         except Exception as e:
             logger.error(f"Failed to check dual pressure status: {e}")
             return True  # 에러 시 알람 발송 (안전 방향)
+        finally:
+            if conn:
+                put_conn(conn)
+
+    def _is_tm_pressure_test_required(self) -> bool:
+        """admin_settings에서 tm_pressure_test_required 조회"""
+        conn = None
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT setting_value FROM admin_settings
+                WHERE setting_key = 'tm_pressure_test_required'
+            """)
+            row = cur.fetchone()
+            if row is None:
+                return True
+            val = row['setting_value']
+            return val.lower() in ('true', '1') if isinstance(val, str) else bool(val)
+        except Exception as e:
+            logger.error(f"Failed to check tm_pressure_test_required: {e}")
+            return True  # default: 가압검사 포함
         finally:
             if conn:
                 put_conn(conn)

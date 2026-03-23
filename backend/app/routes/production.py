@@ -46,11 +46,12 @@ def _current_iso_week():
 
 
 def _get_confirm_settings(cur) -> Dict[str, bool]:
-    """admin_settings에서 실적확인 관련 설정 조회"""
+    """admin_settings에서 실적확인 + TM 가압검사 설정 조회"""
     cur.execute("""
         SELECT setting_key, setting_value
         FROM admin_settings
         WHERE setting_key LIKE 'confirm_%'
+           OR setting_key = 'tm_pressure_test_required'
     """)
     settings = {}
     for row in cur.fetchall():
@@ -200,17 +201,21 @@ def _build_order_item(
     process_types = ['MECH', 'ELEC', 'TMS', 'PI', 'QI', 'SI']
     processes = {}
 
-    # 추후 tm_pressure_test_required 옵션 구현 시:
-    # settings.get('tm_pressure_test_required', True) == False이면
-    # TMS 카테고리에서 PRESSURE_TEST task를 progress 집계에서 제외
-    # → tasks dict에서 TANK_MODULE만 합산하도록 분기 추가
+    # TMS progress 집계: tm_pressure_test_required=false → TANK_MODULE만 합산
+    tm_pt_required = settings.get('tm_pressure_test_required', True)
+
     for pt in process_types:
         total = 0
         completed = 0
         for sn in serial_numbers:
             cat = sns_progress.get(sn, {}).get(pt, {})
-            total += cat.get('total', 0)
-            completed += cat.get('completed', 0)
+            if pt == 'TMS' and not tm_pt_required:
+                tm_task = cat.get('tasks', {}).get('TANK_MODULE', {})
+                total += tm_task.get('total', 0)
+                completed += tm_task.get('completed', 0)
+            else:
+                total += cat.get('total', 0)
+                completed += cat.get('completed', 0)
 
         if total == 0:
             continue
@@ -235,8 +240,13 @@ def _build_order_item(
                 ptnr_completed = 0
                 for sn in ptnr_sns:
                     cat = sns_progress.get(sn, {}).get(pt, {})
-                    ptnr_total += cat.get('total', 0)
-                    ptnr_completed += cat.get('completed', 0)
+                    if pt == 'TMS' and not tm_pt_required:
+                        tm_task = cat.get('tasks', {}).get('TANK_MODULE', {})
+                        ptnr_total += tm_task.get('total', 0)
+                        ptnr_completed += tm_task.get('completed', 0)
+                    else:
+                        ptnr_total += cat.get('total', 0)
+                        ptnr_completed += cat.get('completed', 0)
 
                 ptnr_confirm_key = f"{sales_order}:{proc_key}:{ptnr}"
                 ptnr_confirm = confirms.get(ptnr_confirm_key)

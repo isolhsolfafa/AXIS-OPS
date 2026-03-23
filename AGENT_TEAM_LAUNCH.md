@@ -14349,3 +14349,351 @@ cur.execute("""
 - `_is_process_confirmable()` — 이미 #36에서 TANK_MODULE only 분기 완료
 - `_CONFIRM_TASK_FILTER` — 변경 없음
 ```
+
+---
+
+## Sprint 37-A: TM 가압검사 옵션 — settings 기반 progress/알람 제어 (2026-03-23) — #36-C
+
+> **참조**: OPS_API_REQUESTS.md #36-C, DESIGN_FIX_SPRINT.md Sprint 13
+> **선행**: Sprint 37 완료 (partner별 실적확인)
+> **대상**: `production.py`, `task_service.py`, migration
+
+### 배경
+
+TM 공정은 TANK_MODULE + PRESSURE_TEST 2개 task 존재.
+- 실적확인(confirmable): TANK_MODULE만 체크 — #36에서 `_CONFIRM_TASK_FILTER` 구현 완료
+- Progress/알람: 현재 TANK_MODULE + PRESSURE_TEST 전체 포함 (기본 동작)
+- `tm_pressure_test_required` 옵션: progress/알람에 가압검사 포함 여부를 admin_settings로 제어
+
+default `true` = 현재 동작 유지 (가압검사 포함). `false`로 변경 시 progress는 TANK_MODULE만, 알람은 TANK_MODULE 완료 시점에 트리거.
+
+### BE 작업 — Task 정의
+
+#### Task 1: Migration (`backend/migrations/031_tm_pressure_test_setting.sql`)
+
+```sql
+BEGIN;
+
+INSERT INTO plan.admin_settings (setting_key, setting_value, description)
+VALUES ('tm_pressure_test_required', 'true', 'TM 가압검사 progress/알람 포함 여부 (true=포함, false=탱크모듈만)')
+ON CONFLICT (setting_key) DO NOTHING;
+
+COMMIT;
+```
+
+#### Task 2: `_get_confirm_settings()` WHERE 조건 확장
+
+현재: `WHERE setting_key LIKE 'confirm_%'` → `tm_pressure_test_required` 조회 불가
+
+변경:
+```python
+def _get_confirm_settings(cur) -> Dict[str, bool]:
+    """admin_settings에서 실적확인 관련 설정 조회"""
+    cur.execute("""
+        SELECT setting_key, setting_value
+        FROM admin_settings
+        WHERE setting_key LIKE 'confirm_%'
+           OR setting_key = 'tm_pressure_test_required'
+    """)
+    # ... 기존 파싱 로직 유지
+```
+
+#### Task 3: `_build_order_item()` — settings 기반 TMS progress 집계 분기
+
+현재 (line 203~206): 주석만 존재
+변경: `tm_pressure_test_required=false` 시 TMS 카테고리 progress에서 PRESSURE_TEST 제외
+
+```python
+for pt in process_types:
+    total = 0
+    completed = 0
+    for sn in serial_numbers:
+        cat = sns_progress.get(sn, {}).get(pt, {})
+
+        # TMS 카테고리 + tm_pressure_test_required=false → TANK_MODULE만 합산
+        if pt == 'TMS' and not settings.get('tm_pressure_test_required', True):
+            tm_task = cat.get('tasks', {}).get('TANK_MODULE', {})
+            total += tm_task.get('total', 0)
+            completed += tm_task.get('completed', 0)
+        else:
+            total += cat.get('total', 0)
+            completed += cat.get('completed', 0)
+```
+
+혼재 분기에서도 동일 적용 (partner별 progress 집계 루프):
+```python
+for sn in ptnr_sns:
+    cat = sns_progress.get(sn, {}).get(pt, {})
+    if pt == 'TMS' and not settings.get('tm_pressure_test_required', True):
+        tm_task = cat.get('tasks', {}).get('TANK_MODULE', {})
+        ptnr_total += tm_task.get('total', 0)
+        ptnr_completed += tm_task.get('completed', 0)
+    else:
+        ptnr_total += cat.get('total', 0)
+        ptnr_completed += cat.get('completed', 0)
+```
+
+#### Task 4: `task_service.py` `_trigger_completion_alerts()` — settings 기반 트리거 분기
+
+현재 (line 359~363): `PRESSURE_TEST` 완료 시에만 알람 트리거
+변경: `tm_pressure_test_required=false` 시 `TANK_MODULE` 완료 시에도 알람 트리거
+
+```python
+def _trigger_completion_alerts(self, task) -> None:
+    trigger = None
+
+    if task.task_id == 'PRESSURE_TEST':
+        if task.task_category == 'TMS':
+            if self._is_dual_pressure_all_done(task.serial_number):
+                trigger = ('TMS_TANK_COMPLETE', 'MECH', 'TMS 가압검사 완료')
+        elif task.task_category == 'MECH':
+            trigger = ('TMS_TANK_COMPLETE', 'QI', 'MECH 가압검사 완료')
+
+    # NEW: tm_pressure_test_required=false 시 TANK_MODULE 완료로도 알람
+    elif task.task_id == 'TANK_MODULE' and task.task_category == 'TMS':
+        if not self._is_tm_pressure_test_required():
+            trigger = ('TMS_TANK_COMPLETE', 'MECH', 'TMS 탱크모듈 완료 (가압검사 제외)')
+
+    elif task.task_category == 'MECH' and task.task_id == 'TANK_DOCKING':
+        # ... 기존 코드 유지
+```
+
+`_is_tm_pressure_test_required()` 헬퍼 추가:
+```python
+def _is_tm_pressure_test_required(self) -> bool:
+    """admin_settings에서 tm_pressure_test_required 조회"""
+    cur = get_db_connection().cursor(cursor_factory=RealDictCursor)
+    cur.execute("""
+        SELECT setting_value FROM plan.admin_settings
+        WHERE setting_key = 'tm_pressure_test_required'
+    """)
+    row = cur.fetchone()
+    if row is None:
+        return True  # default: 가압검사 포함
+    val = row['setting_value']
+    return val.lower() in ('true', '1') if isinstance(val, str) else bool(val)
+```
+
+### 배포 순서
+
+1. **DB migration**: Migration 031 실행 (Railway)
+2. **BE push**: Task 2~4 (`production.py` + `task_service.py`)
+3. **FE push**: ConfirmSettingsPanel TM 그룹 박스 UI (VIEW Sprint 13)
+
+### 체크리스트
+
+**BE (✅ 완료)**:
+- [x] Migration 031 작성 + Railway DB 적용 ✅
+- [x] `production.py` — `_get_confirm_settings()` WHERE 확장 (`tm_pressure_test_required` 포함) ✅
+- [x] `production.py` — `_build_order_item()` TMS progress 비혼재 분기 (TANK_MODULE only) ✅
+- [x] `production.py` — 혼재 partner별 progress에서도 동일 분기 ✅
+- [x] `task_service.py` — `_trigger_completion_alerts()` TANK_MODULE 완료 알람 분기 ✅
+- [x] `task_service.py` — `_is_tm_pressure_test_required()` 헬퍼 추가 ✅
+
+## TEST 작업 (tests/backend/) — Sprint 37-A
+
+### test_sprint37a_pressure_test_setting.py (신규) — 🔴 가압검사 옵션 테스트
+
+**White-box: _build_order_item() progress 분기**
+1. TC-PT-01: `tm_pressure_test_required=true` → TMS progress = TANK_MODULE + PRESSURE_TEST 합산 (기본 동작)
+2. TC-PT-02: `tm_pressure_test_required=false` → TMS progress = TANK_MODULE만 합산 (PRESSURE_TEST 제외)
+3. TC-PT-03: `tm_pressure_test_required=false` + TANK_MODULE 5/5 완료 → pct=100% (PRESSURE_TEST 0/5 무시)
+4. TC-PT-04: `tm_pressure_test_required` 설정 미존재 → default `true` 동작 (가압검사 포함)
+
+**White-box: 혼재 partner별 progress 분기**
+5. TC-PT-05: 혼재 O/N + `tm_pressure_test_required=false` → partner_confirms의 TMS total/completed도 TANK_MODULE만 합산
+6. TC-PT-06: 혼재 O/N + `tm_pressure_test_required=true` → partner_confirms의 TMS total/completed = 전체 합산
+
+**White-box: _get_confirm_settings() 확장**
+7. TC-PT-07: `_get_confirm_settings()` → `tm_pressure_test_required` 키 포함 반환 확인
+
+**White-box: _trigger_completion_alerts() 알람 분기**
+8. TC-PT-08: `tm_pressure_test_required=true` + TANK_MODULE 완료 → 알람 미발송 (PRESSURE_TEST 대기)
+9. TC-PT-09: `tm_pressure_test_required=false` + TANK_MODULE 완료 → 알람 발송 (TMS_TANK_COMPLETE)
+10. TC-PT-10: `tm_pressure_test_required=true` + PRESSURE_TEST 완료 → 기존 알람 발송 (변경 없음)
+
+### test_sprint37a_regression.py (신규) — Regression 테스트
+11. TC-PTR-01: MECH/ELEC progress — `tm_pressure_test_required` 무관, 기존 동작 유지
+12. TC-PTR-02: `_CONFIRM_TASK_FILTER` TMS→TANK_MODULE only confirmable — 변경 없음
+13. TC-PTR-03: `_is_process_confirmable()` — 설정값 무관, TANK_MODULE only 유지 (confirmable ≠ progress)
+14. TC-PTR-04: partner별 confirm/cancel — Sprint 37 동작 유지
+15. TC-PTR-05: PI/QI/SI 알람 — 변경 없음
+
+---
+
+## 변경 파일 — Sprint 37-A
+
+| 파일 | 변경 |
+|------|------|
+| `backend/migrations/031_tm_pressure_test_setting.sql` | admin_settings에 `tm_pressure_test_required` 키 추가 (신규) |
+| `backend/app/routes/production.py` | `_get_confirm_settings()` WHERE 확장 + `_build_order_item()` TMS progress 분기 (비혼재 + 혼재) |
+| `backend/app/services/task_service.py` | `_trigger_completion_alerts()` TANK_MODULE 완료 알람 분기 + `_is_tm_pressure_test_required()` 헬퍼 |
+| `tests/backend/test_sprint37a_pressure_test_setting.py` | White-box 테스트 10건 (신규) |
+| `tests/backend/test_sprint37a_regression.py` | Regression 테스트 5건 (신규) |
+
+## 규칙 — Sprint 37-A
+- CLAUDE.md의 "DB 테이블 정확한 컬럼 명세" 섹션을 반드시 참조 — `admin_settings` 컬럼은 `setting_key`, `setting_value`, `description`
+- `admin_settings` 조회: `_get_confirm_settings()`를 통해 일괄 조회 — 개별 쿼리 금지
+- `_calc_sn_progress()` 결과의 `tasks` dict 활용 — task_id 레벨 데이터 이미 존재 (#36)
+- `tm_pressure_test_required` default = `true` — 설정 미존재 시 기존 동작(가압검사 포함) 유지 필수
+- confirmable 로직(`_CONFIRM_TASK_FILTER`)과 progress 로직은 독립 — confirmable은 항상 TANK_MODULE only
+- BE가 코드를 완성하면 TEST가 먼저 CLAUDE.md 기준으로 코드 리뷰 진행
+- 리뷰 통과 후에만 테스트 코드 작성
+- 각 teammate는 자신의 소유 파일만 수정 가능
+- ⚠️ `_calc_sn_progress()` 수정 금지 — #36에서 task_id 레벨로 확장 완료
+- ⚠️ `_is_process_confirmable()` 수정 금지 — #36에서 TANK_MODULE only 분기 완료
+- ⚠️ `_CONFIRM_TASK_FILTER` 수정 금지
+- ⚠️ `task_seed.py` 수정 금지 — task 생성 로직 변경 없음
+- ⚠️ FE 코드 수정 금지 — VIEW Sprint 13에서 별도 진행
+- .env 파일 절대 커밋 금지
+- N+1 쿼리 금지 — batch 조회(ANY 사용)
+- 완료 시 AGENT_TEAM_LAUNCH.md 체크리스트 업데이트
+
+---
+
+### Teammate 프롬프트 — Sprint 37-A (#36-C TM 가압검사 옵션)
+
+> **이 프롬프트를 Claude Code teammate에게 전달하여 실행**
+> 선행 조건: Sprint 37 완료, DB Migration 031 실행 완료
+
+```
+## Sprint 37-A: TM 가압검사 옵션 — settings 기반 progress/알람 제어
+
+### 컨텍스트
+- 참조: `AXIS-VIEW/docs/OPS_API_REQUESTS.md` #36-C (설계 문서)
+- 참조: `AXIS-OPS/AGENT_TEAM_LAUNCH.md` Sprint 37-A 섹션
+- 대상 파일: `backend/app/routes/production.py`, `backend/app/services/task_service.py`
+- DB: `plan.admin_settings`에 `tm_pressure_test_required=true` 키 추가 완료 상태
+
+### 배경
+TM 공정의 PRESSURE_TEST를 progress/알람에 포함할지 admin_settings로 제어.
+- confirmable: 항상 TANK_MODULE only (변경 없음 — `_CONFIRM_TASK_FILTER` 유지)
+- progress: `tm_pressure_test_required=true` → 전체, `false` → TANK_MODULE만
+- 알람: `tm_pressure_test_required=true` → PRESSURE_TEST 완료 시, `false` → TANK_MODULE 완료 시
+
+### Task 순서 (반드시 이 순서대로)
+
+#### Task 1: Migration 031 작성 (`backend/migrations/031_tm_pressure_test_setting.sql`)
+
+```sql
+BEGIN;
+
+INSERT INTO plan.admin_settings (setting_key, setting_value, description)
+VALUES ('tm_pressure_test_required', 'true', 'TM 가압검사 progress/알람 포함 여부 (true=포함, false=탱크모듈만)')
+ON CONFLICT (setting_key) DO NOTHING;
+
+COMMIT;
+```
+
+#### Task 2: `_get_confirm_settings()` WHERE 조건 확장
+
+현재 WHERE: `setting_key LIKE 'confirm_%'`
+변경: `tm_pressure_test_required`도 포함
+
+```python
+cur.execute("""
+    SELECT setting_key, setting_value
+    FROM admin_settings
+    WHERE setting_key LIKE 'confirm_%'
+       OR setting_key = 'tm_pressure_test_required'
+""")
+```
+
+#### Task 3: `_build_order_item()` — TMS progress 분기
+
+현재 주석(line 203~206)을 실제 코드로 변경.
+비혼재 + 혼재 양쪽 progress 집계 루프에서:
+- `pt == 'TMS'` and `settings.get('tm_pressure_test_required', True) == False`
+- → `tasks` dict에서 TANK_MODULE만 합산
+
+비혼재 루프:
+```python
+for sn in serial_numbers:
+    cat = sns_progress.get(sn, {}).get(pt, {})
+    if pt == 'TMS' and not settings.get('tm_pressure_test_required', True):
+        tm_task = cat.get('tasks', {}).get('TANK_MODULE', {})
+        total += tm_task.get('total', 0)
+        completed += tm_task.get('completed', 0)
+    else:
+        total += cat.get('total', 0)
+        completed += cat.get('completed', 0)
+```
+
+혼재 partner별 루프에서도 동일 패턴 적용.
+
+#### Task 4: `task_service.py` `_trigger_completion_alerts()` — 알람 분기
+
+기존 `PRESSURE_TEST` 완료 알람 유지 + TANK_MODULE 완료 시 알람 분기 추가:
+
+```python
+# 기존 PRESSURE_TEST 블록 유지 (line 359~366)
+
+# NEW: TANK_MODULE 완료 + tm_pressure_test_required=false → 알람 발송
+elif task.task_id == 'TANK_MODULE' and task.task_category == 'TMS':
+    if not self._is_tm_pressure_test_required():
+        trigger = ('TMS_TANK_COMPLETE', 'MECH', 'TMS 탱크모듈 완료 (가압검사 제외)')
+```
+
+`_is_tm_pressure_test_required()` 헬퍼 추가:
+```python
+def _is_tm_pressure_test_required(self) -> bool:
+    cur = get_db_connection().cursor(cursor_factory=RealDictCursor)
+    cur.execute("""
+        SELECT setting_value FROM plan.admin_settings
+        WHERE setting_key = 'tm_pressure_test_required'
+    """)
+    row = cur.fetchone()
+    if row is None:
+        return True
+    val = row['setting_value']
+    return val.lower() in ('true', '1') if isinstance(val, str) else bool(val)
+```
+
+#### Task 5: 테스트 코드 작성
+
+`AGENT_TEAM_LAUNCH.md`의 "TEST 작업 — Sprint 37-A" 섹션 참조.
+아래 2개 테스트 파일을 `tests/backend/`에 작성:
+
+1. `test_sprint37a_pressure_test_setting.py` — White-box 10건 (TC-PT-01 ~ TC-PT-10)
+2. `test_sprint37a_regression.py` — Regression 5건 (TC-PTR-01 ~ TC-PTR-05)
+
+테스트 전체 PASSED (15건 이상) 확인 후 완료.
+
+### 검증 체크리스트
+
+1. **tm_pressure_test_required=true** (기본): TMS progress = TANK_MODULE + PRESSURE_TEST 합산, 알람 = PRESSURE_TEST 완료 시
+2. **tm_pressure_test_required=false**: TMS progress = TANK_MODULE만, 알람 = TANK_MODULE 완료 시
+3. **설정 미존재**: default `true` 동작 (기존과 동일)
+4. **confirmable 미변경**: `_CONFIRM_TASK_FILTER` = TANK_MODULE only 그대로
+5. **MECH/ELEC/PI/QI/SI**: 영향 없음
+6. **혼재 + false**: partner별 TMS progress도 TANK_MODULE만 합산
+
+### 수정 대상 파일 목록
+
+- `backend/migrations/031_tm_pressure_test_setting.sql` (신규)
+- `backend/app/routes/production.py` (수정)
+- `backend/app/services/task_service.py` (수정)
+- `tests/backend/test_sprint37a_pressure_test_setting.py` (신규)
+- `tests/backend/test_sprint37a_regression.py` (신규)
+
+### 규칙
+
+- CLAUDE.md의 "DB 테이블 정확한 컬럼 명세" 반드시 참조 — `admin_settings` 컬럼: `setting_key`, `setting_value`, `description`
+- `_get_confirm_settings()`를 통해 일괄 조회 — 개별 쿼리 금지 (`_is_tm_pressure_test_required` 헬퍼는 task_service.py 전용)
+- `tm_pressure_test_required` default = `true` — 설정 미존재 시 기존 동작 유지 필수
+- confirmable 로직과 progress 로직은 독립 — confirmable은 항상 TANK_MODULE only
+- BE가 코드를 완성하면 TEST가 먼저 CLAUDE.md 기준으로 코드 리뷰 진행
+- 리뷰 통과 후에만 테스트 코드 작성
+- 각 teammate는 자신의 소유 파일만 수정 가능
+- N+1 쿼리 금지 — batch 조회(ANY 사용)
+- .env 파일 절대 커밋 금지
+
+### 절대 수정 금지
+
+- `_calc_sn_progress()` — task_id 레벨 구조 변경 없음
+- `_is_process_confirmable()` — TANK_MODULE only 분기 변경 없음
+- `_CONFIRM_TASK_FILTER` — 변경 없음
+- `task_seed.py` — task 생성 로직 변경 없음
+- FE 코드 — VIEW Sprint 13에서 별도 진행
+- Sprint 37 partner 혼재 로직 (`_PROC_PARTNER_COL`, `partner_confirms`) — 구조 변경 없음
+```
