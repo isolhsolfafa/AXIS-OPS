@@ -14979,8 +14979,11 @@ RETURNING id, sales_order, process_type, partner, serial_number
 - [x] `confirm_production()` serial_numbers 배열 + multi-row INSERT ✅
 - [x] `cancel_confirm()` RETURNING serial_number ✅
 
-**TEST**:
-- [ ] 테스트 파일 작성 — 추후
+**TEST (✅ 36/36 passed — 26분 53초)**:
+- [x] `test_sprint37b_sn_confirm.py` White-box 24건 ✅
+- [x] `test_sprint37b_graybox.py` Gray-box 5건 ✅
+- [x] `test_sprint37b_regression.py` Regression 7건 ✅
+- [x] `has_docking` 컬럼 참조 버그 수정 (product_info에 없는 컬럼) ✅
 
 **검증 (배포 후)**:
 - [ ] 🔴 TM 혼재 제거: `processes.TM.mixed` 없음, `partner_confirms` 없음
