@@ -13941,5 +13941,39 @@ def _is_process_confirmable(sns_progress, process_type, settings, proc_key=None)
 - [x] ETL: `step1_extract.py` — AQ열 "모듈계획종료일" 추출 (`semi_product_end`, index 42) ✅
 - [x] ETL: `step2_load.py` — `module_end` INSERT/UPSERT/WHERE 추가 ✅
 - [x] BE: `production.py` — performance 쿼리 `mech_start` → `mech_end OR elec_end OR COALESCE(module_end, module_start)` ✅
-- [ ] ETL 재실행: DB 컬럼 추가 후 `python3 etl_main.py --all` 실행하여 module_end 적재
-- [ ] VIEW 확인: W12 선택 시 공정 종료일 기준 O/N 목록 정상 표시
+- [x] ETL 재실행: DB 컬럼 추가 후 `python3 etl_main.py --all` 실행하여 module_end 적재
+- [x] VIEW 확인: W12 선택 시 공정 종료일 기준 O/N 목록 정상 표시
+
+---
+
+## TM 실적확인 로직 분리: TANK_MODULE only confirmable (2026-03-23) — #36
+
+> **목적**: TM 실적확인(confirmable)은 TANK_MODULE만 기준, progress/알람은 TANK_MODULE+PRESSURE_TEST 전체 기준으로 분리
+> **참조**: OPS_API_REQUESTS.md #36, #36-B, #36-C
+> **배경**: 가압검사가 TMS(협력사) + PI(GST 내부) 2회 중복 수행 중 (공정 안정화 목적). 추후 PI만 남기고 TMS PRESSURE_TEST 제거 예정.
+
+### 설계 원칙
+
+| 항목 | 기준 | 범위 |
+|------|------|------|
+| Progress | TMS 카테고리 전체 | TANK_MODULE + PRESSURE_TEST |
+| Alarm trigger | TMS 전체 완료 시 | PRESSURE_TEST 완료 → mech_partner 알람 |
+| 실적확인 (confirmable) | TANK_MODULE만 | PRESSURE_TEST 미완료여도 실적확인 가능 |
+
+### 체크리스트
+
+- [x] BE: `_calc_sn_progress()` — `GROUP BY task_category` → `GROUP BY task_category, task_id` 확장 ✅ 2026-03-23
+  - 반환 구조: `{sn: {cat: {total, completed, pct, tasks: {task_id: {total, completed}}}}}`
+  - 기존 카테고리 레벨 total/completed는 Python 합산으로 유지 (하위호환)
+- [x] BE: `_CONFIRM_TASK_FILTER = {'TMS': 'TANK_MODULE'}` 매핑 추가 ✅ 2026-03-23
+- [x] BE: `_is_process_confirmable()` — TMS일 때 `tasks.TANK_MODULE`만 체크하도록 분기 ✅ 2026-03-23
+- [x] BE: `_build_order_item()` — 추후 `tm_pressure_test_required` 옵션 연계 주석 추가 ✅ 2026-03-23
+- [ ] 배포 후 확인: TM `1/2` 상태에서 실적확인 버튼 활성화 (TANK_MODULE 완료 기준)
+- [ ] 배포 후 확인: TM progress `1/2` 정상 표시 (PRESSURE_TEST 미완 포함)
+
+### BACKLOG: `tm_pressure_test_required` 옵션 (설비 변경 시)
+
+- [ ] BE: `admin_settings` 테이블에 `tm_pressure_test_required` 키 추가
+- [ ] BE: `_build_order_item()` — 설정값에 따라 TMS progress에서 PRESSURE_TEST 제외/포함 분기
+- [ ] BE: `task_service.py` `_trigger_completion_alerts()` — 설정값에 따라 알람 트리거 분기
+- [ ] FE: `ConfirmSettingsPanel` — TM 그룹 UI + 가압검사 포함 토글 (#36-C)

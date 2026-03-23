@@ -65,17 +65,23 @@ def _get_confirm_settings(cur) -> Dict[str, bool]:
 
 
 def _calc_sn_progress(cur, serial_numbers: List[str]) -> Dict[str, Dict]:
-    """S/N 목록에 대해 카테고리별 태스크 진행률 조회"""
+    """S/N 목록에 대해 카테고리별·태스크별 진행률 조회
+
+    Returns:
+        {sn: {category: {total, completed, pct, tasks: {task_id: {total, completed}}}}}
+        task_id 레벨 데이터는 confirmable 판정, 추후 tm_pressure_test_required
+        옵션 등에서 개별 태스크 필터링에 사용.
+    """
     if not serial_numbers:
         return {}
 
     cur.execute("""
-        SELECT serial_number, task_category,
+        SELECT serial_number, task_category, task_id,
                COUNT(*) AS total,
                COUNT(completed_at) AS completed
         FROM app_task_details
         WHERE serial_number = ANY(%s) AND is_applicable = TRUE
-        GROUP BY serial_number, task_category
+        GROUP BY serial_number, task_category, task_id
     """, (serial_numbers,))
 
     result = {}
@@ -84,14 +90,36 @@ def _calc_sn_progress(cur, serial_numbers: List[str]) -> Dict[str, Dict]:
         if sn not in result:
             result[sn] = {}
         cat = row['task_category']
+        task_id = row['task_id']
         total = row['total']
         completed = row['completed']
-        result[sn][cat] = {
+
+        if cat not in result[sn]:
+            result[sn][cat] = {'total': 0, 'completed': 0, 'tasks': {}}
+
+        result[sn][cat]['total'] += total
+        result[sn][cat]['completed'] += completed
+        result[sn][cat]['tasks'][task_id] = {
             'total': total,
             'completed': completed,
-            'pct': round(completed / total * 100, 1) if total > 0 else 0.0,
         }
+
+    # 카테고리 레벨 pct 계산
+    for sn_data in result.values():
+        for cat_data in sn_data.values():
+            t = cat_data['total']
+            c = cat_data['completed']
+            cat_data['pct'] = round(c / t * 100, 1) if t > 0 else 0.0
+
     return result
+
+
+# 실적확인(confirmable) 판정 시 특정 task_id만 체크하는 매핑
+# TMS: TANK_MODULE만 (PRESSURE_TEST는 progress/알람 전용, 실적확인 대상 아님)
+# 추후 다른 카테고리도 task_id별 분리 필요 시 여기에 추가
+_CONFIRM_TASK_FILTER: Dict[str, str] = {
+    'TMS': 'TANK_MODULE',
+}
 
 
 def _is_process_confirmable(
@@ -101,14 +129,18 @@ def _is_process_confirmable(
     proc_key: Optional[str] = None,
     serial_numbers: Optional[List[str]] = None,
 ) -> bool:
-    """O/N 전체 S/N이 해당 공정 100% 완료인지 판정
+    """O/N 전체 S/N이 해당 공정의 실적확인 대상 태스크를 100% 완료했는지 판정
 
     Args:
-        sns_progress: 전체 S/N progress (여러 O/N 포함 가능)
+        sns_progress: {sn: {category: {total, completed, pct, tasks: {task_id: ...}}}}
         process_type: DB task_category (MECH, ELEC, TMS 등)
         settings: confirm_*_enabled 설정값
         proc_key: 시스템 표준 공정키 (TM 등). 없으면 process_type 사용
         serial_numbers: 현재 O/N에 속하는 S/N 목록. 없으면 전체 순회 (하위호환)
+
+    동작:
+        _CONFIRM_TASK_FILTER에 등록된 카테고리 → 지정 task_id만 체크
+        미등록 카테고리 → 카테고리 전체 체크 (기존 동작)
     """
     key = f'confirm_{(proc_key or process_type).lower()}_enabled'
     if not settings.get(key, False):
@@ -116,14 +148,28 @@ def _is_process_confirmable(
 
     # 현재 O/N의 S/N만 필터링하여 판정
     check_sns = serial_numbers or list(sns_progress.keys())
+    confirm_task = _CONFIRM_TASK_FILTER.get(process_type)
+
     has_data = False
     for sn in check_sns:
         cat_data = sns_progress.get(sn, {}).get(process_type, {})
-        if cat_data.get('total', 0) == 0:
-            continue
-        has_data = True
-        if cat_data.get('completed', 0) < cat_data.get('total', 0):
-            return False
+
+        if confirm_task:
+            # task_id 레벨 체크 (예: TMS → TANK_MODULE만)
+            task_data = cat_data.get('tasks', {}).get(confirm_task, {})
+            if task_data.get('total', 0) == 0:
+                continue
+            has_data = True
+            if task_data.get('completed', 0) < task_data.get('total', 0):
+                return False
+        else:
+            # 카테고리 전체 체크 (MECH, ELEC, PI, QI, SI 등)
+            if cat_data.get('total', 0) == 0:
+                continue
+            has_data = True
+            if cat_data.get('completed', 0) < cat_data.get('total', 0):
+                return False
+
     return has_data
 
 
@@ -146,6 +192,10 @@ def _build_order_item(
     process_types = ['MECH', 'ELEC', 'TMS', 'PI', 'QI', 'SI']
     processes = {}
 
+    # 추후 tm_pressure_test_required 옵션 구현 시:
+    # settings.get('tm_pressure_test_required', True) == False이면
+    # TMS 카테고리에서 PRESSURE_TEST task를 progress 집계에서 제외
+    # → tasks dict에서 TANK_MODULE만 합산하도록 분기 추가
     for pt in process_types:
         total = 0
         completed = 0
