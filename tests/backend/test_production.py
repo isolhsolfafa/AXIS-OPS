@@ -16,12 +16,13 @@ def _insert_product(db_conn, serial_number, qr_doc_id, model, sales_order, mech_
     """테스트용 제품 + QR 등록"""
     if mech_start is None:
         mech_start = date.today()
+    mech_end = mech_start  # 같은 날 → 같은 주차 보장
     cursor = db_conn.cursor()
     cursor.execute("""
-        INSERT INTO plan.product_info (serial_number, model, sales_order, mech_start)
-        VALUES (%s, %s, %s, %s)
+        INSERT INTO plan.product_info (serial_number, model, sales_order, mech_start, mech_end)
+        VALUES (%s, %s, %s, %s, %s)
         ON CONFLICT (serial_number) DO NOTHING
-    """, (serial_number, model, sales_order, mech_start))
+    """, (serial_number, model, sales_order, mech_start, mech_end))
     cursor.execute("""
         INSERT INTO public.qr_registry (qr_doc_id, serial_number, status)
         VALUES (%s, %s, 'active')
@@ -104,6 +105,12 @@ class TestProductionPerformance:
 
         _cleanup_test_data(db_conn)
         today = date.today()
+
+        # confirm_mech_enabled=true 설정 (confirmable 판정 전제)
+        cursor = db_conn.cursor()
+        cursor.execute("UPDATE admin_settings SET setting_value = 'true' WHERE setting_key = 'confirm_mech_enabled'")
+        db_conn.commit()
+        cursor.close()
 
         _insert_product(db_conn, 'SN-PROD-33-010', 'DOC-PROD-33-010', 'GAIA-I', 'ON-SN-PROD-33-7001', today)
         # MECH 태스크 1개 — 완료
