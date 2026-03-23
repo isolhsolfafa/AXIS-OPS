@@ -13927,3 +13927,19 @@ def _is_process_confirmable(sns_progress, process_type, settings, proc_key=None)
 
 **선제 적용 가능 (현재)**:
 - `production_confirm`에 `sap_status` 컬럼만 먼저 추가 (기존 로직 무영향, DEFAULT 'NOT_SENT')
+
+---
+
+## 생산실적 리스트 기준 변경: mech_start → 공정 종료일 기준 (2026-03-23) ✅ 완료
+
+> **목적**: 실적확인 시점과 표시 기준 일치 — W12 착수 O/N이 W13 완료 시 W13에 표시
+> **참조**: OPS_API_REQUESTS.md #35, CORE-ETL Sprint 3
+
+### 체크리스트
+
+- [ ] DB: `ALTER TABLE plan.product_info ADD COLUMN module_end DATE` + 인덱스 3개 (수동 실행)
+- [x] ETL: `step1_extract.py` — AQ열 "모듈계획종료일" 추출 (`semi_product_end`, index 42) ✅
+- [x] ETL: `step2_load.py` — `module_end` INSERT/UPSERT/WHERE 추가 ✅
+- [x] BE: `production.py` — performance 쿼리 `mech_start` → `mech_end OR elec_end OR COALESCE(module_end, module_start)` ✅
+- [ ] ETL 재실행: DB 컬럼 추가 후 `python3 etl_main.py --all` 실행하여 module_end 적재
+- [ ] VIEW 확인: W12 선택 시 공정 종료일 기준 O/N 목록 정상 표시
