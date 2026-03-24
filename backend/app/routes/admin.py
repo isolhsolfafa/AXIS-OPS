@@ -48,6 +48,8 @@ SETTING_KEYS: Dict[str, Dict[str, Any]] = {
     'geo_latitude':           {'type': 'number', 'default': 35.1796},
     'geo_longitude':          {'type': 'number', 'default': 129.0756},
     'geo_radius_meters':      {'type': 'number', 'default': 200, 'min': 50, 'max': 5000},
+    # bool — Sprint 37-A TM 가압검사 옵션
+    'tm_pressure_test_required': {'type': 'bool', 'default': True},
     # string_list (JSON 배열) — Sprint 31C PI 위임
     'pi_capable_mech_partners': {'type': 'string_list', 'default': []},
     'pi_gst_override_lines':    {'type': 'string_list', 'default': []},
