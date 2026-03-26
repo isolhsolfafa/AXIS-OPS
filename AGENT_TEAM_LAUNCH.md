@@ -15366,3 +15366,1197 @@ RETURNING id, sales_order, process_type, partner, serial_number
 - FE 코드 — VIEW Sprint에서 별도 진행
 - Sprint 37 MECH/ELEC partner 혼재 판정 로직 — `_PROC_PARTNER_COL`에서 TM만 제거, MECH/ELEC 유지
 ```
+
+---
+
+## Sprint 38: product/progress API 최근 태깅 요약 필드 추가 (2026-03-25) — VIEW Sprint 18 연동
+
+> **목적**: VIEW S/N 카드뷰에서 카드 리스트 단계에서 최근 태깅 작업자를 표시하기 위한 BE 확장. N+1 호출 방지(방향 B 채택)
+> **참조**: OPS_API_REQUESTS.md #43, VIEW DESIGN_FIX_SPRINT.md Sprint 18
+> **대상**: `AXIS-OPS/backend/app/services/progress_service.py`
+> **선행**: Sprint 37-B 완료
+
+### 배경
+
+VIEW Sprint 18 S/N 카드뷰에서 카드에 "최근 작업자 + 마지막 태깅 시간"을 표시하려면, 기존 방식으로는 S/N마다 `GET /tasks/<sn>?all=true`를 호출해야 하는 N+1 문제 발생. 방향 B를 채택하여 `GET /api/app/product/progress` 응답의 `products[]`에 summary 필드를 추가.
+
+카드 리스트 데이터 소스는 APP 전사 작업 진행현황과 동일한 `GET /api/app/product/progress` API 사용. VIEW Sprint 18은 Sprint 38 없이 선행 가능 (progress만 표시), Sprint 38 완료 후 `last_worker` 필드 FE 연결만 추가.
+
+현장 관리자(mech, elec in_manager)가 카드 리스트에서 작업자의 실제 태깅 여부를 바로 확인하는 용도.
+
+장기적으로 작업자별 공정시간 집계 → APS integration 기반 데이터로 활용 예정.
+
+### BE 작업
+
+#### Task 1: `_aggregate_products()` — S/N별 최근 태깅 요약 서브쿼리 추가
+
+**파일**: `backend/app/services/progress_service.py`
+**위치**: `_aggregate_products()` 함수 내, S/N 그룹핑 후 반환 전
+
+**추가할 서브쿼리** (`get_partner_sn_progress()` 메인 쿼리 이후, 별도 쿼리):
+
+```sql
+SELECT DISTINCT ON (t.serial_number)
+    t.serial_number,
+    w.name AS last_worker,
+    COALESCE(wcl.completed_at, wsl.started_at) AS last_activity_at
+FROM app_task_details t
+JOIN work_start_log wsl ON wsl.task_id = t.id
+JOIN workers w ON wsl.worker_id = w.id
+LEFT JOIN work_completion_log wcl
+    ON wcl.task_id = t.id AND wcl.worker_id = wsl.worker_id
+WHERE t.serial_number = ANY(%s)
+ORDER BY t.serial_number, COALESCE(wcl.completed_at, wsl.started_at) DESC
+```
+
+**파라미터**: `list(sn_map.keys())` — 그룹핑된 S/N 목록
+
+**결과 캐싱**: `last_activity_map = { sn: { 'last_worker': name, 'last_activity_at': timestamp } }`
+
+#### Task 2: `products[]` 응답에 필드 추가
+
+**현재** (`_aggregate_products()` line 229~246):
+```python
+for sn_data in sn_map.values():
+    # ... overall_percent, my_category 계산 ...
+    products.append(sn_data)
+    'mech_end': ...,
+    'elec_end': ...,
+    'module_end': ...,
+    'progress': sn_prog,
+})
+```
+
+**변경 후**:
+```python
+for sn_data in sn_map.values():
+    # ... overall_percent, my_category 계산 ...
+    activity = last_activity_map.get(sn_data['serial_number'], {})
+    sn_data['last_worker'] = activity.get('last_worker')
+    sn_data['last_activity_at'] = (
+        activity['last_activity_at'].isoformat()
+        if activity.get('last_activity_at') else None
+    )
+    products.append(sn_data)
+```
+
+### 응답 변경 (기존 호환)
+
+기존 APP FE에서 사용하지 않는 필드 추가이므로 **하위 호환성 문제 없음**.
+
+```json
+{
+  "products": [
+    {
+      "serial_number": "GBWS-6804",
+      "model": "GAIA-I DUAL",
+      "customer": "MICRON",
+      "ship_plan_date": "2026-04-17",
+      "all_completed": false,
+      "overall_percent": 76,
+      "categories": {
+        "MECH": { "total": 6, "done": 6, "percent": 100 },
+        "ELEC": { "total": 6, "done": 6, "percent": 100 }
+      },
+      "last_worker": "김태영",
+      "last_activity_at": "2026-03-25T10:32:45+09:00"
+    }
+  ],
+  "summary": { "total": 4, "in_progress": 3, "completed_recent": 1 }
+}
+```
+
+> `last_worker`가 `null`이면 해당 S/N에 아직 태깅 이력 없음 → FE에서 "-" 또는 빈칸 처리
+
+### 성능 고려
+
+- `DISTINCT ON` + `ORDER BY DESC` → S/N당 최신 1건만 반환, 인덱스 활용
+- `progress_service.py`는 전체 진행중 S/N 대상이므로 최대 수십~백 건 — 1회 batch 쿼리로 부하 미미
+- `work_start_log`에 `task_id` 인덱스 이미 존재 (Sprint 14부터)
+
+### 장기 확장 — APS Integration 기반
+
+이 서브쿼리의 데이터 소스(`work_start_log` + `work_completion_log`)는 향후 아래 기능 확장의 기반:
+
+| 확장 방향 | 설명 | 데이터 소스 |
+|----------|------|-----------|
+| 작업자별 공정시간 집계 | 모델별·공정별·작업자별 SUM(duration_minutes) | `work_completion_log.duration_minutes` |
+| 생산계획 vs 실적 비교 | 계획 공정시간 대비 실제 소요시간 GAP 분석 | `plan.product_info` + `work_completion_log` |
+| APS 데이터 제공 | 집계된 공정시간을 APS 시스템에 전달 | 위 집계 API 기반 |
+
+현재 Sprint 38에서는 summary(최근 1건)만 제공하되, 동일 데이터 소스를 활용하므로 향후 집계 API 확장 시 일관성 유지.
+
+### 배포 순서
+
+1. **DB migration 불필요** — 기존 테이블(`work_start_log`, `work_completion_log`, `app_task_details`, `workers`) 활용
+2. **BE push**: Task 1~2 (`production.py` 수정)
+3. **TEST push**: 테스트 3파일 작성 + 전체 PASSED 확인
+4. **FE 연결**: VIEW Sprint 18에서 `sns[].last_worker`, `last_activity_at` 사용 — 별도 진행
+
+### 체크리스트
+
+**BE**:
+- [x] `progress_service.py` — `get_partner_sn_progress()` 내 `last_activity` 서브쿼리 추가 (1회 batch, N+1 금지)
+- [x] `progress_service.py` — `_aggregate_products()` 반환 시 `last_worker`, `last_activity_at` 필드 추가
+- [x] `last_activity_at` → `.isoformat()` 포맷, `None`이면 `null` 반환
+- [x] 동시작업 S/N → `DISTINCT ON` + `ORDER BY DESC`로 가장 최근 활동 작업자 1명만
+
+**TEST**:
+- [x] `test_sprint38_last_activity.py` — White-box 8건 ✅
+- [x] `test_sprint38_graybox.py` — Gray-box 3건 ✅
+- [x] `test_sprint38_regression.py` — Regression 5건 ✅
+- [x] 전체 PASSED (16건) 확인 — 2026-03-27
+
+**검증 (배포 후)**:
+- [ ] 태깅 이력 있는 S/N → `last_worker` = "작업자명", `last_activity_at` = ISO timestamp
+- [ ] 태깅 이력 없는 S/N → `last_worker` = null, `last_activity_at` = null
+- [ ] 동시작업 S/N → 가장 최근 활동한 작업자 1명만 표시
+- [ ] 기존 APP 전사 작업 진행현황 영향 없음 (하위호환)
+
+**검증 (배포 후 실기기)**:
+- [ ] 🔴 `GET /api/app/product/progress` → 응답 `products[]` 각 항목에 `last_worker`, `last_activity_at` 존재
+- [ ] 🔴 작업자 태깅 후 재조회 → `last_worker`, `last_activity_at` 갱신 확인
+- [ ] 🔴 동시작업 task → 최후 활동 작업자 1명만 반환
+- [ ] APP 전사 작업 진행현황 + VIEW 생산실적 페이지 정상 동작 (하위호환)
+
+---
+
+## TEST 작업 (tests/backend/) — Sprint 38
+
+### test_sprint38_last_activity.py (신규) — 🔴 S/N 최근 태깅 요약 테스트
+
+**White-box: `_aggregate_products()` last_activity 서브쿼리**
+1. TC-LA-01: 태깅 이력 있는 S/N 1대 → `last_worker` = 작업자명, `last_activity_at` = ISO timestamp
+2. TC-LA-02: 태깅 이력 없는 S/N 1대 → `last_worker` = null, `last_activity_at` = null
+3. TC-LA-03: 동시작업 (workers 2명) S/N → `COALESCE(completed_at, started_at)` DESC 기준 최신 1명만 반환
+4. TC-LA-04: 작업 시작만 한 S/N (완료 전) → `last_activity_at` = `started_at` (completed_at = null → COALESCE fallback)
+5. TC-LA-05: S/N 5대 batch → 5대 모두 각각 올바른 `last_worker` 반환 (batch 정상)
+
+**White-box: 응답 구조**
+6. TC-LA-06: `products[]` 배열 각 항목에 `last_worker`, `last_activity_at` 필드 존재 확인
+7. TC-LA-07: `last_activity_at` 포맷 → ISO 8601 (`.isoformat()`)
+8. TC-LA-08: 기존 필드(`serial_number`, `categories`, `overall_percent`, `my_category`) 유지 확인 (하위호환)
+
+### test_sprint38_graybox.py (신규) — Gray-box 테스트
+
+9. TC-LG-01: `GET /api/app/product/progress` E2E → `products[].last_worker` 존재 확인
+10. TC-LG-02: 작업자 태깅 → 재조회 → `last_worker` 갱신 확인 (E2E 흐름)
+11. TC-LG-03: admin 호출 → 전체 S/N, 협력사 호출 → 소속 S/N만 + `last_worker` 모두 정상
+
+### test_sprint38_regression.py (신규) — Regression 테스트
+
+12. TC-LR-01: `_build_company_filter()` admin/GST/협력사 필터 정상 (last_activity 추가 후 regression 없음)
+13. TC-LR-02: `completion_status` 완료 후 N일 필터 정상 (기존 로직 변경 없음)
+14. TC-LR-03: `_resolve_my_category()` 자사 담당 카테고리 정상 (변경 없음)
+15. TC-LR-04: `categories` 진행률 계산 정상 (total/done/percent 변경 없음)
+16. TC-LR-05: `summary` (total/in_progress/completed_recent) 카운트 정상 (변경 없음)
+
+---
+
+## 변경 파일 — Sprint 38
+
+| 파일 | 변경 |
+|------|------|
+| `backend/app/services/progress_service.py` | `get_partner_sn_progress()` — last_activity 서브쿼리 추가 + `_aggregate_products()` 필드 추가 |
+| `tests/backend/test_sprint38_last_activity.py` | White-box 테스트 8건 (신규) |
+| `tests/backend/test_sprint38_graybox.py` | Gray-box 테스트 3건 (신규) |
+| `tests/backend/test_sprint38_regression.py` | Regression 테스트 5건 (신규) |
+
+## 규칙 — Sprint 38
+
+- CLAUDE.md의 "DB 테이블 정확한 컬럼 명세" 섹션을 반드시 참조 — `work_start_log`, `work_completion_log`, `workers`, `app_task_details` 컬럼명 실수 방지
+- `_aggregate_products()` 기존 로직 수정 금지 — **필드 추가만**
+- `_build_company_filter()`, `_resolve_my_category()` 수정 금지
+- 서브쿼리는 `get_partner_sn_progress()` 내부에서 `sn_map.keys()` ANY 1회 실행 (N+1 금지)
+- `DISTINCT ON (t.serial_number)` + `ORDER BY COALESCE(wcl.completed_at, wsl.started_at) DESC` — 최신 1건만
+- `work_start_log` / `work_completion_log` 테이블 스키마 변경 없음
+- FE 코드 수정 없음 — VIEW Sprint 18에서 별도 진행
+- BE가 코드를 완성하면 TEST가 먼저 CLAUDE.md 기준으로 코드 리뷰 진행
+- 리뷰 통과 후에만 테스트 코드 작성
+- 각 teammate는 자신의 소유 파일만 수정 가능
+- N+1 쿼리 금지 — batch 조회(ANY 사용)
+- .env 파일 절대 커밋 금지
+
+### 절대 수정 금지
+
+- `_build_company_filter()` — 협력사 필터 로직 변경 없음
+- `_resolve_my_category()` — 자사 담당 카테고리 판정 변경 없음
+- `_aggregate_products()` 기존 필드 — `categories`, `overall_percent`, `my_category` 등 제거/변경 없음, 추가만 허용
+- `product.py` 라우트 — `get_sn_progress()` 함수 변경 없음
+- `task_seed.py` — task 생성 로직 변경 없음
+- `task_service.py` — 알람 로직 변경 없음
+- `production.py` — 이 Sprint에서 수정 대상 아님
+- FE 코드 — VIEW Sprint 18에서 별도 진행
+
+---
+
+### Teammate 프롬프트 — Sprint 38 (#43 product/progress API last_activity 확장)
+
+> **이 프롬프트를 Claude Code teammate에게 전달하여 실행**
+> 선행 조건: Sprint 37-B 완료
+
+```
+## Sprint 38: product/progress API 최근 태깅 요약 필드 추가
+
+### 컨텍스트
+- 참조: `AXIS-VIEW/docs/OPS_API_REQUESTS.md` #43 (설계 문서)
+- 참조: `AXIS-OPS/AGENT_TEAM_LAUNCH.md` Sprint 38 섹션
+- 대상 파일: `backend/app/services/progress_service.py`
+- DB: 기존 테이블 활용 (스키마 변경 없음)
+
+### 배경
+VIEW Sprint 18 S/N 카드뷰에서 카드 리스트에 "최근 태깅 작업자 + 시간"을 표시해야 함.
+카드 리스트 데이터 소스는 APP 전사 작업 진행현황과 동일한 `GET /api/app/product/progress` API.
+S/N마다 `GET /tasks/<sn>?all=true`를 호출하면 N+1 문제 발생.
+`products[]` 응답에 `last_worker`, `last_activity_at` summary 필드를 추가하여 해결.
+
+### Task 순서 (반드시 이 순서대로)
+
+#### Task 1: `get_partner_sn_progress()` — last_activity 서브쿼리 추가
+
+파일: `backend/app/services/progress_service.py`
+위치: `get_partner_sn_progress()` 함수 내, `_aggregate_products()` 호출 전
+
+메인 쿼리 실행 후, 그룹핑된 S/N 목록으로 별도 서브쿼리 (1회 batch, N+1 금지):
+```sql
+SELECT DISTINCT ON (t.serial_number)
+    t.serial_number,
+    w.name AS last_worker,
+    COALESCE(wcl.completed_at, wsl.started_at) AS last_activity_at
+FROM app_task_details t
+JOIN work_start_log wsl ON wsl.task_id = t.id
+JOIN workers w ON wsl.worker_id = w.id
+LEFT JOIN work_completion_log wcl
+    ON wcl.task_id = t.id AND wcl.worker_id = wsl.worker_id
+WHERE t.serial_number = ANY(%s)
+ORDER BY t.serial_number, COALESCE(wcl.completed_at, wsl.started_at) DESC
+```
+
+결과를 dict로 캐싱:
+```python
+last_activity_map = {}
+for row in cur.fetchall():
+    last_activity_map[row['serial_number']] = {
+        'last_worker': row['last_worker'],
+        'last_activity_at': row['last_activity_at'],
+    }
+```
+
+`last_activity_map`을 `_aggregate_products()`에 파라미터로 전달.
+
+#### Task 2: `_aggregate_products()` 응답에 필드 추가
+
+`products.append(sn_data)` 직전에 2개 필드 추가:
+```python
+activity = last_activity_map.get(sn_data['serial_number'], {})
+sn_data['last_worker'] = activity.get('last_worker')
+sn_data['last_activity_at'] = (
+    activity['last_activity_at'].isoformat()
+    if activity.get('last_activity_at') else None
+)
+products.append(sn_data)
+```
+
+#### Task 3: 테스트 코드 작성
+
+`AGENT_TEAM_LAUNCH.md`의 "TEST 작업 — Sprint 38" 섹션 참조.
+아래 3개 테스트 파일을 `tests/backend/`에 작성:
+
+1. `test_sprint38_last_activity.py` — White-box 8건 (TC-LA-01 ~ TC-LA-08)
+2. `test_sprint38_graybox.py` — Gray-box 3건 (TC-LG-01 ~ TC-LG-03)
+3. `test_sprint38_regression.py` — Regression 5건 (TC-LR-01 ~ TC-LR-05)
+
+테스트 전체 PASSED (16건 이상) 확인 후 완료.
+
+### 검증 체크리스트
+
+수정 완료 후 아래 시나리오 검증 (코드 리뷰 레벨):
+
+1. **태깅 이력 있는 S/N**: `last_worker` = 작업자명, `last_activity_at` = ISO timestamp
+2. **태깅 이력 없는 S/N**: `last_worker` = null, `last_activity_at` = null
+3. **동시작업 S/N**: workers 2명 → 가장 최근 활동 작업자 1명만 반환
+4. **작업 시작만 한 S/N**: completed_at = null → COALESCE fallback으로 started_at 사용
+5. **S/N 5대 batch**: 5대 모두 각각 올바른 last_worker 반환
+6. **admin vs 협력사**: admin → 전체 S/N + last_worker, 협력사 → 소속 S/N + last_worker
+7. **기존 APP 하위호환**: 기존 products[] 필드 유지, 추가 필드만
+
+### 수정 대상 파일 목록
+
+- `backend/app/services/progress_service.py` (수정)
+- `tests/backend/test_sprint38_last_activity.py` (신규)
+- `tests/backend/test_sprint38_graybox.py` (신규)
+- `tests/backend/test_sprint38_regression.py` (신규)
+
+### 규칙
+
+- CLAUDE.md의 "DB 테이블 정확한 컬럼 명세" 섹션을 반드시 참조
+- `_aggregate_products()` 기존 로직 수정 금지 — 필드 추가만
+- `_build_company_filter()`, `_resolve_my_category()` 수정 금지
+- 서브쿼리는 sn_map.keys() ANY 1회 실행 (N+1 금지)
+- `DISTINCT ON` + `ORDER BY DESC` 필수 — 최신 1건만
+- BE가 코드를 완성하면 TEST가 먼저 CLAUDE.md 기준으로 코드 리뷰 진행
+- 리뷰 통과 후에만 테스트 코드 작성
+- 각 teammate는 자신의 소유 파일만 수정 가능
+- N+1 쿼리 금지 — batch 조회(ANY 사용)
+- .env 파일 절대 커밋 금지
+
+### 절대 수정 금지
+
+- `_build_company_filter()` — 협력사 필터 로직 변경 없음
+- `_resolve_my_category()` — 자사 담당 카테고리 판정 변경 없음
+- `_aggregate_products()` 기존 필드 — `categories`, `overall_percent`, `my_category` 등 제거/변경 없음
+- `product.py` 라우트 — `get_sn_progress()` 함수 변경 없음
+- `task_seed.py` — task 생성 로직 변경 없음
+- `task_service.py` — 알람 로직 변경 없음
+- `production.py` — 이 Sprint에서 수정 대상 아님
+- FE 코드 — VIEW Sprint 18에서 별도 진행
+```
+
+---
+
+## Sprint 39: 테스트 DB 분리 — conftest.py 리팩토링 (2026-03-25) — 인프라
+
+> **목적**: 테스트 실행 시 운영 DB(Railway Staging) 대신 전용 테스트 DB를 사용하도록 분리. 운영 데이터 백업/복원 로직 제거, 안전한 regression test 환경 구축
+> **대상**: `tests/conftest.py`
+> **선행**: Railway 테스트 PostgreSQL 18 인스턴스 생성 완료 (`centerbeam.proxy.rlwy.net:20196`)
+
+### 배경
+
+현재 `conftest.py`의 문제점:
+1. **운영 DB 직접 사용**: `STAGING_DB_URL`이 하드코딩되어 테스트가 운영 DB에서 실행됨
+2. **백업/복원 위험**: 테스트 시작 시 workers, product_info, qr_registry, auth_settings, attendance를 백업 → 스키마 DROP → migration → 복원하는 절차 — 실패 시 운영 데이터 유실 위험
+3. **DROP 제약**: 운영 데이터 보존을 위해 workers, hr, plan 스키마를 DROP하지 못함 → 불완전한 스키마 초기화
+4. **`STAGING_DB_URL` 하드코딩**: `db_existing_roles`, `has_sprint6_schema` fixture에서도 직접 참조
+
+### BE 작업 — Task 정의
+
+#### Task 1: 환경변수 기반 DB URL 분리
+
+- `STAGING_DB_URL` 하드코딩 제거
+- `TEST_DATABASE_URL` 환경변수 필수화 (미설정 시 명확한 에러 메시지)
+- `.env.test` 파일 생성 (`.gitignore` 등록)
+- `.env.test` 자동 로딩: `python-dotenv` 있으면 사용, 없으면 수동 파싱 fallback (별도 설치 불필요)
+
+```python
+# Before (위험)
+STAGING_DB_URL = 'postgresql://postgres:xxx@maglev.proxy.rlwy.net:38813/railway'
+class TestConfig:
+    DATABASE_URL = os.getenv('TEST_DATABASE_URL', os.getenv('DATABASE_URL', STAGING_DB_URL))
+
+# After (안전)
+class TestConfig:
+    DATABASE_URL = os.getenv('TEST_DATABASE_URL')
+    if not DATABASE_URL:
+        raise RuntimeError(
+            "TEST_DATABASE_URL 환경변수가 설정되지 않았습니다.\n"
+            "테스트 전용 DB URL을 설정하세요: export TEST_DATABASE_URL='postgresql://...'"
+        )
+```
+
+#### Task 2: db_schema fixture 간소화 — 백업/복원 로직 제거
+
+- 기존: 5개 테이블 백업 → DROP → migration → 5개 테이블 복원 (약 200줄)
+- 변경: 전체 스키마 DROP → migration 실행 (약 40줄)
+- 테스트 DB는 운영 데이터가 없으므로 자유롭게 DROP/CREATE 가능
+
+```python
+# After: 깔끔한 스키마 초기화
+@pytest.fixture(scope='session')
+def db_schema():
+    db_url = TestConfig.DATABASE_URL
+    params = _parse_db_url(db_url)
+    conn = psycopg2.connect(**params)
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    cursor = conn.cursor()
+
+    try:
+        # 전체 스키마 클린 DROP (테스트 DB이므로 안전)
+        cursor.execute("DROP SCHEMA IF EXISTS public CASCADE")
+        cursor.execute("CREATE SCHEMA public")
+        cursor.execute("DROP SCHEMA IF EXISTS hr CASCADE")
+        cursor.execute("DROP SCHEMA IF EXISTS plan CASCADE")
+        cursor.execute("DROP SCHEMA IF EXISTS auth CASCADE")
+        cursor.execute("DROP SCHEMA IF EXISTS checklist CASCADE")
+
+        # migrations 순서대로 실행
+        migrations_dir = Path(__file__).parent.parent / 'backend' / 'migrations'
+        for filename in sorted(migrations_dir.glob('*.sql')):
+            sql = filename.read_text(encoding='utf-8')
+            for stmt in _split_sql_statements(sql):
+                effective = ' '.join(
+                    l for l in stmt.splitlines()
+                    if l.strip() and not l.strip().startswith('--')
+                ).strip().upper()
+                if effective in ('BEGIN', 'COMMIT', 'ROLLBACK'):
+                    continue
+                try:
+                    cursor.execute(stmt)
+                except Exception as e:
+                    print(f"Warning: {filename.name}: {e}")
+    finally:
+        cursor.close()
+        conn.close()
+
+    yield
+```
+
+#### Task 3: STAGING_DB_URL 참조 전수 제거
+
+- `db_existing_roles` fixture: `STAGING_DB_URL` → `TestConfig.DATABASE_URL`
+- `has_sprint6_schema` fixture: `STAGING_DB_URL` → `TestConfig.DATABASE_URL`
+- 파일 전체에서 `STAGING_DB_URL` 변수 및 하드코딩된 운영 DB URL 완전 제거
+
+#### Task 4: 테스트 시드 데이터 fixture 추가
+
+- 운영 DB에서 복원하던 데이터를 테스트 전용 fixture로 교체
+- `seed_test_data` (session-scoped): 테스트에 필요한 최소 데이터 삽입
+  - workers: admin 1명, manager 1명, 일반 작업자 3명 (FNI MECH, TMS ELEC, GST QI)
+  - product_info: 2~3건 (혼재/비혼재 O/N 포함)
+  - qr_registry: product_info와 매핑된 QR 2~3건
+  - admin_settings: 기본 설정값
+
+```python
+@pytest.fixture(scope='session')
+def seed_test_data(db_schema):
+    """테스트용 시드 데이터 삽입 (session-scoped)"""
+    db_url = TestConfig.DATABASE_URL
+    params = _parse_db_url(db_url)
+    conn = psycopg2.connect(**params)
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    cursor = conn.cursor()
+
+    try:
+        # admin worker
+        cursor.execute("""
+            INSERT INTO workers (name, email, password_hash, role, company,
+                approval_status, email_verified, is_manager, is_admin)
+            VALUES ('Test Admin', 'admin@test.axisos.com', %s,
+                'ADMIN'::role_enum, 'GST', 'approved'::approval_status_enum,
+                true, false, true)
+            ON CONFLICT (email) DO NOTHING
+        """, (bcrypt.hashpw(b'AdminPass123!', bcrypt.gensalt()).decode(),))
+
+        # ... (일반 작업자, product_info, qr_registry, admin_settings)
+    finally:
+        cursor.close()
+        conn.close()
+
+    yield
+```
+
+#### Task 5: `.env.test` 생성 + `.gitignore` 등록
+
+```bash
+# .env.test (커밋 금지)
+TEST_DATABASE_URL=postgresql://postgres:bNgbAqsBMseFyIDHmiuqLjDCGAuuqmXS@centerbeam.proxy.rlwy.net:20196/railway
+```
+
+### 체크리스트
+
+**BE (인프라)**:
+- [ ] `.env.test` 생성 (TEST_DATABASE_URL 설정)
+- [ ] `.gitignore`에 `.env.test` 추가
+- [ ] `conftest.py` — `STAGING_DB_URL` 하드코딩 제거
+- [ ] `conftest.py` — `TestConfig.DATABASE_URL` fallback 제거 → `TEST_DATABASE_URL` 필수
+- [ ] `conftest.py` — `db_schema` fixture 간소화 (백업/복원 약 200줄 제거)
+- [ ] `conftest.py` — `db_existing_roles`, `has_sprint6_schema`에서 `STAGING_DB_URL` → `TestConfig.DATABASE_URL`
+- [ ] `conftest.py` — `seed_test_data` fixture 추가
+- [ ] `conftest.py` — `create_test_worker` fixture에서 Sprint 6 호환 분기 정리 (테스트 DB는 항상 최신 스키마)
+
+**TEST**:
+- [ ] 테스트 DB 연결 확인 (`pytest --co` — collect only)
+- [ ] migration 전체 실행 확인 (에러 없이 완료)
+- [ ] 기존 테스트 전체 실행 regression 확인
+- [ ] seed_test_data fixture로 기본 데이터 정상 삽입 확인
+
+**검증**:
+- [ ] `STAGING_DB_URL` 문자열이 `conftest.py`에 없음 확인
+- [ ] 운영 DB URL(`maglev.proxy.rlwy.net`)이 코드 어디에도 없음 확인
+- [ ] `TEST_DATABASE_URL` 미설정 시 명확한 RuntimeError 발생 확인
+- [ ] 테스트 실행 후 운영 DB 데이터 영향 없음 확인
+
+### TEST 작업 (tests/backend/) — Sprint 39
+
+#### test_sprint39_db_isolation.py (신규) — 테스트 DB 분리 검증
+
+**White-box: 환경변수 검증**
+1. TC-DB-01: `TEST_DATABASE_URL` 설정 시 → `TestConfig.DATABASE_URL`이 테스트 DB URL
+2. TC-DB-02: `TEST_DATABASE_URL` 미설정 시 → `RuntimeError` 발생 (운영 DB fallback 없음)
+
+**White-box: 스키마 초기화**
+3. TC-DB-03: `db_schema` fixture 실행 후 → 모든 테이블 존재 확인 (workers, app_task_details, work_start_log, work_completion_log, completion_status, qr_registry, plan.product_info, hr.worker_auth_settings, hr.partner_attendance, auth.refresh_tokens, checklist.*)
+4. TC-DB-04: `db_schema` fixture 2회 실행 → 멱등성 확인 (DROP + CREATE 반복 에러 없음)
+
+**White-box: 시드 데이터**
+5. TC-DB-05: `seed_test_data` fixture 실행 후 → admin worker 존재 확인
+6. TC-DB-06: `seed_test_data` fixture 실행 후 → product_info, qr_registry 존재 확인
+
+**Gray-box: 기존 fixture 호환**
+7. TC-DB-07: `create_test_worker` fixture → 테스트 DB에서 정상 동작 (INSERT + RETURNING id)
+8. TC-DB-08: `approved_worker` + `get_auth_token` → JWT 발급 + API 호출 정상
+
+**Regression: 운영 DB 격리 확인**
+9. TC-DB-09: `conftest.py` 전체 소스에서 운영 DB 호스트(`maglev.proxy.rlwy.net`) 문자열 없음 확인 (코드 레벨 격리 검증)
+10. TC-DB-10: `conftest.py` 전체 소스에서 `STAGING_DB_URL` 변수명 없음 확인
+
+### 변경 파일 — Sprint 39
+
+| 파일 | 변경 |
+|------|------|
+| `tests/conftest.py` | STAGING_DB_URL 제거, db_schema 간소화, seed_test_data 추가, Sprint 6 호환 분기 정리 |
+| `.env.test` | TEST_DATABASE_URL 설정 (신규, .gitignore 등록) |
+| `.gitignore` | `.env.test` 추가 |
+| `tests/backend/test_sprint39_db_isolation.py` | 테스트 DB 분리 검증 10건 (신규) |
+
+### 규칙 — Sprint 39
+
+- 운영 DB URL(`maglev.proxy.rlwy.net:38813`)을 코드에 절대 남기지 않음
+- `.env.test`는 `.gitignore`에 반드시 등록 — 커밋 금지
+- `db_schema` fixture는 session-scoped 유지 — 테스트 세션당 1회만 스키마 초기화
+- `seed_test_data`는 `db_schema` 의존 — 스키마 초기화 후 시드 삽입
+- 기존 테스트 파일(`test_sprint37_*.py`, `test_sprint38_*.py` 등)은 수정 없이 통과해야 함
+- `create_test_worker` fixture의 Sprint 6 호환 분기(role fallback, company 컬럼 확인)는 제거 가능 — 테스트 DB는 항상 최신 migration 적용 상태
+- BE가 코드를 완성하면 TEST가 먼저 코드 리뷰 진행
+- 리뷰 통과 후에만 테스트 코드 작성
+- .env 파일 절대 커밋 금지
+
+### 절대 수정 금지
+
+- `backend/app/` 하위 모든 파일 — 이 Sprint은 테스트 인프라만 변경
+- `backend/migrations/` — migration 파일 수정/추가 없음
+- `tests/fixtures/` — 기존 fixture JSON 파일 변경 없음
+- `CLAUDE.md` — 수정 없음
+- `.env` (운영 환경변수) — 절대 수정 금지
+
+---
+
+### Teammate 프롬프트 — Sprint 39 (테스트 DB 분리)
+
+> **이 프롬프트를 Claude Code teammate에게 전달하여 실행**
+> 선행 조건: Railway 테스트 PostgreSQL 인스턴스 생성 완료
+
+```
+## Sprint 39: 테스트 DB 분리 — conftest.py 리팩토링
+
+### 컨텍스트
+- 참조: `AXIS-OPS/AGENT_TEAM_LAUNCH.md` Sprint 39 섹션
+- 대상 파일: `tests/conftest.py`
+- 테스트 DB: Railway PostgreSQL 18 (`centerbeam.proxy.rlwy.net:20196`)
+
+### 배경
+현재 테스트가 운영 DB를 직접 사용하며, 백업/복원 절차가 복잡하고 위험함.
+전용 테스트 DB로 분리하여 안전하게 regression test를 실행할 수 있는 환경을 구축.
+
+### Task 순서
+
+#### Task 1: `.env.test` 생성 + `.gitignore` 등록
+- `.env.test` 파일 생성: `TEST_DATABASE_URL=postgresql://postgres:bNgbAqsBMseFyIDHmiuqLjDCGAuuqmXS@centerbeam.proxy.rlwy.net:20196/railway`
+- `.gitignore`에 `.env.test` 추가
+
+#### Task 2: `conftest.py` — STAGING_DB_URL 제거 + TestConfig 변경
+- `STAGING_DB_URL` 변수 및 하드코딩된 URL 완전 제거
+- `TestConfig.DATABASE_URL`: `TEST_DATABASE_URL` 환경변수 필수 (미설정 시 RuntimeError)
+- `db_existing_roles`, `has_sprint6_schema` fixture: `STAGING_DB_URL` → `TestConfig.DATABASE_URL`
+
+#### Task 3: `conftest.py` — db_schema fixture 간소화
+- 기존 백업/복원 로직 전체 제거 (workers, product_info, qr_registry, auth_settings, attendance)
+- 변경: 전체 스키마 DROP → migrations/*.sql 순서대로 실행
+- `DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;` + hr, plan, auth, checklist
+- migration 파일은 `sorted(migrations_dir.glob('*.sql'))` — 하드코딩 목록 대신 자동 탐색
+
+#### Task 4: `conftest.py` — seed_test_data fixture 추가
+- session-scoped, db_schema 의존
+- 최소 시드: admin 1명, manager 1명 (GST), 일반 작업자 3명 (FNI MECH, TMS ELEC, GST QI)
+- product_info 2~3건, qr_registry 매핑, admin_settings 기본값
+- bcrypt로 비밀번호 해싱
+
+#### Task 5: `conftest.py` — create_test_worker 정리
+- Sprint 6 호환 분기 제거 (role fallback, company 컬럼 존재 확인)
+- 테스트 DB는 항상 최신 스키마 → company 컬럼 항상 존재, role_enum 최신
+- role_enum 조회 실패 fallback 제거
+
+#### Task 6: 검증
+- `.env.test` 자동 로딩: conftest.py 상단에서 python-dotenv 또는 수동 파싱으로 자동 로드됨 (별도 `source` 불필요)
+- `pytest --co` (collect only) — 모든 테스트 수집 확인
+- `pytest tests/backend/test_sprint39_db_isolation.py -v` — 신규 테스트 통과
+- `pytest tests/ -v` — 전체 regression 통과
+
+### 수정 대상 파일 목록
+
+- `tests/conftest.py` (수정)
+- `.env.test` (신규)
+- `.gitignore` (수정)
+- `tests/backend/test_sprint39_db_isolation.py` (신규)
+
+### 규칙
+
+- CLAUDE.md의 "DB 테이블 정확한 컬럼 명세" 섹션을 반드시 참조
+- 운영 DB URL(`maglev.proxy.rlwy.net`)을 코드에 절대 남기지 않음
+- `.env.test`는 커밋 금지
+- `backend/app/` 하위 파일 수정 금지 — 테스트 인프라만 변경
+- `backend/migrations/` 수정 금지
+- 기존 테스트 파일 수정 없이 통과해야 함
+- N+1 쿼리 금지
+- .env 파일 절대 커밋 금지
+
+### 절대 수정 금지
+
+- `backend/app/` 하위 모든 파일 — 이 Sprint은 테스트 인프라만 변경
+- `backend/migrations/` — migration 파일 수정/추가 없음
+- `tests/fixtures/` — 기존 fixture JSON 파일 변경 없음
+- `CLAUDE.md` — 수정 없음
+- `.env` — 운영 환경변수 절대 수정 금지
+```
+
+---
+
+## Sprint 40-A: QR 스캔 UX 개선 3건 (2026-03-26) — APP FE + BE
+
+> **목적**: QR 스캔 현장 UX 3가지 개선 — 프레임 축소, DOC_ 자동접두어, 오늘 태깅 드롭다운
+> **위험도**: ⚠️ QR 카메라는 BUG-5~BUG-23까지 20회 이상 수정 이력 있음. 카메라 초기화/정사각형/MutationObserver 관련 코드는 절대 수정 금지.
+
+### 변경 대상 파일 (총 4개)
+
+| 파일 | 변경 유형 | Task |
+|------|----------|------|
+| `frontend/lib/services/qr_scanner_web.dart` | 수정 (1줄) | A-1 |
+| `frontend/lib/screens/qr/qr_scan_screen.dart` | 수정 (~60줄) | A-1, A-2, A-3 |
+| `backend/app/routes/work.py` | 수정 (엔드포인트 1개 추가) | A-3 |
+| `backend/app/models/work_start_log.py` | 수정 (함수 1개 추가) | A-3 |
+
+### 테스트 파일 (신규 1개)
+
+| 파일 | 내용 |
+|------|------|
+| `tests/backend/test_sprint40a_today_tags.py` | 오늘 태깅 API 테스트 5건 |
+
+---
+
+### Task A-1: QR 프레임 크기 축소 (config 값 변경만)
+
+**변경 1 — `frontend/lib/services/qr_scanner_web.dart` 라인 380**
+
+현재:
+```javascript
+qrbox: 200
+```
+변경:
+```javascript
+qrbox: 160
+```
+
+이 파일에서 이 1줄 외에 **다른 어떤 코드도 수정하지 않는다**.
+- `_forceSquareAfterCameraStart()` 함수 수정 금지
+- CSS `aspect-ratio: 1 / 1` 수정 금지
+- MutationObserver 로직 수정 금지
+- 3단계 카메라 폴백 전략 수정 금지
+- `window.__qrScanConfig` 구조 변경 금지 (fps, qrbox 키 유지)
+
+**변경 2 — `frontend/lib/screens/qr/qr_scan_screen.dart` 라인 604**
+
+현재:
+```dart
+final cameraSize = (screenWidth - 40).clamp(200.0, 350.0); // padding 20*2
+```
+변경:
+```dart
+final cameraSize = (screenWidth - 40).clamp(200.0, 300.0); // padding 20*2
+```
+
+clamp 상한만 350→300으로 변경. 하한 200 유지. 이 라인 외 주변 코드 수정 금지.
+
+---
+
+### Task A-2: DOC_ 자동 접두어 (직접입력 UX 개선)
+
+**목적**: 사용자가 `DOC_GBWS-6408` 전체를 수동 입력하는 대신, `DOC_` prefix가 자동 표시되고 사용자는 `GBWS-6408`만 입력.
+
+**변경 위치: `frontend/lib/screens/qr/qr_scan_screen.dart`**
+
+#### 변경 A-2-1: 형식 안내 텍스트 수정 (라인 681~683)
+
+현재:
+```dart
+_scanType == 'worksheet'
+    ? '형식: DOC_GBWS-6408'
+    : '형식: LOC_01',
+```
+변경:
+```dart
+_scanType == 'worksheet'
+    ? '형식: GBWS-6408 (DOC_ 자동 추가)'
+    : '형식: 01 (LOC_ 자동 추가)',
+```
+
+#### 변경 A-2-2: TextFormField에 prefixText 추가 (라인 692~698 영역)
+
+현재:
+```dart
+TextFormField(
+  controller: _qrCodeController,
+  decoration: InputDecoration(
+    labelText: 'QR 코드',
+    labelStyle: const TextStyle(color: GxColors.steel, fontSize: 13),
+    hintText: _scanType == 'worksheet' ? 'DOC_GBWS-6408' : 'LOC_01',
+    hintStyle: const TextStyle(color: GxColors.silver),
+    prefixIcon: const Icon(Icons.qr_code, color: GxColors.accent),
+```
+변경:
+```dart
+TextFormField(
+  controller: _qrCodeController,
+  decoration: InputDecoration(
+    labelText: _scanType == 'worksheet' ? 'S/N' : 'Location',
+    labelStyle: const TextStyle(color: GxColors.steel, fontSize: 13),
+    hintText: _scanType == 'worksheet' ? 'GBWS-6408' : '01',
+    hintStyle: const TextStyle(color: GxColors.silver),
+    prefixIcon: const Icon(Icons.qr_code, color: GxColors.accent),
+    prefixText: _scanType == 'worksheet' ? 'DOC_' : 'LOC_',
+    prefixStyle: const TextStyle(
+      color: GxColors.accent,
+      fontSize: 14,
+      fontWeight: FontWeight.w600,
+    ),
+```
+
+#### 변경 A-2-3: validator 수정 (라인 721~731)
+
+현재:
+```dart
+validator: (value) {
+  if (value == null || value.isEmpty) {
+    return 'QR 코드를 입력해주세요.';
+  }
+  if (_scanType == 'worksheet' && !value.toUpperCase().startsWith('DOC_')) {
+    return 'Worksheet QR은 DOC_로 시작해야 합니다.';
+  }
+  if (_scanType == 'location' && !value.toUpperCase().startsWith('LOC_')) {
+    return 'Location QR은 LOC_로 시작해야 합니다.';
+  }
+  return null;
+},
+```
+변경:
+```dart
+validator: (value) {
+  if (value == null || value.trim().isEmpty) {
+    return _scanType == 'worksheet'
+        ? 'S/N을 입력해주세요. (예: GBWS-6408)'
+        : 'Location 코드를 입력해주세요. (예: 01)';
+  }
+  return null;
+},
+```
+
+DOC_/LOC_ 접두어 검사 제거 — prefixText가 자동으로 붙으므로 불필요.
+
+#### 변경 A-2-4: onFieldSubmitted + 확인버튼 submit에서 prefix 결합 (라인 733~736, 766)
+
+현재 (onFieldSubmitted):
+```dart
+onFieldSubmitted: (value) {
+  if (_formKey.currentState!.validate()) {
+    _handleQrCode(value);
+  }
+},
+```
+변경:
+```dart
+onFieldSubmitted: (value) {
+  if (_formKey.currentState!.validate()) {
+    final prefix = _scanType == 'worksheet' ? 'DOC_' : 'LOC_';
+    _handleQrCode('$prefix${value.trim().toUpperCase()}');
+  }
+},
+```
+
+현재 (확인 버튼 onTap, 라인 764~767):
+```dart
+: () {
+    if (_formKey.currentState!.validate()) {
+      _handleQrCode(_qrCodeController.text);
+    }
+  },
+```
+변경:
+```dart
+: () {
+    if (_formKey.currentState!.validate()) {
+      final prefix = _scanType == 'worksheet' ? 'DOC_' : 'LOC_';
+      _handleQrCode('$prefix${_qrCodeController.text.trim().toUpperCase()}');
+    }
+  },
+```
+
+**중요**: `_handleQrCode()` 함수 자체는 수정하지 않는다. 이 함수는 `DOC_` prefix가 포함된 완전한 QR 코드를 기대하며, 내부에서 `DOC_` 검증 후 BE API를 호출한다. prefix 결합은 submit 시점에서만 처리.
+
+---
+
+### Task A-3: 오늘 태깅 QR 드롭다운 (BE API 신규 + FE 드롭다운)
+
+#### BE 변경 1: `backend/app/models/work_start_log.py` — 함수 추가
+
+파일 끝(라인 249 이후)에 아래 함수 추가:
+
+```python
+def get_today_tags_by_worker(worker_id: int) -> List[Dict[str, Any]]:
+    """
+    작업자의 오늘 태깅한 QR Doc ID 목록 조회 (중복 제거, 최신순)
+
+    Args:
+        worker_id: 작업자 ID
+
+    Returns:
+        [{"qr_doc_id": "DOC_GBWS-6408", "serial_number": "GBWS-6408", "last_tagged_at": "2026-03-26T09:30:00+09:00"}, ...]
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT DISTINCT ON (qr_doc_id)
+                qr_doc_id,
+                serial_number,
+                started_at AS last_tagged_at
+            FROM work_start_log
+            WHERE worker_id = %s
+              AND started_at::date = CURRENT_DATE
+            ORDER BY qr_doc_id, started_at DESC
+            """,
+            (worker_id,)
+        )
+
+        rows = cur.fetchall()
+        return [
+            {
+                'qr_doc_id': row['qr_doc_id'],
+                'serial_number': row['serial_number'],
+                'last_tagged_at': row['last_tagged_at'].isoformat() if row['last_tagged_at'] else None,
+            }
+            for row in rows
+        ]
+
+    except PsycopgError as e:
+        logger.error(f"Failed to get today's tags for worker_id={worker_id}: {e}")
+        return []
+    finally:
+        if conn:
+            put_conn(conn)
+```
+
+#### BE 변경 2: `backend/app/routes/work.py` — 엔드포인트 추가
+
+파일 끝(라인 922 이후, 마지막 함수 뒤)에 추가:
+
+```python
+@work_bp.route("/work/today-tags", methods=["GET"])
+@jwt_required
+def get_today_tags() -> Tuple[Dict[str, Any], int]:
+    """
+    내가 오늘 태깅한 QR Doc ID 목록 조회
+
+    직접입력 UI에서 드롭다운으로 제공하여, 이전에 태깅했던 QR을 빠르게 재선택
+
+    Headers:
+        Authorization: Bearer {token}
+
+    Returns:
+        200: {"tags": [{"qr_doc_id": str, "serial_number": str, "last_tagged_at": str}, ...]}
+    """
+    worker_id = get_current_worker_id()
+
+    from app.models.work_start_log import get_today_tags_by_worker
+    tags = get_today_tags_by_worker(worker_id)
+
+    return jsonify({'tags': tags}), 200
+```
+
+import 위치: 함수 내부 lazy import 사용 (기존 work.py 상단 import에 추가해도 됨).
+
+#### FE 변경: `frontend/lib/screens/qr/qr_scan_screen.dart` — 드롭다운 추가
+
+**변경 위치**: 직접입력 섹션 내부, "형식 안내" Container(라인 669~688) 바로 아래.
+
+##### 1) State 변수 추가 (클래스 상단, 라인 30~34 근처):
+```dart
+List<Map<String, dynamic>> _todayTags = [];
+bool _loadingTags = false;
+```
+
+##### 2) 태깅 목록 로드 함수 추가 (initState 근처):
+```dart
+Future<void> _loadTodayTags() async {
+  if (_loadingTags) return;
+  setState(() => _loadingTags = true);
+  try {
+    final authState = ref.read(authProvider);
+    final apiService = ApiService();
+    final response = await apiService.get('/app/work/today-tags');
+    if (response.statusCode == 200 && response.data != null) {
+      final tags = (response.data['tags'] as List?) ?? [];
+      setState(() {
+        _todayTags = tags.cast<Map<String, dynamic>>();
+      });
+    }
+  } catch (e) {
+    debugPrint('[QrScanScreen] Failed to load today tags: $e');
+  } finally {
+    if (mounted) setState(() => _loadingTags = false);
+  }
+}
+```
+
+##### 3) `_showTextInput` 토글 시 태깅 목록 로드:
+
+현재 (라인 628):
+```dart
+onTap: () => setState(() => _showTextInput = !_showTextInput),
+```
+변경:
+```dart
+onTap: () {
+  setState(() => _showTextInput = !_showTextInput);
+  if (_showTextInput && _todayTags.isEmpty && _scanType == 'worksheet') {
+    _loadTodayTags();
+  }
+},
+```
+
+##### 4) 드롭다운 위젯 (형식 안내 Container 바로 아래, `const SizedBox(height: 12)` 전):
+
+"형식 안내" Container 닫는 `)` 와 `const SizedBox(height: 12)` 사이에 삽입:
+
+```dart
+// 오늘 태깅 이력 드롭다운 (worksheet 모드에서만)
+if (_scanType == 'worksheet' && _todayTags.isNotEmpty) ...[
+  const SizedBox(height: 8),
+  Container(
+    width: double.infinity,
+    padding: const EdgeInsets.symmetric(horizontal: 12),
+    decoration: BoxDecoration(
+      color: GxColors.white,
+      borderRadius: BorderRadius.circular(GxRadius.sm),
+      border: Border.all(color: GxColors.mist, width: 1.5),
+    ),
+    child: DropdownButtonHideUnderline(
+      child: DropdownButton<String>(
+        isExpanded: true,
+        hint: const Text(
+          '오늘 태깅 이력에서 선택',
+          style: TextStyle(fontSize: 13, color: GxColors.steel),
+        ),
+        icon: const Icon(Icons.history, color: GxColors.accent, size: 18),
+        items: _todayTags.map((tag) {
+          return DropdownMenuItem<String>(
+            value: tag['qr_doc_id'] as String,
+            child: Text(
+              tag['serial_number'] as String? ?? tag['qr_doc_id'] as String,
+              style: const TextStyle(fontSize: 14, color: GxColors.charcoal),
+            ),
+          );
+        }).toList(),
+        onChanged: (qrDocId) {
+          if (qrDocId != null) {
+            _handleQrCode(qrDocId);
+          }
+        },
+      ),
+    ),
+  ),
+],
+```
+
+**주의**: 드롭다운에서 선택 시 `_handleQrCode(qrDocId)`를 직접 호출한다. `qrDocId`는 이미 `DOC_GBWS-6408` 형식이므로 prefix 결합 불필요. `_qrCodeController`를 거치지 않고 바로 처리.
+
+---
+
+### 테스트 코드: `tests/backend/test_sprint40a_today_tags.py`
+
+```python
+"""Sprint 40-A: 오늘 태깅 QR 드롭다운 API 테스트"""
+import pytest
+from datetime import datetime, timezone
+
+
+class TestTodayTags:
+    """GET /api/app/work/today-tags"""
+
+    def test_today_tags_returns_200(self, client, auth_token_worker1):
+        """TC-40A-01: 인증된 작업자 → 200 + tags 배열"""
+        resp = client.get(
+            "/api/app/work/today-tags",
+            headers={"Authorization": f"Bearer {auth_token_worker1}"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "tags" in data
+        assert isinstance(data["tags"], list)
+
+    def test_today_tags_empty_for_new_worker(self, client, auth_token_worker2):
+        """TC-40A-02: 오늘 태깅 이력 없는 작업자 → 빈 배열"""
+        resp = client.get(
+            "/api/app/work/today-tags",
+            headers={"Authorization": f"Bearer {auth_token_worker2}"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["tags"] == []
+
+    def test_today_tags_distinct_qr_doc(self, client, auth_token_worker1, seed_multiple_tags):
+        """TC-40A-03: 같은 QR 2번 태깅 → 중복 제거, 1건만"""
+        resp = client.get(
+            "/api/app/work/today-tags",
+            headers={"Authorization": f"Bearer {auth_token_worker1}"},
+        )
+        data = resp.get_json()
+        qr_ids = [t["qr_doc_id"] for t in data["tags"]]
+        assert len(qr_ids) == len(set(qr_ids)), "중복 qr_doc_id 존재"
+
+    def test_today_tags_has_required_fields(self, client, auth_token_worker1, seed_multiple_tags):
+        """TC-40A-04: 응답 필드 검증 — qr_doc_id, serial_number, last_tagged_at"""
+        resp = client.get(
+            "/api/app/work/today-tags",
+            headers={"Authorization": f"Bearer {auth_token_worker1}"},
+        )
+        data = resp.get_json()
+        if data["tags"]:
+            tag = data["tags"][0]
+            assert "qr_doc_id" in tag
+            assert "serial_number" in tag
+            assert "last_tagged_at" in tag
+
+    def test_today_tags_unauthorized(self, client):
+        """TC-40A-05: 토큰 없이 호출 → 401"""
+        resp = client.get("/api/app/work/today-tags")
+        assert resp.status_code == 401
+```
+
+fixture (`seed_multiple_tags`)는 conftest.py의 기존 패턴을 따라 구현.
+- worker1로 동일 qr_doc_id 2회 태깅 (DISTINCT 검증용)
+- worker1로 서로 다른 qr_doc_id 2개 태깅
+
+---
+
+### 검증 체크리스트
+
+수정 완료 후 아래 시나리오 검증 (코드 리뷰 레벨):
+
+1. **A-1 프레임 축소**: `qrbox: 160`, `clamp(200, 300)` — 정사각형 유지 확인, MutationObserver 정상
+2. **A-2 DOC_ 접두어**: Worksheet 모드에서 `DOC_` prefix 자동 표시, 사용자는 S/N만 입력
+3. **A-2 LOC_ 접두어**: Location 모드에서 `LOC_` prefix 자동 표시
+4. **A-2 submit**: 제출 시 `DOC_` + 입력값 결합 → `_handleQrCode()`에 전달
+5. **A-2 카메라 스캔**: 카메라로 스캔 시 기존 `_onQrDetected` → `_handleQrCode` 경로 영향 없음 (직접 입력 UI만 변경)
+6. **A-3 BE**: `/api/app/work/today-tags` → 오늘 날짜 DISTINCT qr_doc_id 반환
+7. **A-3 FE**: 드롭다운에서 선택 → `_handleQrCode(qrDocId)` 직접 호출 (DOC_ 포함된 값)
+8. **A-3 빈 이력**: 오늘 태깅 없으면 드롭다운 미표시
+9. **하위호환**: 카메라 QR 스캔 경로 (`_onQrDetected` → `_handleQrCode`)는 수정 없음
+10. **테스트**: `test_sprint40a_today_tags.py` 5건 PASSED
+
+### 수정 대상 파일 목록
+
+- `frontend/lib/services/qr_scanner_web.dart` (수정 — qrbox 값 1줄)
+- `frontend/lib/screens/qr/qr_scan_screen.dart` (수정 — A-1 cameraSize, A-2 직접입력, A-3 드롭다운)
+- `backend/app/routes/work.py` (수정 — 엔드포인트 1개 추가)
+- `backend/app/models/work_start_log.py` (수정 — 함수 1개 추가)
+- `tests/backend/test_sprint40a_today_tags.py` (신규)
+
+### 규칙
+
+- CLAUDE.md의 "DB 테이블 정확한 컬럼 명세" 섹션을 반드시 참조
+- 기존 테스트 전체 PASSED 유지
+- N+1 쿼리 금지 — `DISTINCT ON` + 단일 쿼리
+- .env 파일 절대 커밋 금지
+
+### ⛔ 절대 수정 금지 — 카메라 관련 (20회 수정 이력, 재수정 시 연쇄 버그 위험)
+
+아래 나열된 코드/함수/로직은 **어떤 이유로도 수정하지 않는다**:
+
+**`qr_scanner_web.dart` (qrbox 값 1줄 외 전체 수정 금지)**:
+- `_forceSquareAfterCameraStart()` — 카메라 시작 후 정사각형 강제 함수
+- MutationObserver 로직 (DOM 변경 감시 + height=width 복원)
+- CSS `#qr-scanner-dom-div` 스타일 (aspect-ratio, overflow, object-fit)
+- `_requestCameraPermission()` — 카메라 권한 선요청
+- 3단계 카메라 폴백 전략 (environment → user → cameraId)
+- `window.__qrScanConfig` 객체 구조 (fps + qrbox 키 유지)
+- `ScriptElement` 생성/제거 패턴
+- html5-qrcode 라이브러리 버전/CDN URL
+
+**`qr_scan_screen.dart` (직접입력 UI 외 수정 금지)**:
+- `_startCamera()` — 카메라 초기화 시퀀스
+- `_onScroll()` / `_getCameraContainerRect()` — DOM 위치 동기화
+- `_buildCameraView()` — 카메라 뷰 위젯
+- `_cameraContainerKey` — 카메라 컨테이너 GlobalKey
+- `_onQrDetected()` → `_handleQrCode()` 카메라 스캔 경로
+- `_handleQrCode()` 함수 내부 로직 (DOC_ 검증, API 호출, 에러 처리)
+- 카메라 Container 위젯 (Builder → cameraSize → Container) — clamp 값만 변경 가능
+
+**BE 기존 코드**:
+- `work.py` 기존 엔드포인트 (start_work, complete_work, pause, resume 등) 수정 금지
+- `task_service.py` — 알람/시작/완료 서비스 로직 수정 금지
+- `work_start_log.py` 기존 3개 함수 수정 금지 (create, get_by_serial, get_by_worker)
+
+---
+
+### Teammate 프롬프트 — Sprint 40-A (QR 스캔 UX 개선 3건)
+
+> **이 프롬프트를 Claude Code teammate에게 전달하여 실행**
+> 선행 조건: 없음 (Sprint 38과 독립적으로 진행 가능)
+
+```
+## Sprint 40-A: QR 스캔 UX 개선 3건
+
+### 컨텍스트
+- 참조: `AXIS-OPS/AGENT_TEAM_LAUNCH.md` Sprint 40-A 섹션 (이 문서의 가장 마지막 섹션)
+- 위 섹션에 Task A-1, A-2, A-3의 **정확한 변경 내용, 라인 번호, 코드**가 모두 명시되어 있음
+- 반드시 해당 섹션을 먼저 읽고, 지시된 내용 그대로 수정할 것
+
+### ⚠️ 최우선 규칙: 카메라 코드 수정 금지
+
+이 Sprint은 QR 카메라 기능이 아닌 **직접입력 UI + BE API**만 수정한다.
+QR 카메라는 BUG-5부터 BUG-23까지 20회 이상 수정 이력이 있으며, 정사각형 강제/MutationObserver/CSS 등의 코드가 매우 민감하다.
+
+**수정 가능한 것**:
+- `qr_scanner_web.dart` → `qrbox: 200`을 `qrbox: 160`으로 변경 (숫자 1개만)
+- `qr_scan_screen.dart` → cameraSize clamp 상한 350→300 (숫자 1개만)
+- `qr_scan_screen.dart` → 직접입력 섹션 (라인 660~790 범위 내) UI 수정
+- `qr_scan_screen.dart` → State 변수 추가 + 태깅 로드 함수 추가
+- `work.py` → 파일 끝에 엔드포인트 1개 추가
+- `work_start_log.py` → 파일 끝에 함수 1개 추가
+
+**수정 불가능한 것** (AGENT_TEAM_LAUNCH.md "⛔ 절대 수정 금지" 섹션 참조):
+- `_forceSquareAfterCameraStart()`, MutationObserver, CSS aspect-ratio
+- `_startCamera()`, `_onScroll()`, `_buildCameraView()`
+- `_handleQrCode()` 함수 내부
+- `_onQrDetected()` 경로
+- `work.py` 기존 엔드포인트
+- `task_service.py`, `work_start_log.py` 기존 함수
+
+### Task 순서 (반드시 이 순서대로)
+
+1. **Task A-1**: `qr_scanner_web.dart` qrbox 160 + `qr_scan_screen.dart` clamp 300
+2. **Task A-2**: `qr_scan_screen.dart` 직접입력 — prefixText, validator, submit 로직
+3. **Task A-3 BE**: `work_start_log.py` 함수 추가 + `work.py` 엔드포인트 추가
+4. **Task A-3 FE**: `qr_scan_screen.dart` State 변수 + 태깅 로드 + 드롭다운 위젯
+5. **테스트**: `test_sprint40a_today_tags.py` 5건 작성 + 실행
+
+각 Task의 정확한 코드는 AGENT_TEAM_LAUNCH.md Sprint 40-A 섹션에 명시되어 있다.
+해당 섹션의 "현재" → "변경" 코드를 **그대로** 적용한다.
+
+### 검증
+
+- `flutter analyze` 에러 없음 (FE)
+- `test_sprint40a_today_tags.py` 5건 PASSED (BE)
+- 기존 테스트 regression 없음
+- `_handleQrCode()` 함수 내부에 어떠한 수정도 없음을 확인
+- `qr_scanner_web.dart`에서 qrbox 값 외에 diff가 없음을 확인
+
+### 수정 대상 파일 (5개만, 그 외 수정 금지)
+
+1. `frontend/lib/services/qr_scanner_web.dart` (1줄)
+2. `frontend/lib/screens/qr/qr_scan_screen.dart` (~60줄)
+3. `backend/app/routes/work.py` (엔드포인트 추가)
+4. `backend/app/models/work_start_log.py` (함수 추가)
+5. `tests/backend/test_sprint40a_today_tags.py` (신규)
+```

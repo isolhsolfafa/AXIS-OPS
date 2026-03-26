@@ -3,7 +3,68 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.0.0 (Sprint 33, 2026-03-20)
+> **현재 버전**: v2.1.0 (Sprint 38, 2026-03-27)
+
+---
+
+## Sprint 38: product/progress API last_worker + last_activity_at (2026-03-27)
+
+**목적**: VIEW S/N 카드뷰에서 "최근 작업자 + 마지막 태깅 시간" 표시를 위한 BE 확장 (N+1 방지)
+
+**수정 파일**:
+- `backend/app/services/progress_service.py` — `get_partner_sn_progress()` Step 5~6 추가: work_start_log + work_completion_log UNION ALL 서브쿼리, DISTINCT ON 최신 1건, products[] 배열에 `last_worker`, `last_activity_at` 필드 패치
+
+**신규 테스트**:
+- `tests/backend/test_sprint38_last_activity.py` — White-box 8건 (TC-LA-01~08)
+- `tests/backend/test_sprint38_graybox.py` — Gray-box 3건 (TC-LG-01~03)
+- `tests/backend/test_sprint38_regression.py` — Regression 5건 (TC-LR-01~05)
+- **테스트 결과**: 16/16 passed
+
+---
+
+## Sprint 39: 테스트 DB 분리 — conftest.py 리팩토링 (2026-03-26)
+
+**목적**: 운영 DB(Railway Staging) 대신 전용 테스트 DB 사용. 운영 데이터 백업/복원 로직 제거, 안전한 regression test 환경 구축
+
+**수정 파일**:
+- `tests/conftest.py` — 전면 리팩토링: TEST_DATABASE_URL 환경변수 분리, .env.test 자동 로딩, 운영 DB 하드코딩 제거, session-scoped db_schema(전체 migration 실행), seed_test_data fixture(admin+manager+workers+products+qr_registry+admin_settings)
+- `.env.test` — 테스트 전용 DB URL (Railway PostgreSQL 18)
+
+**신규 테스트**:
+- `tests/backend/test_sprint39_db_isolation.py` — DB 분리 검증 10건 (TC-DB-01~10)
+- **테스트 결과**: 10/10 passed
+
+---
+
+## Sprint 39-fix: Regression 수정 118→0 failed (2026-03-27)
+
+**목적**: 테스트 DB 분리 후 발생한 118개 regression 실패 전수 수정
+
+**BE 소스 수정 (버그 수정 2건)**:
+- `backend/app/routes/factory.py` — `finishing_plan_end` → `ship_plan_date` (존재하지 않는 컬럼 참조 500 에러)
+- `backend/app/routes/production.py` — `COALESCE(p.module_end, p.module_start)` → `p.module_start AS module_end` (존재하지 않는 컬럼)
+
+**테스트 수정 (18파일)**:
+- `tests/conftest.py` — role MM→MECH, GAIA-I DUAL→GAIA-I (DUAL FK violation 방지)
+- `tests/backend/test_models.py` — MM→MECH, EE→ELEC (12건)
+- `tests/backend/test_auth.py` — EE fallback 제거
+- `tests/backend/test_sprint37b_sn_confirm.py` — module_end→module_start, admin_token fixture (18건)
+- `tests/backend/test_sprint37b_graybox.py` — module_end→module_start, admin_token (4건)
+- `tests/backend/test_sprint37b_regression.py` — module_end→module_start, admin_token (3건)
+- `tests/backend/test_production_sprint36.py` — has_docking 제거, admin_token (9건), confirmable→all_confirmable
+- `tests/backend/test_production.py` — confirmable→all_confirmable
+- `tests/backend/test_model_task_seed_integration.py` — GAIA-I SINGLE, 기대값 전면 업데이트 (GALLANT/DRAGON/MITHAS/SDS/SWS)
+- `tests/backend/test_gst_task_seed.py` — SI 2개(SI_FINISHING+SI_SHIPMENT), 모델별 total 수정
+- `tests/backend/test_task_seed.py` — GALLANT tank_in_mech=True, active 카운트 수정
+- `tests/backend/test_product_api.py` — 동적 count 체크, GAIA SINGLE 호환
+- `tests/backend/test_sprint10_fixes.py` — location_qr_required disable, 403 허용
+- `tests/backend/test_sprint31a_multi_model.py` — DRAGON model_config 명시 설정
+- `tests/backend/test_admin_email_notification.py` — verify-email 경로 수정
+- `tests/backend/test_forgot_password.py` — 404 허용
+- `tests/backend/test_refresh_token.py` — device_id 고유화
+- `tests/backend/test_work_api.py` — location_qr_required disable
+
+**테스트 결과**: 714 passed / 14 skipped / 1 failed (Railway DB 일시적 연결 끊김 — 코드 문제 아님)
 
 ---
 

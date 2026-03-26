@@ -109,6 +109,48 @@ def get_partner_sn_progress(
         # Step 4: 결과 조립 — S/N별 그룹핑
         products = _aggregate_products(rows, effective_company, is_admin)
 
+        # Step 5: last_activity 서브쿼리 — S/N별 최근 태깅 작업자/시간 1건씩 조회 (N+1 방지)
+        sn_list = [p['serial_number'] for p in products]
+        last_activity_map: Dict[str, Any] = {}
+        if sn_list:
+            last_activity_query = """
+                SELECT DISTINCT ON (combined.serial_number)
+                       combined.serial_number,
+                       w.name AS last_worker,
+                       combined.activity_at AS last_activity_at
+                FROM (
+                    SELECT wsl.serial_number,
+                           wsl.worker_id,
+                           wsl.started_at AS activity_at
+                    FROM work_start_log wsl
+                    WHERE wsl.serial_number = ANY(%s)
+                    UNION ALL
+                    SELECT wcl.serial_number,
+                           wcl.worker_id,
+                           wcl.completed_at AS activity_at
+                    FROM work_completion_log wcl
+                    WHERE wcl.serial_number = ANY(%s)
+                      AND wcl.completed_at IS NOT NULL
+                ) combined
+                JOIN workers w ON w.id = combined.worker_id
+                ORDER BY combined.serial_number, combined.activity_at DESC
+            """
+            cur.execute(last_activity_query, [sn_list, sn_list])
+            for la_row in cur.fetchall():
+                last_activity_map[la_row['serial_number']] = {
+                    'last_worker': la_row['last_worker'],
+                    'last_activity_at': la_row['last_activity_at'],
+                }
+
+        # Step 6: products 배열에 last_worker / last_activity_at 필드 추가
+        for p in products:
+            activity = last_activity_map.get(p['serial_number'])
+            p['last_worker'] = activity['last_worker'] if activity else None
+            p['last_activity_at'] = (
+                activity['last_activity_at'].isoformat()
+                if activity and activity.get('last_activity_at') else None
+            )
+
         # Summary 계산
         total = len(products)
         in_progress = sum(1 for p in products if not p['all_completed'])

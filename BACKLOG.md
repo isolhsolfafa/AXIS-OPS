@@ -366,6 +366,164 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 
 ---
 
+## 🟡 체크리스트 확장 설계 (MECH/ELEC/TM 자주검사)
+
+> 마지막 업데이트: 2026-03-26
+> 상태: MECH 전체 확정 (#1~#20), TM 확인 완료, VIEW 연동 설계 완료 — ELEC 대기, 목업 제작 예정
+
+### 배경
+- 기존 Sprint 11 `checklist` 스키마 (checklist_master + checklist_record) 확장
+- VIEW 대시보드에서 마스터 항목 CRUD + APP에서 자주검사 토스트 팝업
+- 실적확인(confirm) 연동: progress 100% + 체크리스트 완료 = 승인 가능
+
+### MECH 양식 분석 (기구 조립 검사 성적서)
+- 소스: `현황판_260108_MFC Maker추가 260223.xlsm` → sheet `공정진행현황-2행`
+- **20개 그룹, 약 60개 항목** (#1~#20 전체 확인 완료)
+
+**#1~#6** (cols 1~130):
+
+| # | inspection_group | CHECK 항목 | INPUT 항목 | 비고 |
+|---|---|---|---|---|
+| 1 | 3Way V/V | Spec 확인, 볼트 체결 (2) | 없음 | |
+| 2 | WASTE GAS | 배관 도면 일치, 클램프 체결 (2) | 없음 | |
+| 3 | INLET | 배관 도면 일치 (1) | 배관 S/N 확인 Left#1~#4/Right#1~#4 (1) | DRAGON 전용 — 비DRAGON은 NA. `product_info` 참조 |
+| 4 | BURNER | SUS Fitting 조임, Gas Nozzle Cover 휨, 클램프 체결 (3) | 없음 | |
+| 5 | REACTOR | Fitting 조임, Tube 조립, 클램프 체결, Cir Line Tubing (4) | 없음 | |
+| 6 | GN2 | Sol V/V Spec/Flow, SUS Fitting 조임, Tube 조립, Speed Controller 방향 (4) | Speed Controller 수량 EA (1) + MFC Spec (1) | |
+
+**#7~#20** (cols 131~260):
+
+| # | inspection_group | CHECK 항목 | INPUT 항목 | 비고 |
+|---|---|---|---|---|
+| 7 | LNG | MFC Spec/Flow 방향, SUS Fitting 조임, Part 조립 (3) | MFC Maker/Spec 정보 (1) | |
+| 8 | O2 | MFC Spec/Flow 방향, SUS Fitting 조임, Part 조립 (3) | MFC Maker/Spec 정보 (1) | |
+| 9 | CDA | Sol V/V Spec/Flow, SUS Fitting 조임, Part 조립, Speed Controller 방향 (4) | MFC Maker/Spec 정보 (1) + Speed Controller 수량 EA (1) | |
+| 10 | BCW | Flow Sensor Spec/방향, 공압 밸브 Flow, SUS Fitting 조임, Part 조립 (4) | Flow Sensor Spec 정보 (1) | |
+| 11 | PCW-S | Flow Sensor Spec/방향, 공압 밸브 Flow, SUS Fitting 조임, Part 조립 (4) | Flow Sensor Spec 정보 (1) | |
+| 12 | PCW-R | Flow Sensor Spec/방향, 공압 밸브 Flow, SUS Fitting 조임, Part 조립 (4) | Flow Sensor Spec 정보 (1) | |
+| 13 | Exhaust | Packing 조립, Packing Guide 고정, SUS Fitting 조임, BCW Nozzle Spray (4) | 없음 | |
+| 14 | TANK | Cir Pump Spec, Flow Sensor Swirl Orifice, Tank 내부 이물질 (3) | 없음 | |
+| 15 | PU | 버너 및 이그저스트 위치 (1) | 없음 | |
+| 16 | 설비 상부 | SUS Fitting 조임, Drain Nut 조립, 미사용 Hole 막음 (3) | 없음 | |
+| 17 | 설비 전면부 | Interface 스티커 부착 (1) | 없음 | |
+| 18 | H/J | 배관 H/J 완전체 조립, 벨크로 체결, 케이블 정리 (3) | 없음 | |
+| 19 | Quenching | Flow Sensor Spec/방향, Flow Sensor 위치 (2) | 없음 | |
+| 20 | 눈관리 | 눈관리 스티커 위치 (1) | 없음 | |
+
+- **가압검사 섹션**: 체크리스트 범위에서 **제외**
+- **ISSUE사항**: 체크리스트 외 별도 기록란 (범위 외)
+
+### TM 양식 분석 (이미지 기준)
+- 총 15개 항목: BURNER(3) + REACTOR(4) + Exhaust(4) + TANK(4)
+- MECH와 컬럼 구조 동일 (검사 항목/검사 내용/기준·SPEC/검사 방법/1차판정/작업자/2차판정/비고)
+
+### 스키마 확장 — checklist_master 컬럼 추가
+
+| 컬럼명 | 타입 | 매핑 | 비고 |
+|--------|------|------|------|
+| `inspection_group` | VARCHAR(100) | 검사 항목 그룹 (BURNER/LNG/BCW 등) | 그룹핑 레이어 |
+| `item_name` | VARCHAR(255) | 검사 내용 | 기존 컬럼 유지 |
+| `item_type` | VARCHAR(10) DEFAULT 'CHECK' | **CHECK** = PASS/NA 판정 항목 / **INPUT** = 직접 입력 항목 | 신규 핵심 |
+| `spec_criteria` | VARCHAR(255) | 기준/SPEC (GAP GAUGE 등) | 신규 |
+| `inspection_method` | VARCHAR(100) | 검사 방법 (측수 검사/육안 검사) | 신규 |
+| `second_judgment_required` | BOOLEAN DEFAULT FALSE | 2차판정 옵션키 | 카테고리 단위 ON/OFF |
+
+### item_type 동작
+- **CHECK** (`item_type = 'CHECK'`): APP UI에서 PASS/NA 버튼 표시 → `checklist_record.status`에 저장
+- **INPUT** (`item_type = 'INPUT'`): APP UI에서 텍스트 입력 필드 표시 → `checklist_record.note`에 저장
+  - MFC Maker/Spec 정보 (LNG, O2, CDA, GN2)
+  - Flow Sensor Spec 정보 (BCW, PCW-S, PCW-R)
+  - Speed Controller 수량 (CDA, GN2)
+  - 배관 S/N (INLET — 해당 제품만 대시보드에서 항목 추가)
+- **INPUT 항목은 선택 입력** — 비어있어도 실적 승인에 영향 없음 (실적 승인 조건은 CHECK 항목 전체 판정 완료만 확인)
+
+### 설계 원칙: 대시보드 중심 관리
+- product_info JOIN 등 코드 레벨 조건부 로직 **사용 안 함**
+- 제품별 항목 차이(DRAGON 배관 S/N, 신규 추가 항목 등)는 **VIEW 대시보드에서 해당 product_code에 항목 추가/수정/비활성화로 관리**
+- 모든 설정값·변경값은 대시보드에서 edit 가능한 구조로 통일
+- BE는 master 테이블 데이터만 충실히 서빙하면 됨 (비즈니스 로직 최소화)
+
+### 스키마 확장 — checklist_record 변경
+
+| 변경 | 현재 | 제안 |
+|------|------|------|
+| `is_checked` BOOLEAN | TRUE/FALSE | → `status` VARCHAR(10): **PASS / NA** 2가지만 (CHECK 항목용) |
+| 단일 판정 | 1회 | → `judgment_round` INTEGER DEFAULT 1 (1차=1, 2차=2) |
+| UNIQUE 제약 | `(serial_number, master_id)` | → `(serial_number, master_id, judgment_round)` |
+
+- 미검사 = record 행 없음 (LEFT JOIN 시 NULL). PENDING 상태 불필요
+- 비고(`note`): APP에서 직접 입력 가능 (기존 컬럼 유지)
+- INPUT 항목: `status` = NULL, `note`에 입력값 저장
+
+### 옵션키 동작 (second_judgment_required)
+- **OFF (기본)**: 전항목 1차판정 완료 (CHECK→PASS/NA, INPUT→note 입력) → 실적 승인 가능
+- **ON**: 전항목 1차 + 2차판정 모두 완료 → 실적 승인 가능
+- TM/MECH/ELEC 동일 조건으로 적용
+
+### 누락 BE API — Admin CRUD (VIEW 대시보드용)
+
+| 엔드포인트 | 메서드 | 용도 | 권한 |
+|---|---|---|---|
+| `/api/admin/checklist/master` | GET | 마스터 목록 (category, product_code 필터) | admin/manager/gst(pm) |
+| `/api/admin/checklist/master` | POST | 개별 항목 생성 | admin/manager/gst(pm) |
+| `/api/admin/checklist/master/{id}` | PUT | 항목 수정 | admin/manager/gst(pm) |
+| `/api/admin/checklist/master/{id}` | DELETE | 비활성화 (soft delete → is_active=FALSE) | admin |
+
+### VIEW FE 구성
+
+#### 1. 생산관리 > 체크리스트 관리 (마스터 CRUD)
+- 필터 바: product_code 드롭다운 + category 탭 (TM/MECH/ELEC)
+- 마스터 항목 테이블: item_order 순, 인라인 수정/비활성화
+- item_type 구분 표시 (CHECK 뱃지 / INPUT 뱃지)
+- 항목 추가: 모달 또는 인라인 폼 (item_type 선택 포함)
+- TanStack Query v5 (useQuery + useMutation + invalidateQueries)
+
+#### 2. 생산현황 > S/N 디테일 패널에 체크리스트 연동
+- **현재 구조**: SNStatusPage → S/N 카드 클릭 → SNDetailPanel(480px 슬라이드인) → ProcessStepCard(MECH/ELEC/TMS...) 확장 → 작업자 태깅 정보
+- **추가**: ProcessStepCard 확장 시 작업자 정보 아래에 **체크리스트 현황 섹션** 표시
+- **API 방식**: 옵션 B — 기존 `GET /api/app/checklist/{SN}/{category}` 별도 호출 (BE 변경 0, APP과 동일 API 공유)
+- **FE 추가**: `useChecklist.ts` 훅 신규 → 카드 확장 시 task + checklist 병렬 fetch
+- **표시 내용**:
+  - 체크리스트 완료율 (예: ✅ 12/15 완료 + 프로그레스 바)
+  - 미완료 항목 리스트 (inspection_group + item_name)
+
+#### 3. S/N 카드 레벨 체크리스트 요약 (Phase 2)
+- **목적**: 카드 목록만 봐도 체크리스트 상태 확인 (예: 진행률 바 옆에 ✅ 3/3 또는 ⚠️ 2/3 아이콘)
+- **구현**: BE 집계 API 신규 — `GET /api/admin/checklist/summary`
+  - 파라미터: `serial_numbers` (복수 S/N)
+  - SQL 한 번으로 S/N×category별 total/checked 집계
+  - FE에서 progress API 호출 후 반환된 S/N 목록으로 summary API **1회 추가 호출** (총 2회)
+- **우선순위**: 후순위. 디테일 패널 연동 먼저 완성 후, 필요 시 추가
+
+### APP 트리거
+- MECH/ELEC/TM 자주검사 시작 → 토스트 팝업 체크리스트 표시
+- CHECK 항목: PASS/NA 버튼
+- INPUT 항목: 텍스트 입력 필드 (비고와 동일 UX)
+- 기존 GET/PUT API 사용 (status 타입 + item_type 분기 추가)
+
+### 연동 흐름
+```
+VIEW: 마스터 CRUD (CHECK/INPUT 항목 관리)
+→ APP: 자주검사 시작 → 체크리스트 팝업
+→ 작업자: CHECK→PASS/NA 판정 / INPUT→텍스트 입력 + 비고 입력
+→ 전항목 완료 + progress 100% = 실적확인 승인 활성화
+→ VIEW 생산현황: S/N 디테일에서 체크리스트 완료 현황 확인
+```
+
+### 구현 우선순위
+1. **BE**: checklist_master/record 스키마 확장 (migration) + Admin CRUD API 4개
+2. **VIEW**: 체크리스트 관리 페이지 (마스터 CRUD UI)
+3. **VIEW**: 생산현황 ProcessStepCard 체크리스트 연동 (옵션 B)
+4. **APP**: 자주검사 토스트 팝업 (기존 API 활용)
+5. **BE+VIEW**: S/N 카드 레벨 summary 집계 API (Phase 2)
+
+### 미결정 사항
+- RV-1: 단순 item_name vs BOM 기반 확장 → ELEC 양식 확인 후 최종 결정
+- `second_judgment_required` 저장 위치: master 행마다 vs 별도 설정 테이블 (admin_settings 등)
+- ELEC 양식 수집 대기 중
+
+---
+
 ## 🟢 아이디어 / 메모
 
 - **AXIS-VIEW**: React 기반 관리자 대시보드 (출퇴근, 생산 현황, KPI 등). App과 분리.
@@ -380,6 +538,17 @@ CLAUDE.md Phase 계획 기반. 시급도순.
   - 활용성 검토 필요: VIEW QR관리 페이지에서 이 정보를 어떻게 활용할지 (필터? 표시만?) 확인 후 진행
   - OPS_API_REQUESTS.md #6에 등록됨
 - ~~**PWA 버전 업데이트 알림 토스트**~~ → ✅ Sprint 26 전체 완료 (Task 1: SW 업데이트 토스트, Task 2~5: UpdateService + UpdateDialog + HomeScreen 연동 — 버전별 공지 팝업 정상 동작 확인)
+- **QR 스캔 UX 개선 3건** (APP FE):
+  - ① QR 스캔 프레임 크기 축소: 전체 사각 프레임이 과도하게 큼. `html5-qrcode` config `qrbox` 사이즈 조정 (Sprint 14에서 정사각형 처리 완료 — 사이즈만 줄이면 됨). BE 변경 없음
+  - ② 직접입력 `DOC_` 자동 접두어: 현재 `DOC_SN` 전체를 수동 입력해야 함. `DOC_` prefix 고정 표시 + 사용자는 S/N만 입력하도록 개선. BE 변경 없음
+  - ③ 작업자별 오늘 태깅한 qr_doc 드롭다운: 직접입력 대신 오늘 태깅 이력에서 선택. `work_start_log`에서 `worker_id` + `started_at >= today` 기준 `DISTINCT qr_doc_id` 조회. **BE 변경 필요** — 오늘 태깅 목록 API 신규 또는 기존 API 확장
+- **테스트 DB 분리**: 현재 `conftest.py`가 Railway 운영 DB(`STAGING_DB_URL`)를 직접 참조. 테스트 전용 PostgreSQL 인스턴스 생성 후 `TEST_DATABASE_URL` 환경변수 분리 필요. 운영 DB 사고 방지 + 백업/복원 로직 단순화 목적
+- **비활성 사용자 자동 삭제 + 협력사 유저 삭제 기능**:
+  - 30일간 로그(app_access_log 등) 미발생 사용자 자동 감지 → 삭제 대상으로 표시
+  - 협력사 소속 manager가 자사 유저 삭제 요청 가능
+  - **최종 admin 승인 후 삭제** (즉시 삭제 아님 — 승인 플로우 필요)
+  - VIEW 권한 관리 페이지 또는 별도 UI에서 삭제 대기 목록 확인 + 승인/반려
+  - soft delete (is_active=FALSE) vs hard delete 정책 결정 필요
 
 ---
 
@@ -453,3 +622,45 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 | 37-B | S/N별 실적확인 + TM 혼재 제거 + 탭별 End 필터 (#38) | ✅ v2.1.0 |
 | BUG-27 | monthly-summary 500 에러 — SUM(sn_count) 참조 (DROP된 컬럼) | ✅ 수정 완료 (2026-03-24) |
 | BUG-28 | tm_pressure_test_required PUT 400 — SETTING_KEYS 등록 누락 | ✅ 수정 완료 (2026-03-24) | `admin.py` SETTING_KEYS에 `tm_pressure_test_required` bool 추가. DB에는 존재했으나 레지스트리 미등록 |
+| 38 | product/progress API last_worker + last_activity_at 필드 추가 | ✅ 완료 (2026-03-27) | progress_service.py 서브쿼리 추가 + 테스트 16/16 passed. VIEW Sprint 18 연동 |
+| 39 | 테스트 DB 분리 — conftest.py 리팩토링 | ✅ 완료 (2026-03-26) | TEST_DATABASE_URL 환경변수 분리, .env.test 자동 로딩, 운영 DB 하드코딩 제거, seed_test_data fixture, test_sprint39_db_isolation.py 10/10 통과 |
+| 39-fix | Regression 수정 — 118 failed → 0 failed | ✅ 완료 (2026-03-27) | BE: factory.py finishing_plan_end→ship_plan_date, production.py module_end→module_start. TEST: 18개 파일 수정 (MM→MECH, worker_id 819→seed admin, task seed 기대값, GAIA-I DUAL→SINGLE, confirmable→all_confirmable 등). 최종 714 passed / 14 skipped |
+
+---
+
+## 🔷 Sprint 40 계획 (병렬 3트랙)
+
+> 등록일: 2026-03-26
+> 상태: 계획 — Sprint 38 완료 후 착수
+> 선행: Sprint 38 (last_worker, progress_service.py 1건)
+
+### Track A: QR 스캔 UX 개선 3건 (APP FE + BE 1개)
+
+| # | 개선 | 변경 범위 | 난이도 |
+|---|------|----------|--------|
+| A-1 | QR 프레임 크기 축소 | `qr_scanner_web.dart` qrbox값 1줄 + `qr_scan_screen.dart` cameraSize 1줄 | 매우 낮음 |
+| A-2 | DOC_ 자동 접두어 | `qr_scan_screen.dart` — prefixText + validator/submit 로직 수정 | 낮음 |
+| A-3 | 오늘 태깅 QR 드롭다운 | BE: `work.py` API 1개 + `work_start_log.py` 쿼리 1개 / FE: 드롭다운 UI | 중 |
+
+⚠️ **카메라 관련 주의**: BUG-5~BUG-23까지 20회 이상 카메라 수정 이력 있음. 정사각형 강제 로직(MutationObserver, _forceSquareAfterCameraStart, CSS aspect-ratio 등) 절대 수정 금지. qrbox 정수값과 cameraSize clamp 범위만 변경.
+
+### Track B: VIEW Sprint 18 — S/N 카드뷰
+
+- Sprint 38의 last_worker/last_activity_at 필드를 FE에서 카드뷰에 연결
+- VIEW FE만 변경 (BE 변경 0건)
+
+### Track C: 비활성 사용자 관리
+
+- BE: `app_access_log` 기반 30일 미로그인 감지 API + 삭제 대기 목록 + admin 승인 API
+- BE: 협력사 manager 자사 유저 삭제 요청 API
+- VIEW: 권한관리 페이지에 삭제 대기 목록 + 승인/반려 UI
+- soft delete (is_active=FALSE)
+- **최종 admin 승인 후 삭제** (즉시 삭제 아님)
+
+### Sprint 40 이후 대기
+
+| 작업 | 선행 조건 |
+|------|----------|
+| 체크리스트 BE (스키마 + CRUD) | ELEC 양식 수집 완료 |
+| VIEW Sprint 20 (체크리스트 관리 UI) | 체크리스트 BE 완료 |
+| QR contract_type / sales_note | 활용성 검토 확정 |
