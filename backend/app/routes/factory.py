@@ -186,7 +186,7 @@ def get_monthly_detail() -> Tuple[Dict[str, Any], int]:
             f"""SELECT p.sales_order, p.product_code, p.serial_number, p.model,
                        p.customer, p.line, p.mech_partner, p.elec_partner,
                        p.mech_start, p.mech_end, p.elec_start, p.elec_end,
-                       p.pi_start, p.qi_start, p.si_start, p.finishing_plan_end, p.ship_plan_date,
+                       p.pi_start, p.qi_start, p.si_start, p.ship_plan_date,
                        cs.mech_completed, cs.elec_completed, cs.tm_completed,
                        cs.pi_completed, cs.qi_completed, cs.si_completed
                 FROM plan.product_info p
@@ -233,7 +233,6 @@ def get_monthly_detail() -> Tuple[Dict[str, Any], int]:
                 'pi_start': _date_to_iso(row.get('pi_start')),
                 'qi_start': _date_to_iso(row.get('qi_start')),
                 'si_start': _date_to_iso(row.get('si_start')),
-                'finishing_plan_end': _date_to_iso(row.get('finishing_plan_end')),
                 'ship_plan_date': _date_to_iso(row.get('ship_plan_date')),
                 'completion': {
                     'mech': bool(row.get('mech_completed')),
@@ -315,12 +314,12 @@ def get_weekly_kpi() -> Tuple[Dict[str, Any], int]:
         cur = conn.cursor()
 
         cur.execute(
-            """SELECT p.serial_number, p.model, p.finishing_plan_end,
+            """SELECT p.serial_number, p.model, p.ship_plan_date,
                       cs.mech_completed, cs.elec_completed, cs.tm_completed,
                       cs.pi_completed, cs.qi_completed, cs.si_completed
                FROM plan.product_info p
                LEFT JOIN completion_status cs ON p.serial_number = cs.serial_number
-               WHERE p.finishing_plan_end >= %s AND p.finishing_plan_end <= %s""",
+               WHERE p.ship_plan_date >= %s AND p.ship_plan_date <= %s""",
             (week_start, week_end)
         )
         rows = cur.fetchall()
@@ -362,7 +361,7 @@ def get_weekly_kpi() -> Tuple[Dict[str, Any], int]:
             by_stage = {'mech': 0.0, 'elec': 0.0, 'tm': 0.0, 'pi': 0.0, 'qi': 0.0, 'si': 0.0}
 
         # pipeline 집계
-        # shipped 판정: finishing_plan_end(출하 예정일) 기준 — 주간 생산량 관리 기준일.
+        # shipped 판정: ship_plan_date(출하 예정일) 기준 — 주간 생산량 관리 기준일.
         pipeline = {'pi': 0, 'qi': 0, 'si': 0, 'shipped': 0}
         for r in rows:
             if r.get('pi_completed') and not r.get('qi_completed'):
@@ -370,8 +369,8 @@ def get_weekly_kpi() -> Tuple[Dict[str, Any], int]:
             if r.get('qi_completed') and not r.get('si_completed'):
                 pipeline['qi'] += 1
             if r.get('si_completed'):
-                fpe = r.get('finishing_plan_end')
-                if fpe and fpe > today:
+                spd = r.get('ship_plan_date')
+                if spd and spd > today:
                     pipeline['si'] += 1
                 else:
                     pipeline['shipped'] += 1

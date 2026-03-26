@@ -25,10 +25,24 @@ from datetime import date, timedelta
 _PREFIX = 'SN-SR37B-'
 
 
+# ── Admin 토큰 픽스처 ──────────────────────────────
+@pytest.fixture
+def admin_token(db_conn, seed_test_data, get_auth_token):
+    """Seed admin의 실제 worker_id로 JWT 토큰 생성"""
+    cursor = db_conn.cursor()
+    cursor.execute("SELECT id FROM workers WHERE email = 'seed_admin@test.axisos.com'")
+    row = cursor.fetchone()
+    cursor.close()
+    return get_auth_token(row[0], role='ADMIN', is_admin=True)
+
+
 def _insert_product(db_conn, serial_number, qr_doc_id, model, sales_order,
                     mech_start=None, mech_partner='GST', elec_partner='GST',
                     mech_end=None, elec_end=None, module_end=None):
-    """테스트용 제품 + QR 등록"""
+    """테스트용 제품 + QR 등록
+    주의: plan.product_info에는 module_end 컬럼이 없음.
+    BE가 COALESCE(module_end, module_start)를 사용하므로 module_start에 저장.
+    """
     if mech_start is None:
         mech_start = date.today()
     if mech_end is None:
@@ -37,7 +51,7 @@ def _insert_product(db_conn, serial_number, qr_doc_id, model, sales_order,
     cursor.execute("""
         INSERT INTO plan.product_info
             (serial_number, model, sales_order, mech_start, mech_end,
-             elec_end, module_end, mech_partner, elec_partner)
+             elec_end, module_start, mech_partner, elec_partner)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (serial_number) DO NOTHING
     """, (serial_number, model, sales_order, mech_start, mech_end,
@@ -119,7 +133,7 @@ def _cleanup(db_conn, prefix=_PREFIX):
 class TestProcPartnerColRegression:
     """_PROC_PARTNER_COL 변경 후 기존 MECH/ELEC 동작 유지"""
 
-    def test_tc_sr_01_mech_elec_mixed_still_works(self, client, db_conn, get_auth_token):
+    def test_tc_sr_01_mech_elec_mixed_still_works(self, client, db_conn, get_auth_token, admin_token):
         """TC-SR-01: MECH/ELEC partner 혼재 기존 동작 유지 (TM만 제거)"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -139,7 +153,7 @@ class TestProcPartnerColRegression:
                      'SELF_INSPECTION', '자주검사', completed=True)
 
         iso_week = today.isocalendar()[1]
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
         resp = client.get(
             f'/api/admin/production/performance?view=weekly&week=W{iso_week:02d}&year={today.year}',
             headers={'Authorization': f'Bearer {token}'}
@@ -161,7 +175,7 @@ class TestProcPartnerColRegression:
 class TestTmPressureTestRegression:
     """Sprint 37-A tm_pressure_test_required 기존 동작 유지"""
 
-    def test_tc_sr_02_tm_pressure_false_tank_module_only(self, client, db_conn, get_auth_token):
+    def test_tc_sr_02_tm_pressure_false_tank_module_only(self, client, db_conn, get_auth_token, admin_token):
         """TC-SR-02: tm_pressure_test_required=false → TMS progress TANK_MODULE only"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -178,7 +192,7 @@ class TestTmPressureTestRegression:
         _insert_task(db_conn, sn, f'DOC-{sn}', 'TMS', 'PRESSURE_TEST', '가압검사', completed=False)
 
         iso_week = today.isocalendar()[1]
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
         resp = client.get(
             f'/api/admin/production/performance?view=weekly&week=W{iso_week:02d}&year={today.year}',
             headers={'Authorization': f'Bearer {token}'}
@@ -292,7 +306,7 @@ class TestCalcSnProgressRegression:
 class TestCancelConfirmRegression:
     """cancel_confirm() soft delete 기존 동작 유지"""
 
-    def test_tc_sr_06_cancel_soft_delete(self, client, db_conn, get_auth_token):
+    def test_tc_sr_06_cancel_soft_delete(self, client, db_conn, get_auth_token, admin_token):
         """TC-SR-06: cancel_confirm() id 기반 soft delete 유지"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -306,7 +320,7 @@ class TestCancelConfirmRegression:
         _insert_product(db_conn, sn, f'DOC-{sn}', 'DRAGON', f'ON-{_PREFIX}06', mech_end=today)
         _insert_task(db_conn, sn, f'DOC-{sn}', 'MECH', 'SELF_INSPECTION', '자주검사', completed=True)
 
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
 
         resp = client.post('/api/admin/production/confirm', json={
             'sales_order': f'ON-{_PREFIX}06',

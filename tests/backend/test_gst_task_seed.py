@@ -1,14 +1,19 @@
 """
 Sprint 11: GST Task 템플릿 추가 검증 테스트
-PI 2개 + QI 1개 + SI 1개 — 모든 모델 공통 생성 확인
+PI 2개 + QI 1개 + SI 2개 — 모든 모델 공통 생성 확인
 
 테스트 대상:
-- initialize_product_tasks() 호출 시 PI/QI/SI task 자동 생성 (기존 15개 + 4개 = 19개)
+- initialize_product_tasks() 호출 시 PI/QI/SI task 자동 생성
 - PI task: PI_LNG_UTIL, PI_CHAMBER (task_category='PI')
 - QI task: QI_INSPECTION (task_category='QI')
-- SI task: SI_FINISHING (task_category='SI')
+- SI task: SI_FINISHING, SI_SHIPMENT (task_category='SI') — 2개
 - 중복 생성 방지
 - GST 작업자 / Admin이 PI/QI/SI task 조회 가능
+
+실제 task_seed.py 기준:
+  GAIA-100 (SINGLE): MECH7+ELEC6+TMS2+PI2+QI1+SI2 = 20개
+  DRAGON-200: MECH8+ELEC6+PI2+QI1+SI2 = 19개 (tank_in_mech TANK_MODULE extra)
+  GALLANT-50: MECH8+ELEC6+PI2+QI1+SI2 = 19개 (tank_in_mech=T in DB)
 """
 
 import pytest
@@ -219,10 +224,10 @@ class TestGSTTaskSeedPIQISI:
 
     def test_gaia_si_task_created(self, db_conn):
         """
-        TC-GST-SEED-03: GAIA 모델 seed → SI task 1개 생성 확인
+        TC-GST-SEED-03: GAIA 모델 seed → SI task 2개 생성 확인
 
         Expected:
-        - SI_FINISHING task_category='SI', is_applicable=True
+        - SI_FINISHING, SI_SHIPMENT task_category='SI', is_applicable=True (각 2개)
         """
         if db_conn is None:
             pytest.skip("DB 연결 없음")
@@ -242,32 +247,37 @@ class TestGSTTaskSeedPIQISI:
             assert result.get('error') is None
 
             si_count = result.get('categories', {}).get('SI', 0)
-            assert si_count == 1, f"SI task 1개 필요, 현재 {si_count}개"
+            assert si_count == 2, f"SI task 2개 필요 (SI_FINISHING+SI_SHIPMENT), 현재 {si_count}개"
 
             cursor = db_conn.cursor()
             cursor.execute("""
                 SELECT task_id, task_category, is_applicable
                 FROM app_task_details
                 WHERE serial_number = %s AND task_category = 'SI'
+                ORDER BY task_id
             """, (serial_number,))
-            si_row = cursor.fetchone()
+            si_rows = cursor.fetchall()
             cursor.close()
 
-            assert si_row is not None, "SI task DB에 없음"
-            assert si_row[0] == 'SI_FINISHING', f"SI task_id 오류: {si_row[0]}"
-            assert si_row[2] is True, "SI_FINISHING is_applicable=True여야 함"
+            assert len(si_rows) == 2, f"SI task DB에 2개 필요, got {len(si_rows)}"
+            si_ids = [r[0] for r in si_rows]
+            assert 'SI_FINISHING' in si_ids, "SI_FINISHING task 없음"
+            assert 'SI_SHIPMENT' in si_ids, "SI_SHIPMENT task 없음"
+            for row in si_rows:
+                assert row[2] is True, f"{row[0]} is_applicable=True여야 함"
 
         finally:
             _cleanup_test_data(db_conn, serial_number, qr_doc_id)
 
-    def test_gaia_total_19_tasks(self, db_conn):
+    def test_gaia_total_20_tasks(self, db_conn):
         """
-        TC-GST-SEED-04: GAIA 모델 seed → 총 19개 Task 생성 확인
-        기존 15개 (MECH 7 + ELEC 6 + TMS 2) + Sprint 11 추가 4개 (PI 2 + QI 1 + SI 1) = 19개
+        TC-GST-SEED-04: GAIA-100 (SINGLE) 모델 seed → 총 20개 Task 생성 확인
+        MECH 7 + ELEC 6 + TMS 2 + PI 2 + QI 1 + SI 2 = 20개
+        ('GAIA-100'은 'DUAL' 미포함 → SINGLE, TMS FK 위반 없음)
 
         Expected:
-        - 총 Task 수 = 19개
-        - categories = {MECH:7, ELEC:6, TMS:2, PI:2, QI:1, SI:1}
+        - 총 Task 수 = 20개
+        - categories = {MECH:7, ELEC:6, TMS:2, PI:2, QI:1, SI:2}
         """
         if db_conn is None:
             pytest.skip("DB 연결 없음")
@@ -287,7 +297,7 @@ class TestGSTTaskSeedPIQISI:
             assert result.get('error') is None
 
             total = result.get('created', 0)
-            assert total == 19, f"GAIA Sprint 11 총 19개 task 필요, 현재 {total}개"
+            assert total == 20, f"GAIA-100 (SINGLE) 총 20개 task 필요, 현재 {total}개"
 
             cats = result.get('categories', {})
             assert cats.get('MECH', 0) == 7, f"MECH 7개 필요, 현재 {cats.get('MECH', 0)}개"
@@ -295,18 +305,18 @@ class TestGSTTaskSeedPIQISI:
             assert cats.get('TMS', 0) == 2, f"TMS 2개 필요, 현재 {cats.get('TMS', 0)}개"
             assert cats.get('PI', 0) == 2, f"PI 2개 필요, 현재 {cats.get('PI', 0)}개"
             assert cats.get('QI', 0) == 1, f"QI 1개 필요, 현재 {cats.get('QI', 0)}개"
-            assert cats.get('SI', 0) == 1, f"SI 1개 필요, 현재 {cats.get('SI', 0)}개"
+            assert cats.get('SI', 0) == 2, f"SI 2개 필요 (SI_FINISHING+SI_SHIPMENT), 현재 {cats.get('SI', 0)}개"
 
         finally:
             _cleanup_test_data(db_conn, serial_number, qr_doc_id)
 
     def test_dragon_pi_qi_si_tasks_created(self, db_conn):
         """
-        TC-GST-SEED-05: DRAGON 모델 seed → PI/QI/SI task 4개 생성 확인
-        PI/QI/SI는 모든 모델 공통 적용
+        TC-GST-SEED-05: DRAGON 모델 seed → PI/QI/SI task 5개 생성 확인
+        PI/QI/SI는 모든 모델 공통 적용 (SI는 SI_FINISHING + SI_SHIPMENT 2개)
 
         Expected:
-        - PI 2개 + QI 1개 + SI 1개 = 4개 생성
+        - PI 2개 + QI 1개 + SI 2개 = 5개 생성
         """
         if db_conn is None:
             pytest.skip("DB 연결 없음")
@@ -328,17 +338,18 @@ class TestGSTTaskSeedPIQISI:
             cats = result.get('categories', {})
             assert cats.get('PI', 0) == 2, f"DRAGON PI 2개 필요, 현재 {cats.get('PI', 0)}개"
             assert cats.get('QI', 0) == 1, f"DRAGON QI 1개 필요, 현재 {cats.get('QI', 0)}개"
-            assert cats.get('SI', 0) == 1, f"DRAGON SI 1개 필요, 현재 {cats.get('SI', 0)}개"
+            assert cats.get('SI', 0) == 2, f"DRAGON SI 2개 필요 (SI_FINISHING+SI_SHIPMENT), 현재 {cats.get('SI', 0)}개"
 
         finally:
             _cleanup_test_data(db_conn, serial_number, qr_doc_id)
 
     def test_gallant_pi_qi_si_tasks_created(self, db_conn):
         """
-        TC-GST-SEED-06: GALLANT 모델 seed → PI/QI/SI task 4개 생성 확인
+        TC-GST-SEED-06: GALLANT 모델 seed → PI/QI/SI task 5개 생성 확인
+        (SI는 SI_FINISHING + SI_SHIPMENT 2개)
 
         Expected:
-        - PI 2개 + QI 1개 + SI 1개 = 4개 생성
+        - PI 2개 + QI 1개 + SI 2개 = 5개 생성
         """
         if db_conn is None:
             pytest.skip("DB 연결 없음")
@@ -360,7 +371,7 @@ class TestGSTTaskSeedPIQISI:
             cats = result.get('categories', {})
             assert cats.get('PI', 0) == 2, f"GALLANT PI 2개 필요, 현재 {cats.get('PI', 0)}개"
             assert cats.get('QI', 0) == 1, f"GALLANT QI 1개 필요, 현재 {cats.get('QI', 0)}개"
-            assert cats.get('SI', 0) == 1, f"GALLANT SI 1개 필요, 현재 {cats.get('SI', 0)}개"
+            assert cats.get('SI', 0) == 2, f"GALLANT SI 2개 필요 (SI_FINISHING+SI_SHIPMENT), 현재 {cats.get('SI', 0)}개"
 
         finally:
             _cleanup_test_data(db_conn, serial_number, qr_doc_id)
@@ -408,7 +419,7 @@ class TestGSTTaskSeedPIQISI:
 
             assert rows.get('PI', 0) == 2, f"PI 중복 없이 2개 유지 필요, 현재 {rows.get('PI', 0)}개"
             assert rows.get('QI', 0) == 1, f"QI 중복 없이 1개 유지 필요, 현재 {rows.get('QI', 0)}개"
-            assert rows.get('SI', 0) == 1, f"SI 중복 없이 1개 유지 필요, 현재 {rows.get('SI', 0)}개"
+            assert rows.get('SI', 0) == 2, f"SI 중복 없이 2개 유지 필요 (SI_FINISHING+SI_SHIPMENT), 현재 {rows.get('SI', 0)}개"
 
         finally:
             _cleanup_test_data(db_conn, serial_number, qr_doc_id)
@@ -541,7 +552,8 @@ class TestGSTTaskSeedPIQISI:
         self, client, db_conn, create_test_worker, get_auth_token
     ):
         """
-        TC-GST-SEED-10: POST /api/admin/products/initialize-tasks → PI/QI/SI 포함 19개 생성
+        TC-GST-SEED-10: POST /api/admin/products/initialize-tasks → PI/QI/SI 포함 생성
+        GAIA-100 (SINGLE): 총 20개 (MECH7+ELEC6+TMS2+PI2+QI1+SI2)
 
         Expected:
         - 응답에 PI/QI/SI category 포함
@@ -585,4 +597,4 @@ class TestGSTTaskSeedPIQISI:
 
         assert rows.get('PI', 0) == 2, f"PI 2개 필요, 현재 {rows.get('PI', 0)}개"
         assert rows.get('QI', 0) == 1, f"QI 1개 필요, 현재 {rows.get('QI', 0)}개"
-        assert rows.get('SI', 0) == 1, f"SI 1개 필요, 현재 {rows.get('SI', 0)}개"
+        assert rows.get('SI', 0) == 2, f"SI 2개 필요 (SI_FINISHING+SI_SHIPMENT), 현재 {rows.get('SI', 0)}개"

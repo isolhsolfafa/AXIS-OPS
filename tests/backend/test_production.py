@@ -59,12 +59,23 @@ def _cleanup_test_data(db_conn, prefix='SN-PROD-33'):
     cursor.close()
 
 
+# ── Admin 토큰 픽스처 ──────────────────────────────
+@pytest.fixture
+def admin_token(db_conn, seed_test_data, get_auth_token):
+    """Seed admin의 실제 worker_id로 JWT 토큰 생성"""
+    cursor = db_conn.cursor()
+    cursor.execute("SELECT id FROM workers WHERE email = 'seed_admin@test.axisos.com'")
+    row = cursor.fetchone()
+    cursor.close()
+    return get_auth_token(row[0], role='ADMIN', is_admin=True)
+
+
 # ── 테스트 클래스 ──────────────────────────────────
 
 class TestProductionPerformance:
     """GET /api/admin/production/performance"""
 
-    def test_weekly_groups_by_order(self, client, db_conn, get_auth_token):
+    def test_weekly_groups_by_order(self, client, db_conn, get_auth_token, admin_token):
         """O/N 단위 그룹핑 — 같은 O/N의 S/N이 묶여서 반환"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -79,7 +90,7 @@ class TestProductionPerformance:
         _insert_product(db_conn, 'SN-PROD-33-003', 'DOC-PROD-33-003', 'DRAGON', 'ON-SN-PROD-33-6002', today)
 
         iso_week = today.isocalendar()[1]
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
 
         resp = client.get(
             f'/api/admin/production/performance?view=weekly&week=W{iso_week:02d}&year={today.year}',
@@ -98,7 +109,7 @@ class TestProductionPerformance:
 
         _cleanup_test_data(db_conn)
 
-    def test_confirmable_all_complete(self, client, db_conn, get_auth_token):
+    def test_confirmable_all_complete(self, client, db_conn, get_auth_token, admin_token):
         """전체 S/N 공정 완료 → confirmable=True"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -117,7 +128,7 @@ class TestProductionPerformance:
         _insert_task(db_conn, 'SN-PROD-33-010', 'DOC-PROD-33-010', 'MECH', 'SELF_INSPECTION', '자주검사', completed=True)
 
         iso_week = today.isocalendar()[1]
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
 
         resp = client.get(
             f'/api/admin/production/performance?view=weekly&week=W{iso_week:02d}&year={today.year}',
@@ -128,11 +139,13 @@ class TestProductionPerformance:
 
         order = next((o for o in data['orders'] if o['sales_order'] == 'ON-SN-PROD-33-7001'), None)
         assert order is not None
-        assert order['processes'].get('MECH', {}).get('confirmable') is True
+        # MECH는 partner-level process → sn_confirms + all_confirmable 구조
+        mech_proc = order['processes'].get('MECH', {})
+        assert mech_proc.get('all_confirmable', mech_proc.get('confirmable')) is True
 
         _cleanup_test_data(db_conn)
 
-    def test_confirmable_partial_incomplete(self, client, db_conn, get_auth_token):
+    def test_confirmable_partial_incomplete(self, client, db_conn, get_auth_token, admin_token):
         """일부 S/N 미완료 → confirmable=False"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -147,7 +160,7 @@ class TestProductionPerformance:
         _insert_task(db_conn, 'SN-PROD-33-021', 'DOC-PROD-33-021', 'MECH', 'SELF_INSPECTION', '자주검사', completed=False)
 
         iso_week = today.isocalendar()[1]
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
 
         resp = client.get(
             f'/api/admin/production/performance?view=weekly&week=W{iso_week:02d}&year={today.year}',
@@ -158,7 +171,9 @@ class TestProductionPerformance:
 
         order = next((o for o in data['orders'] if o['sales_order'] == 'ON-SN-PROD-33-7002'), None)
         assert order is not None
-        assert order['processes'].get('MECH', {}).get('confirmable') is False
+        # MECH는 partner-level process → sn_confirms + all_confirmable 구조
+        mech_proc = order['processes'].get('MECH', {})
+        assert mech_proc.get('all_confirmable', mech_proc.get('confirmable')) is False
 
         _cleanup_test_data(db_conn)
 
@@ -166,7 +181,7 @@ class TestProductionPerformance:
 class TestProductionConfirm:
     """POST /api/admin/production/confirm"""
 
-    def test_confirm_success(self, client, db_conn, get_auth_token):
+    def test_confirm_success(self, client, db_conn, get_auth_token, admin_token):
         """confirmable 조건 충족 → 실적확인 성공"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -175,16 +190,23 @@ class TestProductionConfirm:
         today = date.today()
         iso_week = today.isocalendar()[1]
 
+        # confirm_mech_enabled=true 설정 (confirmable 판정 전제)
+        cursor = db_conn.cursor()
+        cursor.execute("UPDATE admin_settings SET setting_value = 'true' WHERE setting_key = 'confirm_mech_enabled'")
+        db_conn.commit()
+        cursor.close()
+
         _insert_product(db_conn, 'SN-PROD-33-030', 'DOC-PROD-33-030', 'GAIA-I', 'ON-SN-PROD-33-8001', today)
         _insert_task(db_conn, 'SN-PROD-33-030', 'DOC-PROD-33-030', 'MECH', 'SELF_INSPECTION', '자주검사', completed=True)
 
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
 
         resp = client.post(
             '/api/admin/production/confirm',
             json={
                 'sales_order': 'ON-SN-PROD-33-8001',
                 'process_type': 'MECH',
+                'serial_numbers': ['SN-PROD-33-030'],
                 'confirmed_week': f'W{iso_week:02d}',
                 'confirmed_month': f'{today.year}-{today.month:02d}',
             },
@@ -192,11 +214,14 @@ class TestProductionConfirm:
         )
         assert resp.status_code == 201
         data = resp.get_json()
-        assert data.get('confirm_id') is not None
+        # 응답 구조: { confirmed: [{id, serial_number, confirmed_at}], count, message }
+        assert data.get('confirmed') is not None
+        assert len(data['confirmed']) >= 1
+        assert data['confirmed'][0].get('id') is not None
 
         _cleanup_test_data(db_conn)
 
-    def test_confirm_not_confirmable(self, client, db_conn, get_auth_token):
+    def test_confirm_not_confirmable(self, client, db_conn, get_auth_token, admin_token):
         """미완료 → 실적확인 거부 400"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -205,16 +230,23 @@ class TestProductionConfirm:
         today = date.today()
         iso_week = today.isocalendar()[1]
 
+        # confirm_mech_enabled=true 설정
+        cursor = db_conn.cursor()
+        cursor.execute("UPDATE admin_settings SET setting_value = 'true' WHERE setting_key = 'confirm_mech_enabled'")
+        db_conn.commit()
+        cursor.close()
+
         _insert_product(db_conn, 'SN-PROD-33-040', 'DOC-PROD-33-040', 'GAIA-I', 'ON-SN-PROD-33-8002', today)
         _insert_task(db_conn, 'SN-PROD-33-040', 'DOC-PROD-33-040', 'MECH', 'SELF_INSPECTION', '자주검사', completed=False)
 
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
 
         resp = client.post(
             '/api/admin/production/confirm',
             json={
                 'sales_order': 'ON-SN-PROD-33-8002',
                 'process_type': 'MECH',
+                'serial_numbers': ['SN-PROD-33-040'],
                 'confirmed_week': f'W{iso_week:02d}',
                 'confirmed_month': f'{today.year}-{today.month:02d}',
             },
@@ -225,7 +257,7 @@ class TestProductionConfirm:
 
         _cleanup_test_data(db_conn)
 
-    def test_confirm_duplicate_409(self, client, db_conn, get_auth_token):
+    def test_confirm_duplicate_409(self, client, db_conn, get_auth_token, admin_token):
         """중복 실적확인 → 409"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -234,13 +266,20 @@ class TestProductionConfirm:
         today = date.today()
         iso_week = today.isocalendar()[1]
 
+        # confirm_mech_enabled=true 설정
+        cursor = db_conn.cursor()
+        cursor.execute("UPDATE admin_settings SET setting_value = 'true' WHERE setting_key = 'confirm_mech_enabled'")
+        db_conn.commit()
+        cursor.close()
+
         _insert_product(db_conn, 'SN-PROD-33-050', 'DOC-PROD-33-050', 'GAIA-I', 'ON-SN-PROD-33-8003', today)
         _insert_task(db_conn, 'SN-PROD-33-050', 'DOC-PROD-33-050', 'MECH', 'SELF_INSPECTION', '자주검사', completed=True)
 
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
         body = {
             'sales_order': 'ON-SN-PROD-33-8003',
             'process_type': 'MECH',
+            'serial_numbers': ['SN-PROD-33-050'],
             'confirmed_week': f'W{iso_week:02d}',
             'confirmed_month': f'{today.year}-{today.month:02d}',
         }
@@ -249,7 +288,7 @@ class TestProductionConfirm:
         resp1 = client.post('/api/admin/production/confirm', json=body, headers={'Authorization': f'Bearer {token}'})
         assert resp1.status_code == 201
 
-        # 중복 확인
+        # 중복 확인 → ALREADY_CONFIRMED (409)
         resp2 = client.post('/api/admin/production/confirm', json=body, headers={'Authorization': f'Bearer {token}'})
         assert resp2.status_code == 409
 
@@ -259,7 +298,7 @@ class TestProductionConfirm:
 class TestProductionCancel:
     """DELETE /api/admin/production/confirm/:id"""
 
-    def test_cancel_soft_delete(self, client, db_conn, get_auth_token):
+    def test_cancel_soft_delete(self, client, db_conn, get_auth_token, admin_token):
         """실적확인 취소 → soft delete"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -271,16 +310,25 @@ class TestProductionCancel:
         _insert_product(db_conn, 'SN-PROD-33-060', 'DOC-PROD-33-060', 'GAIA-I', 'ON-SN-PROD-33-9001', today)
         _insert_task(db_conn, 'SN-PROD-33-060', 'DOC-PROD-33-060', 'MECH', 'SELF_INSPECTION', '자주검사', completed=True)
 
-        token = get_auth_token(819, role='ADMIN')
+        # confirm_mech_enabled=true 설정
+        cursor = db_conn.cursor()
+        cursor.execute("UPDATE admin_settings SET setting_value = 'true' WHERE setting_key = 'confirm_mech_enabled'")
+        db_conn.commit()
+        cursor.close()
 
-        # 확인
+        token = admin_token
+
+        # 확인 (serial_numbers 필드 추가)
         resp = client.post('/api/admin/production/confirm', json={
             'sales_order': 'ON-SN-PROD-33-9001',
             'process_type': 'MECH',
+            'serial_numbers': ['SN-PROD-33-060'],
             'confirmed_week': f'W{iso_week:02d}',
             'confirmed_month': f'{today.year}-{today.month:02d}',
         }, headers={'Authorization': f'Bearer {token}'})
-        confirm_id = resp.get_json()['confirm_id']
+        assert resp.status_code == 201, f"confirm failed: {resp.get_json()}"
+        # 응답: { confirmed: [{id, ...}], count, message }
+        confirm_id = resp.get_json()['confirmed'][0]['id']
 
         # 취소
         resp2 = client.delete(
@@ -298,7 +346,7 @@ class TestProductionCancel:
 
         _cleanup_test_data(db_conn)
 
-    def test_reconfirm_after_cancel(self, client, db_conn, get_auth_token):
+    def test_reconfirm_after_cancel(self, client, db_conn, get_auth_token, admin_token):
         """취소 후 재확인 가능"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -310,17 +358,26 @@ class TestProductionCancel:
         _insert_product(db_conn, 'SN-PROD-33-070', 'DOC-PROD-33-070', 'GAIA-I', 'ON-SN-PROD-33-9002', today)
         _insert_task(db_conn, 'SN-PROD-33-070', 'DOC-PROD-33-070', 'MECH', 'SELF_INSPECTION', '자주검사', completed=True)
 
-        token = get_auth_token(819, role='ADMIN')
+        # confirm_mech_enabled=true 설정
+        cursor = db_conn.cursor()
+        cursor.execute("UPDATE admin_settings SET setting_value = 'true' WHERE setting_key = 'confirm_mech_enabled'")
+        db_conn.commit()
+        cursor.close()
+
+        token = admin_token
         body = {
             'sales_order': 'ON-SN-PROD-33-9002',
             'process_type': 'MECH',
+            'serial_numbers': ['SN-PROD-33-070'],
             'confirmed_week': f'W{iso_week:02d}',
             'confirmed_month': f'{today.year}-{today.month:02d}',
         }
 
         # 확인 → 취소 → 재확인
         resp1 = client.post('/api/admin/production/confirm', json=body, headers={'Authorization': f'Bearer {token}'})
-        confirm_id = resp1.get_json()['confirm_id']
+        assert resp1.status_code == 201, f"confirm failed: {resp1.get_json()}"
+        # 응답: { confirmed: [{id, ...}], count, message }
+        confirm_id = resp1.get_json()['confirmed'][0]['id']
 
         client.delete(f'/api/admin/production/confirm/{confirm_id}', headers={'Authorization': f'Bearer {token}'})
 
@@ -333,7 +390,7 @@ class TestProductionCancel:
 class TestMonthlySummary:
     """GET /api/admin/production/monthly-summary"""
 
-    def test_monthly_returns_orders(self, client, db_conn, get_auth_token):
+    def test_monthly_returns_orders(self, client, db_conn, get_auth_token, admin_token):
         """월마감 집계 — O/N 목록 + 실적확인 이력"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -344,7 +401,7 @@ class TestMonthlySummary:
 
         _insert_product(db_conn, 'SN-PROD-33-080', 'DOC-PROD-33-080', 'GAIA-I', 'ON-SN-PROD-33-A001', today)
 
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
 
         resp = client.get(
             f'/api/admin/production/monthly-summary?month={month_str}',

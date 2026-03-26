@@ -258,10 +258,10 @@ class TestGSTProductsDashboard:
 
     def test_not_started_product_included_in_response(self, client, db_conn, gst_worker):
         """
-        TC-GST-GP-04: 작업 미시작 제품 → 목록에 포함 (status: not_started)
+        TC-GST-GP-04: 작업 미시작 제품 → status=not_started 필터로 목록에 포함
 
         Expected:
-        - started_at IS NULL인 PI task가 있는 제품도 목록에 포함
+        - started_at IS NULL인 PI task가 있는 제품도 ?status=not_started 필터로 포함
         - task_status = 'not_started'
         """
         if db_conn is None:
@@ -275,8 +275,9 @@ class TestGSTProductsDashboard:
             started_at=None  # 미시작
         )
 
+        # status=not_started 파라미터를 사용해야 미시작 제품이 포함됨
         response = client.get(
-            '/api/app/gst/products/PI',
+            '/api/app/gst/products/PI?status=not_started',
             headers={'Authorization': f'Bearer {token}'}
         )
 
@@ -290,7 +291,7 @@ class TestGSTProductsDashboard:
         # 미시작 제품이 포함되었는지 확인
         sns = [p.get('serial_number') for p in products]
         assert 'SN-SP11-GP-004' in sns, \
-            "미시작 PI task 제품이 목록에 포함되어야 함"
+            "미시작 PI task 제품이 목록에 포함되어야 함 (?status=not_started 필터 사용)"
 
     def test_completed_task_not_in_active_products(self, client, db_conn, gst_worker):
         """

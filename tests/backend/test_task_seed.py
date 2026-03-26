@@ -161,10 +161,11 @@ class TestModelConfigLookup:
 
     def test_gallant_config_values(self, db_conn):
         """
-        GALLANT 모델: has_docking=False, is_tms=False, tank_in_mech=False
+        GALLANT 모델: has_docking=False, is_tms=False, tank_in_mech=True
+        (DB 실제값: GALLANT는 tank_in_mech=True — 탱크 조립 있으나 도킹 없음)
 
         Expected:
-        - 도킹 없음, TMS 없음, tank_in_mech 없음
+        - has_docking=False, is_tms=False, tank_in_mech=True
         """
         if db_conn is None:
             pytest.skip("DB 연결 없음")
@@ -180,7 +181,7 @@ class TestModelConfigLookup:
         assert row is not None
         assert row[0] is False
         assert row[1] is False
-        assert row[2] is False
+        assert row[2] is True  # DB 실제값: GALLANT tank_in_mech=True
 
     def test_model_config_api_accessible(self, client, create_test_worker, get_auth_token):
         """
@@ -341,14 +342,15 @@ class TestTaskSeedGAIA:
 
     def test_gaia_total_task_count(self, client, db_conn, create_test_worker, get_auth_token):
         """
-        TC-SEED-01: GAIA → 총 15개 Task 생성 확인
-        MECH 7 (1~5 + 자주검사 + HEATING_JACKET) + ELEC 6 + TMS 2
+        TC-SEED-01: GAIA-100 (SINGLE) → 총 20개 Task 생성 확인
+        MECH 7 + ELEC 6 + TMS 2 + PI 2 + QI 1 + SI 2 = 20
 
         heating_jacket은 admin_settings.heating_jacket_enabled=false이면 is_applicable=false
+        'GAIA-100'은 'DUAL' 미포함 → SINGLE, TMS FK 위반 없음
 
         Expected:
-        - 총 Task 수 = 15개 (MECH 7 + ELEC 6 + TMS 2)
-        - is_applicable=true: MECH 6 (HEATING_JACKET 제외) + ELEC 6 + TMS 2 = 14개
+        - 총 Task 수 = 20개
+        - MECH 7, ELEC 6, TMS 2, PI 2, QI 1, SI 2
         """
         if db_conn is None:
             pytest.skip("DB 연결 없음")
@@ -378,7 +380,7 @@ class TestTaskSeedGAIA:
         # DB에서 Task 수 확인
         counts = _get_task_counts(db_conn, serial_number)
         total = sum(v['total'] for v in counts.values())
-        assert total == 19, f"GAIA는 19개 Task 생성되어야 함 (MECH7+ELEC6+TMS2+PI2+QI1+SI1), 현재 {total}개"
+        assert total == 20, f"GAIA-100(SINGLE) 20개 Task 생성 필요 (MECH7+ELEC6+TMS2+PI2+QI1+SI2), 현재 {total}개"
 
         # TMS Task 생성 확인
         assert 'TMS' in counts, "GAIA는 TMS Task가 생성되어야 함"
@@ -391,6 +393,10 @@ class TestTaskSeedGAIA:
         # ELEC Task 생성 확인
         assert 'ELEC' in counts
         assert counts['ELEC']['total'] == 6, f"ELEC 6개 필요, 현재 {counts.get('ELEC', {}).get('total', 0)}개"
+
+        # SI Task 2개 확인
+        assert 'SI' in counts
+        assert counts['SI']['total'] == 2, f"SI 2개 필요 (SI_FINISHING+SI_SHIPMENT), 현재 {counts.get('SI', {}).get('total', 0)}개"
 
     def test_gaia_docking_tasks_applicable(self, client, db_conn, create_test_worker, get_auth_token):
         """
@@ -501,15 +507,19 @@ class TestTaskSeedDRAGON:
 
 
 class TestTaskSeedGALLANT:
-    """GALLANT 모델 Task Seed 테스트 (has_docking=False, tank_in_mech=False)"""
+    """GALLANT 모델 Task Seed 테스트 (has_docking=False, tank_in_mech=True)
+    DB 실제값: GALLANT는 tank_in_mech=True
+    """
 
-    def test_gallant_only_self_inspection_applicable(self, client, db_conn, create_test_worker, get_auth_token):
+    def test_gallant_tank_docking_not_applicable(self, client, db_conn, create_test_worker, get_auth_token):
         """
-        TC-SEED-04: 기타 모델 (GALLANT) → MECH는 자주검사만 is_applicable=true
+        TC-SEED-04: GALLANT → tank_in_mech=True 이므로 TANK_DOCKING만 비활성
+                   WASTE_GAS_LINE_1/2, UTIL_LINE_1/2 는 활성
 
         Expected:
         - SELF_INSPECTION: is_applicable=true
-        - 도킹 관련 MECH tasks: is_applicable=false
+        - TANK_DOCKING: is_applicable=false
+        - WASTE_GAS_LINE_1, UTIL_LINE_1, WASTE_GAS_LINE_2, UTIL_LINE_2: is_applicable=true
         - ELEC: 전부 is_applicable=true (6개)
         - TMS: 없음
         """
@@ -540,7 +550,7 @@ class TestTaskSeedGALLANT:
 
         cursor = db_conn.cursor()
 
-        # MECH: SELF_INSPECTION만 applicable
+        # MECH: SELF_INSPECTION 활성 확인
         cursor.execute("""
             SELECT task_id, is_applicable FROM app_task_details
             WHERE serial_number = %s AND task_category = 'MECH'
@@ -551,12 +561,15 @@ class TestTaskSeedGALLANT:
         applicable_mech = [r[0] for r in mech_rows if r[1] is True]
         assert 'SELF_INSPECTION' in applicable_mech, "SELF_INSPECTION은 GALLANT에서도 applicable"
 
-        # 도킹 관련: not applicable
+        # TANK_DOCKING: tank_in_mech=True여도 비활성
         not_applicable_mech = [r[0] for r in mech_rows if r[1] is False]
-        for task_id in ['WASTE_GAS_LINE_1', 'UTIL_LINE_1', 'TANK_DOCKING',
-                        'WASTE_GAS_LINE_2', 'UTIL_LINE_2']:
-            assert task_id in not_applicable_mech, \
-                f"{task_id}은 GALLANT에서 is_applicable=false여야 함"
+        assert 'TANK_DOCKING' in not_applicable_mech, \
+            "TANK_DOCKING은 GALLANT에서 is_applicable=false여야 함"
+
+        # tank_in_mech=True → 나머지 4개 docking task는 활성
+        for task_id in ['WASTE_GAS_LINE_1', 'UTIL_LINE_1', 'WASTE_GAS_LINE_2', 'UTIL_LINE_2']:
+            assert task_id in applicable_mech, \
+                f"{task_id}은 GALLANT(tank_in_mech=True)에서 is_applicable=true여야 함"
 
         # ELEC: 전부 applicable (6개)
         cursor.execute("""
@@ -920,12 +933,12 @@ class TestTaskSeedDirectCall:
 
     def test_seed_returns_correct_counts_gaia(self, db_conn):
         """
-        TC-SEED-DIRECT-01: GAIA 직접 seed → 반환값 검증
+        TC-SEED-DIRECT-01: GAIA-100 (SINGLE) 직접 seed → 반환값 검증
 
         Expected:
-        - created = 15 (최초 실행)
+        - created = 20 (MECH7+ELEC6+TMS2+PI2+QI1+SI2)
         - skipped = 0
-        - categories = {'MECH': 7, 'ELEC': 6, 'TMS': 2}
+        - categories = {'MECH': 7, 'ELEC': 6, 'TMS': 2, 'PI': 2, 'QI': 1, 'SI': 2}
         """
         if db_conn is None:
             pytest.skip("DB 연결 없음")
@@ -959,8 +972,8 @@ class TestTaskSeedDirectCall:
             result = initialize_product_tasks(serial_number, qr_doc_id, 'GAIA-100')
 
             assert result.get('error') is None, f"Seed 에러: {result.get('error')}"
-            assert result.get('created', 0) == 19, \
-                f"GAIA는 15개 생성 필요, 현재 {result.get('created')}개"
+            assert result.get('created', 0) == 20, \
+                f"GAIA-100(SINGLE) 20개 생성 필요, 현재 {result.get('created')}개"
             assert result.get('categories', {}).get('MECH', 0) == 7
             assert result.get('categories', {}).get('ELEC', 0) == 6
             assert result.get('categories', {}).get('TMS', 0) == 2
@@ -975,11 +988,11 @@ class TestTaskSeedDirectCall:
 
     def test_seed_idempotent_direct_call(self, db_conn):
         """
-        TC-SEED-DIRECT-02: 동일 제품에 seed 2회 호출 → 두 번째는 skipped=15
+        TC-SEED-DIRECT-02: 동일 제품에 seed 2회 호출 → 두 번째는 skipped=20
 
         Expected:
-        - 첫 번째 호출: created=15, skipped=0
-        - 두 번째 호출: created=0, skipped=15 (ON CONFLICT DO NOTHING)
+        - 첫 번째 호출: created=20 (GAIA-100 SINGLE), skipped=0
+        - 두 번째 호출: created=0, skipped=20 (ON CONFLICT DO NOTHING)
         """
         if db_conn is None:
             pytest.skip("DB 연결 없음")
@@ -1011,9 +1024,9 @@ class TestTaskSeedDirectCall:
             result2 = initialize_product_tasks(serial_number, qr_doc_id, 'GAIA-100')
 
             assert result1.get('error') is None
-            assert result1.get('created', 0) == 19, f"첫 번째 created=19 필요"
+            assert result1.get('created', 0) == 20, f"첫 번째 created=20 필요 (GAIA-100 SINGLE)"
             assert result2.get('created', 0) == 0, f"두 번째 created=0 필요 (이미 존재)"
-            assert result2.get('skipped', 0) == 19, f"두 번째 skipped=19 필요"
+            assert result2.get('skipped', 0) == 20, f"두 번째 skipped=20 필요"
         finally:
             cursor = db_conn.cursor()
             cursor.execute("DELETE FROM app_task_details WHERE serial_number = %s", (serial_number,))

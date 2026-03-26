@@ -17,6 +17,33 @@ from typing import Dict, Any, Generator, Optional
 
 
 # ============================================================
+# Sprint 39: .env.test 자동 로딩
+# python-dotenv가 설치되어 있으면 .env.test를 자동으로 로드
+# 설치되지 않은 환경에서도 환경변수를 직접 설정했다면 정상 동작
+# ============================================================
+_env_test_path = Path(__file__).parent.parent / '.env.test'
+if _env_test_path.exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_env_test_path, override=False)  # 기존 환경변수 우선
+    except ImportError:
+        # python-dotenv 미설치 시 수동 파싱 (fallback)
+        with open(_env_test_path) as _f:
+            for _line in _f:
+                _line = _line.strip()
+                if _line and not _line.startswith('#') and '=' in _line:
+                    _key, _, _val = _line.partition('=')
+                    _key, _val = _key.strip(), _val.strip()
+                    if _key not in os.environ:  # 기존 환경변수 우선
+                        os.environ[_key] = _val
+
+# Sprint 39-fix: Flask 앱(db_pool.py)이 Config.DATABASE_URL을 직접 참조하므로,
+# DATABASE_URL도 테스트 DB로 오버라이드 → 운영 DB 완전 격리
+if os.getenv('TEST_DATABASE_URL'):
+    os.environ['DATABASE_URL'] = os.environ['TEST_DATABASE_URL']
+
+
+# ============================================================
 # 전역 SMTP Mock (autouse=True) — 모든 테스트에서 실제 메일 발송 차단
 # register API 호출 시 send_verification_email()이 실제 SMTP 서버에
 # 연결하지 않도록 smtplib.SMTP / smtplib.SMTP_SSL을 전역 mock 처리
@@ -36,12 +63,7 @@ def _block_smtp_globally():
 # 테스트 환경 변수 설정 (Config 임포트 전에 설정 → Config.JWT_SECRET_KEY에 반영됨)
 os.environ['JWT_SECRET_KEY'] = 'test-secret-key-do-not-use-in-production'
 
-# Staging DB URL
-STAGING_DB_URL = (
-    'postgresql://postgres:aemQKKvZhddWGlLUsAghiWAlzFkoWugL'
-    '@maglev.proxy.rlwy.net:38813/railway'
-)
-
+# Sprint 39: 테스트 전용 DB 분리 — 운영 DB URL 하드코딩 제거
 
 class TestConfig:
     """테스트 전용 설정"""
@@ -50,11 +72,18 @@ class TestConfig:
     JWT_SECRET_KEY = 'test-secret-key-do-not-use-in-production'
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=24)
 
-    # DB 연결: TEST_DATABASE_URL → DATABASE_URL → Staging DB
-    DATABASE_URL = os.getenv(
-        'TEST_DATABASE_URL',
-        os.getenv('DATABASE_URL', STAGING_DB_URL)
-    )
+    # DB 연결: TEST_DATABASE_URL 필수 (운영 DB fallback 없음)
+    DATABASE_URL = os.getenv('TEST_DATABASE_URL')
+    if not DATABASE_URL:
+        raise RuntimeError(
+            "\n========================================\n"
+            "  TEST_DATABASE_URL 환경변수가 설정되지 않았습니다.\n"
+            "  테스트 전용 DB URL을 설정하세요:\n"
+            "    export TEST_DATABASE_URL='postgresql://...'\n"
+            "  또는 .env.test 파일을 source 하세요:\n"
+            "    source .env.test && pytest\n"
+            "========================================"
+        )
 
 
 def _parse_db_url(db_url: str) -> dict:
@@ -127,11 +156,12 @@ def _split_sql_statements(sql: str) -> list:
 
 
 # Session-scoped: DB 스키마 초기화 (migrations 실행)
+# Sprint 39: 테스트 전용 DB — 백업/복원 불필요, 전체 스키마 클린 초기화
 @pytest.fixture(scope='session')
 def db_schema():
     """
     데이터베이스 스키마 초기화 (session-scoped)
-    migrations/*.sql 파일을 순서대로 실행
+    테스트 전용 DB이므로 전체 DROP 후 migrations/*.sql 순서대로 실행
     deadlock 발생 시 최대 3회 재시도
     """
     import time as _time
@@ -143,293 +173,45 @@ def db_schema():
         return
 
     def _execute_migrations():
-        """스키마 DROP 후 migrations 재실행 (기존 worker 데이터 보존)"""
+        """전체 스키마 DROP 후 migrations 재실행 (테스트 DB 전용 — 안전)"""
         params = _parse_db_url(db_url)
         conn = psycopg2.connect(**params)
         conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
         cursor = conn.cursor()
 
         try:
-            # ── 기존 worker 데이터 백업 (실서비스 계정 보존) ──
-            backed_up_workers = []
-            backed_up_auth_settings = []
-            backed_up_attendance = []
-            backed_up_product_info = []
-            backed_up_qr_registry = []
-            try:
-                cursor.execute(
-                    "SELECT id, name, email, password_hash, role::text, "
-                    "approval_status::text, email_verified, is_manager, is_admin, "
-                    "company, active_role "
-                    "FROM workers"
-                )
-                backed_up_workers = cursor.fetchall()
-                print(f"[db_schema] Backed up {len(backed_up_workers)} workers")
+            # ── 전체 스키마 클린 DROP (테스트 DB이므로 안전) ──
+            cursor.execute("DROP SCHEMA IF EXISTS checklist CASCADE")
+            cursor.execute("DROP SCHEMA IF EXISTS auth CASCADE")
+            cursor.execute("DROP SCHEMA IF EXISTS hr CASCADE")
+            cursor.execute("DROP SCHEMA IF EXISTS plan CASCADE")
+            cursor.execute("DROP SCHEMA IF EXISTS public CASCADE")
+            cursor.execute("CREATE SCHEMA public")
+            print("[db_schema] All schemas dropped (test DB clean slate)")
 
-                # hr.worker_auth_settings 백업 (PIN 설정)
-                cursor.execute(
-                    "SELECT worker_id, pin_hash, biometric_enabled, biometric_type, "
-                    "pin_fail_count, pin_locked_until "
-                    "FROM hr.worker_auth_settings"
-                )
-                backed_up_auth_settings = cursor.fetchall()
-                print(f"[db_schema] Backed up {len(backed_up_auth_settings)} auth settings")
-
-                # hr.partner_attendance 백업 (출퇴근 기록 보존)
-                cursor.execute(
-                    "SELECT id, worker_id, check_type, check_time, method, note, "
-                    "created_at, work_site, product_line "
-                    "FROM hr.partner_attendance"
-                )
-                backed_up_attendance = cursor.fetchall()
-                print(f"[db_schema] Backed up {len(backed_up_attendance)} attendance records")
-                # plan.product_info 백업 (ETL 적재 데이터 보존)
-                cursor.execute(
-                    "SELECT id, serial_number, model, title_number, product_code, "
-                    "sales_order, customer, line, quantity, "
-                    "mech_partner, elec_partner, module_outsourcing, "
-                    "prod_date, mech_start, mech_end, elec_start, elec_end, "
-                    "module_start, pi_start, qi_start, si_start, "
-                    "ship_plan_date, location_qr_id, "
-                    "actual_ship_date, "
-                    "created_at, updated_at "
-                    "FROM plan.product_info"
-                )
-                backed_up_product_info = cursor.fetchall()
-                print(f"[db_schema] Backed up {len(backed_up_product_info)} product_info records")
-
-                # public.qr_registry 백업 (QR ↔ 제품 매핑 보존)
-                cursor.execute(
-                    "SELECT id, qr_doc_id, serial_number, status, "
-                    "issued_at, revoked_at, created_at, updated_at "
-                    "FROM public.qr_registry"
-                )
-                backed_up_qr_registry = cursor.fetchall()
-                print(f"[db_schema] Backed up {len(backed_up_qr_registry)} qr_registry records")
-
-            except Exception as backup_err:
-                print(f"[db_schema] Backup skipped (table may not exist): {backup_err}")
-
-            # 기존 스키마 정리 (재실행 대비) - Sprint 6 + Sprint 11 + Sprint 12 테이블 포함
-            drop_stmts = [
-                # ──────────────────────────────────────────────
-                # ⚠️ 운영 데이터 보존 정책 (절대 DROP 금지):
-                #   - workers: 실서비스 계정 (FK: 거의 모든 테이블 참조)
-                #   - hr 스키마: partner_attendance, worker_auth_settings
-                #   - plan 스키마: product_info (ETL 적재)
-                #   - qr_registry: QR↔제품 매핑
-                # ──────────────────────────────────────────────
-                # "DROP SCHEMA IF EXISTS auth CASCADE",  # ← refresh_tokens 84건 삭제 → 전원 재로그인 강제
-                "DROP SCHEMA IF EXISTS checklist CASCADE",
-                # "DROP SCHEMA IF EXISTS hr CASCADE",  # ← 절대 사용 금지
-                "DROP TABLE IF EXISTS location_history CASCADE",
-                "DROP TABLE IF EXISTS offline_sync_queue CASCADE",
-                "DROP TABLE IF EXISTS app_alert_logs CASCADE",
-                "DROP TABLE IF EXISTS work_pause_log CASCADE",
-                "DROP TABLE IF EXISTS work_completion_log CASCADE",
-                "DROP TABLE IF EXISTS work_start_log CASCADE",
-                "DROP TABLE IF EXISTS completion_status CASCADE",
-                "DROP TABLE IF EXISTS app_task_details CASCADE",
-                "DROP TABLE IF EXISTS email_verification CASCADE",
-                # "DROP TABLE IF EXISTS product_info CASCADE",  # plan.product_info — ETL 적재
-                # "DROP TABLE IF EXISTS admin_settings CASCADE",  # ← 운영 설정값 17건 보존
-                # "DROP TABLE IF EXISTS model_config CASCADE",    # ← 모델 분기 설정 6건 보존
-                # "DROP TABLE IF EXISTS workers CASCADE",  # ← 절대 사용 금지 (FK CASCADE로 hr 전체 삭제됨)
-                # TYPE/ENUM/FUNCTION은 IF NOT EXISTS로 migration에서 처리
-                # "DROP TYPE IF EXISTS alert_type_enum CASCADE",
-                # "DROP TYPE IF EXISTS role_enum CASCADE",
-                # "DROP TYPE IF EXISTS approval_status_enum CASCADE",
-                # "DROP FUNCTION IF EXISTS update_updated_at_column() CASCADE",
-            ]
-            for stmt in drop_stmts:
-                cursor.execute(stmt)
-
-            # migrations 디렉토리
+            # migrations 디렉토리 — 파일명 순서대로 자동 탐색
             migrations_dir = Path(__file__).parent.parent / 'backend' / 'migrations'
 
-            migration_files = [
-                '001_create_workers.sql',
-                '002_create_product_info.sql',
-                '003_create_task_tables.sql',
-                '004_create_alert_tables.sql',
-                '005_create_sync_tables.sql',
-                '006_sprint6_schema_changes.sql',
-                '008_sprint9_pause_resume.sql',
-                '009_sprint11_gst_tasks.sql',
-                '010_sprint12_hr_schema.sql',
-                '017_add_attendance_classification.sql',
-                '018_auth_refresh_tokens.sql',
-                '019_geolocation_settings.sql',
-                '022_add_task_type.sql',
-                '023_fix_cascade_and_task_type.sql',
-                '024_multi_model_support.sql',
-                '025_qr_registry_dual_support.sql',
-            ]
+            migration_files = sorted(migrations_dir.glob('*.sql'))
+            print(f"[db_schema] Found {len(migration_files)} migration files")
 
-            for filename in migration_files:
-                filepath = migrations_dir / filename
-                if filepath.exists():
-                    with open(filepath, 'r', encoding='utf-8') as f:
-                        sql = f.read()
-                    # psycopg2는 cursor.execute에 여러 문장을 한번에 넘기면
-                    # 첫 번째 문장만 실행하므로 파일을 세미콜론으로 분리해서 실행.
-                    # 단, $$...$$로 감싸진 PL/pgSQL 블록 내부 ';'은 분리하지 않도록
-                    # dollar-quote 상태를 추적하여 분리
-                    statements = _split_sql_statements(sql)
-                    for stmt in statements:
-                        # BEGIN/COMMIT/ROLLBACK은 autocommit 모드에서 불필요하므로 건너뜀
-                        # 주석 제거 후 실제 SQL 키워드 확인
-                        non_comment_lines = [
-                            line for line in stmt.splitlines()
-                            if line.strip() and not line.strip().startswith('--')
-                        ]
-                        effective_stmt = ' '.join(non_comment_lines).strip().upper()
-                        if effective_stmt in ('BEGIN', 'COMMIT', 'ROLLBACK'):
-                            continue
-                        try:
-                            cursor.execute(stmt)
-                        except Exception as stmt_err:
-                            # 개별 문장 실패 시 경고만 출력하고 계속 진행
-                            print(f"Warning: Migration stmt failed in {filename}: {stmt_err}")
-            # ── 백업된 worker 데이터 복원 ──
-            if backed_up_workers:
-                restored = 0
-                for row in backed_up_workers:
+            for filepath in migration_files:
+                sql = filepath.read_text(encoding='utf-8')
+                statements = _split_sql_statements(sql)
+                for stmt in statements:
+                    non_comment_lines = [
+                        line for line in stmt.splitlines()
+                        if line.strip() and not line.strip().startswith('--')
+                    ]
+                    effective_stmt = ' '.join(non_comment_lines).strip().upper()
+                    if effective_stmt in ('BEGIN', 'COMMIT', 'ROLLBACK'):
+                        continue
                     try:
-                        cursor.execute(
-                            """
-                            INSERT INTO workers (id, name, email, password_hash, role,
-                                approval_status, email_verified, is_manager, is_admin,
-                                company, active_role)
-                            VALUES (%s, %s, %s, %s, %s::role_enum,
-                                %s::approval_status_enum, %s, %s, %s,
-                                %s, %s)
-                            ON CONFLICT (id) DO NOTHING
-                            """,
-                            row
-                        )
-                        restored += 1
-                    except Exception as restore_err:
-                        print(f"[db_schema] Worker restore failed for id={row[0]}: {restore_err}")
+                        cursor.execute(stmt)
+                    except Exception as stmt_err:
+                        print(f"Warning: Migration stmt failed in {filepath.name}: {stmt_err}")
 
-                # id 시퀀스를 최대값으로 조정
-                cursor.execute(
-                    "SELECT setval('workers_id_seq', COALESCE((SELECT MAX(id) FROM workers), 1))"
-                )
-                print(f"[db_schema] Restored {restored}/{len(backed_up_workers)} workers")
-
-            # hr.worker_auth_settings 복원
-            if backed_up_auth_settings:
-                restored_auth = 0
-                for row in backed_up_auth_settings:
-                    try:
-                        cursor.execute(
-                            """
-                            INSERT INTO hr.worker_auth_settings
-                                (worker_id, pin_hash, biometric_enabled, biometric_type,
-                                 pin_fail_count, pin_locked_until)
-                            VALUES (%s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (worker_id) DO NOTHING
-                            """,
-                            row
-                        )
-                        restored_auth += 1
-                    except Exception as auth_err:
-                        print(f"[db_schema] Auth settings restore failed: {auth_err}")
-                print(f"[db_schema] Restored {restored_auth}/{len(backed_up_auth_settings)} auth settings")
-
-            # hr.partner_attendance 복원
-            if backed_up_attendance:
-                restored_att = 0
-                for row in backed_up_attendance:
-                    try:
-                        cursor.execute(
-                            """
-                            INSERT INTO hr.partner_attendance
-                                (id, worker_id, check_type, check_time, method, note,
-                                 created_at, work_site, product_line)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (id) DO NOTHING
-                            """,
-                            row
-                        )
-                        restored_att += 1
-                    except Exception as att_err:
-                        print(f"[db_schema] Attendance restore failed: {att_err}")
-                # id 시퀀스 조정
-                cursor.execute(
-                    "SELECT setval('hr.partner_attendance_id_seq', "
-                    "COALESCE((SELECT MAX(id) FROM hr.partner_attendance), 1))"
-                )
-                print(f"[db_schema] Restored {restored_att}/{len(backed_up_attendance)} attendance records")
-
-            # plan.product_info 복원 (ETL 적재 데이터)
-            if backed_up_product_info:
-                # actual_ship_date 컬럼 보장 (migration에 없으므로)
-                try:
-                    cursor.execute(
-                        "ALTER TABLE plan.product_info ADD COLUMN IF NOT EXISTS actual_ship_date DATE"
-                    )
-                except Exception:
-                    pass
-                restored_pi = 0
-                for row in backed_up_product_info:
-                    try:
-                        cursor.execute(
-                            """
-                            INSERT INTO plan.product_info
-                                (id, serial_number, model, title_number, product_code,
-                                 sales_order, customer, line, quantity,
-                                 mech_partner, elec_partner, module_outsourcing,
-                                 prod_date, mech_start, mech_end, elec_start, elec_end,
-                                 module_start, pi_start, qi_start, si_start,
-                                 ship_plan_date, location_qr_id,
-                                 actual_ship_date,
-                                 created_at, updated_at)
-                            VALUES (%s, %s, %s, %s, %s,
-                                    %s, %s, %s, %s,
-                                    %s, %s, %s,
-                                    %s, %s, %s, %s, %s,
-                                    %s, %s, %s, %s,
-                                    %s, %s,
-                                    %s,
-                                    %s, %s)
-                            ON CONFLICT (id) DO NOTHING
-                            """,
-                            row
-                        )
-                        restored_pi += 1
-                    except Exception as pi_err:
-                        print(f"[db_schema] product_info restore failed: {pi_err}")
-                cursor.execute(
-                    "SELECT setval('plan.product_info_id_seq', "
-                    "COALESCE((SELECT MAX(id) FROM plan.product_info), 1))"
-                )
-                print(f"[db_schema] Restored {restored_pi}/{len(backed_up_product_info)} product_info records")
-
-            # public.qr_registry 복원 (product_info 다음 — FK 의존성)
-            if backed_up_qr_registry:
-                restored_qr = 0
-                for row in backed_up_qr_registry:
-                    try:
-                        cursor.execute(
-                            """
-                            INSERT INTO public.qr_registry
-                                (id, qr_doc_id, serial_number, status,
-                                 issued_at, revoked_at, created_at, updated_at)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (id) DO NOTHING
-                            """,
-                            row
-                        )
-                        restored_qr += 1
-                    except Exception as qr_err:
-                        print(f"[db_schema] qr_registry restore failed for id={row[0]}: {qr_err}")
-                cursor.execute(
-                    "SELECT setval('qr_registry_id_seq', "
-                    "COALESCE((SELECT MAX(id) FROM public.qr_registry), 1))"
-                )
-                print(f"[db_schema] Restored {restored_qr}/{len(backed_up_qr_registry)} qr_registry records")
+            print("[db_schema] All migrations executed successfully")
 
         finally:
             cursor.close()
@@ -447,6 +229,99 @@ def db_schema():
                 _time.sleep(3)
             else:
                 print(f"Warning: Schema initialization failed after {max_retries} attempts: {e}")
+
+    yield
+
+
+# Sprint 39: 테스트 시드 데이터 (session-scoped) — 매 세션 1회 삽입
+@pytest.fixture(scope='session')
+def seed_test_data(db_schema):
+    """
+    테스트 전용 시드 데이터 삽입 (session-scoped)
+    - admin 1명, manager 1명, 일반 작업자 3명
+    - product_info 3건 (혼재/비혼재 O/N 포함)
+    - qr_registry 매핑 3건
+    - admin_settings 기본값
+
+    db_schema 이후 실행되므로 테이블이 보장됨.
+    기존 function-scoped seed fixtures(seed_test_products, seed_test_workers)와 병존:
+    - session seed: 모든 테스트에서 공유하는 기본 데이터
+    - function seed: 개별 테스트에서 추가 생성하는 테스트별 데이터
+    """
+    from werkzeug.security import generate_password_hash
+
+    db_url = TestConfig.DATABASE_URL
+    params = _parse_db_url(db_url)
+    conn = psycopg2.connect(**params)
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    cursor = conn.cursor()
+
+    _seed_password = generate_password_hash('SeedPass123!')
+
+    try:
+        # ── Workers: admin + manager + 일반 작업자 3명 ──
+        _seed_workers = [
+            ('Seed Admin',       'seed_admin@test.axisos.com',    _seed_password, 'ADMIN', 'GST',    'approved', True,  False, True),
+            ('Seed Manager',     'seed_manager@test.axisos.com',  _seed_password, 'MECH',  'FNI',    'approved', True,  True,  False),
+            ('Seed MECH Worker', 'seed_mech@test.axisos.com',     _seed_password, 'MECH',  'FNI',    'approved', True,  False, False),
+            ('Seed ELEC Worker', 'seed_elec@test.axisos.com',     _seed_password, 'ELEC',  'TMS(E)', 'approved', True,  False, False),
+            ('Seed QI Worker',   'seed_qi@test.axisos.com',       _seed_password, 'QI',    'GST',    'approved', True,  False, False),
+        ]
+        for w in _seed_workers:
+            cursor.execute("""
+                INSERT INTO workers (name, email, password_hash, role, company,
+                    approval_status, email_verified, is_manager, is_admin)
+                VALUES (%s, %s, %s, %s::role_enum, %s,
+                    %s::approval_status_enum, %s, %s, %s)
+                ON CONFLICT (email) DO NOTHING
+            """, (w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8]))
+
+        # ── product_info 3건 ──
+        _seed_products = [
+            # (serial_number, model, sales_order, mech_partner, elec_partner, module_outsourcing)
+            ('SEED-TEST-001', 'GALLANT-50',  '6804', 'FNI',  'P&S',    None),
+            ('SEED-TEST-002', 'GAIA-I',      '6520', 'TMS',  'TMS',    'TMS'),   # 혼재 O/N
+            ('SEED-TEST-003', 'DRAGON-V',    '6905', 'FNI',  'C&A',    None),
+        ]
+        for p in _seed_products:
+            cursor.execute("""
+                INSERT INTO plan.product_info (
+                    serial_number, model, sales_order,
+                    mech_partner, elec_partner, module_outsourcing,
+                    prod_date
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, NOW()::date)
+                ON CONFLICT (serial_number) DO NOTHING
+            """, p)
+
+        # ── qr_registry 매핑 ──
+        for p in _seed_products:
+            cursor.execute("""
+                INSERT INTO public.qr_registry (qr_doc_id, serial_number)
+                VALUES (%s, %s)
+                ON CONFLICT (qr_doc_id) DO NOTHING
+            """, (f'DOC_{p[0]}', p[0]))
+
+        # ── admin_settings 기본값 ──
+        _seed_settings = [
+            ('confirm_mech_enabled', 'true', 'MECH 실적확인 활성화'),
+            ('confirm_elec_enabled', 'true', 'ELEC 실적확인 활성화'),
+            ('confirm_tm_enabled',   'true', 'TM 실적확인 활성화'),
+        ]
+        for s in _seed_settings:
+            cursor.execute("""
+                INSERT INTO admin_settings (setting_key, setting_value, description)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (setting_key) DO NOTHING
+            """, s)
+
+        print("[seed_test_data] Seeded: 5 workers, 3 products, 3 qr_registry, 3 admin_settings")
+
+    except Exception as e:
+        print(f"[seed_test_data] Seed failed: {e}")
+    finally:
+        cursor.close()
+        conn.close()
 
     yield
 
@@ -515,9 +390,10 @@ SPRINT6_ROLE_MAP_REVERSE = {v: k for k, v in SPRINT6_ROLE_MAP.items()}
 
 @pytest.fixture(scope='session')
 def db_existing_roles():
-    """현재 DB의 role_enum 값 목록 반환 (Sprint 6 마이그레이션 여부 확인용)"""
+    """현재 테스트 DB의 role_enum 값 목록 반환"""
     try:
-        conn = psycopg2.connect(STAGING_DB_URL)
+        params = _parse_db_url(TestConfig.DATABASE_URL)
+        conn = psycopg2.connect(**params)
         cur = conn.cursor()
         cur.execute("SELECT unnest(enum_range(NULL::role_enum))")
         roles = {r[0] for r in cur.fetchall()}
@@ -525,31 +401,18 @@ def db_existing_roles():
         conn.close()
         return roles
     except Exception:
-        return {'MM', 'EE', 'TM', 'PI', 'QI', 'SI'}  # 기본값
+        # 테스트 DB는 항상 최신 migration → Sprint 6 이후 role_enum
+        return {'MECH', 'ELEC', 'TM', 'PI', 'QI', 'SI', 'ADMIN'}
 
 
 @pytest.fixture(scope='session')
 def has_sprint6_schema():
     """
     Sprint 6 DB 마이그레이션 완료 여부 확인
-    - completion_status에 mech_completed 컬럼 존재
-    - workers에 company 컬럼 존재
-    - role_enum에 MECH 값 존재
+    테스트 DB는 항상 최신 migration 적용 → True 반환
     """
-    try:
-        conn = psycopg2.connect(STAGING_DB_URL)
-        cur = conn.cursor()
-        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='completion_status' AND column_name='mech_completed'")
-        has_mech_col = cur.fetchone() is not None
-        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='workers' AND column_name='company'")
-        has_company = cur.fetchone() is not None
-        cur.execute("SELECT 1 FROM pg_enum JOIN pg_type ON pg_enum.enumtypid=pg_type.oid WHERE pg_type.typname='role_enum' AND pg_enum.enumlabel='MECH'")
-        has_mech_role = cur.fetchone() is not None
-        cur.close()
-        conn.close()
-        return has_mech_col and has_company and has_mech_role
-    except Exception:
-        return False
+    # 테스트 DB는 전체 migration을 매번 실행하므로 항상 최신 스키마
+    return True
 
 
 # JWT 토큰 생성 헬퍼
@@ -630,34 +493,7 @@ def create_test_worker(db_conn):
 
         cursor = db_conn.cursor()
 
-        # role_enum 실제 값 확인 (Sprint 6 전/후 호환)
-        # InternalError_ (cache lookup failed) 발생 시 별도 연결로 재시도
-        try:
-            cursor.execute("SELECT unnest(enum_range(NULL::role_enum))")
-            existing_roles = {r[0] for r in cursor.fetchall()}
-        except Exception:
-            # 타입 캐시 오염 시 별도 연결로 조회
-            try:
-                db_conn.rollback()
-                cursor.close()
-                cursor = db_conn.cursor()
-                cursor.execute("SELECT unnest(enum_range(NULL::role_enum))")
-                existing_roles = {r[0] for r in cursor.fetchall()}
-            except Exception:
-                # 최후 폴백: Sprint 11 기준 role_enum 값
-                existing_roles = {'MECH', 'ELEC', 'TM', 'PI', 'QI', 'SI', 'ADMIN'}
-
-        # Sprint 6 전/후 role 이름 호환 매핑
-        # Sprint 6 이전 DB: MECH→MM, ELEC→EE, ADMIN→PI (downgrade)
-        # Sprint 6 이후 DB: MM→MECH, EE→ELEC, TM→TM (upgrade)
-        role_fallback_map = {'MECH': 'MM', 'ELEC': 'EE', 'ADMIN': 'PI', 'TMS': 'TM'}
-        role_upgrade_map = {'MM': 'MECH', 'EE': 'ELEC'}  # 구버전 코드가 새 DB에 접근할 때
-        db_role = role
-        if role not in existing_roles:
-            if role in role_fallback_map:
-                db_role = role_fallback_map[role]
-            elif role in role_upgrade_map:
-                db_role = role_upgrade_map[role]
+        # Sprint 39: 테스트 DB는 항상 최신 스키마 — Sprint 6 호환 분기 제거
 
         # 테스트 이메일 잔여 데이터 정리 (이전 실행 잔여 → UniqueViolation 방지)
         if email.endswith('@test.axisos.com') or email.endswith('@axisos.test') or email.endswith('@test.com'):
@@ -674,29 +510,13 @@ def create_test_worker(db_conn):
             cursor.execute("DELETE FROM workers WHERE email = %s", (email,))
             db_conn.commit()
 
-        # company 컬럼 존재 여부 확인 (Sprint 6 마이그레이션 유무)
         cursor.execute("""
-            SELECT column_name FROM information_schema.columns
-            WHERE table_name='workers' AND column_name='company'
-        """)
-        has_company_col = cursor.fetchone() is not None
-
-        if has_company_col:
-            cursor.execute("""
-                INSERT INTO workers (name, email, password_hash, role, company, approval_status,
-                                     email_verified, is_manager, is_admin)
-                VALUES (%s, %s, %s, %s::role_enum, %s, %s::approval_status_enum, %s, %s, %s)
-                RETURNING id
-            """, (name, email, password_hash, db_role, company, approval_status,
-                  email_verified, is_manager, is_admin))
-        else:
-            cursor.execute("""
-                INSERT INTO workers (name, email, password_hash, role, approval_status,
-                                     email_verified, is_manager, is_admin)
-                VALUES (%s, %s, %s, %s::role_enum, %s::approval_status_enum, %s, %s, %s)
-                RETURNING id
-            """, (name, email, password_hash, db_role, approval_status,
-                  email_verified, is_manager, is_admin))
+            INSERT INTO workers (name, email, password_hash, role, company, approval_status,
+                                 email_verified, is_manager, is_admin)
+            VALUES (%s, %s, %s, %s::role_enum, %s, %s::approval_status_enum, %s, %s, %s)
+            RETURNING id
+        """, (name, email, password_hash, role, company, approval_status,
+              email_verified, is_manager, is_admin))
 
         worker_id = cursor.fetchone()[0]
         created_worker_ids.append(worker_id)
@@ -1006,22 +826,16 @@ def create_test_task(db_conn):
         task_detail_id = cursor.fetchone()[0]
         created_task_ids.append(task_detail_id)
 
-        # Sprint 6 Phase C: work_start_log에도 시작 기록 삽입 (멀티 작업자 지원)
+        # Sprint 39: 테스트 DB는 항상 최신 스키마 — work_start_log 항상 존재
         # BE complete_work는 work_start_log를 기반으로 작업자 권한을 확인함
         if started_at is not None:
             cursor.execute("""
-                SELECT table_name FROM information_schema.tables
-                WHERE table_name = 'work_start_log'
-            """)
-            has_start_log = cursor.fetchone() is not None
-            if has_start_log:
-                cursor.execute("""
-                    INSERT INTO work_start_log
-                        (task_id, worker_id, serial_number, qr_doc_id,
-                         task_category, task_id_ref, task_name, started_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                """, (task_detail_id, worker_id, serial_number, qr_doc_id,
-                      task_category, task_id, task_name, started_at))
+                INSERT INTO work_start_log
+                    (task_id, worker_id, serial_number, qr_doc_id,
+                     task_category, task_id_ref, task_name, started_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (task_detail_id, worker_id, serial_number, qr_doc_id,
+                  task_category, task_id, task_name, started_at))
 
         db_conn.commit()
         cursor.close()
@@ -1084,46 +898,22 @@ def create_test_completion_status(db_conn):
 
         cursor = db_conn.cursor()
 
-        # mech_completed vs mm_completed 컬럼 호환성 확인 (Sprint 6 전/후)
+        # Sprint 39: 테스트 DB는 항상 최신 스키마 — mech_completed 컬럼 사용
         cursor.execute("""
-            SELECT column_name FROM information_schema.columns
-            WHERE table_name='completion_status' AND column_name='mech_completed'
-        """)
-        has_mech_col = cursor.fetchone() is not None
-
-        if has_mech_col:
-            cursor.execute("""
-                INSERT INTO completion_status (
-                    serial_number, mech_completed, elec_completed, tm_completed,
-                    pi_completed, qi_completed, si_completed
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (serial_number) DO UPDATE
-                SET mech_completed = EXCLUDED.mech_completed,
-                    elec_completed = EXCLUDED.elec_completed,
-                    tm_completed = EXCLUDED.tm_completed,
-                    pi_completed = EXCLUDED.pi_completed,
-                    qi_completed = EXCLUDED.qi_completed,
-                    si_completed = EXCLUDED.si_completed
-            """, (serial_number, mech_completed, elec_completed, tm_completed,
-                  pi_completed, qi_completed, si_completed))
-        else:
-            # Sprint 6 이전: mm_completed, ee_completed 컬럼 사용
-            cursor.execute("""
-                INSERT INTO completion_status (
-                    serial_number, mm_completed, ee_completed, tm_completed,
-                    pi_completed, qi_completed, si_completed
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (serial_number) DO UPDATE
-                SET mm_completed = EXCLUDED.mm_completed,
-                    ee_completed = EXCLUDED.ee_completed,
-                    tm_completed = EXCLUDED.tm_completed,
-                    pi_completed = EXCLUDED.pi_completed,
-                    qi_completed = EXCLUDED.qi_completed,
-                    si_completed = EXCLUDED.si_completed
-            """, (serial_number, mech_completed, elec_completed, tm_completed,
-                  pi_completed, qi_completed, si_completed))
+            INSERT INTO completion_status (
+                serial_number, mech_completed, elec_completed, tm_completed,
+                pi_completed, qi_completed, si_completed
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (serial_number) DO UPDATE
+            SET mech_completed = EXCLUDED.mech_completed,
+                elec_completed = EXCLUDED.elec_completed,
+                tm_completed = EXCLUDED.tm_completed,
+                pi_completed = EXCLUDED.pi_completed,
+                qi_completed = EXCLUDED.qi_completed,
+                si_completed = EXCLUDED.si_completed
+        """, (serial_number, mech_completed, elec_completed, tm_completed,
+              pi_completed, qi_completed, si_completed))
 
         created_serial_numbers.append(serial_number)
         db_conn.commit()
@@ -1357,7 +1147,7 @@ def create_pending_worker(create_test_worker) -> Dict[str, Any]:
         'email': 'pending_worker@test.axisos.com',
         'password': 'PendingPass123!',
         'name': 'Pending Worker',
-        'role': 'MM',
+        'role': 'MECH',
         'approval_status': 'pending',
         'email_verified': True
     }
@@ -1525,7 +1315,7 @@ def create_test_location_history(db_conn):
 
 # Sprint 7 테스트 제품 데이터 (6개 모델)
 TEST_PRODUCTS = [
-    {"serial_number": "TEST-GAIA-001",    "qr_doc_id": "DOC_TEST-GAIA-001",    "model": "GAIA-I DUAL",    "mech_partner": "FNI",  "elec_partner": "TMS",  "module_outsourcing": "TMS"},
+    {"serial_number": "TEST-GAIA-001",    "qr_doc_id": "DOC_TEST-GAIA-001",    "model": "GAIA-I",         "mech_partner": "FNI",  "elec_partner": "TMS",  "module_outsourcing": "TMS"},
     {"serial_number": "TEST-DRAGON-001",  "qr_doc_id": "DOC_TEST-DRAGON-001",  "model": "DRAGON-V",       "mech_partner": "TMS",  "elec_partner": "P&S",  "module_outsourcing": None},
     {"serial_number": "TEST-GALLANT-001", "qr_doc_id": "DOC_TEST-GALLANT-001", "model": "GALLANT-III",    "mech_partner": "BAT",  "elec_partner": "C&A",  "module_outsourcing": None},
     {"serial_number": "TEST-MITHAS-001",  "qr_doc_id": "DOC_TEST-MITHAS-001",  "model": "MITHAS-II",      "mech_partner": "FNI",  "elec_partner": "P&S",  "module_outsourcing": None},
@@ -1633,51 +1423,23 @@ def seed_test_workers(db_conn):
     cursor = db_conn.cursor()
 
     try:
-        # role_enum 및 company 컬럼 존재 여부 확인 (Sprint 6 호환)
-        cursor.execute("SELECT unnest(enum_range(NULL::role_enum))")
-        existing_roles = {r[0] for r in cursor.fetchall()}
-
-        cursor.execute("""
-            SELECT column_name FROM information_schema.columns
-            WHERE table_name='workers' AND column_name='company'
-        """)
-        has_company_col = cursor.fetchone() is not None
-
-        role_fallback_map = {'MECH': 'MM', 'ELEC': 'EE', 'ADMIN': 'PI'}
-
+        # Sprint 39: 테스트 DB는 항상 최신 스키마 — Sprint 6 호환 분기 제거
         for w in TEST_WORKERS:
             password_hash = generate_password_hash('test1234')
-            db_role = w["role"]
-            if db_role not in existing_roles:
-                db_role = role_fallback_map.get(db_role, db_role)
-
             is_admin = w.get("is_admin", False)
             is_manager = w.get("is_manager", False)
 
-            if has_company_col:
-                cursor.execute("""
-                    INSERT INTO workers (
-                        name, email, password_hash, role, company,
-                        approval_status, email_verified, is_admin, is_manager
-                    )
-                    VALUES (%s, %s, %s, %s::role_enum, %s,
-                            %s::approval_status_enum, %s, %s, %s)
-                    ON CONFLICT (email) DO NOTHING
-                    RETURNING id
-                """, (w["name"], w["email"], password_hash, db_role, w.get("company"),
-                      w["approval_status"], w["email_verified"], is_admin, is_manager))
-            else:
-                cursor.execute("""
-                    INSERT INTO workers (
-                        name, email, password_hash, role,
-                        approval_status, email_verified, is_admin, is_manager
-                    )
-                    VALUES (%s, %s, %s, %s::role_enum,
-                            %s::approval_status_enum, %s, %s, %s)
-                    ON CONFLICT (email) DO NOTHING
-                    RETURNING id
-                """, (w["name"], w["email"], password_hash, db_role,
-                      w["approval_status"], w["email_verified"], is_admin, is_manager))
+            cursor.execute("""
+                INSERT INTO workers (
+                    name, email, password_hash, role, company,
+                    approval_status, email_verified, is_admin, is_manager
+                )
+                VALUES (%s, %s, %s, %s::role_enum, %s,
+                        %s::approval_status_enum, %s, %s, %s)
+                ON CONFLICT (email) DO NOTHING
+                RETURNING id
+            """, (w["name"], w["email"], password_hash, w["role"], w.get("company"),
+                  w["approval_status"], w["email_verified"], is_admin, is_manager))
 
             row = cursor.fetchone()
             worker_id = row[0] if row else None
@@ -1712,35 +1474,10 @@ def seed_test_workers(db_conn):
 def has_sprint9_schema():
     """
     Sprint 9 DB 마이그레이션 완료 여부 확인
-    - app_task_details에 is_paused, total_pause_minutes 컬럼 존재
-    - work_pause_log 테이블 존재
-    - alert_type_enum에 BREAK_TIME_PAUSE, BREAK_TIME_END 값 존재
+    테스트 DB는 항상 최신 migration 적용 → True 반환
     """
-    try:
-        conn = psycopg2.connect(STAGING_DB_URL)
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT column_name FROM information_schema.columns
-            WHERE table_name='app_task_details' AND column_name='is_paused'
-        """)
-        has_is_paused = cur.fetchone() is not None
-        cur.execute("""
-            SELECT table_name FROM information_schema.tables
-            WHERE table_name='work_pause_log'
-        """)
-        has_pause_log = cur.fetchone() is not None
-        cur.execute("""
-            SELECT 1 FROM pg_enum
-            JOIN pg_type ON pg_enum.enumtypid=pg_type.oid
-            WHERE pg_type.typname='alert_type_enum'
-              AND pg_enum.enumlabel='BREAK_TIME_PAUSE'
-        """)
-        has_break_alert = cur.fetchone() is not None
-        cur.close()
-        conn.close()
-        return has_is_paused and has_pause_log and has_break_alert
-    except Exception:
-        return False
+    # Sprint 39: 테스트 DB는 전체 migration을 매번 실행하므로 항상 최신 스키마
+    return True
 
 
 @pytest.fixture
@@ -1771,17 +1508,7 @@ def create_test_pause_log(db_conn):
 
         cursor = db_conn.cursor()
 
-        # work_pause_log 테이블 존재 확인 (Sprint 9 마이그레이션 전/후 호환)
-        cursor.execute("""
-            SELECT table_name FROM information_schema.tables
-            WHERE table_name = 'work_pause_log'
-        """)
-        has_pause_log = cursor.fetchone() is not None
-
-        if not has_pause_log:
-            cursor.close()
-            return 999
-
+        # Sprint 39: 테스트 DB는 항상 최신 스키마 — work_pause_log 항상 존재
         cursor.execute("""
             INSERT INTO work_pause_log
                 (task_detail_id, worker_id, paused_at, resumed_at,

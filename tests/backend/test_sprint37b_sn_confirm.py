@@ -25,10 +25,24 @@ from datetime import date, timedelta
 _PREFIX = 'SN-SP37B-'
 
 
+# ── Admin 토큰 픽스처 ──────────────────────────────
+@pytest.fixture
+def admin_token(db_conn, seed_test_data, get_auth_token):
+    """Seed admin의 실제 worker_id로 JWT 토큰 생성"""
+    cursor = db_conn.cursor()
+    cursor.execute("SELECT id FROM workers WHERE email = 'seed_admin@test.axisos.com'")
+    row = cursor.fetchone()
+    cursor.close()
+    return get_auth_token(row[0], role='ADMIN', is_admin=True)
+
+
 def _insert_product(db_conn, serial_number, qr_doc_id, model, sales_order,
                     mech_start=None, mech_partner='GST', elec_partner='GST',
                     mech_end=None, elec_end=None, module_end=None):
-    """테스트용 제품 + QR 등록 (end 날짜 지원)"""
+    """테스트용 제품 + QR 등록 (end 날짜 지원)
+    주의: plan.product_info에는 module_end 컬럼이 없음.
+    BE가 COALESCE(module_end, module_start)를 사용하므로 module_start에 저장.
+    """
     if mech_start is None:
         mech_start = date.today()
     if mech_end is None:
@@ -37,7 +51,7 @@ def _insert_product(db_conn, serial_number, qr_doc_id, model, sales_order,
     cursor.execute("""
         INSERT INTO plan.product_info
             (serial_number, model, sales_order, mech_start, mech_end,
-             elec_end, module_end, mech_partner, elec_partner)
+             elec_end, module_start, mech_partner, elec_partner)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (serial_number) DO NOTHING
     """, (serial_number, model, sales_order, mech_start, mech_end,
@@ -128,7 +142,7 @@ class TestProcPartnerColTmRemoved:
         assert 'MECH' in _PROC_PARTNER_COL
         assert 'ELEC' in _PROC_PARTNER_COL
 
-    def test_tc_sc_02_tm_no_partner_confirms_mixed_on(self, client, db_conn, get_auth_token):
+    def test_tc_sc_02_tm_no_partner_confirms_mixed_on(self, client, db_conn, get_auth_token, admin_token):
         """TC-SC-02: O/N에 mech_partner TMS(1대)+FNI(4대) — TM에 partner_confirms 없음, sn_confirms만"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -149,7 +163,7 @@ class TestProcPartnerColTmRemoved:
                      'TANK_MODULE', '탱크모듈', completed=True)
 
         iso_week = today.isocalendar()[1]
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
         resp = client.get(
             f'/api/admin/production/performance?view=weekly&week=W{iso_week:02d}&year={today.year}',
             headers={'Authorization': f'Bearer {token}'}
@@ -169,7 +183,7 @@ class TestProcPartnerColTmRemoved:
 
         _cleanup(db_conn)
 
-    def test_tc_sc_03_tm_tms_only_sn_confirms(self, client, db_conn, get_auth_token):
+    def test_tc_sc_03_tm_tms_only_sn_confirms(self, client, db_conn, get_auth_token, admin_token):
         """TC-SC-03: TMS 단독 O/N — TM sn_confirms 정상"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -184,7 +198,7 @@ class TestProcPartnerColTmRemoved:
                      'TANK_MODULE', '탱크모듈', completed=True)
 
         iso_week = today.isocalendar()[1]
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
         resp = client.get(
             f'/api/admin/production/performance?view=weekly&week=W{iso_week:02d}&year={today.year}',
             headers={'Authorization': f'Bearer {token}'}
@@ -290,7 +304,7 @@ class TestIsSnProcessConfirmable:
 class TestBuildOrderItemSnConfirms:
     """_build_order_item() sn_confirms 구조 검증 — API 레벨"""
 
-    def test_tc_sc_08_mech_non_mixed_sn_confirms(self, client, db_conn, get_auth_token):
+    def test_tc_sc_08_mech_non_mixed_sn_confirms(self, client, db_conn, get_auth_token, admin_token):
         """TC-SC-08: MECH 비혼재 O/N 3대 — sn_confirms 길이 3"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -307,7 +321,7 @@ class TestBuildOrderItemSnConfirms:
                          completed=(i <= 2))
 
         iso_week = today.isocalendar()[1]
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
         resp = client.get(
             f'/api/admin/production/performance?view=weekly&week=W{iso_week:02d}&year={today.year}',
             headers={'Authorization': f'Bearer {token}'}
@@ -330,7 +344,7 @@ class TestBuildOrderItemSnConfirms:
 
         _cleanup(db_conn)
 
-    def test_tc_sc_09_mech_mixed_partner_confirms(self, client, db_conn, get_auth_token):
+    def test_tc_sc_09_mech_mixed_partner_confirms(self, client, db_conn, get_auth_token, admin_token):
         """TC-SC-09: MECH 혼재 (TMS 2대+FNI 3대) — partner_confirms 구조"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -354,7 +368,7 @@ class TestBuildOrderItemSnConfirms:
             _insert_task(db_conn, sn, f'DOC-{sn}', 'MECH', 'SELF_INSPECTION', '자주검사', completed=True)
 
         iso_week = today.isocalendar()[1]
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
         resp = client.get(
             f'/api/admin/production/performance?view=weekly&week=W{iso_week:02d}&year={today.year}',
             headers={'Authorization': f'Bearer {token}'}
@@ -378,7 +392,7 @@ class TestBuildOrderItemSnConfirms:
 
         _cleanup(db_conn)
 
-    def test_tc_sc_10_elec_non_mixed_sn_confirms(self, client, db_conn, get_auth_token):
+    def test_tc_sc_10_elec_non_mixed_sn_confirms(self, client, db_conn, get_auth_token, admin_token):
         """TC-SC-10: ELEC 비혼재 O/N — sn_confirms 정상"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -394,7 +408,7 @@ class TestBuildOrderItemSnConfirms:
             _insert_task(db_conn, sn, f'DOC-{sn}', 'ELEC', 'WIRE', '배선', completed=True)
 
         iso_week = today.isocalendar()[1]
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
         resp = client.get(
             f'/api/admin/production/performance?view=weekly&week=W{iso_week:02d}&year={today.year}',
             headers={'Authorization': f'Bearer {token}'}
@@ -412,7 +426,7 @@ class TestBuildOrderItemSnConfirms:
 
         _cleanup(db_conn)
 
-    def test_tc_sc_11_tm_5_sn_confirms(self, client, db_conn, get_auth_token):
+    def test_tc_sc_11_tm_5_sn_confirms(self, client, db_conn, get_auth_token, admin_token):
         """TC-SC-11: TM O/N 5대 — sn_confirms 길이 5, partner_confirms 없음"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -428,7 +442,7 @@ class TestBuildOrderItemSnConfirms:
             _insert_task(db_conn, sn, f'DOC-{sn}', 'TMS', 'TANK_MODULE', '탱크모듈', completed=True)
 
         iso_week = today.isocalendar()[1]
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
         resp = client.get(
             f'/api/admin/production/performance?view=weekly&week=W{iso_week:02d}&year={today.year}',
             headers={'Authorization': f'Bearer {token}'}
@@ -447,7 +461,7 @@ class TestBuildOrderItemSnConfirms:
 
         _cleanup(db_conn)
 
-    def test_tc_sc_12_pi_qi_si_no_sn_confirms(self, client, db_conn, get_auth_token):
+    def test_tc_sc_12_pi_qi_si_no_sn_confirms(self, client, db_conn, get_auth_token, admin_token):
         """TC-SC-12: PI/QI/SI — sn_confirms 없음, 기존 O/N 단위"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -461,7 +475,7 @@ class TestBuildOrderItemSnConfirms:
         _insert_task(db_conn, sn, f'DOC-{sn}', 'PI', 'PRE_INSPECT', '사전검사', completed=True)
 
         iso_week = today.isocalendar()[1]
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
         resp = client.get(
             f'/api/admin/production/performance?view=weekly&week=W{iso_week:02d}&year={today.year}',
             headers={'Authorization': f'Bearer {token}'}
@@ -482,7 +496,7 @@ class TestBuildOrderItemSnConfirms:
 
         _cleanup(db_conn)
 
-    def test_tc_sc_13_all_confirmable_true(self, client, db_conn, get_auth_token):
+    def test_tc_sc_13_all_confirmable_true(self, client, db_conn, get_auth_token, admin_token):
         """TC-SC-13: S/N 5대 모두 완료 → all_confirmable=true"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -498,7 +512,7 @@ class TestBuildOrderItemSnConfirms:
             _insert_task(db_conn, sn, f'DOC-{sn}', 'MECH', 'SELF_INSPECTION', '자주검사', completed=True)
 
         iso_week = today.isocalendar()[1]
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
         resp = client.get(
             f'/api/admin/production/performance?view=weekly&week=W{iso_week:02d}&year={today.year}',
             headers={'Authorization': f'Bearer {token}'}
@@ -515,7 +529,7 @@ class TestBuildOrderItemSnConfirms:
 
         _cleanup(db_conn)
 
-    def test_tc_sc_14_all_confirmable_false_partial(self, client, db_conn, get_auth_token):
+    def test_tc_sc_14_all_confirmable_false_partial(self, client, db_conn, get_auth_token, admin_token):
         """TC-SC-14: S/N 5대 중 3대만 완료 → all_confirmable=false, 완료된 3대 confirmable=true"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -532,7 +546,7 @@ class TestBuildOrderItemSnConfirms:
                          completed=(i <= 3))
 
         iso_week = today.isocalendar()[1]
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
         resp = client.get(
             f'/api/admin/production/performance?view=weekly&week=W{iso_week:02d}&year={today.year}',
             headers={'Authorization': f'Bearer {token}'}
@@ -561,7 +575,7 @@ class TestBuildOrderItemSnConfirms:
 class TestConfirmProductionSerialNumbers:
     """confirm_production() serial_numbers 배열 처리 검증"""
 
-    def test_tc_sc_15_batch_confirm_two_sns(self, client, db_conn, get_auth_token):
+    def test_tc_sc_15_batch_confirm_two_sns(self, client, db_conn, get_auth_token, admin_token):
         """TC-SC-15: serial_numbers=['SN001','SN002'] → 2 rows, count=2"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -577,7 +591,7 @@ class TestConfirmProductionSerialNumbers:
                             mech_end=today)
             _insert_task(db_conn, sn, f'DOC-{sn}', 'MECH', 'SELF_INSPECTION', '자주검사', completed=True)
 
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
         resp = client.post('/api/admin/production/confirm', json={
             'sales_order': f'ON-{_PREFIX}15',
             'process_type': 'MECH',
@@ -593,7 +607,7 @@ class TestConfirmProductionSerialNumbers:
 
         _cleanup(db_conn)
 
-    def test_tc_sc_16_individual_confirm_one_sn(self, client, db_conn, get_auth_token):
+    def test_tc_sc_16_individual_confirm_one_sn(self, client, db_conn, get_auth_token, admin_token):
         """TC-SC-16: serial_numbers=['SN001'] 개별 → 1 row"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -607,7 +621,7 @@ class TestConfirmProductionSerialNumbers:
         _insert_product(db_conn, sn, f'DOC-{sn}', 'DRAGON', f'ON-{_PREFIX}16', mech_end=today)
         _insert_task(db_conn, sn, f'DOC-{sn}', 'MECH', 'SELF_INSPECTION', '자주검사', completed=True)
 
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
         resp = client.post('/api/admin/production/confirm', json={
             'sales_order': f'ON-{_PREFIX}16',
             'process_type': 'MECH',
@@ -622,7 +636,7 @@ class TestConfirmProductionSerialNumbers:
 
         _cleanup(db_conn)
 
-    def test_tc_sc_17_empty_serial_numbers_400(self, client, db_conn, get_auth_token):
+    def test_tc_sc_17_empty_serial_numbers_400(self, client, db_conn, get_auth_token, admin_token):
         """TC-SC-17: serial_numbers 빈 배열 → 400"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -630,7 +644,7 @@ class TestConfirmProductionSerialNumbers:
         today = date.today()
         iso_week = today.isocalendar()[1]
 
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
         resp = client.post('/api/admin/production/confirm', json={
             'sales_order': f'ON-{_PREFIX}17',
             'process_type': 'MECH',
@@ -641,7 +655,7 @@ class TestConfirmProductionSerialNumbers:
 
         assert resp.status_code == 400
 
-    def test_tc_sc_18_not_confirmable_sn_400(self, client, db_conn, get_auth_token):
+    def test_tc_sc_18_not_confirmable_sn_400(self, client, db_conn, get_auth_token, admin_token):
         """TC-SC-18: serial_numbers에 미완료 S/N 포함 → 400 + 해당 S/N 명시"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -659,7 +673,7 @@ class TestConfirmProductionSerialNumbers:
         _insert_task(db_conn, sn1, f'DOC-{sn1}', 'MECH', 'SELF_INSPECTION', '자주검사', completed=True)
         _insert_task(db_conn, sn2, f'DOC-{sn2}', 'MECH', 'SELF_INSPECTION', '자주검사', completed=False)
 
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
         resp = client.post('/api/admin/production/confirm', json={
             'sales_order': f'ON-{_PREFIX}18',
             'process_type': 'MECH',
@@ -675,7 +689,7 @@ class TestConfirmProductionSerialNumbers:
 
         _cleanup(db_conn)
 
-    def test_tc_sc_19_mixed_partner_confirm(self, client, db_conn, get_auth_token):
+    def test_tc_sc_19_mixed_partner_confirm(self, client, db_conn, get_auth_token, admin_token):
         """TC-SC-19: MECH 혼재 + partner='TMS' + serial_numbers → TMS S/N만 대상"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -698,7 +712,7 @@ class TestConfirmProductionSerialNumbers:
                             mech_partner='FNI', mech_end=today)
             _insert_task(db_conn, sn, f'DOC-{sn}', 'MECH', 'SELF_INSPECTION', '자주검사', completed=True)
 
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
         resp = client.post('/api/admin/production/confirm', json={
             'sales_order': f'ON-{_PREFIX}19',
             'process_type': 'MECH',
@@ -739,7 +753,7 @@ class TestConfirmProductionSerialNumbers:
 class TestCancelConfirmSerialNumber:
     """cancel_confirm() S/N별 취소 검증"""
 
-    def test_tc_sc_20_cancel_single_sn_keeps_others(self, client, db_conn, get_auth_token):
+    def test_tc_sc_20_cancel_single_sn_keeps_others(self, client, db_conn, get_auth_token, admin_token):
         """TC-SC-20: S/N별 취소 → 해당 S/N만 soft delete, 다른 S/N 유지"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -754,7 +768,7 @@ class TestCancelConfirmSerialNumber:
             _insert_product(db_conn, sn, f'DOC-{sn}', 'DRAGON', f'ON-{_PREFIX}20', mech_end=today)
             _insert_task(db_conn, sn, f'DOC-{sn}', 'MECH', 'SELF_INSPECTION', '자주검사', completed=True)
 
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
 
         # 2대 일괄 확인
         resp = client.post('/api/admin/production/confirm', json={
@@ -793,7 +807,7 @@ class TestCancelConfirmSerialNumber:
 
         _cleanup(db_conn)
 
-    def test_tc_sc_21_cancel_returning_serial_number(self, client, db_conn, get_auth_token):
+    def test_tc_sc_21_cancel_returning_serial_number(self, client, db_conn, get_auth_token, admin_token):
         """TC-SC-21: RETURNING에 serial_number 포함 확인"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -807,7 +821,7 @@ class TestCancelConfirmSerialNumber:
         _insert_product(db_conn, sn, f'DOC-{sn}', 'DRAGON', f'ON-{_PREFIX}21', mech_end=today)
         _insert_task(db_conn, sn, f'DOC-{sn}', 'MECH', 'SELF_INSPECTION', '자주검사', completed=True)
 
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
 
         resp = client.post('/api/admin/production/confirm', json={
             'sales_order': f'ON-{_PREFIX}21',
@@ -843,7 +857,7 @@ class TestCancelConfirmSerialNumber:
 class TestGetPerformanceEndDates:
     """get_performance() end 날짜 포함 + confirms dict 키 검증"""
 
-    def test_tc_sc_22_sns_detail_end_dates(self, client, db_conn, get_auth_token):
+    def test_tc_sc_22_sns_detail_end_dates(self, client, db_conn, get_auth_token, admin_token):
         """TC-SC-22: sns_detail에 mech_end, elec_end, module_end 포함"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -858,7 +872,7 @@ class TestGetPerformanceEndDates:
         _insert_task(db_conn, sn, f'DOC-{sn}', 'MECH', 'SELF_INSPECTION', '자주검사', completed=True)
 
         iso_week = today.isocalendar()[1]
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
         resp = client.get(
             f'/api/admin/production/performance?view=weekly&week=W{iso_week:02d}&year={today.year}',
             headers={'Authorization': f'Bearer {token}'}
@@ -879,7 +893,7 @@ class TestGetPerformanceEndDates:
 
         _cleanup(db_conn)
 
-    def test_tc_sc_23_confirms_dict_key_format(self, client, db_conn, get_auth_token):
+    def test_tc_sc_23_confirms_dict_key_format(self, client, db_conn, get_auth_token, admin_token):
         """TC-SC-23: confirms dict 키 — {so}:{proc}:{partner}:{sn} 형식"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -893,7 +907,7 @@ class TestGetPerformanceEndDates:
         _insert_product(db_conn, sn, f'DOC-{sn}', 'DRAGON', f'ON-{_PREFIX}23', mech_end=today)
         _insert_task(db_conn, sn, f'DOC-{sn}', 'MECH', 'SELF_INSPECTION', '자주검사', completed=True)
 
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
 
         # confirm
         resp = client.post('/api/admin/production/confirm', json={
@@ -922,21 +936,24 @@ class TestGetPerformanceEndDates:
 
         _cleanup(db_conn)
 
-    def test_tc_sc_24_legacy_null_serial_number(self, db_conn):
+    def test_tc_sc_24_legacy_null_serial_number(self, db_conn, seed_test_data):
         """TC-SC-24: 기존 serial_number=NULL 데이터 → dict 키 하위호환"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
 
         _cleanup(db_conn)
 
-        # 레거시 데이터 직접 INSERT (serial_number=NULL)
+        # 레거시 데이터 직접 INSERT (serial_number=NULL) — seed admin의 실제 ID 사용
         cursor = db_conn.cursor()
+        cursor.execute("SELECT id FROM workers WHERE email = 'seed_admin@test.axisos.com'")
+        admin_id = cursor.fetchone()[0]
+
         cursor.execute("""
             INSERT INTO plan.production_confirm
                 (sales_order, process_type, partner, serial_number,
                  confirmed_week, confirmed_month, confirmed_by)
-            VALUES (%s, %s, NULL, '', %s, %s, 819)
-        """, (f'ON-{_PREFIX}24', 'MECH', 'W01', '2026-01'))
+            VALUES (%s, %s, NULL, '', %s, %s, %s)
+        """, (f'ON-{_PREFIX}24', 'MECH', 'W01', '2026-01', admin_id))
         db_conn.commit()
 
         # confirms dict 키 빌드 로직: COALESCE(partner,''), serial_number=''

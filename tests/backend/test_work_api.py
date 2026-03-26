@@ -43,6 +43,18 @@ class TestTaskOperations:
         if db_conn is None:
             pytest.skip("DB 연결 없음")
 
+        # location_qr_required를 false로 설정하여 위치 QR 체크 비활성화
+        # (admin_settings에 이미 true로 설정된 경우 LOCATION_QR_REQUIRED 에러 방지)
+        import json
+        cursor = db_conn.cursor()
+        cursor.execute("""
+            INSERT INTO admin_settings (setting_key, setting_value, description)
+            VALUES ('location_qr_required', 'false'::jsonb, 'test: disable location qr check')
+            ON CONFLICT (setting_key) DO UPDATE SET setting_value = 'false'::jsonb
+        """)
+        db_conn.commit()
+        cursor.close()
+
         cursor = db_conn.cursor()
         cursor.execute("""
             INSERT INTO app_task_details

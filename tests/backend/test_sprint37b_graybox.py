@@ -23,10 +23,24 @@ from datetime import date, timedelta
 _PREFIX = 'SN-SG37B-'
 
 
+# ── Admin 토큰 픽스처 ──────────────────────────────
+@pytest.fixture
+def admin_token(db_conn, seed_test_data, get_auth_token):
+    """Seed admin의 실제 worker_id로 JWT 토큰 생성"""
+    cursor = db_conn.cursor()
+    cursor.execute("SELECT id FROM workers WHERE email = 'seed_admin@test.axisos.com'")
+    row = cursor.fetchone()
+    cursor.close()
+    return get_auth_token(row[0], role='ADMIN', is_admin=True)
+
+
 def _insert_product(db_conn, serial_number, qr_doc_id, model, sales_order,
                     mech_start=None, mech_partner='GST', elec_partner='GST',
                     mech_end=None, elec_end=None, module_end=None):
-    """테스트용 제품 + QR 등록"""
+    """테스트용 제품 + QR 등록
+    주의: plan.product_info에는 module_end 컬럼이 없음.
+    BE가 COALESCE(module_end, module_start)를 사용하므로 module_start에 저장.
+    """
     if mech_start is None:
         mech_start = date.today()
     if mech_end is None:
@@ -35,7 +49,7 @@ def _insert_product(db_conn, serial_number, qr_doc_id, model, sales_order,
     cursor.execute("""
         INSERT INTO plan.product_info
             (serial_number, model, sales_order, mech_start, mech_end,
-             elec_end, module_end, mech_partner, elec_partner)
+             elec_end, module_start, mech_partner, elec_partner)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (serial_number) DO NOTHING
     """, (serial_number, model, sales_order, mech_start, mech_end,
@@ -144,7 +158,7 @@ class TestMigration032Schema:
 class TestE2EFlow:
     """S/N별 confirm → cancel → 재confirm E2E"""
 
-    def test_tc_sg_02_confirm_cancel_reconfirm(self, client, db_conn, get_auth_token):
+    def test_tc_sg_02_confirm_cancel_reconfirm(self, client, db_conn, get_auth_token, admin_token):
         """TC-SG-02: S/N별 confirm → cancel → 재confirm 전체 흐름"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -158,7 +172,7 @@ class TestE2EFlow:
         _insert_product(db_conn, sn, f'DOC-{sn}', 'DRAGON', f'ON-{_PREFIX}SG02', mech_end=today)
         _insert_task(db_conn, sn, f'DOC-{sn}', 'MECH', 'SELF_INSPECTION', '자주검사', completed=True)
 
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
         body = {
             'sales_order': f'ON-{_PREFIX}SG02',
             'process_type': 'MECH',
@@ -205,7 +219,7 @@ class TestE2EFlow:
 
         _cleanup(db_conn)
 
-    def test_tc_sg_03_mixed_on_partial_confirm(self, client, db_conn, get_auth_token):
+    def test_tc_sg_03_mixed_on_partial_confirm(self, client, db_conn, get_auth_token, admin_token):
         """TC-SG-03: 혼재 O/N — TMS 2대 일괄 → FNI 1대 개별 → 응답 검증"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -229,7 +243,7 @@ class TestE2EFlow:
                             mech_partner='FNI', mech_end=today)
             _insert_task(db_conn, sn, f'DOC-{sn}', 'MECH', 'SELF_INSPECTION', '자주검사', completed=True)
 
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
 
         # TMS 2대 일괄확인
         resp1 = client.post('/api/admin/production/confirm', json={
@@ -274,7 +288,7 @@ class TestE2EFlow:
 
         _cleanup(db_conn)
 
-    def test_tc_sg_04_tm_partial_confirm_no_fni(self, client, db_conn, get_auth_token):
+    def test_tc_sg_04_tm_partial_confirm_no_fni(self, client, db_conn, get_auth_token, admin_token):
         """TC-SG-04: TM 5대 중 3대 확인 → 3대 confirmed + 2대 미확인 + FNI 미포함"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -297,7 +311,7 @@ class TestE2EFlow:
                             mech_partner='FNI', mech_end=today)
             # FNI S/N에는 TMS tasks 없음 → TM에 안 나타남
 
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
 
         # TM 3대 개별확인
         resp = client.post('/api/admin/production/confirm', json={
@@ -337,7 +351,7 @@ class TestE2EFlow:
 class TestDuplicateConfirm:
     """duplicate INSERT unique constraint 처리"""
 
-    def test_tc_sg_05_duplicate_confirm_409(self, client, db_conn, get_auth_token):
+    def test_tc_sg_05_duplicate_confirm_409(self, client, db_conn, get_auth_token, admin_token):
         """TC-SG-05: 동일 sales_order+process_type+partner+serial_number → 409"""
         if not db_conn:
             pytest.skip("DB 연결 없음")
@@ -351,7 +365,7 @@ class TestDuplicateConfirm:
         _insert_product(db_conn, sn, f'DOC-{sn}', 'DRAGON', f'ON-{_PREFIX}SG05', mech_end=today)
         _insert_task(db_conn, sn, f'DOC-{sn}', 'MECH', 'SELF_INSPECTION', '자주검사', completed=True)
 
-        token = get_auth_token(819, role='ADMIN')
+        token = admin_token
         body = {
             'sales_order': f'ON-{_PREFIX}SG05',
             'process_type': 'MECH',

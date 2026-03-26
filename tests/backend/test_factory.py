@@ -71,17 +71,17 @@ class TestMonthlyDetail:
         assert resp.get_json()['error'] == 'INVALID_MONTH'
 
     def test_md05_per_page_max_limit(self, client, create_test_admin, get_admin_auth_token):
-        """per_page=300 → 200, per_page가 200으로 제한"""
+        """per_page=600 → 200, per_page가 500으로 제한"""
         admin = create_test_admin
         token = get_admin_auth_token(admin['id'])
 
         resp = client.get(
-            '/api/admin/factory/monthly-detail?per_page=300',
+            '/api/admin/factory/monthly-detail?per_page=600',
             headers={'Authorization': f'Bearer {token}'}
         )
         assert resp.status_code == 200
         data = resp.get_json()
-        assert data['per_page'] == 200
+        assert data['per_page'] == 500
 
     def test_md06_pagination_page2(self, client, create_test_admin, get_admin_auth_token):
         """page=2, per_page=5 → 200, offset 올바른지 확인"""

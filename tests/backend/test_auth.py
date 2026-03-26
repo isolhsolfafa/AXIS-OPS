@@ -96,7 +96,7 @@ class TestWorkerRegistration:
         - Error message: "이메일이 이미 등록되어 있습니다"
         - No new worker created
         """
-        role_name = 'ELEC' if 'ELEC' in db_existing_roles else 'EE'
+        role_name = 'ELEC'
         payload = {
             'name': '중복 작업자',
             'email': approved_worker['email'],  # 기존 워커 이메일 사용

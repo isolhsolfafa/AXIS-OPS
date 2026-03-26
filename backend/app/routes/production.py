@@ -435,18 +435,16 @@ def get_performance() -> Tuple[Dict[str, Any], int]:
         cur = conn.cursor()
 
         # 1. 대상 제품 조회 (공정 종료일 기준 — 해당 기간에 어떤 공정이든 완료되는 O/N)
-        # mech_end, elec_end, module_end 중 하나라도 기간 내 → 표시
-        # module_end NULL인 경우 module_start fallback (ETL 미적재 과도기)
+        # mech_end, elec_end, module_start 중 하나라도 기간 내 → 표시
         cur.execute("""
             SELECT p.sales_order, p.serial_number, p.model,
                    p.mech_partner, p.elec_partner, p.line,
                    p.mech_end, p.elec_end,
-                   COALESCE(p.module_end, p.module_start) AS module_end
+                   p.module_start AS module_end
             FROM plan.product_info p
             WHERE (p.mech_end >= %s AND p.mech_end < %s)
                OR (p.elec_end >= %s AND p.elec_end < %s)
-               OR (COALESCE(p.module_end, p.module_start) >= %s
-                   AND COALESCE(p.module_end, p.module_start) < %s)
+               OR (p.module_start >= %s AND p.module_start < %s)
             ORDER BY p.sales_order, p.serial_number
         """, (start_date, end_date, start_date, end_date, start_date, end_date))
         product_rows = cur.fetchall()

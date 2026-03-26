@@ -766,24 +766,30 @@ class TestRefreshTokenLifecycle:
 
     def test_multiple_refresh_tokens_valid(self, client, approved_worker):
         """
-        같은 작업자로 2번 로그인 시 두 refresh_token 모두 유효한지 확인
+        같은 작업자로 서로 다른 기기에서 2번 로그인 시 두 refresh_token 모두 유효한지 확인
 
         시나리오:
-        1. 동일 worker로 1차 로그인 → refresh_token_1 획득
-        2. 동일 worker로 2차 로그인 → refresh_token_2 획득
-        3. refresh_token_1으로 /api/auth/refresh 성공 확인
-        4. refresh_token_2으로 /api/auth/refresh 성공 확인
+        1. 동일 worker로 device-A에서 1차 로그인 → refresh_token_1 획득
+        2. 동일 worker로 device-B에서 2차 로그인 → refresh_token_2 획득
+        3. refresh_token_1으로 /api/auth/refresh 성공 확인 (device-A)
+        4. refresh_token_2으로 /api/auth/refresh 성공 확인 (device-B)
+
+        Note: DB 기반 토큰 관리에서 같은 device_id로 재로그인 시 기존 토큰이 revoked됨.
+              다른 device_id(device-A/B)를 사용하면 두 토큰이 각자 독립적으로 유효.
 
         Expected:
-        - 두 refresh_token 모두 200 반환 (서버에서 상태 저장 없이 JWT 검증만)
+        - 두 refresh_token 모두 200 반환
         """
-        login_payload = {
-            'email': approved_worker['email'],
-            'password': approved_worker['password']
-        }
+        import time as _time
 
-        # Step 1: 1차 로그인
-        response_1 = client.post('/api/auth/login', json=login_payload)
+        ts = int(_time.time() * 1000)
+
+        # Step 1: 1차 로그인 (device-A)
+        response_1 = client.post('/api/auth/login', json={
+            'email': approved_worker['email'],
+            'password': approved_worker['password'],
+            'device_id': f'test-device-A-{ts}',
+        })
         assert response_1.status_code == 200
         data_1 = response_1.get_json()
 
@@ -792,19 +798,21 @@ class TestRefreshTokenLifecycle:
 
         refresh_token_1 = data_1['refresh_token']
 
-        # Step 2: 2차 로그인
-        response_2 = client.post('/api/auth/login', json=login_payload)
+        # Step 2: 2차 로그인 (device-B — 다른 기기)
+        # device_id가 다르므로 기존 token_1은 revoked되지 않음
+        response_2 = client.post('/api/auth/login', json={
+            'email': approved_worker['email'],
+            'password': approved_worker['password'],
+            'device_id': f'test-device-B-{ts}',
+        })
         assert response_2.status_code == 200
         data_2 = response_2.get_json()
         refresh_token_2 = data_2['refresh_token']
 
-        # 두 토큰은 서로 다름 (iat timestamp 차이로 인해)
-        # 동일할 수도 있으므로 assert하지 않음
-
-        # Step 3: refresh_token_1 유효성 확인
+        # Step 3: refresh_token_1 유효성 확인 (device-A)
         refresh_resp_1 = client.post(
             '/api/auth/refresh',
-            json={'refresh_token': refresh_token_1}
+            json={'refresh_token': refresh_token_1, 'device_id': f'test-device-A-{ts}'}
         )
 
         if refresh_resp_1.status_code == 404:
@@ -814,10 +822,10 @@ class TestRefreshTokenLifecycle:
             f"1차 refresh_token 사용 실패: {refresh_resp_1.get_json()}"
         assert 'access_token' in refresh_resp_1.get_json()
 
-        # Step 4: refresh_token_2 유효성 확인
+        # Step 4: refresh_token_2 유효성 확인 (device-B)
         refresh_resp_2 = client.post(
             '/api/auth/refresh',
-            json={'refresh_token': refresh_token_2}
+            json={'refresh_token': refresh_token_2, 'device_id': f'test-device-B-{ts}'}
         )
 
         assert refresh_resp_2.status_code == 200, \

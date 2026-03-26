@@ -61,20 +61,38 @@ def lq_worker(create_test_worker, get_auth_token):
 
 
 def _create_task_with_location_qr(
-    db_conn, worker_id, suffix, location_qr_verified=False
+    db_conn, worker_id, suffix, location_qr_verified=False,
+    set_location_qr_id=False
 ):
-    """location_qr_verified 플래그가 설정된 Task 생성 헬퍼"""
+    """location_qr_verified 플래그가 설정된 Task 생성 헬퍼
+
+    Args:
+        db_conn: DB 연결
+        worker_id: 작업자 ID
+        suffix: 고유 접미사
+        location_qr_verified: task.location_qr_verified 값
+        set_location_qr_id: True면 product_info.location_qr_id를 설정하여
+                            BE의 location_qr_required 체크를 통과시킴
+    """
     qr_doc_id = f'DOC-LQ-{suffix}'
     serial_number = f'SN-LQ-{suffix}'
+    location_qr_id = f'LOC-QR-{suffix}' if set_location_qr_id else None
 
     cursor = db_conn.cursor()
 
     # product_info + qr_registry
-    cursor.execute("""
-        INSERT INTO plan.product_info (serial_number, model, mech_partner)
-        VALUES (%s, 'GALLANT-50', 'FNI')
-        ON CONFLICT (serial_number) DO NOTHING
-    """, (serial_number,))
+    if location_qr_id:
+        cursor.execute("""
+            INSERT INTO plan.product_info (serial_number, model, mech_partner, location_qr_id)
+            VALUES (%s, 'GALLANT-50', 'FNI', %s)
+            ON CONFLICT (serial_number) DO UPDATE SET location_qr_id = EXCLUDED.location_qr_id
+        """, (serial_number, location_qr_id))
+    else:
+        cursor.execute("""
+            INSERT INTO plan.product_info (serial_number, model, mech_partner)
+            VALUES (%s, 'GALLANT-50', 'FNI')
+            ON CONFLICT (serial_number) DO NOTHING
+        """, (serial_number,))
     cursor.execute("""
         INSERT INTO public.qr_registry (qr_doc_id, serial_number)
         VALUES (%s, %s) ON CONFLICT (qr_doc_id) DO NOTHING
@@ -160,7 +178,11 @@ class TestLocationQrRequired:
         self, client, app, lq_worker, db_conn
     ):
         """
-        TC-LQ-02: location_qr_required=True + location_qr_verified=True → 200
+        TC-LQ-02: location_qr_required=True + location_qr_id 등록됨 → 200
+
+        BE 구현에서 location_qr_required 체크는 task.location_qr_verified가 아닌
+        product.location_qr_id가 존재하는지를 확인함 (BUG-11 Fix).
+        따라서 product_info.location_qr_id를 설정해야 200 응답을 받을 수 있음.
 
         Expected:
         - HTTP 200 (작업 시작 성공)
@@ -170,8 +192,11 @@ class TestLocationQrRequired:
         _set_admin_setting(db_conn, 'location_qr_required', True)
 
         try:
+            # set_location_qr_id=True: product_info.location_qr_id 설정 → 체크 통과
             task_id = _create_task_with_location_qr(
-                db_conn, lq_worker['id'], suffix, location_qr_verified=True
+                db_conn, lq_worker['id'], suffix,
+                location_qr_verified=True,
+                set_location_qr_id=True
             )
 
             response = client.post(

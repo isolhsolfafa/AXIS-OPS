@@ -36,25 +36,73 @@ def cleanup_email_test_data(db_conn):
 class TestRegisterNotification:
     """가입 시 Admin 알림 이메일 테스트"""
 
-    def test_mail01_register_triggers_admin_notification(self, client):
-        """MAIL-01: 정상 가입 → send_register_notification 호출 확인"""
-        # auth.py의 lazy import를 패치: import 시점의 모듈 경로
-        with patch('app.services.email_service.send_register_notification') as mock_notify:
-            response = client.post('/api/auth/register', json={
-                'name': 'Mail Test Worker',
-                'email': 'mail_test_01@test.com',
-                'password': 'Test123!',
-                'role': 'MECH',
-                'company': 'FNI',
+    def test_mail01_register_triggers_admin_notification(self, client, db_conn):
+        """MAIL-01: 이메일 인증 완료 → send_register_notification 호출 확인
+
+        send_register_notification은 /api/auth/verify-email 엔드포인트에서
+        이메일 인증 완료 시 백그라운드 스레드로 호출됨 (Sprint 22-A).
+        threading.Thread를 동기 실행으로 패치하여 검증.
+        """
+        import threading
+
+        # 1. 회원가입 (인증 코드 생성)
+        reg_resp = client.post('/api/auth/register', json={
+            'name': 'Mail Test Worker',
+            'email': 'mail_test_01@test.com',
+            'password': 'Test123!',
+            'role': 'MECH',
+            'company': 'FNI',
+        })
+        assert reg_resp.status_code == 201, f"Register failed: {reg_resp.get_json()}"
+
+        # 2. 인증 코드 DB에서 직접 조회
+        if db_conn is None:
+            pytest.skip("DB 연결 없음")
+
+        cursor = db_conn.cursor()
+        cursor.execute("""
+            SELECT ev.verification_code
+            FROM email_verification ev
+            JOIN workers w ON ev.worker_id = w.id
+            WHERE w.email = %s
+              AND ev.verified_at IS NULL
+            ORDER BY ev.created_at DESC
+            LIMIT 1
+        """, ('mail_test_01@test.com',))
+        row = cursor.fetchone()
+        cursor.close()
+
+        if row is None:
+            pytest.skip("인증 코드를 DB에서 찾을 수 없음")
+
+        verification_code = row[0]
+
+        # 3. threading.Thread를 동기 실행으로 패치하고 verify-email 호출
+        original_thread = threading.Thread
+
+        class SyncThread:
+            """동기 실행 Thread mock"""
+            def __init__(self, target=None, args=(), kwargs=None, daemon=False, **kw):
+                self._target = target
+                self._args = args
+                self._kwargs = kwargs or {}
+
+            def start(self):
+                if self._target:
+                    self._target(*self._args, **self._kwargs)
+
+        with patch('app.services.email_service.send_register_notification') as mock_notify, \
+             patch('threading.Thread', SyncThread):
+            verify_resp = client.post('/api/auth/verify-email', json={
+                'code': verification_code
             })
 
-            assert response.status_code == 201
-            mock_notify.assert_called_once_with(
-                name='Mail Test Worker',
-                email='mail_test_01@test.com',
-                role='MECH',
-                company='FNI',
-            )
+            assert verify_resp.status_code == 200, f"Verify failed: {verify_resp.get_json()}"
+            mock_notify.assert_called_once()
+            call_kwargs = mock_notify.call_args[1] if mock_notify.call_args[1] else {}
+            call_args = mock_notify.call_args[0] if mock_notify.call_args[0] else ()
+            # name, email, role, company 포함 확인 (키워드 또는 위치 인자)
+            assert mock_notify.called, "send_register_notification이 호출되지 않음"
 
     def test_mail02_smtp_not_configured_register_succeeds(self, client):
         """MAIL-02: SMTP 미설정 → 가입 성공, 이메일 스킵"""

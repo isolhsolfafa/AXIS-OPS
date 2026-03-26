@@ -46,7 +46,7 @@ class TestWorkStartLog:
         # 선행 데이터 생성
         worker_id = create_test_worker(
             email='wsl_create@test.com', password='Test123!',
-            name='WSL Create Worker', role='MM'
+            name='WSL Create Worker', role='MECH'
         )
 
         # app_task_details 레코드 필요 (work_start_log.task_id FK)
@@ -113,7 +113,7 @@ class TestWorkStartLog:
 
         worker_id = create_test_worker(
             email='wsl_getid@test.com', password='Test123!',
-            name='WSL GetId Worker', role='MM'
+            name='WSL GetId Worker', role='MECH'
         )
 
         cursor = db_conn.cursor()
@@ -180,7 +180,7 @@ class TestWorkStartLog:
 
         worker_id = create_test_worker(
             email='wsl_taskid@test.com', password='Test123!',
-            name='WSL TaskId Worker', role='EE'
+            name='WSL TaskId Worker', role='ELEC'
         )
 
         cursor = db_conn.cursor()
@@ -294,7 +294,7 @@ class TestWorkCompletionLog:
 
         worker_id = create_test_worker(
             email='wcl_create@test.com', password='Test123!',
-            name='WCL Create Worker', role='MM'
+            name='WCL Create Worker', role='MECH'
         )
 
         cursor = db_conn.cursor()
@@ -359,7 +359,7 @@ class TestWorkCompletionLog:
 
         worker_id = create_test_worker(
             email='wcl_getid@test.com', password='Test123!',
-            name='WCL GetId Worker', role='EE'
+            name='WCL GetId Worker', role='ELEC'
         )
 
         cursor = db_conn.cursor()
@@ -566,7 +566,7 @@ class TestOfflineSyncQueue:
 
         worker_id = create_test_worker(
             email='osq_create@test.com', password='Test123!',
-            name='OSQ Create Worker', role='MM'
+            name='OSQ Create Worker', role='MECH'
         )
 
         cursor = db_conn.cursor()
@@ -605,7 +605,7 @@ class TestOfflineSyncQueue:
 
         worker_id = create_test_worker(
             email='osq_sync@test.com', password='Test123!',
-            name='OSQ Sync Worker', role='EE'
+            name='OSQ Sync Worker', role='ELEC'
         )
 
         cursor = db_conn.cursor()
@@ -805,7 +805,7 @@ class TestLocationHistory:
 
         worker_id = create_test_worker(
             email='lh_getworker@test.com', password='Test123!',
-            name='LH GetWorker Worker', role='MM'
+            name='LH GetWorker Worker', role='MECH'
         )
 
         cursor = db_conn.cursor()
@@ -1030,7 +1030,7 @@ class TestEmailVerification:
 
         worker_id = create_test_worker(
             email='ev_format@test.com', password='Test123!',
-            name='EV Format Worker', role='MM'
+            name='EV Format Worker', role='MECH'
         )
 
         cursor = db_conn.cursor()
@@ -1070,7 +1070,7 @@ class TestEmailVerification:
 
         worker_id = create_test_worker(
             email='ev_expiry@test.com', password='Test123!',
-            name='EV Expiry Worker', role='EE'
+            name='EV Expiry Worker', role='ELEC'
         )
 
         cursor = db_conn.cursor()
@@ -1122,7 +1122,7 @@ class TestAlertLogReadAt:
 
         worker_id = create_test_worker(
             email='rat_default@test.com', password='Test123!',
-            name='RAT Default Worker', role='MM'
+            name='RAT Default Worker', role='MECH'
         )
 
         alert_id = create_test_alert(
@@ -1156,7 +1156,7 @@ class TestAlertLogReadAt:
 
         worker_id = create_test_worker(
             email='rat_set@test.com', password='Test123!',
-            name='RAT Set Worker', role='EE'
+            name='RAT Set Worker', role='ELEC'
         )
 
         alert_id = create_test_alert(
