@@ -3,7 +3,20 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.1.0 (Sprint 38, 2026-03-27)
+> **현재 버전**: v2.2.0 (Sprint 40-A + #46, 2026-03-27)
+
+---
+
+## #46: 상세뷰 workers 매핑 — task_id fallback (2026-03-27)
+
+**목적**: 상세뷰 API workers 조회에서 task_id FK 불일치 시 작업자 누락 방지 (구조적 취약점 해소)
+
+**수정 파일**:
+- `backend/app/routes/work.py` — workers 일괄 조회: `WHERE task_id = ANY(%s)` → `WHERE serial_number = %s` + 2단계 매핑 (1차 task_id, 2차 task_category+task_id_ref fallback) + `[#46-fallback]` 로그
+
+**신규 테스트**:
+- `tests/backend/test_issue46_workers_mapping.py` — 5건 (TC-46-01~05)
+- **테스트 결과**: 5/5 passed
 
 ---
 
