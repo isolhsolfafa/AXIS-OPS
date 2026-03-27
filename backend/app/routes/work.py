@@ -372,7 +372,9 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
         for item in task_list:
             item['worker_name'] = None
 
-    # workers 배열 일괄 조회 (N+1 방지: task_id 배열로 한 번에 조회)
+    # workers 배열 일괄 조회 (N+1 방지)
+    # #46: task_id 단독 매핑 → serial_number 기준 조회 + task_id/task_ref fallback 복합 매핑
+    # task seed 재실행으로 app_task_details.id가 변경되어도 작업자 누락 방지
     task_db_ids = [item['id'] for item in task_list if item.get('id')]
     workers_by_task: Dict[int, list] = {item['id']: [] for item in task_list if item.get('id')}
     if task_db_ids:
@@ -380,10 +382,19 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
             from app.models.worker import get_db_connection as get_conn
             conn = get_conn()
             cur = conn.cursor()
+
+            # task_list에서 task_id_ref → db_id 매핑 생성 (fallback용)
+            task_ref_to_id = {}
+            for item in task_list:
+                key = (item.get('task_category', ''), item.get('task_id', ''))  # task_id = task_id_ref
+                task_ref_to_id[key] = item['id']
+
             cur.execute(
                 """
                 SELECT
                     wsl.task_id,
+                    wsl.task_category,
+                    wsl.task_id_ref,
                     wsl.worker_id,
                     w.name AS worker_name,
                     wsl.started_at,
@@ -394,24 +405,36 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
                 JOIN workers w ON wsl.worker_id = w.id
                 LEFT JOIN work_completion_log wcl
                     ON wsl.task_id = wcl.task_id AND wsl.worker_id = wcl.worker_id
-                WHERE wsl.task_id = ANY(%s)
-                ORDER BY wsl.task_id, wsl.started_at ASC
+                WHERE wsl.serial_number = %s
+                ORDER BY wsl.task_category, wsl.started_at ASC
                 """,
-                (task_db_ids,)
+                (serial_number,)
             )
             rows = cur.fetchall()
-            # BUG-14: 다중 작업자 표시 디버깅
             for row in rows:
                 tid = row['task_id']
+                worker_entry = {
+                    'worker_id': row['worker_id'],
+                    'worker_name': row['worker_name'],
+                    'started_at': row['started_at'].isoformat() if row['started_at'] else None,
+                    'completed_at': row['completed_at'].isoformat() if row['completed_at'] else None,
+                    'duration_minutes': row['duration_minutes'],
+                    'status': row['status'],
+                }
                 if tid in workers_by_task:
-                    workers_by_task[tid].append({
-                        'worker_id': row['worker_id'],
-                        'worker_name': row['worker_name'],
-                        'started_at': row['started_at'].isoformat() if row['started_at'] else None,
-                        'completed_at': row['completed_at'].isoformat() if row['completed_at'] else None,
-                        'duration_minutes': row['duration_minutes'],
-                        'status': row['status'],
-                    })
+                    # 1차: task_id로 직접 매핑 (정상 경우)
+                    workers_by_task[tid].append(worker_entry)
+                else:
+                    # 2차 fallback: task_category + task_id_ref로 매핑
+                    # (task seed 재실행으로 app_task_details.id가 변경된 경우 대응)
+                    ref_key = (row['task_category'], row['task_id_ref'])
+                    fallback_tid = task_ref_to_id.get(ref_key)
+                    if fallback_tid and fallback_tid in workers_by_task:
+                        workers_by_task[fallback_tid].append(worker_entry)
+                        logger.info(
+                            f"[#46-fallback] worker={row['worker_name']} matched via "
+                            f"ref_key={ref_key} instead of task_id={tid}"
+                        )
             for tid, wlist in workers_by_task.items():
                 if len(wlist) >= 2:
                     names = [w['worker_name'] for w in wlist]
