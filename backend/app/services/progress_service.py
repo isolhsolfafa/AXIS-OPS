@@ -117,17 +117,23 @@ def get_partner_sn_progress(
                 SELECT DISTINCT ON (combined.serial_number)
                        combined.serial_number,
                        w.name AS last_worker,
-                       combined.activity_at AS last_activity_at
+                       combined.activity_at AS last_activity_at,
+                       combined.task_name AS last_task_name,
+                       combined.task_category AS last_task_category
                 FROM (
                     SELECT wsl.serial_number,
                            wsl.worker_id,
-                           wsl.started_at AS activity_at
+                           wsl.started_at AS activity_at,
+                           wsl.task_name,
+                           wsl.task_category
                     FROM work_start_log wsl
                     WHERE wsl.serial_number = ANY(%s)
                     UNION ALL
                     SELECT wcl.serial_number,
                            wcl.worker_id,
-                           wcl.completed_at AS activity_at
+                           wcl.completed_at AS activity_at,
+                           wcl.task_name,
+                           wcl.task_category
                     FROM work_completion_log wcl
                     WHERE wcl.serial_number = ANY(%s)
                       AND wcl.completed_at IS NOT NULL
@@ -140,9 +146,11 @@ def get_partner_sn_progress(
                 last_activity_map[la_row['serial_number']] = {
                     'last_worker': la_row['last_worker'],
                     'last_activity_at': la_row['last_activity_at'],
+                    'last_task_name': la_row['last_task_name'],
+                    'last_task_category': la_row['last_task_category'],
                 }
 
-        # Step 6: products 배열에 last_worker / last_activity_at 필드 추가
+        # Step 6: products 배열에 last_worker / last_activity_at / last_task_name / last_task_category 필드 추가
         for p in products:
             activity = last_activity_map.get(p['serial_number'])
             p['last_worker'] = activity['last_worker'] if activity else None
@@ -150,6 +158,8 @@ def get_partner_sn_progress(
                 activity['last_activity_at'].isoformat()
                 if activity and activity.get('last_activity_at') else None
             )
+            p['last_task_name'] = activity['last_task_name'] if activity else None
+            p['last_task_category'] = activity['last_task_category'] if activity else None
 
         # Summary 계산
         total = len(products)
