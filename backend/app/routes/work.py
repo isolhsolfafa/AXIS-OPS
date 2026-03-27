@@ -19,6 +19,7 @@ from app.models.product_info import get_product_by_serial_number
 from app.models.work_pause_log import create_pause, resume_pause, get_active_pause, get_pauses_by_task
 from app.models.task_detail import set_paused
 from app.models.admin_settings import get_all_settings
+from app.models.worker import get_worker_by_id, deactivate_worker
 from app.db_pool import put_conn
 
 
@@ -965,3 +966,85 @@ def get_today_tags() -> Tuple[Dict[str, Any], int]:
     tags = get_today_tags_by_worker(worker_id)
 
     return jsonify({'tags': tags}), 200
+
+
+@work_bp.route("/work/request-deactivation", methods=["POST"])
+@jwt_required
+def request_deactivation() -> Tuple[Dict[str, Any], int]:
+    """
+    협력사 관리자(manager)가 같은 company 작업자 비활성화 요청 (Sprint 40-C)
+
+    Request Body:
+        {
+            "worker_id": int,
+            "reason": str
+        }
+
+    Headers:
+        Authorization: Bearer {manager_token}
+
+    Returns:
+        200: {"message": "비활성화 요청 완료", "worker_id": N}
+        400: {"error": "INVALID_REQUEST", "message": "..."}
+        403: {"error": "FORBIDDEN", "message": "..."}
+        404: {"error": "WORKER_NOT_FOUND", "message": "..."}
+        422: {"error": "NO_CHANGE", "message": "..."}
+    """
+    data = request.get_json()
+
+    if not data:
+        return jsonify({
+            'error': 'INVALID_REQUEST',
+            'message': '요청 본문이 필요합니다.'
+        }), 400
+
+    worker_id = data.get('worker_id')
+    reason = data.get('reason', '')
+
+    if not worker_id or not isinstance(worker_id, int):
+        return jsonify({
+            'error': 'INVALID_REQUEST',
+            'message': 'worker_id(int)가 필요합니다.'
+        }), 400
+
+    # 요청자 확인 (manager 체크)
+    requester_id = g.worker_id
+    requester = get_worker_by_id(requester_id)
+
+    if not requester or not requester.is_manager:
+        return jsonify({
+            'error': 'FORBIDDEN',
+            'message': '협력사 관리자만 비활성화 요청을 할 수 있습니다.'
+        }), 403
+
+    # 대상 사용자 확인
+    target = get_worker_by_id(worker_id)
+    if not target:
+        return jsonify({
+            'error': 'WORKER_NOT_FOUND',
+            'message': '해당 사용자를 찾을 수 없습니다.'
+        }), 404
+
+    # 같은 company인지 확인
+    if target.company != requester.company:
+        return jsonify({
+            'error': 'FORBIDDEN',
+            'message': '같은 소속 회사의 작업자만 비활성화할 수 있습니다.'
+        }), 403
+
+    success = deactivate_worker(worker_id)
+
+    if not success:
+        return jsonify({
+            'error': 'NO_CHANGE',
+            'message': '이미 비활성화된 사용자이거나 변경에 실패했습니다.'
+        }), 422
+
+    logger.info(
+        f"Deactivation requested: requester={requester_id}, target={worker_id}, reason={reason}"
+    )
+
+    return jsonify({
+        'message': '비활성화 요청 완료',
+        'worker_id': worker_id,
+    }), 200

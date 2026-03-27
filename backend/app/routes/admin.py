@@ -15,7 +15,10 @@ from collections import defaultdict
 
 from app.config import Config
 from app.middleware.jwt_auth import jwt_required, admin_required, manager_or_admin_required, view_access_required
-from app.models.worker import get_db_connection, update_approval_status, get_worker_by_id
+from app.models.worker import (
+    get_db_connection, update_approval_status, get_worker_by_id,
+    get_inactive_workers, get_deactivated_workers, deactivate_worker, reactivate_worker,
+)
 from app.models.admin_settings import get_all_settings, update_setting
 from app.services.alert_service import create_and_broadcast_alert
 
@@ -2183,3 +2186,167 @@ def get_etl_changes() -> Tuple[Dict[str, Any], int]:
     finally:
         if conn:
             put_conn(conn)
+
+
+# ─── Sprint 40-C: 비활성 사용자 관리 API ────────────────────────────────────
+
+
+@admin_bp.route("/inactive-workers", methods=["GET"])
+@jwt_required
+@admin_required
+def get_inactive_workers_api() -> Tuple[Dict[str, Any], int]:
+    """
+    30일 이상 미로그인(또는 last_login_at NULL) 사용자 목록 조회 (Sprint 40-C)
+
+    Query Params:
+        days (int, optional): 미로그인 기준 일수 (기본 30)
+
+    Headers:
+        Authorization: Bearer {admin_token}
+
+    Returns:
+        200: {
+            "inactive_workers": [...],
+            "count": N,
+            "threshold_days": 30
+        }
+    """
+    try:
+        days = int(request.args.get('days', 30))
+        if days < 1:
+            days = 30
+    except (ValueError, TypeError):
+        days = 30
+
+    workers = get_inactive_workers(days=days)
+
+    # datetime 직렬화
+    result = []
+    for w in workers:
+        result.append({
+            'id': w['id'],
+            'name': w['name'],
+            'email': w['email'],
+            'role': w['role'],
+            'company': w['company'],
+            'is_active': w['is_active'],
+            'last_login_at': w['last_login_at'].isoformat() if w['last_login_at'] else None,
+            'deactivated_at': w['deactivated_at'].isoformat() if w['deactivated_at'] else None,
+            'created_at': w['created_at'].isoformat() if w['created_at'] else None,
+        })
+
+    return jsonify({
+        'inactive_workers': result,
+        'count': len(result),
+        'threshold_days': days,
+    }), 200
+
+
+@admin_bp.route("/deactivated-workers", methods=["GET"])
+@jwt_required
+@admin_required
+def get_deactivated_workers_api() -> Tuple[Dict[str, Any], int]:
+    """
+    비활성화된 사용자 목록 조회 (Sprint 40-C)
+
+    Headers:
+        Authorization: Bearer {admin_token}
+
+    Returns:
+        200: {
+            "deactivated_workers": [...],
+            "count": N
+        }
+    """
+    workers = get_deactivated_workers()
+
+    result = []
+    for w in workers:
+        result.append({
+            'id': w['id'],
+            'name': w['name'],
+            'email': w['email'],
+            'role': w['role'],
+            'company': w['company'],
+            'last_login_at': w['last_login_at'].isoformat() if w['last_login_at'] else None,
+            'deactivated_at': w['deactivated_at'].isoformat() if w['deactivated_at'] else None,
+            'created_at': w['created_at'].isoformat() if w['created_at'] else None,
+        })
+
+    return jsonify({
+        'deactivated_workers': result,
+        'count': len(result),
+    }), 200
+
+
+@admin_bp.route("/worker-status", methods=["POST"])
+@jwt_required
+@admin_required
+def update_worker_status() -> Tuple[Dict[str, Any], int]:
+    """
+    사용자 활성/비활성 상태 변경 (Sprint 40-C)
+
+    Request Body:
+        {
+            "worker_id": int,
+            "action": "deactivate" | "reactivate"
+        }
+
+    Headers:
+        Authorization: Bearer {admin_token}
+
+    Returns:
+        200: {"message": "...", "worker_id": N, "action": "..."}
+        400: {"error": "INVALID_REQUEST", "message": "..."}
+        404: {"error": "WORKER_NOT_FOUND", "message": "..."}
+        422: {"error": "NO_CHANGE", "message": "..."}
+    """
+    data = request.get_json()
+
+    if not data:
+        return jsonify({
+            'error': 'INVALID_REQUEST',
+            'message': '요청 본문이 필요합니다.'
+        }), 400
+
+    worker_id = data.get('worker_id')
+    action = data.get('action')
+
+    if not worker_id or not isinstance(worker_id, int):
+        return jsonify({
+            'error': 'INVALID_REQUEST',
+            'message': 'worker_id(int)가 필요합니다.'
+        }), 400
+
+    if action not in ('deactivate', 'reactivate'):
+        return jsonify({
+            'error': 'INVALID_REQUEST',
+            'message': 'action은 "deactivate" 또는 "reactivate"여야 합니다.'
+        }), 400
+
+    # 대상 사용자 존재 확인
+    target = get_worker_by_id(worker_id)
+    if not target:
+        return jsonify({
+            'error': 'WORKER_NOT_FOUND',
+            'message': '해당 사용자를 찾을 수 없습니다.'
+        }), 404
+
+    if action == 'deactivate':
+        success = deactivate_worker(worker_id)
+        msg = '비활성화 완료'
+    else:
+        success = reactivate_worker(worker_id)
+        msg = '재활성화 완료'
+
+    if not success:
+        return jsonify({
+            'error': 'NO_CHANGE',
+            'message': '이미 해당 상태이거나 변경에 실패했습니다.'
+        }), 422
+
+    return jsonify({
+        'message': msg,
+        'worker_id': worker_id,
+        'action': action,
+    }), 200

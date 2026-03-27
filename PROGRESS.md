@@ -3,7 +3,25 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.2.0 (Sprint 40-A + #46, 2026-03-27)
+> **현재 버전**: v2.2.0 (Sprint 40-A/C + #46, 2026-03-27)
+
+---
+
+## Sprint 40-C: 비활성 사용자 관리 (2026-03-27)
+
+**목적**: 장기 미로그인 사용자 감지 + soft delete + admin 승인/manager 요청 체계
+
+**신규 파일**:
+- `backend/migrations/040_inactive_user_management.sql` — workers에 is_active, deactivated_at, last_login_at 추가
+- `tests/backend/test_sprint40c_inactive_user.py` — 9건
+
+**수정 파일**:
+- `backend/app/models/worker.py` — Worker 클래스 필드 추가 + 함수 5개 (update_last_login, get_inactive_workers, deactivate_worker, reactivate_worker, get_deactivated_workers)
+- `backend/app/services/auth_service.py` — login: is_active=FALSE → 403 ACCOUNT_DEACTIVATED + last_login_at 갱신
+- `backend/app/routes/admin.py` — API 3개 (inactive-workers, deactivated-workers, worker-status)
+- `backend/app/routes/work.py` — API 1개 (request-deactivation, manager+same company 검증)
+
+**테스트 결과**: 9/9 passed
 
 ---
 

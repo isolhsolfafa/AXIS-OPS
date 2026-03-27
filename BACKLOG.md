@@ -539,17 +539,18 @@ VIEW: 마스터 CRUD (CHECK/INPUT 항목 관리)
   - 활용성 검토 필요: VIEW QR관리 페이지에서 이 정보를 어떻게 활용할지 (필터? 표시만?) 확인 후 진행
   - OPS_API_REQUESTS.md #6에 등록됨
 - ~~**PWA 버전 업데이트 알림 토스트**~~ → ✅ Sprint 26 전체 완료 (Task 1: SW 업데이트 토스트, Task 2~5: UpdateService + UpdateDialog + HomeScreen 연동 — 버전별 공지 팝업 정상 동작 확인)
-- **QR 스캔 UX 개선 3건** (APP FE):
-  - ① QR 스캔 프레임 크기 축소: 전체 사각 프레임이 과도하게 큼. `html5-qrcode` config `qrbox` 사이즈 조정 (Sprint 14에서 정사각형 처리 완료 — 사이즈만 줄이면 됨). BE 변경 없음
-  - ② 직접입력 `DOC_` 자동 접두어: 현재 `DOC_SN` 전체를 수동 입력해야 함. `DOC_` prefix 고정 표시 + 사용자는 S/N만 입력하도록 개선. BE 변경 없음
-  - ③ 작업자별 오늘 태깅한 qr_doc 드롭다운: 직접입력 대신 오늘 태깅 이력에서 선택. `work_start_log`에서 `worker_id` + `started_at >= today` 기준 `DISTINCT qr_doc_id` 조회. **BE 변경 필요** — 오늘 태깅 목록 API 신규 또는 기존 API 확장
-- **테스트 DB 분리**: 현재 `conftest.py`가 Railway 운영 DB(`STAGING_DB_URL`)를 직접 참조. 테스트 전용 PostgreSQL 인스턴스 생성 후 `TEST_DATABASE_URL` 환경변수 분리 필요. 운영 DB 사고 방지 + 백업/복원 로직 단순화 목적
-- **비활성 사용자 자동 삭제 + 협력사 유저 삭제 기능**:
-  - 30일간 로그(app_access_log 등) 미발생 사용자 자동 감지 → 삭제 대상으로 표시
+- ~~**QR 스캔 UX 개선 3건**~~ → ✅ Sprint 40-A 전체 완료 (2026-03-27)
+  - ① QR 프레임 축소: qrbox 200→160, cameraSize 350→240 + BUG-29 수정
+  - ② DOC_/LOC_ 자동접두어: prefixText + validator + submit 결합
+  - ③ 오늘 태깅 드롭다운: BE today-tags API + FE _loadTodayTags() + BUG-25 수정 (ApiService.get() 반환 타입 불일치)
+- ~~**테스트 DB 분리**~~ → ✅ Sprint 39 완료 (2026-03-26). `TEST_DATABASE_URL` 환경변수 분리, `.env.test` 자동 로딩, 운영 DB 하드코딩 제거, Sprint 39-fix regression 118→0 해결
+- **비활성 사용자 자동 삭제 + 협력사 유저 삭제 기능** → 🔶 Sprint 40-C 프롬프트 작성 완료 (2026-03-27), 실행 대기
+  - workers 테이블에 `is_active`, `deactivated_at`, `last_login_at` 컬럼 추가 (Migration 040)
+  - `workers.last_login_at` 기반 30일 미로그인 감지 (app_access_log 30일 보관 한계 회피)
   - 협력사 소속 manager가 자사 유저 삭제 요청 가능
   - **최종 admin 승인 후 삭제** (즉시 삭제 아님 — 승인 플로우 필요)
-  - VIEW 권한 관리 페이지 또는 별도 UI에서 삭제 대기 목록 확인 + 승인/반려
-  - soft delete (is_active=FALSE) vs hard delete 정책 결정 필요
+  - soft delete (is_active=FALSE) 확정
+  - 📋 프롬프트: `AGENT_TEAM_LAUNCH.md` Sprint 40-C 섹션 참조
 
 ---
 
@@ -627,6 +628,7 @@ VIEW: 마스터 CRUD (CHECK/INPUT 항목 관리)
 | 38-B | product/progress API last_task_name + last_task_category 추가 | ✅ 완료 (2026-03-27) | progress_service.py 서브쿼리 확장 + 테스트 4/4 passed (기존 8건 regression 0) |
 | 40-A | QR 스캔 UX 개선 — 프레임 축소 + DOC_ 자동접두어 + 오늘 태깅 드롭다운 | ✅ 완료 (2026-03-27) | BE: today-tags API 5/5 passed. FE: qrbox 160, prefixText, 드롭다운 UI |
 | #46 | 상세뷰 workers 매핑 — task_id fallback + serial_number 기준 조회 | ✅ 완료 (2026-03-27) | work.py 2단계 매핑 (task_id 1차 + category+ref fallback). 테스트 5/5 passed |
+| 40-C | 비활성 사용자 관리 — soft delete + admin 승인 + manager 요청 | ✅ 완료 (2026-03-27) | migration 040 + worker.py 5함수 + auth login is_active 체크 + API 4개. 테스트 9/9 passed |
 | 39 | 테스트 DB 분리 — conftest.py 리팩토링 | ✅ 완료 (2026-03-26) | TEST_DATABASE_URL 환경변수 분리, .env.test 자동 로딩, 운영 DB 하드코딩 제거, seed_test_data fixture, test_sprint39_db_isolation.py 10/10 통과 |
 | 39-fix | Regression 수정 — 118 failed → 0 failed | ✅ 완료 (2026-03-27) | BE: factory.py finishing_plan_end→ship_plan_date, production.py module_end→module_start. TEST: 18개 파일 수정 (MM→MECH, worker_id 819→seed admin, task seed 기대값, GAIA-I DUAL→SINGLE, confirmable→all_confirmable 등). 최종 714 passed / 14 skipped |
 
@@ -635,7 +637,7 @@ VIEW: 마스터 CRUD (CHECK/INPUT 항목 관리)
 ## 🔷 Sprint 40 계획 (병렬 3트랙)
 
 > 등록일: 2026-03-26
-> 상태: Track A 완료 (2026-03-27), Track B/C 대기
+> 상태: Track A/B/C 전체 완료 (2026-03-27)
 > 선행: Sprint 38 ✅ 완료
 
 ### Track A: QR 스캔 UX 개선 3건 (APP FE + BE 1개)
@@ -653,13 +655,16 @@ VIEW: 마스터 CRUD (CHECK/INPUT 항목 관리)
 - Sprint 38의 last_worker/last_activity_at 필드를 FE에서 카드뷰에 연결
 - VIEW FE만 변경 (BE 변경 0건)
 
-### Track C: 비활성 사용자 관리
+### Track C: 비활성 사용자 관리 — 프롬프트 작성 완료 ✅
 
-- BE: `app_access_log` 기반 30일 미로그인 감지 API + 삭제 대기 목록 + admin 승인 API
+- BE: `workers.last_login_at` 기반 30일 미로그인 감지 API + 삭제 대기 목록 + admin 승인 API
 - BE: 협력사 manager 자사 유저 삭제 요청 API
-- VIEW: 권한관리 페이지에 삭제 대기 목록 + 승인/반려 UI
+- VIEW: 권한관리 페이지에 삭제 대기 목록 + 승인/반려 UI (별도 Sprint)
 - soft delete (is_active=FALSE)
 - **최종 admin 승인 후 삭제** (즉시 삭제 아님)
+- Migration 040: workers에 `is_active`, `deactivated_at`, `last_login_at` 컬럼 추가
+- ⚠️ `app_access_log`는 30일 보관 한계 → `workers.last_login_at`으로 판단
+- 📋 프롬프트: `AGENT_TEAM_LAUNCH.md` Sprint 40-C 섹션 참조
 
 ### Sprint 40 이후 대기
 

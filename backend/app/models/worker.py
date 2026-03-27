@@ -3,16 +3,18 @@
 테이블: workers, email_verification
 Sprint 5: EmailVerification dataclass 추가
 Sprint 11: active_role 컬럼 추가 (GST 작업자 역할 전환)
+Sprint 40-C: is_active, last_login_at, deactivated_at 필드 추가
 """
 
 import random
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 import psycopg2
 import psycopg2.extras
+from psycopg2.extras import RealDictCursor
 from psycopg2 import Error as PsycopgError
 
 from ..config import Config
@@ -55,6 +57,9 @@ class Worker:
     updated_at: datetime
     company: Optional[str] = None
     active_role: Optional[str] = None  # Sprint 11: GST 작업자 역할 전환용
+    is_active: bool = True             # Sprint 40-C: 비활성 사용자 관리
+    last_login_at: Optional[datetime] = None   # Sprint 40-C: 마지막 로그인 시각
+    deactivated_at: Optional[datetime] = None  # Sprint 40-C: 비활성화 시각
 
     @staticmethod
     def from_db_row(row: Dict[str, Any]) -> "Worker":
@@ -80,7 +85,10 @@ class Worker:
             created_at=row['created_at'],
             updated_at=row['updated_at'],
             company=row.get('company'),
-            active_role=row.get('active_role')  # Sprint 11
+            active_role=row.get('active_role'),   # Sprint 11
+            is_active=row.get('is_active', True),           # Sprint 40-C
+            last_login_at=row.get('last_login_at'),         # Sprint 40-C
+            deactivated_at=row.get('deactivated_at'),       # Sprint 40-C
         )
 
 
@@ -709,3 +717,160 @@ def mark_code_as_verified(code: str) -> bool:
     finally:
         if conn:
             put_conn(conn)
+
+
+# ─── Sprint 40-C: 비활성 사용자 관리 함수 ───────────────────────────────────
+
+
+def update_last_login(worker_id: int) -> None:
+    """
+    로그인 시 last_login_at 갱신 (Sprint 40-C)
+
+    Args:
+        worker_id: 작업자 ID
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE workers SET last_login_at = NOW() WHERE id = %s",
+                (worker_id,)
+            )
+        conn.commit()
+        logger.debug(f"last_login_at updated: worker_id={worker_id}")
+    except PsycopgError as e:
+        conn.rollback()
+        logger.error(f"Failed to update last_login_at: worker_id={worker_id}, error={e}")
+    finally:
+        put_conn(conn)
+
+
+def get_inactive_workers(days: int = 30) -> list:
+    """
+    last_login_at이 {days}일 이전이거나 NULL인 approved 사용자 목록 (Sprint 40-C)
+
+    is_admin=TRUE인 사용자는 제외.
+
+    Args:
+        days: 미로그인 기준 일수 (기본 30일)
+
+    Returns:
+        비활성 사용자 dict 목록
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, name, email, role, company, is_active,
+                       last_login_at, deactivated_at, created_at
+                FROM workers
+                WHERE approval_status = 'approved'
+                  AND is_admin = FALSE
+                  AND is_active = TRUE
+                  AND (last_login_at < NOW() - INTERVAL '1 day' * %s
+                       OR last_login_at IS NULL)
+                ORDER BY last_login_at ASC NULLS FIRST
+            """, (days,))
+            return [dict(row) for row in cur.fetchall()]
+    except PsycopgError as e:
+        logger.error(f"Failed to get inactive workers: {e}")
+        return []
+    finally:
+        put_conn(conn)
+
+
+def deactivate_worker(worker_id: int) -> bool:
+    """
+    사용자 비활성화 — soft delete (Sprint 40-C)
+
+    is_active=FALSE + deactivated_at 기록.
+    이미 비활성화된 사용자는 업데이트하지 않음.
+
+    Args:
+        worker_id: 작업자 ID
+
+    Returns:
+        성공 시 True, 이미 비활성이거나 미존재 시 False
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE workers
+                SET is_active = FALSE, deactivated_at = NOW()
+                WHERE id = %s AND is_active = TRUE
+                RETURNING id
+            """, (worker_id,))
+            result = cur.fetchone()
+        conn.commit()
+        success = result is not None
+        if success:
+            logger.info(f"Worker deactivated: worker_id={worker_id}")
+        return success
+    except PsycopgError as e:
+        conn.rollback()
+        logger.error(f"Failed to deactivate worker: worker_id={worker_id}, error={e}")
+        return False
+    finally:
+        put_conn(conn)
+
+
+def reactivate_worker(worker_id: int) -> bool:
+    """
+    사용자 재활성화 (Sprint 40-C)
+
+    is_active=TRUE + deactivated_at NULL 처리.
+    이미 활성 상태인 사용자는 업데이트하지 않음.
+
+    Args:
+        worker_id: 작업자 ID
+
+    Returns:
+        성공 시 True, 이미 활성이거나 미존재 시 False
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE workers
+                SET is_active = TRUE, deactivated_at = NULL
+                WHERE id = %s AND is_active = FALSE
+                RETURNING id
+            """, (worker_id,))
+            result = cur.fetchone()
+        conn.commit()
+        success = result is not None
+        if success:
+            logger.info(f"Worker reactivated: worker_id={worker_id}")
+        return success
+    except PsycopgError as e:
+        conn.rollback()
+        logger.error(f"Failed to reactivate worker: worker_id={worker_id}, error={e}")
+        return False
+    finally:
+        put_conn(conn)
+
+
+def get_deactivated_workers() -> list:
+    """
+    is_active=FALSE인 사용자 목록 조회 (Sprint 40-C)
+
+    Returns:
+        비활성화된 사용자 dict 목록
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, name, email, role, company,
+                       last_login_at, deactivated_at, created_at
+                FROM workers
+                WHERE is_active = FALSE
+                ORDER BY deactivated_at DESC
+            """)
+            return [dict(row) for row in cur.fetchall()]
+    except PsycopgError as e:
+        logger.error(f"Failed to get deactivated workers: {e}")
+        return []
+    finally:
+        put_conn(conn)

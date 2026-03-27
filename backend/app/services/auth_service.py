@@ -608,6 +608,13 @@ class AuthService:
                     'message': '가입 승인이 거부되었습니다.'
                 }, 403
 
+            # Sprint 40-C: 비활성 사용자 로그인 거부
+            if not getattr(worker, 'is_active', True):
+                return {
+                    'error': 'ACCOUNT_DEACTIVATED',
+                    'message': '비활성화된 계정입니다. 관리자에게 문의하세요.'
+                }, 403
+
         # JWT 토큰 생성 (access + refresh)
         access_token = self.create_access_token(
             worker_id=worker.id,
@@ -632,6 +639,10 @@ class AuthService:
             f"Login success: worker_id={worker.id}, email={email}, "
             f"role={worker.role}, device_id={device_id}"
         )
+
+        # Sprint 40-C: last_login_at 갱신
+        from app.models.worker import update_last_login
+        update_last_login(worker.id)
 
         return {
             'access_token': access_token,
