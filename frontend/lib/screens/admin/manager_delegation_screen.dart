@@ -85,6 +85,50 @@ class _ManagerDelegationScreenState
     }
   }
 
+  Future<void> _requestDeactivation(int workerId, String workerName) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('비활성화 요청'),
+        content: Text('$workerName 계정을 비활성화 요청하시겠습니까?\n\nAdmin 승인 후 로그인이 차단됩니다.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('취소'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: GxColors.danger),
+            child: const Text('비활성화 요청'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    try {
+      final apiService = ref.read(apiServiceProvider);
+      await apiService.post('/app/work/request-deactivation', data: {
+        'worker_id': workerId,
+        'reason': '관리자 요청 (위임 화면)',
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$workerName 비활성화 요청 완료 (Admin 알림 발송)')),
+        );
+        _loadWorkers(); // 목록 갱신
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('비활성화 요청 실패: $e')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final worker = ref.watch(authProvider).currentWorker;
@@ -234,6 +278,14 @@ class _ManagerDelegationScreenState
                                     : null,
                                 activeTrackColor: const Color(0xFFEDE9FE),
                                 activeThumbColor: const Color(0xFF7C3AED),
+                              ),
+                            // 비활성화 요청 버튼 (Admin 계정 제외)
+                            if (!isTargetAdmin)
+                              IconButton(
+                                icon: const Icon(Icons.person_off, size: 20),
+                                color: GxColors.danger,
+                                tooltip: '비활성화 요청',
+                                onPressed: () => _requestDeactivation(wId, w['name'] ?? ''),
                               ),
                           ],
                         ),

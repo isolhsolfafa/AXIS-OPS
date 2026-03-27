@@ -544,13 +544,15 @@ VIEW: 마스터 CRUD (CHECK/INPUT 항목 관리)
   - ② DOC_/LOC_ 자동접두어: prefixText + validator + submit 결합
   - ③ 오늘 태깅 드롭다운: BE today-tags API + FE _loadTodayTags() + BUG-25 수정 (ApiService.get() 반환 타입 불일치)
 - ~~**테스트 DB 분리**~~ → ✅ Sprint 39 완료 (2026-03-26). `TEST_DATABASE_URL` 환경변수 분리, `.env.test` 자동 로딩, 운영 DB 하드코딩 제거, Sprint 39-fix regression 118→0 해결
-- **비활성 사용자 자동 삭제 + 협력사 유저 삭제 기능** → 🔶 Sprint 40-C 프롬프트 작성 완료 (2026-03-27), 실행 대기
-  - workers 테이블에 `is_active`, `deactivated_at`, `last_login_at` 컬럼 추가 (Migration 040)
-  - `workers.last_login_at` 기반 30일 미로그인 감지 (app_access_log 30일 보관 한계 회피)
-  - 협력사 소속 manager가 자사 유저 삭제 요청 가능
-  - **최종 admin 승인 후 삭제** (즉시 삭제 아님 — 승인 플로우 필요)
-  - soft delete (is_active=FALSE) 확정
-  - 📋 프롬프트: `AGENT_TEAM_LAUNCH.md` Sprint 40-C 섹션 참조
+- ~~**비활성 사용자 자동 삭제 + 협력사 유저 삭제 기능**~~ → ✅ Sprint 40-C 전체 완료 (2026-03-27)
+  - ✅ Migration 040/041: workers에 is_active, deactivated_at, last_login_at + alert_type_enum
+  - ✅ BE: worker.py 5함수 + auth login is_active 체크 + last_login_at 갱신
+  - ✅ BE: admin API 3개 + manager request-deactivation API 1개
+  - ✅ BE: 비활성화 요청 시 admin 앱 알림 + 이메일 알림 동시 발송
+  - ✅ FE: Admin 옵션 — 비활성 사용자 관리 섹션 (30일 미로그인 + 비활성화/재활성화)
+  - ✅ FE: Admin 옵션 레이아웃 8섹션 재배치
+  - 🔲 FE: Manager 위임 화면 — 자사 유저 "비활성화 요청" 버튼 (미구현)
+  - 테스트 9/9 passed
 
 ---
 
