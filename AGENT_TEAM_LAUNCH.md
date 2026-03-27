@@ -16971,3 +16971,518 @@ git diff frontend/lib/screens/qr/qr_scan_screen.dart | grep "^[+-]" | grep -v "^
 git diff frontend/lib/services/
 # 기대 결과: 아무것도 없음 (qr_scanner_web.dart 변경 금지)
 ```
+
+---
+
+## #46 진단: 상세뷰 workers 누락 — task_id 매핑 불일치 (VIEW OPS_API_REQUESTS #46)
+
+> **증상**: 카드뷰에서는 "박새벽 · 배선 포설" 정상 표시, 상세뷰에서는 박새벽 누락.
+>
+> **근본 원인 가설**: 두 API의 workers 조회 기준이 다름.
+> - 카드뷰 (`progress_service.py`): `WHERE serial_number = ANY(%s)` → S/N 기준 전체 매칭 ✅
+> - 상세뷰 (`work.py` 라인 397): `WHERE wsl.task_id = ANY(%s)` → `app_task_details.id` FK 기준 매칭
+>
+> `work_start_log.task_id`가 현재 `app_task_details`의 id와 매핑되지 않으면 workers 쿼리에서 누락됨.
+
+### Phase 1: 진단 SQL (Railway DB에서 실행)
+
+아래 3개 쿼리를 순서대로 실행하여 원인을 확정한다.
+
+```sql
+-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+-- 진단 1) GBWS-6905의 ELEC app_task_details 레코드 확인
+-- → 기대: 배선 포설 등 ELEC task가 존재하고 id값 확인
+-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SELECT id, task_id, task_name, task_category, serial_number, worker_id, started_at
+FROM app_task_details
+WHERE serial_number = 'GBWS-6905' AND task_category = 'ELEC'
+ORDER BY id;
+
+-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+-- 진단 2) 박새벽의 work_start_log에서 GBWS-6905 기록 확인
+-- → 기대: task_id, task_name, task_category 등 확인
+-- → 핵심: 여기 task_id가 진단 1의 id 목록에 포함되는지 확인
+-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SELECT wsl.id AS log_id, wsl.task_id, wsl.serial_number, wsl.task_name,
+       wsl.task_category, wsl.task_id_ref, wsl.worker_id, w.name AS worker_name,
+       wsl.started_at
+FROM work_start_log wsl
+JOIN workers w ON w.id = wsl.worker_id
+WHERE wsl.serial_number = 'GBWS-6905'
+ORDER BY wsl.started_at DESC;
+
+-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+-- 진단 3) task_id 매핑 일치 여부 직접 확인
+-- → LEFT JOIN으로 work_start_log.task_id가 app_task_details에 매핑되는지
+-- → atd.id IS NULL인 행 = 매핑 실패 (누락 원인)
+-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SELECT wsl.id AS log_id, wsl.task_id, wsl.task_name, wsl.task_category,
+       w.name AS worker_name, wsl.started_at,
+       atd.id AS matched_task_detail_id,
+       CASE WHEN atd.id IS NULL THEN '❌ 매핑 실패' ELSE '✅ 매핑 성공' END AS status
+FROM work_start_log wsl
+JOIN workers w ON w.id = wsl.worker_id
+LEFT JOIN app_task_details atd
+    ON wsl.task_id = atd.id AND atd.serial_number = 'GBWS-6905'
+WHERE wsl.serial_number = 'GBWS-6905'
+ORDER BY wsl.started_at DESC;
+```
+
+### Phase 2: 원인별 대응 방향
+
+#### 시나리오 A: task seeding 누락
+
+진단 1에서 "배선 포설" task가 `app_task_details`에 없는 경우.
+→ `task_seed.py`에 해당 task 추가 후 재실행. **코드 수정 불필요.**
+
+#### 시나리오 B: task_id FK 불일치 (가장 가능성 높음)
+
+진단 3에서 `❌ 매핑 실패` 행이 존재하는 경우.
+= `work_start_log.task_id`가 가리키는 `app_task_details` 레코드가 다른 S/N이거나, 삭제/재생성되어 id가 변경됨.
+
+**원인**: task seed 재실행 시 기존 레코드 DELETE → 새 id로 INSERT. 기존 `work_start_log.task_id`는 옛 id를 가리킴.
+
+**수정안**: `work.py` workers 쿼리를 `task_id` 단독 매핑 → `serial_number + task_category + task_id_ref` 복합 매핑으로 변경.
+
+#### 시나리오 C: 동일 S/N에 중복 task 레코드
+
+진단 1에서 같은 task_name/task_id가 여러 id로 존재하는 경우.
+→ 중복 제거 + UPSERT 로직 확인 필요.
+
+### Phase 3: 시나리오 B 수정안 (진단 결과 확인 후 적용)
+
+> ⚠️ 아래 수정은 진단 3에서 `❌ 매핑 실패`가 확인된 후에만 진행.
+
+#### 수정 대상: 1개 파일
+
+| 파일 | 변경 내용 |
+|------|-----------|
+| `backend/app/routes/work.py` | workers 일괄 조회 쿼리 — `task_id` 단독 → `serial_number + task_id` 복합 + fallback |
+
+#### 변경 상세: `work.py` 라인 383~401
+
+**현재 코드** (task_id 단독 매핑):
+```python
+cur.execute(
+    """
+    SELECT
+        wsl.task_id,
+        wsl.worker_id,
+        w.name AS worker_name,
+        wsl.started_at,
+        wcl.completed_at,
+        wcl.duration_minutes,
+        CASE WHEN wcl.id IS NOT NULL THEN 'completed' ELSE 'in_progress' END AS status
+    FROM work_start_log wsl
+    JOIN workers w ON wsl.worker_id = w.id
+    LEFT JOIN work_completion_log wcl
+        ON wsl.task_id = wcl.task_id AND wsl.worker_id = wcl.worker_id
+    WHERE wsl.task_id = ANY(%s)
+    ORDER BY wsl.task_id, wsl.started_at ASC
+    """,
+    (task_db_ids,)
+)
+```
+
+**변경 코드** (serial_number + task_category + task_id_ref 복합 매핑):
+```python
+# task_list에서 task_id_ref → db_id 매핑 생성 (task_id_ref 기반 매칭용)
+task_ref_to_id = {}
+for item in task_list:
+    key = (item.get('task_category', ''), item.get('task_id', ''))  # task_id = task_id_ref
+    task_ref_to_id[key] = item['id']
+
+cur.execute(
+    """
+    SELECT
+        wsl.task_id,
+        wsl.task_category,
+        wsl.task_id_ref,
+        wsl.worker_id,
+        w.name AS worker_name,
+        wsl.started_at,
+        wcl.completed_at,
+        wcl.duration_minutes,
+        CASE WHEN wcl.id IS NOT NULL THEN 'completed' ELSE 'in_progress' END AS status
+    FROM work_start_log wsl
+    JOIN workers w ON wsl.worker_id = w.id
+    LEFT JOIN work_completion_log wcl
+        ON wsl.task_id = wcl.task_id AND wsl.worker_id = wcl.worker_id
+    WHERE wsl.serial_number = %s
+    ORDER BY wsl.task_category, wsl.started_at ASC
+    """,
+    (serial_number,)
+)
+rows = cur.fetchall()
+for row in rows:
+    # 1차: task_id로 직접 매핑 (정상 경우)
+    tid = row['task_id']
+    if tid in workers_by_task:
+        workers_by_task[tid].append({
+            'worker_id': row['worker_id'],
+            'worker_name': row['worker_name'],
+            'started_at': row['started_at'].isoformat() if row['started_at'] else None,
+            'completed_at': row['completed_at'].isoformat() if row['completed_at'] else None,
+            'duration_minutes': row['duration_minutes'],
+            'status': row['status'],
+        })
+    else:
+        # 2차 fallback: task_category + task_id_ref로 매핑
+        ref_key = (row['task_category'], row['task_id_ref'])
+        fallback_tid = task_ref_to_id.get(ref_key)
+        if fallback_tid and fallback_tid in workers_by_task:
+            workers_by_task[fallback_tid].append({
+                'worker_id': row['worker_id'],
+                'worker_name': row['worker_name'],
+                'started_at': row['started_at'].isoformat() if row['started_at'] else None,
+                'completed_at': row['completed_at'].isoformat() if row['completed_at'] else None,
+                'duration_minutes': row['duration_minutes'],
+                'status': row['status'],
+            })
+            logger.info(
+                f"[#46-fallback] worker={row['worker_name']} matched via "
+                f"ref_key={ref_key} instead of task_id={tid}"
+            )
+```
+
+> **변경 포인트**:
+> 1. `WHERE wsl.task_id = ANY(%s)` → `WHERE wsl.serial_number = %s` (S/N 기준 전체 조회)
+> 2. 1차: 기존 `task_id` 매핑 유지 (정상 경우)
+> 3. 2차: `task_id` 매핑 실패 시 `task_category + task_id_ref` 로 fallback
+> 4. fallback 사용 시 `[#46-fallback]` 로그로 추적 가능
+
+### TEST 작업 — #46
+
+**파일**: `tests/backend/test_issue46_workers_mapping.py`
+
+| TC | 설명 | 검증 |
+|----|------|------|
+| TC-46-01 | 정상 매핑 — task_id가 일치하는 경우 | workers 배열에 정상 포함 |
+| TC-46-02 | task_id 불일치 — app_task_details 재생성으로 id 변경 | fallback으로 task_category + task_id_ref 매핑 성공 |
+| TC-46-03 | 다른 S/N의 work_start_log가 혼입 안 됨 | serial_number 필터로 격리 |
+| TC-46-04 | completion_log와 JOIN 정상 동작 | completed_at, duration_minutes 정상 반환 |
+| TC-46-05 | 동시작업 (multi-worker) | 같은 task에 2명 → workers 배열에 2건 |
+
+### 규칙 — #46
+
+- ⛔ `progress_service.py` 수정 금지 — 카드뷰 API는 정상 동작
+- ⛔ `work_start_log.py`, `work_completion_log.py` 모델 수정 금지
+- ⛔ `task_service.py` 의 `start_work()` 수정 금지
+- ✅ `work.py`의 workers 일괄 조회 블록(라인 375~418)만 수정
+- ✅ 로그에 `[#46-fallback]` prefix로 추적 가능하게
+
+### Teammate 프롬프트 — #46 (진단 확인 후 실행)
+
+```
+## #46 BE: 상세뷰 workers 매핑 — task_id fallback 추가
+
+너는 AXIS-OPS BE teammate다. `backend/` 하위 파일만 수정 가능.
+
+### 배경
+상세뷰 API (`GET /api/app/tasks/{sn}?all=true`)에서 workers 조회 시 `work_start_log.task_id = ANY(task_db_ids)` 로만 매핑하는데, task seed 재실행 등으로 `app_task_details.id`가 변경되면 `work_start_log.task_id`와 불일치하여 작업자가 누락됨.
+
+### 목표
+workers 조회를 task_id 단독 매핑 → serial_number 기준 조회 + task_id/task_ref fallback 복합 매핑으로 변경.
+
+### 수정 대상
+- `backend/app/routes/work.py` — 1개 파일, workers 일괄 조회 블록 (라인 ~375-418)
+
+### 작업 내용
+1. WHERE 절을 `task_id = ANY(%s)` → `serial_number = %s` 로 변경
+2. SELECT에 `wsl.task_category`, `wsl.task_id_ref` 추가
+3. 기존 for row 루프를 2단계 매핑으로 변경:
+   - 1차: task_id로 직접 매핑 (기존 동작 유지)
+   - 2차: task_id 매핑 실패 시 task_category + task_id_ref로 fallback
+4. fallback 사용 시 `[#46-fallback]` 로그 기록
+
+- 참조: `AXIS-OPS/AGENT_TEAM_LAUNCH.md` #46 섹션
+- "현재 코드" → "변경 코드" diff가 정확히 명시되어 있으니 그대로 적용
+
+### 테스트
+- `tests/backend/test_issue46_workers_mapping.py` 신규 생성
+- TC-46-01 ~ TC-46-05 (5건)
+- 기존 regression: `pytest tests/backend/ -v --timeout=30` 전체 통과 확인
+
+### 규칙
+- ⛔ `progress_service.py` 수정 금지
+- ⛔ `work_start_log.py`, `work_completion_log.py` 모델 수정 금지
+- ⛔ `task_service.py` 수정 금지
+- ✅ `work.py` 1개 파일만 수정
+
+### 검증 명령
+pytest tests/backend/test_issue46_workers_mapping.py -v
+pytest tests/backend/test_sprint38_last_activity.py -v  # regression
+pytest tests/backend/test_sn_progress.py -v  # regression
+```
+
+---
+
+## Sprint 40-C: 비활성 사용자 관리 (Inactive User Management)
+
+> 등록일: 2026-03-27
+> 트랙: Sprint 40 Track C (BE 전용)
+> 선행: Sprint 1 (workers 테이블), Sprint 32 (app_access_log 테이블)
+> 난이도: 중~상
+
+### 배경
+
+현재 시스템에는 장기 미로그인 사용자를 감지·관리하는 기능이 없음.
+퇴사/이직한 작업자 계정이 approved 상태로 남아 보안 리스크 발생 가능.
+**soft delete 방식** (is_active=FALSE) + **admin 최종 승인** 후 비활성화 처리.
+
+### 현재 DB 상태 (확인 완료)
+
+```
+workers 테이블 (001_create_workers.sql):
+- is_active 컬럼 없음 ❌
+- deactivated_at 컬럼 없음 ❌
+- last_login_at 컬럼 없음 ❌
+
+app_access_log 테이블 (026_access_log.sql):
+- worker_id + created_at 인덱스 있음 ✅
+- scheduler_service.py가 30일 이상 레코드 자동 삭제 ⚠️
+  → access_log만으로 30일 미로그인 판단 불안정
+  → workers.last_login_at 컬럼 추가가 안전한 방법
+```
+
+### auth_service.py login 함수 현재 구조 (라인 549~650)
+
+```
+1. 사용자 조회 (email / admin prefix / name fallback)
+2. 비밀번호 검증 (bcrypt)
+3. Admin freepass 체크 (is_admin=True → 이메일/승인 건너뜀)
+4. 일반 사용자: email_verified + approval_status 체크
+5. JWT access_token + refresh_token 생성
+6. refresh token DB 저장 (_store_refresh_token)
+7. 응답 반환: { access_token, refresh_token, worker: {...} }
+
+Sprint 40-C 추가 위치:
+- is_active 체크: Step 4 이후, Step 5(토큰 생성) 이전
+- last_login_at 갱신: Step 6(refresh token 저장) 직후
+```
+
+### 수정 대상 파일
+
+```
+1. backend/migrations/040_inactive_user_management.sql  (신규)
+2. backend/app/services/auth_service.py                 (수정)
+3. backend/app/routes/admin.py                          (수정 — API 3개 추가)
+4. backend/app/routes/work.py                           (수정 — manager API 1개 추가)
+5. backend/app/models/worker.py                         (수정 — 쿼리 함수 추가)
+6. tests/backend/test_sprint40c_inactive_user.py        (신규)
+```
+
+### Task 1: DB Migration (040_inactive_user_management.sql)
+
+```sql
+-- Migration 040: 비활성 사용자 관리 (Sprint 40-C)
+BEGIN;
+
+-- workers 테이블에 3개 컬럼 추가
+ALTER TABLE workers ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE NOT NULL;
+ALTER TABLE workers ADD COLUMN IF NOT EXISTS deactivated_at TIMESTAMPTZ;
+ALTER TABLE workers ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
+
+-- 인덱스
+CREATE INDEX IF NOT EXISTS idx_workers_is_active ON workers(is_active);
+CREATE INDEX IF NOT EXISTS idx_workers_last_login ON workers(last_login_at);
+
+-- 기존 사용자 last_login_at 초기값: app_access_log에서 가장 최근 접속 시각
+UPDATE workers w
+SET last_login_at = sub.last_access
+FROM (
+    SELECT worker_id, MAX(created_at) AS last_access
+    FROM app_access_log
+    GROUP BY worker_id
+) sub
+WHERE w.id = sub.worker_id
+  AND w.last_login_at IS NULL;
+
+COMMIT;
+```
+
+⚠️ 주의: scheduler_service.py가 30일 이상 access_log 삭제하므로, 이 초기값은 최근 30일 내 접속자만 유효. 나머지는 NULL로 남음 (→ NULL = "접속 이력 불명" 으로 비활성 감지 대상에 포함).
+
+### Task 2: auth_service.py 수정 (login 함수)
+
+```python
+# === 추가 위치: 라인 609 (approval_rejected 체크 이후) ===
+
+# Sprint 40-C: 비활성 사용자 로그인 거부
+if not getattr(worker, 'is_active', True):
+    return {
+        'error': 'ACCOUNT_DEACTIVATED',
+        'message': '비활성화된 계정입니다. 관리자에게 문의하세요.'
+    }, 403
+
+# === 추가 위치: 라인 634 (logger.info 이후, return 이전) ===
+
+# Sprint 40-C: last_login_at 갱신
+from app.models.worker import update_last_login
+update_last_login(worker.id)
+```
+
+### Task 3: worker.py 모델 함수 추가
+
+```python
+# 1) last_login_at 갱신
+def update_last_login(worker_id: int) -> None:
+    """로그인 시 last_login_at 갱신"""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE workers SET last_login_at = NOW() WHERE id = %s",
+                (worker_id,)
+            )
+        conn.commit()
+    finally:
+        put_conn(conn)
+
+# 2) 비활성 사용자 감지 (30일 미로그인)
+def get_inactive_workers(days: int = 30) -> list:
+    """last_login_at이 {days}일 이전이거나 NULL인 approved 사용자 목록"""
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, name, email, role, company, is_active,
+                       last_login_at, deactivated_at, created_at
+                FROM workers
+                WHERE approval_status = 'approved'
+                  AND is_admin = FALSE
+                  AND is_active = TRUE
+                  AND (last_login_at < NOW() - INTERVAL '%s days'
+                       OR last_login_at IS NULL)
+                ORDER BY last_login_at ASC NULLS FIRST
+            """, (days,))
+            return cur.fetchall()
+    finally:
+        put_conn(conn)
+
+# 3) 사용자 비활성화 (soft delete)
+def deactivate_worker(worker_id: int) -> bool:
+    """is_active=FALSE + deactivated_at 기록"""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE workers
+                SET is_active = FALSE, deactivated_at = NOW()
+                WHERE id = %s AND is_active = TRUE
+                RETURNING id
+            """, (worker_id,))
+            result = cur.fetchone()
+        conn.commit()
+        return result is not None
+    finally:
+        put_conn(conn)
+
+# 4) 사용자 재활성화
+def reactivate_worker(worker_id: int) -> bool:
+    """is_active=TRUE + deactivated_at NULL"""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE workers
+                SET is_active = TRUE, deactivated_at = NULL
+                WHERE id = %s AND is_active = FALSE
+                RETURNING id
+            """, (worker_id,))
+            result = cur.fetchone()
+        conn.commit()
+        return result is not None
+    finally:
+        put_conn(conn)
+
+# 5) 삭제 대기 목록 조회 (이미 비활성화된 사용자)
+def get_deactivated_workers() -> list:
+    """is_active=FALSE인 사용자 목록 (admin 최종 승인 대기)"""
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, name, email, role, company,
+                       last_login_at, deactivated_at, created_at
+                FROM workers
+                WHERE is_active = FALSE
+                ORDER BY deactivated_at DESC
+            """)
+            return cur.fetchall()
+    finally:
+        put_conn(conn)
+```
+
+### Task 4: API 엔드포인트 4개
+
+```
+# admin.py — 관리자 전용 (3개)
+
+1) GET  /api/admin/inactive-workers?days=30
+   - @jwt_required @admin_required
+   - get_inactive_workers(days) 호출
+   - 응답: { "inactive_workers": [...], "count": N, "threshold_days": 30 }
+
+2) GET  /api/admin/deactivated-workers
+   - @jwt_required @admin_required
+   - get_deactivated_workers() 호출
+   - 응답: { "deactivated_workers": [...], "count": N }
+
+3) POST /api/admin/worker-status
+   - @jwt_required @admin_required
+   - Body: { "worker_id": int, "action": "deactivate" | "reactivate" }
+   - deactivate → deactivate_worker(worker_id)
+   - reactivate → reactivate_worker(worker_id)
+   - 응답: { "message": "...", "worker_id": N, "action": "..." }
+
+# work.py — 협력사 manager 요청 (1개)
+
+4) POST /api/app/work/request-deactivation
+   - @jwt_required (manager 체크: 토큰에서 is_manager=True 확인)
+   - Body: { "worker_id": int, "reason": str }
+   - 검증: 요청자와 대상이 같은 company인지 확인
+   - deactivate_worker(worker_id) 호출
+   - 응답: { "message": "비활성화 요청 완료", "worker_id": N }
+   - ⚠️ manager가 직접 비활성화하지만, 최종적으로 admin이 reactivate 가능
+```
+
+### Task 5: 테스트 (test_sprint40c_inactive_user.py)
+
+```
+테스트 항목:
+1. Migration: is_active, deactivated_at, last_login_at 컬럼 존재 확인
+2. Login: is_active=FALSE인 사용자 → 403 ACCOUNT_DEACTIVATED
+3. Login: 정상 사용자 → last_login_at 갱신 확인
+4. GET /api/admin/inactive-workers → 30일 미로그인 목록 반환
+5. GET /api/admin/deactivated-workers → 비활성 사용자 목록
+6. POST /api/admin/worker-status → deactivate/reactivate 동작
+7. POST /api/app/work/request-deactivation → manager 요청
+8. POST /api/app/work/request-deactivation → 다른 company 사용자 거부
+9. Regression: 기존 login/approve 흐름 영향 없음
+```
+
+### 제약사항
+
+- ❌ is_admin=TRUE 사용자는 비활성화 대상에서 **제외** (get_inactive_workers에서 필터)
+- ❌ 물리 삭제(DELETE) 절대 금지 — soft delete만 사용
+- ✅ workers.last_login_at으로 판단 (app_access_log는 30일 보관 한계)
+- ✅ 기존 `approval_status` 로직과 독립적으로 동작 (is_active는 별도 체크)
+- ✅ Worker 모델 객체에 `is_active`, `last_login_at` 필드 추가 필요 (worker.py의 Worker 클래스/namedtuple)
+
+### 실행 체크리스트
+
+- [x] Migration 040 실행 ✅ (테스트 DB 자동 적용 — db_schema fixture)
+- [x] auth_service.py login 함수 수정 (is_active 체크 + last_login_at 갱신) ✅
+- [x] worker.py 모델 함수 5개 추가 ✅ (update_last_login, get_inactive/deactivated, de/reactivate)
+- [x] admin.py API 3개 추가 ✅ (inactive-workers, deactivated-workers, worker-status)
+- [x] work.py API 1개 추가 (request-deactivation) ✅
+- [x] Worker 모델에 is_active, last_login_at, deactivated_at 필드 추가 ✅
+- [x] 테스트 작성 및 통과 ✅ — 9/9 passed (2026-03-27)
+
+### 검증 명령
+```bash
+pytest tests/backend/test_sprint40c_inactive_user.py -v
+pytest tests/backend/test_auth.py -v  # regression
+pytest tests/backend/test_workers.py -v  # regression
+```

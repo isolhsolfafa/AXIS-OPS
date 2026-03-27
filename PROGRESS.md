@@ -3,7 +3,20 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.2.0 (Sprint 40-A/C + #46, 2026-03-27)
+> **현재 버전**: v2.2.0 (Sprint 38/38-B/39/40-A/40-C/#46, 2026-03-27)
+
+### v2.2.0 테스트 결과 종합 (2026-03-27)
+
+| Sprint/이슈 | 테스트 파일 | 신규 건수 | 결과 |
+|------------|-----------|----------|------|
+| Sprint 38 | test_sprint38_last_activity/graybox/regression | 16 | 16/16 ✅ |
+| Sprint 38-B | test_sprint38b_last_task | 4 | 4/4 ✅ |
+| Sprint 39 | test_sprint39_db_isolation | 10 | 10/10 ✅ |
+| Sprint 39-fix | 기존 18파일 regression 수정 | (714) | 714 passed ✅ |
+| Sprint 40-A | test_sprint40a_today_tags | 5 | 5/5 ✅ |
+| #46 | test_issue46_workers_mapping | 5 | 5/5 ✅ |
+| Sprint 40-C | test_sprint40c_inactive_user | 9 | 9/9 ✅ |
+| **합계** | **신규 49건** | | **전체 PASSED** |
 
 ---
 
