@@ -246,3 +246,53 @@ def get_work_start_logs_by_worker(
     finally:
         if conn:
             put_conn(conn)
+
+
+def get_today_tags_by_worker(worker_id: int) -> list:
+    """
+    오늘 날짜 기준 해당 작업자의 태깅 QR 목록 (DISTINCT, 최신순)
+
+    KST(Asia/Seoul) 기준 오늘 날짜의 태깅 이력을 qr_doc_id별 중복 제거 후 반환.
+
+    Args:
+        worker_id: 작업자 ID
+
+    Returns:
+        [{'qr_doc_id': str, 'serial_number': str, 'last_tagged_at': str (ISO 8601)}, ...]
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT DISTINCT ON (wsl.qr_doc_id)
+                   wsl.qr_doc_id,
+                   wsl.serial_number,
+                   wsl.started_at AS last_tagged_at
+            FROM work_start_log wsl
+            WHERE wsl.worker_id = %s
+              AND wsl.started_at >= (CURRENT_DATE AT TIME ZONE 'Asia/Seoul')
+            ORDER BY wsl.qr_doc_id, wsl.started_at DESC
+            """,
+            (worker_id,)
+        )
+
+        rows = cur.fetchall()
+        result = []
+        for row in rows:
+            last_tagged_at = row['last_tagged_at']
+            result.append({
+                'qr_doc_id': row['qr_doc_id'],
+                'serial_number': row['serial_number'],
+                'last_tagged_at': last_tagged_at.isoformat() if last_tagged_at else None,
+            })
+        return result
+
+    except PsycopgError as e:
+        logger.error(f"Failed to get today tags for worker_id={worker_id}: {e}")
+        return []
+    finally:
+        if conn:
+            put_conn(conn)

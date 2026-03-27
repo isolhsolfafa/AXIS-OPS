@@ -15854,26 +15854,26 @@ TEST_DATABASE_URL=postgresql://postgres:bNgbAqsBMseFyIDHmiuqLjDCGAuuqmXS@centerb
 ### 체크리스트
 
 **BE (인프라)**:
-- [ ] `.env.test` 생성 (TEST_DATABASE_URL 설정)
-- [ ] `.gitignore`에 `.env.test` 추가
-- [ ] `conftest.py` — `STAGING_DB_URL` 하드코딩 제거
-- [ ] `conftest.py` — `TestConfig.DATABASE_URL` fallback 제거 → `TEST_DATABASE_URL` 필수
-- [ ] `conftest.py` — `db_schema` fixture 간소화 (백업/복원 약 200줄 제거)
-- [ ] `conftest.py` — `db_existing_roles`, `has_sprint6_schema`에서 `STAGING_DB_URL` → `TestConfig.DATABASE_URL`
-- [ ] `conftest.py` — `seed_test_data` fixture 추가
-- [ ] `conftest.py` — `create_test_worker` fixture에서 Sprint 6 호환 분기 정리 (테스트 DB는 항상 최신 스키마)
+- [x] `.env.test` 생성 (TEST_DATABASE_URL 설정) ✅
+- [x] `.gitignore`에 `.env.test` 추가 ✅
+- [x] `conftest.py` — `STAGING_DB_URL` 하드코딩 제거 ✅
+- [x] `conftest.py` — `TestConfig.DATABASE_URL` fallback 제거 → `TEST_DATABASE_URL` 필수 ✅
+- [x] `conftest.py` — `db_schema` fixture 간소화 (백업/복원 약 200줄 제거) ✅
+- [x] `conftest.py` — `db_existing_roles`, `has_sprint6_schema`에서 `STAGING_DB_URL` → `TestConfig.DATABASE_URL` ✅
+- [x] `conftest.py` — `seed_test_data` fixture 추가 ✅
+- [x] `conftest.py` — `create_test_worker` fixture에서 Sprint 6 호환 분기 정리 (테스트 DB는 항상 최신 스키마) ✅
 
 **TEST**:
-- [ ] 테스트 DB 연결 확인 (`pytest --co` — collect only)
-- [ ] migration 전체 실행 확인 (에러 없이 완료)
-- [ ] 기존 테스트 전체 실행 regression 확인
-- [ ] seed_test_data fixture로 기본 데이터 정상 삽입 확인
+- [x] 테스트 DB 연결 확인 (`pytest --co` — collect only) ✅
+- [x] migration 전체 실행 확인 (에러 없이 완료) ✅
+- [x] 기존 테스트 전체 실행 regression 확인 ✅ — 714 passed / 14 skipped (Sprint 39-fix로 118→0 수정)
+- [x] seed_test_data fixture로 기본 데이터 정상 삽입 확인 ✅
 
 **검증**:
-- [ ] `STAGING_DB_URL` 문자열이 `conftest.py`에 없음 확인
-- [ ] 운영 DB URL(`maglev.proxy.rlwy.net`)이 코드 어디에도 없음 확인
-- [ ] `TEST_DATABASE_URL` 미설정 시 명확한 RuntimeError 발생 확인
-- [ ] 테스트 실행 후 운영 DB 데이터 영향 없음 확인
+- [x] `STAGING_DB_URL` 문자열이 `conftest.py`에 없음 확인 ✅ (TC-DB-10)
+- [x] 운영 DB URL(`maglev.proxy.rlwy.net`)이 코드 어디에도 없음 확인 ✅ (TC-DB-09)
+- [x] `TEST_DATABASE_URL` 미설정 시 명확한 RuntimeError 발생 확인 ✅ (TC-DB-02)
+- [x] 테스트 실행 후 운영 DB 데이터 영향 없음 확인 ✅
 
 ### TEST 작업 (tests/backend/) — Sprint 39
 
@@ -16222,7 +16222,7 @@ def get_today_tags_by_worker(worker_id: int) -> List[Dict[str, Any]]:
                 started_at AS last_tagged_at
             FROM work_start_log
             WHERE worker_id = %s
-              AND started_at::date = CURRENT_DATE
+              AND started_at >= (CURRENT_DATE AT TIME ZONE 'Asia/Seoul')
             ORDER BY qr_doc_id, started_at DESC
             """,
             (worker_id,)
@@ -16443,16 +16443,16 @@ fixture (`seed_multiple_tags`)는 conftest.py의 기존 패턴을 따라 구현.
 
 수정 완료 후 아래 시나리오 검증 (코드 리뷰 레벨):
 
-1. **A-1 프레임 축소**: `qrbox: 160`, `clamp(200, 300)` — 정사각형 유지 확인, MutationObserver 정상
-2. **A-2 DOC_ 접두어**: Worksheet 모드에서 `DOC_` prefix 자동 표시, 사용자는 S/N만 입력
-3. **A-2 LOC_ 접두어**: Location 모드에서 `LOC_` prefix 자동 표시
-4. **A-2 submit**: 제출 시 `DOC_` + 입력값 결합 → `_handleQrCode()`에 전달
-5. **A-2 카메라 스캔**: 카메라로 스캔 시 기존 `_onQrDetected` → `_handleQrCode` 경로 영향 없음 (직접 입력 UI만 변경)
-6. **A-3 BE**: `/api/app/work/today-tags` → 오늘 날짜 DISTINCT qr_doc_id 반환
-7. **A-3 FE**: 드롭다운에서 선택 → `_handleQrCode(qrDocId)` 직접 호출 (DOC_ 포함된 값)
-8. **A-3 빈 이력**: 오늘 태깅 없으면 드롭다운 미표시
-9. **하위호환**: 카메라 QR 스캔 경로 (`_onQrDetected` → `_handleQrCode`)는 수정 없음
-10. **테스트**: `test_sprint40a_today_tags.py` 5건 PASSED
+1. [x] **A-1 프레임 축소**: `qrbox: 160`, `clamp(200, 300)` — 코드 적용 완료 ✅ (실기기 검증 대기)
+2. [x] **A-2 DOC_ 접두어**: Worksheet 모드에서 `DOC_` prefix 자동 표시, 사용자는 S/N만 입력 ✅
+3. [x] **A-2 LOC_ 접두어**: Location 모드에서 `LOC_` prefix 자동 표시 ✅
+4. [x] **A-2 submit**: 제출 시 `DOC_` + 입력값 결합 → `_handleQrCode()`에 전달 ✅
+5. [x] **A-2 카메라 스캔**: 카메라 경로 수정 없음 확인 ✅
+6. [x] **A-3 BE**: `/api/app/work/today-tags` → 오늘 날짜 DISTINCT qr_doc_id 반환 ✅
+7. [x] **A-3 FE**: 드롭다운에서 선택 → `_handleQrCode(qrDocId)` 직접 호출 ✅
+8. [x] **A-3 빈 이력**: `_todayTags.isNotEmpty` 조건으로 드롭다운 미표시 ✅
+9. [x] **하위호환**: `_onQrDetected` → `_handleQrCode` 경로 수정 없음 확인 ✅
+10. [x] **테스트**: `test_sprint40a_today_tags.py` 5건 PASSED ✅
 
 ### 수정 대상 파일 목록
 
@@ -16499,64 +16499,155 @@ fixture (`seed_multiple_tags`)는 conftest.py의 기존 패턴을 따라 구현.
 
 ---
 
-### Teammate 프롬프트 — Sprint 40-A (QR 스캔 UX 개선 3건)
+### Teammate 프롬프트 — Sprint 40-A BE (✅ 완료)
 
-> **이 프롬프트를 Claude Code teammate에게 전달하여 실행**
-> 선행 조건: 없음 (Sprint 38과 독립적으로 진행 가능)
+> **상태**: BE 완료 — `work_start_log.py` 함수 추가 + `work.py` 엔드포인트 추가 + `test_sprint40a_today_tags.py` 5/5 PASSED
 
 ```
-## Sprint 40-A: QR 스캔 UX 개선 3건
+## Sprint 40-A BE: 오늘 태깅 API (Task A-3 BE)
+
+### 역할: BE teammate
+### 소유 파일 (이 파일만 수정 가능):
+- `backend/app/routes/work.py`
+- `backend/app/models/work_start_log.py`
+- `tests/backend/test_sprint40a_today_tags.py` (신규)
+
+### 절대 수정 금지 (FE teammate 소유):
+- `frontend/` 하위 모든 파일
+
+### Task
+1. `work_start_log.py` 파일 끝에 `get_today_tags_by_worker()` 함수 추가
+2. `work.py` 파일 끝에 `GET /api/app/work/today-tags` 엔드포인트 추가
+3. `test_sprint40a_today_tags.py` 5건 작성 + 실행
+
+### 결과: ✅ 5/5 PASSED
+```
+
+---
+
+### Teammate 프롬프트 — Sprint 40-A FE (QR 스캔 UX 개선)
+
+> **이 프롬프트를 Claude Code FE teammate에게 전달하여 실행**
+> 선행 조건: Sprint 40-A BE 완료 (✅ today-tags API 배포됨)
+
+```
+## Sprint 40-A FE: QR 스캔 UX 개선 3건 (Task A-1, A-2, A-3 FE)
+
+### 역할: FE teammate
+### 소유 파일 (이 파일만 수정 가능 — 총 2개):
+- `frontend/lib/services/qr_scanner_web.dart` (1줄 변경)
+- `frontend/lib/screens/qr/qr_scan_screen.dart` (~60줄 변경)
+
+### 절대 수정 금지 (BE teammate 소유 — 이미 완료됨):
+- `backend/` 하위 모든 파일 — 수정/추가/삭제 금지
+- `tests/` 하위 모든 파일 — 수정/추가/삭제 금지
 
 ### 컨텍스트
-- 참조: `AXIS-OPS/AGENT_TEAM_LAUNCH.md` Sprint 40-A 섹션 (이 문서의 가장 마지막 섹션)
-- 위 섹션에 Task A-1, A-2, A-3의 **정확한 변경 내용, 라인 번호, 코드**가 모두 명시되어 있음
-- 반드시 해당 섹션을 먼저 읽고, 지시된 내용 그대로 수정할 것
+- 참조: `AXIS-OPS/AGENT_TEAM_LAUNCH.md` Sprint 40-A 섹션
+- 위 섹션에 Task A-1, A-2, A-3 FE의 **정확한 변경 내용, 라인 번호, 코드**가 모두 명시됨
+- 반드시 해당 섹션을 먼저 끝까지 읽고, 지시된 내용 **그대로** 수정할 것
 
 ### ⚠️ 최우선 규칙: 카메라 코드 수정 금지
 
-이 Sprint은 QR 카메라 기능이 아닌 **직접입력 UI + BE API**만 수정한다.
-QR 카메라는 BUG-5부터 BUG-23까지 20회 이상 수정 이력이 있으며, 정사각형 강제/MutationObserver/CSS 등의 코드가 매우 민감하다.
+QR 카메라는 BUG-5~BUG-23까지 **20회 이상 수정 이력**이 있다.
+정사각형 강제/MutationObserver/CSS 코드가 극도로 민감하며, 숫자값 외 어떤 수정도 연쇄 버그를 유발한다.
 
-**수정 가능한 것**:
-- `qr_scanner_web.dart` → `qrbox: 200`을 `qrbox: 160`으로 변경 (숫자 1개만)
-- `qr_scan_screen.dart` → cameraSize clamp 상한 350→300 (숫자 1개만)
-- `qr_scan_screen.dart` → 직접입력 섹션 (라인 660~790 범위 내) UI 수정
-- `qr_scan_screen.dart` → State 변수 추가 + 태깅 로드 함수 추가
-- `work.py` → 파일 끝에 엔드포인트 1개 추가
-- `work_start_log.py` → 파일 끝에 함수 1개 추가
+**`qr_scanner_web.dart`에서 수정 가능한 것 — 딱 1줄**:
+- 라인 380: `qrbox: 200` → `qrbox: 160`
+- 이 파일의 다른 **어떤 코드도** 수정/추가/삭제하지 않는다
 
-**수정 불가능한 것** (AGENT_TEAM_LAUNCH.md "⛔ 절대 수정 금지" 섹션 참조):
-- `_forceSquareAfterCameraStart()`, MutationObserver, CSS aspect-ratio
-- `_startCamera()`, `_onScroll()`, `_buildCameraView()`
-- `_handleQrCode()` 함수 내부
-- `_onQrDetected()` 경로
-- `work.py` 기존 엔드포인트
-- `task_service.py`, `work_start_log.py` 기존 함수
+**`qr_scanner_web.dart`에서 수정 금지 목록** (하나라도 변경 시 전체 카메라 기능 장애):
+- `_forceSquareAfterCameraStart()` 함수 전체
+- MutationObserver 콜백 로직 전체
+- CSS `#qr-scanner-dom-div` 스타일블록 전체 (aspect-ratio, overflow, object-fit)
+- `_requestCameraPermission()` 함수 전체
+- 3단계 카메라 폴백 전략 (environment → user → cameraId)
+- `window.__qrScanConfig` 객체 키 구조 (fps, qrbox)
+- `ScriptElement` 생성/제거 패턴
+- html5-qrcode 라이브러리 참조
+
+**`qr_scan_screen.dart`에서 수정 가능한 영역**:
+- 라인 604: cameraSize clamp 상한 350→300 (숫자 1개)
+- 라인 30~34 근처: State 변수 2개 추가
+- 클래스 내 함수 추가: `_loadTodayTags()`
+- 라인 628: `_showTextInput` 토글에 태깅 로드 추가
+- 라인 660~790: 직접입력 섹션 내부 (형식안내, TextFormField, validator, submit, 드롭다운)
+
+**`qr_scan_screen.dart`에서 수정 금지 목록**:
+- `_startCamera()` — 카메라 초기화 시퀀스
+- `_onScroll()` / `_getCameraContainerRect()` — DOM 위치 동기화
+- `_buildCameraView()` — 카메라 뷰 위젯
+- `_cameraContainerKey` — 카메라 컨테이너 GlobalKey
+- `_onQrDetected()` 함수 — 카메라 스캔 콜백
+- `_handleQrCode()` 함수 내부 — DOC_ 검증/API 호출/에러 처리 전체
+- 카메라 Container 위젯 (Builder → cameraSize → Container 구조) — clamp 값만 변경
 
 ### Task 순서 (반드시 이 순서대로)
 
-1. **Task A-1**: `qr_scanner_web.dart` qrbox 160 + `qr_scan_screen.dart` clamp 300
-2. **Task A-2**: `qr_scan_screen.dart` 직접입력 — prefixText, validator, submit 로직
-3. **Task A-3 BE**: `work_start_log.py` 함수 추가 + `work.py` 엔드포인트 추가
-4. **Task A-3 FE**: `qr_scan_screen.dart` State 변수 + 태깅 로드 + 드롭다운 위젯
-5. **테스트**: `test_sprint40a_today_tags.py` 5건 작성 + 실행
+#### Task A-1: QR 프레임 크기 축소 (숫자 2개만 변경)
 
-각 Task의 정확한 코드는 AGENT_TEAM_LAUNCH.md Sprint 40-A 섹션에 명시되어 있다.
-해당 섹션의 "현재" → "변경" 코드를 **그대로** 적용한다.
+**변경 1** — `frontend/lib/services/qr_scanner_web.dart`:
+파일 내에서 `qrbox: 200`을 찾아 `qrbox: 160`으로 변경. 이 파일은 이 1줄 외에 절대 수정하지 않는다.
 
-### 검증
+**변경 2** — `frontend/lib/screens/qr/qr_scan_screen.dart`:
+`(screenWidth - 40).clamp(200.0, 350.0)`을 찾아 `(screenWidth - 40).clamp(200.0, 300.0)`으로 변경.
 
-- `flutter analyze` 에러 없음 (FE)
-- `test_sprint40a_today_tags.py` 5건 PASSED (BE)
-- 기존 테스트 regression 없음
-- `_handleQrCode()` 함수 내부에 어떠한 수정도 없음을 확인
-- `qr_scanner_web.dart`에서 qrbox 값 외에 diff가 없음을 확인
+#### Task A-2: DOC_ 자동 접두어 (직접입력 UI 개선)
 
-### 수정 대상 파일 (5개만, 그 외 수정 금지)
+AGENT_TEAM_LAUNCH.md Sprint 40-A 섹션의 "Task A-2" 참조. 정확한 "현재" → "변경" 코드가 명시되어 있다.
 
-1. `frontend/lib/services/qr_scanner_web.dart` (1줄)
-2. `frontend/lib/screens/qr/qr_scan_screen.dart` (~60줄)
-3. `backend/app/routes/work.py` (엔드포인트 추가)
-4. `backend/app/models/work_start_log.py` (함수 추가)
-5. `tests/backend/test_sprint40a_today_tags.py` (신규)
+4가지 변경:
+1. **A-2-1**: 형식 안내 텍스트 — `'형식: DOC_GBWS-6408'` → `'형식: GBWS-6408 (DOC_ 자동 추가)'`, LOC도 동일
+2. **A-2-2**: TextFormField — `labelText`, `hintText` 변경 + `prefixText` / `prefixStyle` 추가
+3. **A-2-3**: validator — `DOC_`/`LOC_` 시작 검사 제거, 빈값만 체크
+4. **A-2-4**: onFieldSubmitted + 확인버튼 onTap — submit 시 `'$prefix${value.trim().toUpperCase()}'` 결합 후 `_handleQrCode()` 호출
+
+**핵심**: `_handleQrCode()` 함수 자체는 수정하지 않는다. 이 함수는 `DOC_` prefix가 포함된 완전한 QR 코드를 기대한다. prefix 결합은 submit 시점에서만 처리.
+
+#### Task A-3 FE: 오늘 태깅 QR 드롭다운
+
+AGENT_TEAM_LAUNCH.md Sprint 40-A 섹션의 "Task A-3" FE 변경 참조.
+
+4가지 변경:
+1. **State 변수** 2개 추가: `_todayTags`, `_loadingTags`
+2. **`_loadTodayTags()` 함수** 추가 — `GET /api/app/work/today-tags` 호출 (BE 이미 완료됨)
+3. **`_showTextInput` 토글**에 `_loadTodayTags()` 호출 추가
+4. **드롭다운 위젯** — 형식 안내 Container 아래, worksheet 모드 + 태깅 이력 있을 때만 표시
+
+**드롭다운 선택 시**: `_handleQrCode(qrDocId)` 직접 호출. `qrDocId`는 이미 `DOC_GBWS-6408` 형식이므로 prefix 결합 불필요. `_qrCodeController`를 거치지 않는다.
+
+### 검증 체크리스트
+
+수정 완료 후 아래를 **반드시** 확인:
+
+1. `flutter analyze` 에러 없음
+2. `qr_scanner_web.dart` — `git diff`로 qrbox 값 변경 1줄만 있는지 확인. **다른 diff가 있으면 즉시 revert**
+3. `qr_scan_screen.dart` — `_handleQrCode()` 함수 내부에 diff 없음 확인
+4. `qr_scan_screen.dart` — `_startCamera()`, `_onScroll()`, `_buildCameraView()` 에 diff 없음 확인
+5. `qr_scan_screen.dart` — `_onQrDetected()` 에 diff 없음 확인
+6. DOC_ prefix 결합이 submit 경로(onFieldSubmitted + 확인버튼)에서만 발생하는지 확인
+7. 드롭다운에서 선택 시 prefix 결합 없이 `_handleQrCode(qrDocId)` 직접 호출하는지 확인
+8. `backend/` 하위 파일에 어떤 diff도 없음 확인
+
+### 수정 대상 파일 (2개만, 그 외 절대 수정 금지)
+
+1. `frontend/lib/services/qr_scanner_web.dart` — qrbox 숫자 1줄만
+2. `frontend/lib/screens/qr/qr_scan_screen.dart` — A-1 clamp + A-2 직접입력 + A-3 드롭다운
+
+### diff 검증 명령 (최종 확인용)
+
+수정 완료 후 아래 명령으로 의도치 않은 변경이 없는지 반드시 확인:
+```bash
+# qr_scanner_web.dart — qrbox 1줄만 변경되었는지
+git diff frontend/lib/services/qr_scanner_web.dart | grep "^[+-]" | grep -v "^[+-][+-][+-]"
+# 기대 결과: -          qrbox: 200 / +          qrbox: 160 (이 2줄만)
+
+# backend 변경 없음 확인
+git diff backend/
+# 기대 결과: 아무것도 없음 (BE는 이미 별도 커밋됨)
+
+# _handleQrCode 함수 변경 없음 확인
+git diff frontend/lib/screens/qr/qr_scan_screen.dart | grep "_handleQrCode"
+# 기대 결과: _handleQrCode 함수 정의(Future<void> _handleQrCode) 라인이 diff에 없음
+```
 ```

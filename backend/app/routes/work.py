@@ -919,3 +919,26 @@ def get_pause_history(task_detail_id: int) -> Tuple[Dict[str, Any], int]:
     return jsonify({
         'pauses': [p.to_dict() for p in pauses]
     }), 200
+
+
+@work_bp.route("/work/today-tags", methods=["GET"])
+@jwt_required
+def get_today_tags() -> Tuple[Dict[str, Any], int]:
+    """
+    오늘 날짜 태깅 QR 목록 (현재 작업자 기준, Sprint 40-A)
+
+    KST(Asia/Seoul) 기준 오늘 태깅한 QR 목록을 반환.
+    qr_doc_id별 중복 제거(DISTINCT), 마지막 태깅 시각(last_tagged_at) 포함.
+
+    Headers:
+        Authorization: Bearer {token}
+
+    Response:
+        200: {"tags": [{"qr_doc_id": str, "serial_number": str, "last_tagged_at": str}, ...]}
+    """
+    from app.models.work_start_log import get_today_tags_by_worker
+
+    worker_id = g.worker_id
+    tags = get_today_tags_by_worker(worker_id)
+
+    return jsonify({'tags': tags}), 200

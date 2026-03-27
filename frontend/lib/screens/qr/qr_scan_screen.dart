@@ -32,6 +32,8 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
   bool _showTextInput = false; // 카메라 실패 또는 사용자가 직접 펼침
   bool _cameraInitializing = true;
   bool _cameraFailed = false;
+  List<Map<String, dynamic>> _todayTags = [];
+  bool _loadingTags = false;
 
   static const String _scannerDivId = 'qr-scanner-div';
   final GlobalKey _cameraContainerKey = GlobalKey();
@@ -52,6 +54,25 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
     _qrCodeController.dispose();
     _qrScannerService.stop();
     super.dispose();
+  }
+
+  Future<void> _loadTodayTags() async {
+    if (_loadingTags) return;
+    setState(() => _loadingTags = true);
+    try {
+      final apiService = ref.read(apiServiceProvider);
+      final response = await apiService.get('/app/work/today-tags');
+      if (response.statusCode == 200 && response.data != null) {
+        final tags = (response.data['tags'] as List?) ?? [];
+        setState(() {
+          _todayTags = tags.cast<Map<String, dynamic>>();
+        });
+      }
+    } catch (e) {
+      debugPrint('[QrScanScreen] Failed to load today tags: $e');
+    } finally {
+      if (mounted) setState(() => _loadingTags = false);
+    }
   }
 
   /// Scroll listener: sync DOM scanner div position with Flutter camera container
@@ -601,7 +622,7 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
               Builder(
                 builder: (context) {
                   final screenWidth = MediaQuery.of(context).size.width;
-                  final cameraSize = (screenWidth - 40).clamp(200.0, 350.0); // padding 20*2
+                  final cameraSize = (screenWidth - 40).clamp(200.0, 300.0); // padding 20*2
                   return Container(
                     key: _cameraContainerKey,
                     width: cameraSize,
@@ -625,7 +646,12 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
                   children: [
                     // 헤더 (토글 버튼)
                     InkWell(
-                      onTap: () => setState(() => _showTextInput = !_showTextInput),
+                      onTap: () {
+                        setState(() => _showTextInput = !_showTextInput);
+                        if (_showTextInput && _todayTags.isEmpty && _scanType == 'worksheet') {
+                          _loadTodayTags();
+                        }
+                      },
                       borderRadius: BorderRadius.circular(GxRadius.lg),
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -679,24 +705,68 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
                                     const SizedBox(width: 6),
                                     Text(
                                       _scanType == 'worksheet'
-                                          ? '형식: DOC_GBWS-6408'
-                                          : '형식: LOC_01',
+                                          ? '형식: GBWS-6408 (DOC_ 자동 추가)'
+                                          : '형식: 01 (LOC_ 자동 추가)',
                                       style: const TextStyle(fontSize: 12, color: GxColors.accent, fontWeight: FontWeight.w500),
                                     ),
                                   ],
                                 ),
                               ),
+
+                              // 오늘 태깅 이력 드롭다운 (worksheet 모드에서만)
+                              if (_scanType == 'worksheet' && _todayTags.isNotEmpty) ...[
+                                const SizedBox(height: 8),
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                                  decoration: BoxDecoration(
+                                    color: GxColors.white,
+                                    borderRadius: BorderRadius.circular(GxRadius.sm),
+                                    border: Border.all(color: GxColors.mist, width: 1.5),
+                                  ),
+                                  child: DropdownButtonHideUnderline(
+                                    child: DropdownButton<String>(
+                                      isExpanded: true,
+                                      hint: const Text(
+                                        '오늘 태깅 이력에서 선택',
+                                        style: TextStyle(fontSize: 13, color: GxColors.steel),
+                                      ),
+                                      icon: const Icon(Icons.history, color: GxColors.accent, size: 18),
+                                      items: _todayTags.map((tag) {
+                                        return DropdownMenuItem<String>(
+                                          value: tag['qr_doc_id'] as String,
+                                          child: Text(
+                                            tag['serial_number'] as String? ?? tag['qr_doc_id'] as String,
+                                            style: const TextStyle(fontSize: 14, color: GxColors.charcoal),
+                                          ),
+                                        );
+                                      }).toList(),
+                                      onChanged: (qrDocId) {
+                                        if (qrDocId != null) {
+                                          _handleQrCode(qrDocId);
+                                        }
+                                      },
+                                    ),
+                                  ),
+                                ),
+                              ],
                               const SizedBox(height: 12),
 
                               // QR 코드 입력 필드
                               TextFormField(
                                 controller: _qrCodeController,
                                 decoration: InputDecoration(
-                                  labelText: 'QR 코드',
+                                  labelText: _scanType == 'worksheet' ? 'S/N' : 'Location',
                                   labelStyle: const TextStyle(color: GxColors.steel, fontSize: 13),
-                                  hintText: _scanType == 'worksheet' ? 'DOC_GBWS-6408' : 'LOC_01',
+                                  hintText: _scanType == 'worksheet' ? 'GBWS-6408' : '01',
                                   hintStyle: const TextStyle(color: GxColors.silver),
                                   prefixIcon: const Icon(Icons.qr_code, color: GxColors.accent),
+                                  prefixText: _scanType == 'worksheet' ? 'DOC_' : 'LOC_',
+                                  prefixStyle: const TextStyle(
+                                    color: GxColors.accent,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                  ),
                                   border: OutlineInputBorder(
                                     borderRadius: BorderRadius.circular(GxRadius.sm),
                                     borderSide: const BorderSide(color: GxColors.mist),
@@ -719,20 +789,17 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
                                 style: const TextStyle(fontSize: 14, color: GxColors.charcoal, fontWeight: FontWeight.w500),
                                 textCapitalization: TextCapitalization.characters,
                                 validator: (value) {
-                                  if (value == null || value.isEmpty) {
-                                    return 'QR 코드를 입력해주세요.';
-                                  }
-                                  if (_scanType == 'worksheet' && !value.toUpperCase().startsWith('DOC_')) {
-                                    return 'Worksheet QR은 DOC_로 시작해야 합니다.';
-                                  }
-                                  if (_scanType == 'location' && !value.toUpperCase().startsWith('LOC_')) {
-                                    return 'Location QR은 LOC_로 시작해야 합니다.';
+                                  if (value == null || value.trim().isEmpty) {
+                                    return _scanType == 'worksheet'
+                                        ? 'S/N을 입력해주세요. (예: GBWS-6408)'
+                                        : 'Location 코드를 입력해주세요. (예: 01)';
                                   }
                                   return null;
                                 },
                                 onFieldSubmitted: (value) {
                                   if (_formKey.currentState!.validate()) {
-                                    _handleQrCode(value);
+                                    final prefix = _scanType == 'worksheet' ? 'DOC_' : 'LOC_';
+                                    _handleQrCode('$prefix${value.trim().toUpperCase()}');
                                   }
                                 },
                               ),
@@ -763,7 +830,8 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
                                             ? null
                                             : () {
                                                 if (_formKey.currentState!.validate()) {
-                                                  _handleQrCode(_qrCodeController.text);
+                                                  final prefix = _scanType == 'worksheet' ? 'DOC_' : 'LOC_';
+                                                  _handleQrCode('$prefix${_qrCodeController.text.trim().toUpperCase()}');
                                                 }
                                               },
                                         borderRadius: BorderRadius.circular(GxRadius.sm),
