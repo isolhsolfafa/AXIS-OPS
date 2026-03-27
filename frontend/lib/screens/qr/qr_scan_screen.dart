@@ -62,21 +62,19 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
     setState(() => _loadingTags = true);
     try {
       final apiService = ref.read(apiServiceProvider);
-      final response = await apiService.get('/app/work/today-tags');
-      debugPrint('[QrScanScreen] today-tags response: ${response.statusCode}, data type: ${response.data.runtimeType}');
-      if (response.statusCode == 200 && response.data != null) {
-        final data = response.data is Map ? response.data as Map<String, dynamic> : null;
-        if (data != null) {
-          final rawTags = (data['tags'] as List?) ?? [];
-          debugPrint('[QrScanScreen] today-tags count: ${rawTags.length}');
-          final parsedTags = rawTags
-              .map((e) => Map<String, dynamic>.from(e as Map))
-              .toList();
-          if (mounted) {
-            setState(() {
-              _todayTags = parsedTags;
-            });
-          }
+      // apiService.get()은 response.data를 직접 반환 (Dio Response 객체 아님)
+      final data = await apiService.get('/app/work/today-tags');
+      debugPrint('[QrScanScreen] today-tags data: $data');
+      if (data != null && data is Map) {
+        final rawTags = (data['tags'] as List?) ?? [];
+        debugPrint('[QrScanScreen] today-tags count: ${rawTags.length}');
+        final parsedTags = rawTags
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+        if (mounted) {
+          setState(() {
+            _todayTags = parsedTags;
+          });
         }
       }
     } catch (e) {
