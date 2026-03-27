@@ -17479,6 +17479,12 @@ def get_deactivated_workers() -> list:
 - [x] work.py API 1개 추가 (request-deactivation) ✅
 - [x] Worker 모델에 is_active, last_login_at, deactivated_at 필드 추가 ✅
 - [x] 테스트 작성 및 통과 ✅ — 9/9 passed (2026-03-27)
+- [x] Migration 041 (alert_type_enum WORKER_DEACTIVATION_REQUEST) ✅
+- [x] email_service.py send_deactivation_notification() 추가 ✅
+- [x] work.py request-deactivation 앱 알림 + 이메일 알림 추가 ✅
+- [x] FE admin_options_screen.dart 레이아웃 8섹션 재배치 ✅
+- [x] FE 비활성 사용자 관리 섹션 신규 (30일 미로그인 + 비활성화/재활성화) ✅
+- [x] Flutter 빌드 성공 + Netlify 배포 완료 ✅ (2026-03-27)
 
 ### 검증 명령
 ```bash
