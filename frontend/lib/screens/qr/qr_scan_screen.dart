@@ -622,18 +622,20 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
               Builder(
                 builder: (context) {
                   final screenWidth = MediaQuery.of(context).size.width;
-                  final cameraSize = (screenWidth - 40).clamp(200.0, 300.0); // padding 20*2
-                  return Container(
-                    key: _cameraContainerKey,
-                    width: cameraSize,
-                    height: cameraSize,
-                    decoration: BoxDecoration(
-                      color: Colors.black,
-                      borderRadius: BorderRadius.circular(GxRadius.lg),
-                      border: Border.all(color: GxColors.mist, width: 1),
+                  final cameraSize = (screenWidth - 40).clamp(200.0, 240.0); // padding 20*2
+                  return Center(
+                    child: Container(
+                      key: _cameraContainerKey,
+                      width: cameraSize,
+                      height: cameraSize,
+                      decoration: BoxDecoration(
+                        color: Colors.black,
+                        borderRadius: BorderRadius.circular(GxRadius.lg),
+                        border: Border.all(color: GxColors.mist, width: 1),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: _buildCameraView(),
                     ),
-                    clipBehavior: Clip.antiAlias,
-                    child: _buildCameraView(),
                   );
                 },
               ),
