@@ -16443,15 +16443,15 @@ fixture (`seed_multiple_tags`)는 conftest.py의 기존 패턴을 따라 구현.
 
 수정 완료 후 아래 시나리오 검증 (코드 리뷰 레벨):
 
-1. [x] **A-1 프레임 축소**: `qrbox: 160`, `clamp(200, 300)` — 코드 적용 완료 ✅ (실기기 검증 대기)
-2. [x] **A-2 DOC_ 접두어**: Worksheet 모드에서 `DOC_` prefix 자동 표시, 사용자는 S/N만 입력 ✅
+1. [x] **A-1 프레임 축소**: `qrbox: 160`, `clamp(200, 240)` — 실기기 검증 완료 ✅ (BUG-29로 300→240 추가 축소)
+2. [x] **A-2 DOC_ 접두어**: Worksheet 모드에서 `DOC_` prefix 자동 표시 — 실기기 검증 완료 ✅
 3. [x] **A-2 LOC_ 접두어**: Location 모드에서 `LOC_` prefix 자동 표시 ✅
 4. [x] **A-2 submit**: 제출 시 `DOC_` + 입력값 결합 → `_handleQrCode()`에 전달 ✅
-5. [x] **A-2 카메라 스캔**: 카메라 경로 수정 없음 확인 ✅
+5. [x] **A-2 카메라 스캔**: 카메라 경로 수정 없음 확인 — 실기기 검증 완료 ✅
 6. [x] **A-3 BE**: `/api/app/work/today-tags` → 오늘 날짜 DISTINCT qr_doc_id 반환 ✅
 7. [x] **A-3 FE**: 드롭다운에서 선택 → `_handleQrCode(qrDocId)` 직접 호출 ✅
 8. [x] **A-3 빈 이력**: `_todayTags.isNotEmpty` 조건으로 드롭다운 미표시 ✅
-9. [x] **하위호환**: `_onQrDetected` → `_handleQrCode` 경로 수정 없음 확인 ✅
+9. [x] **하위호환**: `_onQrDetected` → `_handleQrCode` 경로 수정 없음 — 실기기 검증 완료 ✅
 10. [x] **테스트**: `test_sprint40a_today_tags.py` 5건 PASSED ✅
 
 ### 수정 대상 파일 목록
@@ -16650,4 +16650,324 @@ git diff backend/
 git diff frontend/lib/screens/qr/qr_scan_screen.dart | grep "_handleQrCode"
 # 기대 결과: _handleQrCode 함수 정의(Future<void> _handleQrCode) 라인이 diff에 없음
 ```
+```
+
+---
+
+## Sprint 38-B: product/progress API — last_task_name / last_task_category 필드 추가 (VIEW #45)
+
+> **목적**: S/N 카드뷰 및 상세뷰에서 마지막 작업자가 수행한 **Task 이름**(예: 캐비넷 조립)과 **카테고리**(예: MECH)를 표시할 수 있도록 `GET /api/app/product/progress` 응답에 2개 필드 추가.
+>
+> **배경**: Sprint 38에서 `last_worker`, `last_activity_at` 필드를 추가했으나, "어떤 작업을 했는지" 정보가 없어 VIEW에서 표시 불가. `work_start_log`, `work_completion_log` 테이블에 `task_name`, `task_category` 컬럼이 이미 존재하므로, 기존 서브쿼리의 SELECT 절에 2개 컬럼을 추가하면 됨.
+
+### 수정 대상: 1개 파일
+
+| 파일 | 변경 내용 |
+|------|-----------|
+| `backend/app/services/progress_service.py` | Step 5 last_activity 서브쿼리에 `task_name`, `task_category` SELECT 추가 + products 배열에 필드 추가 |
+
+### 변경 상세
+
+#### 1) `progress_service.py` — Step 5 last_activity 서브쿼리 수정
+
+**현재 코드** (라인 ~116-143):
+```python
+last_activity_query = """
+    SELECT DISTINCT ON (combined.serial_number)
+           combined.serial_number,
+           w.name AS last_worker,
+           combined.activity_at AS last_activity_at
+    FROM (
+        SELECT wsl.serial_number,
+               wsl.worker_id,
+               wsl.started_at AS activity_at
+        FROM work_start_log wsl
+        WHERE wsl.serial_number = ANY(%s)
+        UNION ALL
+        SELECT wcl.serial_number,
+               wcl.worker_id,
+               wcl.completed_at AS activity_at
+        FROM work_completion_log wcl
+        WHERE wcl.serial_number = ANY(%s)
+          AND wcl.completed_at IS NOT NULL
+    ) combined
+    JOIN workers w ON w.id = combined.worker_id
+    ORDER BY combined.serial_number, combined.activity_at DESC
+"""
+```
+
+**변경 코드**:
+```python
+last_activity_query = """
+    SELECT DISTINCT ON (combined.serial_number)
+           combined.serial_number,
+           w.name AS last_worker,
+           combined.activity_at AS last_activity_at,
+           combined.task_name AS last_task_name,
+           combined.task_category AS last_task_category
+    FROM (
+        SELECT wsl.serial_number,
+               wsl.worker_id,
+               wsl.started_at AS activity_at,
+               wsl.task_name,
+               wsl.task_category
+        FROM work_start_log wsl
+        WHERE wsl.serial_number = ANY(%s)
+        UNION ALL
+        SELECT wcl.serial_number,
+               wcl.worker_id,
+               wcl.completed_at AS activity_at,
+               wcl.task_name,
+               wcl.task_category
+        FROM work_completion_log wcl
+        WHERE wcl.serial_number = ANY(%s)
+          AND wcl.completed_at IS NOT NULL
+    ) combined
+    JOIN workers w ON w.id = combined.worker_id
+    ORDER BY combined.serial_number, combined.activity_at DESC
+"""
+```
+
+#### 2) `progress_service.py` — Step 6 products 배열 필드 추가
+
+**현재 코드** (라인 ~139-152):
+```python
+for la_row in cur.fetchall():
+    last_activity_map[la_row['serial_number']] = {
+        'last_worker': la_row['last_worker'],
+        'last_activity_at': la_row['last_activity_at'],
+    }
+
+# Step 6: products 배열에 last_worker / last_activity_at 필드 추가
+for p in products:
+    activity = last_activity_map.get(p['serial_number'])
+    p['last_worker'] = activity['last_worker'] if activity else None
+    p['last_activity_at'] = (
+        activity['last_activity_at'].isoformat()
+        if activity and activity.get('last_activity_at') else None
+    )
+```
+
+**변경 코드**:
+```python
+for la_row in cur.fetchall():
+    last_activity_map[la_row['serial_number']] = {
+        'last_worker': la_row['last_worker'],
+        'last_activity_at': la_row['last_activity_at'],
+        'last_task_name': la_row['last_task_name'],
+        'last_task_category': la_row['last_task_category'],
+    }
+
+# Step 6: products 배열에 last_worker / last_activity_at / last_task 필드 추가
+for p in products:
+    activity = last_activity_map.get(p['serial_number'])
+    p['last_worker'] = activity['last_worker'] if activity else None
+    p['last_activity_at'] = (
+        activity['last_activity_at'].isoformat()
+        if activity and activity.get('last_activity_at') else None
+    )
+    p['last_task_name'] = activity['last_task_name'] if activity else None
+    p['last_task_category'] = activity['last_task_category'] if activity else None
+```
+
+### TEST 작업 — Sprint 38-B
+
+**파일**: `tests/backend/test_sprint38b_last_task.py`
+
+기존 `test_sprint38_last_activity.py` 패턴 참조. 테스트 케이스:
+
+| TC | 설명 | 검증 |
+|----|------|------|
+| TC-LT-01 | start 로그만 있는 S/N | `last_task_name`, `last_task_category`가 해당 start 로그의 값과 일치 |
+| TC-LT-02 | start + completion 로그 (completion이 최신) | 최신 로그(completion)의 `task_name`, `task_category` 반환 |
+| TC-LT-03 | 여러 태깅 이력 — 가장 최근 것만 반환 | `DISTINCT ON + DESC` 정렬로 최신 1건의 task 정보 |
+| TC-LT-04 | 태깅 이력 없는 S/N | `last_task_name`, `last_task_category` 모두 `None` |
+
+### 규칙 — Sprint 38-B
+
+- ⛔ `work.py`, `work_start_log.py`, `work_completion_log.py` 등 **다른 파일 수정 금지** — `progress_service.py` 1개 파일만 수정
+- ⛔ 기존 `last_worker`, `last_activity_at` 로직 변경 금지 — 필드 추가만
+- ⛔ DB 스키마(ALTER TABLE) 변경 없음 — 이미 `task_name`, `task_category` 컬럼 존재
+- ✅ UNION ALL 양쪽(start/completion) 모두 동일한 `task_name`, `task_category` 컬럼 추가 필수
+
+### Teammate 프롬프트 — Sprint 38-B (#45 last_task_name/category 추가)
+
+```
+## Sprint 38-B BE: product/progress API last_task_name 필드 추가
+
+너는 AXIS-OPS BE teammate다. `backend/` 하위 파일만 수정 가능.
+
+### 목표
+`GET /api/app/product/progress` 응답의 각 product 객체에 `last_task_name`, `last_task_category` 2개 필드를 추가한다.
+
+### 수정 대상
+- `backend/app/services/progress_service.py` — 1개 파일만
+
+### 작업 내용
+1. Step 5 last_activity_query의 UNION ALL 양쪽에 `task_name`, `task_category` 컬럼 추가
+2. 외부 SELECT에 `combined.task_name AS last_task_name`, `combined.task_category AS last_task_category` 추가
+3. last_activity_map 딕셔너리에 `last_task_name`, `last_task_category` 추가
+4. Step 6 for 루프에서 products에 `last_task_name`, `last_task_category` 필드 추가
+
+- 참조: `AXIS-OPS/AGENT_TEAM_LAUNCH.md` Sprint 38-B 섹션
+- "현재 코드" → "변경 코드" diff가 정확히 명시되어 있으니 그대로 적용
+
+### 테스트
+- `tests/backend/test_sprint38b_last_task.py` 신규 생성
+- 기존 `test_sprint38_last_activity.py` 패턴 참조
+- TC-LT-01 ~ TC-LT-04 (4건)
+
+### 규칙
+- ⛔ `progress_service.py` 외 다른 파일 수정 금지
+- ⛔ 기존 last_worker/last_activity_at 로직 변경 금지 (필드 추가만)
+- ⛔ DB 스키마 변경 없음
+
+### 검증 명령
+pytest tests/backend/test_sprint38b_last_task.py -v
+pytest tests/backend/test_sprint38_last_activity.py -v  # 기존 테스트 regression 확인
+pytest tests/backend/test_sn_progress.py -v  # 기존 progress 테스트 regression 확인
+```
+
+---
+
+## BUG-24: QR 스캔 — 카메라 프레임 과대 + 직접입력 안보임 (Sprint 40-A 후속)
+
+> **증상**: Sprint 40-A 적용 후 카메라 외곽 프레임이 화면 대부분을 차지하며, 하단 "직접 입력" 섹션이 스크롤 없이는 보이지 않음.
+>
+> **원인 분석**:
+> 1. `Column`의 `crossAxisAlignment: CrossAxisAlignment.stretch` (라인 485)가 카메라 Container의 `width: cameraSize`를 무시 → 전체 너비(~350px)로 강제 확장
+> 2. `cameraSize` max 300 + AppBar + QR타입 카드 + 여백 합산 → 직접입력 카드가 뷰포트 밖으로 밀림
+>
+> **영향 범위**: FE 1개 파일 (`qr_scan_screen.dart`) — BE 변경 없음
+
+### 수정 대상: 1개 파일
+
+| 파일 | 변경 내용 |
+|------|-----------|
+| `frontend/lib/screens/qr/qr_scan_screen.dart` | 카메라 Container를 Center로 감싸 stretch 방지 + cameraSize max 축소 |
+
+### 변경 상세
+
+#### 1) cameraSize clamp 축소 — max 300 → 240
+
+**현재 코드** (라인 ~625):
+```dart
+final cameraSize = (screenWidth - 40).clamp(200.0, 300.0); // padding 20*2
+```
+
+**변경 코드**:
+```dart
+final cameraSize = (screenWidth - 40).clamp(200.0, 240.0); // padding 20*2
+```
+
+> qrbox=160이므로 240 컨테이너 안에 충분히 들어감 (160 < 240). 여백 40px씩 확보.
+
+#### 2) 카메라 Container를 Center로 감싸서 stretch 무시
+
+**현재 코드** (라인 ~622-638):
+```dart
+Builder(
+  builder: (context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final cameraSize = (screenWidth - 40).clamp(200.0, 300.0); // padding 20*2
+    return Container(
+      key: _cameraContainerKey,
+      width: cameraSize,
+      height: cameraSize,
+      decoration: BoxDecoration(
+        color: Colors.black,
+        borderRadius: BorderRadius.circular(GxRadius.lg),
+        border: Border.all(color: GxColors.mist, width: 1),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: _buildCameraView(),
+    );
+  },
+),
+```
+
+**변경 코드**:
+```dart
+Builder(
+  builder: (context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final cameraSize = (screenWidth - 40).clamp(200.0, 240.0); // padding 20*2
+    return Center(
+      child: Container(
+        key: _cameraContainerKey,
+        width: cameraSize,
+        height: cameraSize,
+        decoration: BoxDecoration(
+          color: Colors.black,
+          borderRadius: BorderRadius.circular(GxRadius.lg),
+          border: Border.all(color: GxColors.mist, width: 1),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: _buildCameraView(),
+      ),
+    );
+  },
+),
+```
+
+> `Center` 위젯이 `CrossAxisAlignment.stretch`를 차단하여 Container가 정확히 `cameraSize × cameraSize` 정사각형 유지.
+
+### 규칙 — BUG-24
+
+- ⛔ `_buildCameraView()` 함수 내부 수정 금지
+- ⛔ `qr_scanner_web.dart` 수정 금지 (CSS, MutationObserver, aspect-ratio 등)
+- ⛔ `_handleQrCode()` 함수 수정 금지
+- ⛔ `_startCamera()` 함수 수정 금지
+- ⛔ DOC_ prefix, today-tags 드롭다운 등 Sprint 40-A 기능 수정 금지
+- ✅ 변경 허용: `cameraSize` clamp 숫자값 1줄 + `Center` 래핑 추가 1줄
+
+### Teammate 프롬프트 — BUG-24 (카메라 프레임 축소)
+
+```
+## BUG-24 FE: QR 스캔 카메라 프레임 과대 수정
+
+너는 AXIS-OPS FE teammate다. `frontend/` 하위 파일만 수정 가능.
+
+### 목표
+QR 스캔 화면의 카메라 프레임이 너무 커서 하단 직접입력 섹션이 보이지 않는 문제 수정.
+
+### 수정 대상
+- `frontend/lib/screens/qr/qr_scan_screen.dart` — 1개 파일, 2곳 수정
+
+### 작업 내용
+1. 라인 ~625: `cameraSize` clamp max를 300 → 240으로 변경
+   ```dart
+   // 변경 전
+   final cameraSize = (screenWidth - 40).clamp(200.0, 300.0);
+   // 변경 후
+   final cameraSize = (screenWidth - 40).clamp(200.0, 240.0);
+   ```
+
+2. 카메라 Container를 `Center` 위젯으로 감싸기
+   ```dart
+   // 변경 전
+   return Container(
+     key: _cameraContainerKey,
+   // 변경 후
+   return Center(
+     child: Container(
+       key: _cameraContainerKey,
+   ```
+   → 닫는 괄호도 추가: Container 닫는 `)` 뒤에 `,` + Center 닫는 `)` 추가
+
+- 참조: `AXIS-OPS/AGENT_TEAM_LAUNCH.md` BUG-24 섹션
+
+### ⛔ 절대 수정 금지
+- _buildCameraView() 함수
+- qr_scanner_web.dart (CSS, MutationObserver, aspect-ratio 등 전체)
+- _handleQrCode() 함수
+- _startCamera() 함수
+- DOC_ prefix, today-tags 드롭다운 등 Sprint 40-A 기능 코드
+
+### 검증 명령
+git diff frontend/lib/screens/qr/qr_scan_screen.dart | grep "^[+-]" | grep -v "^[+-][+-][+-]"
+# 기대 결과: clamp 숫자 변경 1줄 + Center( 추가 1줄 + 닫는 괄호 1줄 (총 ~4-6줄 diff만)
+
+git diff frontend/lib/services/
+# 기대 결과: 아무것도 없음 (qr_scanner_web.dart 변경 금지)
 ```
