@@ -1044,6 +1044,61 @@ def request_deactivation() -> Tuple[Dict[str, Any], int]:
         f"Deactivation requested: requester={requester_id}, target={worker_id}, reason={reason}"
     )
 
+    # 비활성화 성공 후 알림 발송 (non-blocking — 실패해도 비활성화는 유지)
+    try:
+        from app.services.alert_service import create_and_broadcast_alert
+        from app.models.worker import get_db_connection
+        from app.db_pool import put_conn as _put_conn
+
+        # Admin ID 목록 조회
+        _conn = None
+        admin_ids = []
+        try:
+            _conn = get_db_connection()
+            _cur = _conn.cursor()
+            _cur.execute("SELECT id FROM workers WHERE is_admin = TRUE AND is_active = TRUE")
+            admin_ids = [row['id'] for row in _cur.fetchall()]
+        finally:
+            if _conn:
+                _put_conn(_conn)
+
+        alert_message = (
+            f"{requester.name}({requester.company})이 "
+            f"{target.name} 비활성화를 요청했습니다."
+        )
+
+        for admin_id in admin_ids:
+            create_and_broadcast_alert({
+                'alert_type': 'WORKER_DEACTIVATION_REQUEST',
+                'message': alert_message,
+                'triggered_by_worker_id': requester_id,
+                'target_worker_id': admin_id,
+            })
+    except Exception as _e:
+        logger.warning(f"비활성화 앱 알림 발송 실패 (non-blocking): {_e}")
+
+    # Admin 이메일 알림 (non-blocking)
+    try:
+        import threading
+        from app.services.email_service import send_deactivation_notification
+
+        def _send_email_async():
+            try:
+                send_deactivation_notification(
+                    manager_name=requester.name,
+                    manager_company=requester.company or '',
+                    target_name=target.name,
+                    target_email=target.email,
+                    target_role=target.role,
+                    reason=reason,
+                )
+            except Exception as _ex:
+                logger.warning(f"비활성화 이메일 알림 발송 실패 (non-blocking): {_ex}")
+
+        threading.Thread(target=_send_email_async, daemon=True).start()
+    except Exception as _e:
+        logger.warning(f"비활성화 이메일 스레드 시작 실패 (non-blocking): {_e}")
+
     return jsonify({
         'message': '비활성화 요청 완료',
         'worker_id': worker_id,

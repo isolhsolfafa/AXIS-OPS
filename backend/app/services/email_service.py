@@ -141,3 +141,92 @@ def send_register_notification(
             _send_email(to_email=admin_email, subject=subject, html_body=html_body)
         except Exception as e:
             logger.error(f"Admin 알림 발송 실패: {admin_email} — {e}")
+
+
+def render_deactivation_notification(
+    manager_name: str,
+    manager_company: str,
+    target_name: str,
+    target_email: str,
+    target_role: str,
+    reason: str = '',
+) -> str:
+    """비활성화 요청 알림 HTML 템플릿 생성"""
+    now_kst = datetime.now(_KST).strftime('%Y-%m-%d %H:%M')
+    reason_display = reason if reason else '-'
+
+    return f"""
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="UTF-8"></head>
+<body style="font-family: sans-serif; background-color: #f5f5f5; padding: 20px;">
+  <div style="max-width: 480px; margin: 0 auto; background: #ffffff;
+              border-radius: 8px; padding: 32px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+    <h2 style="color: #dc2626; margin-bottom: 8px;">사용자 비활성화 요청</h2>
+    <p style="color: #555; margin-bottom: 24px;">
+      협력사 관리자가 작업자 비활성화를 요청했습니다. AXIS-OPS 앱에서 확인해주세요.
+    </p>
+    <table style="width: 100%; border-collapse: collapse; margin-bottom: 24px;">
+      <tr>
+        <td style="padding: 8px 12px; color: #888; border-bottom: 1px solid #eee;">요청자</td>
+        <td style="padding: 8px 12px; font-weight: bold; border-bottom: 1px solid #eee;">
+          {manager_name} ({manager_company})
+        </td>
+      </tr>
+      <tr>
+        <td style="padding: 8px 12px; color: #888; border-bottom: 1px solid #eee;">대상자</td>
+        <td style="padding: 8px 12px; border-bottom: 1px solid #eee;">{target_name}</td>
+      </tr>
+      <tr>
+        <td style="padding: 8px 12px; color: #888; border-bottom: 1px solid #eee;">이메일</td>
+        <td style="padding: 8px 12px; border-bottom: 1px solid #eee;">{target_email}</td>
+      </tr>
+      <tr>
+        <td style="padding: 8px 12px; color: #888; border-bottom: 1px solid #eee;">역할</td>
+        <td style="padding: 8px 12px; border-bottom: 1px solid #eee;">{target_role}</td>
+      </tr>
+      <tr>
+        <td style="padding: 8px 12px; color: #888; border-bottom: 1px solid #eee;">사유</td>
+        <td style="padding: 8px 12px; border-bottom: 1px solid #eee;">{reason_display}</td>
+      </tr>
+      <tr>
+        <td style="padding: 8px 12px; color: #888;">요청일시</td>
+        <td style="padding: 8px 12px;">{now_kst}</td>
+      </tr>
+    </table>
+    <p style="color: #888; font-size: 13px;">이 알림은 자동으로 발송되었습니다.</p>
+  </div>
+</body>
+</html>
+"""
+
+
+def send_deactivation_notification(
+    manager_name: str,
+    manager_company: str,
+    target_name: str,
+    target_email: str,
+    target_role: str,
+    reason: str = '',
+):
+    """협력사 관리자의 비활성화 요청 시 Admin 전원에게 알림 이메일 발송 (best-effort)"""
+    admin_emails = get_admin_emails()
+    if not admin_emails:
+        logger.warning("Admin 이메일 수신자 없음 (is_admin=true 사용자 없음)")
+        return
+
+    subject = f"[G-AXIS] 사용자 비활성화 요청: {target_name} ({manager_company})"
+    html_body = render_deactivation_notification(
+        manager_name=manager_name,
+        manager_company=manager_company,
+        target_name=target_name,
+        target_email=target_email,
+        target_role=target_role,
+        reason=reason,
+    )
+
+    for admin_email in admin_emails:
+        try:
+            _send_email(to_email=admin_email, subject=subject, html_body=html_body)
+        except Exception as e:
+            logger.error(f"비활성화 알림 발송 실패: {admin_email} — {e}")
