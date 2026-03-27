@@ -44,6 +44,7 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
     _scrollController.addListener(_onScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _startCamera();
+      _loadTodayTags(); // 화면 진입 시 오늘 태깅 이력 사전 로드
     });
   }
 
@@ -62,11 +63,21 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
     try {
       final apiService = ref.read(apiServiceProvider);
       final response = await apiService.get('/app/work/today-tags');
+      debugPrint('[QrScanScreen] today-tags response: ${response.statusCode}, data type: ${response.data.runtimeType}');
       if (response.statusCode == 200 && response.data != null) {
-        final tags = (response.data['tags'] as List?) ?? [];
-        setState(() {
-          _todayTags = tags.cast<Map<String, dynamic>>();
-        });
+        final data = response.data is Map ? response.data as Map<String, dynamic> : null;
+        if (data != null) {
+          final rawTags = (data['tags'] as List?) ?? [];
+          debugPrint('[QrScanScreen] today-tags count: ${rawTags.length}');
+          final parsedTags = rawTags
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .toList();
+          if (mounted) {
+            setState(() {
+              _todayTags = parsedTags;
+            });
+          }
+        }
       }
     } catch (e) {
       debugPrint('[QrScanScreen] Failed to load today tags: $e');
@@ -650,8 +661,8 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
                     InkWell(
                       onTap: () {
                         setState(() => _showTextInput = !_showTextInput);
-                        if (_showTextInput && _todayTags.isEmpty && _scanType == 'worksheet') {
-                          _loadTodayTags();
+                        if (_showTextInput && _scanType == 'worksheet') {
+                          _loadTodayTags(); // 펼칠 때마다 최신 태깅 이력 갱신
                         }
                       },
                       borderRadius: BorderRadius.circular(GxRadius.lg),
