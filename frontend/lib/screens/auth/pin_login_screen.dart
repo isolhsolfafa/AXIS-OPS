@@ -139,8 +139,11 @@ class _PinLoginScreenState extends ConsumerState<PinLoginScreen> {
   }
 
   Future<void> _goToEmailLogin() async {
-    // 로그아웃 후 이메일 로그인 화면으로
+    // 로그아웃 후 루트로 이동 → AuthGate가 로그인 화면 표시
     await ref.read(authProvider.notifier).logout();
+    if (mounted) {
+      Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
+    }
   }
 
   @override

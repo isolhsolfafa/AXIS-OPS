@@ -215,7 +215,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               const SizedBox(width: 8),
                               Expanded(
                                 child: Text(
-                                  authState.errorMessage!,
+                                  // [ERROR_CODE] prefix 제거 — 사용자에게 시스템 코드 미표시
+                                  authState.errorMessage!.replaceFirst(
+                                    RegExp(r'^\[[\w_]+\]\s*'), '',
+                                  ),
                                   style: const TextStyle(
                                     color: Color(0xFFB91C1C),
                                     fontSize: 13,

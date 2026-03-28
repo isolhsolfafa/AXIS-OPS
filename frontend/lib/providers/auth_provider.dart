@@ -138,17 +138,15 @@ class AuthNotifier extends StateNotifier<AuthState> {
       );
       return true;
     } catch (e) {
-      // "Exception: [CODE] message" → 사용자 친화적 메시지만 표시
-      var msg = e.toString();
-      if (msg.startsWith('Exception: ')) {
-        msg = msg.substring(11);
+      // "Exception: [CODE] message" → rawMsg (에러코드 포함, 내부 분기용 보존)
+      var rawMsg = e.toString();
+      if (rawMsg.startsWith('Exception: ')) {
+        rawMsg = rawMsg.substring(11);
       }
-      // [ERROR_CODE] prefix 제거 — 시스템 코드 미표시
-      msg = msg.replaceFirst(RegExp(r'^\[[\w_]+\]\s*'), '');
 
       state = state.copyWith(
         isLoading: false,
-        errorMessage: msg,
+        errorMessage: rawMsg,  // 에러코드 포함 보존 (login_screen에서 APPROVAL_PENDING 분기 필요)
       );
       return false;
     }
