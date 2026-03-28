@@ -3,7 +3,13 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.2.0 (Sprint 38/38-B/39/40-A/40-C/#46, 2026-03-27)
+> **현재 버전**: v2.2.0 (Sprint 38/38-B/39/40-A/40-C/#46 + BUG-30/31, 2026-03-28)
+
+### BUG-30/31: 로그인 에러 시스템코드 + PIN→이메일 전환 (2026-03-28)
+
+- **BUG-30**: api_service.dart 401→서버 message 사용. login_screen.dart 표시 시 `[ERROR_CODE]` regex 제거. auth_provider.dart 에러코드 내부 보존 (APPROVAL_PENDING 분기용)
+- **BUG-31**: pin_login_screen.dart `_goToEmailLogin()` → logout 후 `pushNamedAndRemoveUntil('/')` 루트 이동
+- **Manager 비활성화 요청 UI**: manager_delegation_screen.dart — 각 작업자 행에 비활성화 요청 아이콘 + 확인 다이얼로그
 
 ### v2.2.0 테스트 결과 종합 (2026-03-27)
 
