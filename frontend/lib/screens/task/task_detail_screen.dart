@@ -710,13 +710,8 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     if (mounted) {
       setState(() => _isActionLoading = false);
       if (success) {
-        if (finalize) {
-          _showSnack(true, '작업을 완료했습니다.', '');
-          Navigator.pop(context);
-        } else {
-          _showSnack(true, '내 작업이 종료되었습니다. 다른 작업자가 이어서 작업할 수 있습니다.', '');
-          Navigator.pop(context);
-        }
+        // 이전 화면(task_management)에서 토스트 표시 — Scaffold 소멸 방지
+        Navigator.pop(context, finalize ? 'finalize' : 'relay');
       } else {
         _showSnack(false, '', '작업 완료에 실패했습니다.');
       }

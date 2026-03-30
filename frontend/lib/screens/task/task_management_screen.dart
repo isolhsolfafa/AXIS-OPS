@@ -278,12 +278,26 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
         color: Colors.transparent,
         borderRadius: BorderRadius.circular(GxRadius.lg),
         child: InkWell(
-          onTap: () {
+          onTap: () async {
             ref.read(taskProvider.notifier).selectTask(task);
-            Navigator.push(
+            final result = await Navigator.push<String>(
               context,
               MaterialPageRoute(builder: (context) => const TaskDetailScreen()),
             );
+            if (result != null && mounted) {
+              final message = result == 'finalize'
+                  ? '작업을 완료했습니다.'
+                  : '내 작업이 종료되었습니다. 다른 작업자가 이어서 작업할 수 있습니다.';
+              final bgColor = result == 'finalize' ? GxColors.success : GxColors.accent;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(message),
+                  backgroundColor: bgColor,
+                  behavior: SnackBarBehavior.floating,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.sm)),
+                ),
+              );
+            }
           },
           borderRadius: BorderRadius.circular(GxRadius.lg),
           child: Padding(
