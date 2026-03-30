@@ -377,7 +377,7 @@ Future<bool> startQrScanner({
       ..text = '''
         window.__qrScanConfig = {
           fps: 10,
-          qrbox: 160
+          qrbox: 200
         };
         console.log("[QrScannerWeb] config.qrbox type=" + typeof window.__qrScanConfig.qrbox + " value=" + window.__qrScanConfig.qrbox);
       ''';
