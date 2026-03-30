@@ -1139,10 +1139,14 @@ def _worker_restarted_after_completion(task_detail_id: int, worker_id: int) -> b
         """, (task_detail_id, worker_id, task_detail_id, worker_id))
 
         row = cur.fetchone()
-        if not row or not row[0] or not row[1]:
+        if not row:
+            return False
+        last_start = row.get('last_start') if isinstance(row, dict) else row[0]
+        last_completion = row.get('last_completion') if isinstance(row, dict) else row[1]
+        if not last_start or not last_completion:
             return False
 
-        return row[0] > row[1]  # last_start > last_completion → 재시작함
+        return last_start > last_completion  # last_start > last_completion → 재시작함
 
     except PsycopgError as e:
         logger.error(
