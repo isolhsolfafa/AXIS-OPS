@@ -43,6 +43,7 @@
 | BUG-29 | QR 카메라 프레임 과대 — 직접입력 안보임 | ✅ 수정 + 배포 완료 (2026-03-27) | cameraSize 300→240 + Center 래핑. stretch 방지. 실기기 검증 완료 |
 | BUG-30 | 로그인 에러 시 시스템코드 노출 | ✅ 수정 + 배포 완료 (2026-03-28) | api_service.dart 401→서버 message 사용. login_screen.dart 표시 시 `[ERROR_CODE]` regex 제거. 에러코드는 내부 분기용 보존 |
 | BUG-31 | PIN→이메일 로그인 전환 미동작 | ✅ 수정 + 배포 완료 (2026-03-28) | pin_login_screen.dart: logout 후 `pushNamedAndRemoveUntil('/')` → 루트 이동, AuthGate가 로그인 화면 표시 |
+| BUG-32 | 분석 대시보드 엔드포인트 한글 미표시 | ✅ 수정 완료 (2026-03-30) | analytics.py _ENDPOINT_LABELS 40개 누락 전수 등록 (30→90개) |
 | FEAT-1 | 사용자 행위 트래킹 + 분석 대시보드 | ✅ BE Sprint 32 완료 (2026-03-19) | `app_access_log` 테이블 + analytics API 4개 + 30일 정리 스케줄러. VIEW 분석 대시보드는 별도 Sprint |
 
 ---
