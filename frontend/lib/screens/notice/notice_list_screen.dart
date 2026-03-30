@@ -82,23 +82,9 @@ class _NoticeListScreenState extends ConsumerState<NoticeListScreen> {
                 )
               : RefreshIndicator(
                   onRefresh: _loadNotices,
-                  child: ListView.builder(
+                  child: ListView(
                     padding: const EdgeInsets.all(16),
-                    itemCount: _notices.length + (_total > _page * _limit ? 1 : 0),
-                    itemBuilder: (context, index) {
-                      if (index == _notices.length) {
-                        return Center(
-                          child: TextButton(
-                            onPressed: () {
-                              setState(() => _page++);
-                              _loadNotices();
-                            },
-                            child: const Text('더 보기'),
-                          ),
-                        );
-                      }
-                      return _buildNoticeItem(_notices[index]);
-                    },
+                    children: _buildGroupedNoticeList(),
                   ),
                 ),
       floatingActionButton: isAdmin
@@ -109,6 +95,60 @@ class _NoticeListScreenState extends ConsumerState<NoticeListScreen> {
             )
           : null,
     );
+  }
+
+  List<Widget> _buildGroupedNoticeList() {
+    final widgets = <Widget>[];
+
+    // 1. pinned 공지 (상단)
+    final pinned = _notices.where((n) => n['is_pinned'] == true).toList();
+    for (final n in pinned) {
+      widgets.add(_buildNoticeItem(n));
+    }
+
+    // 2. 일반 공지 (월단위 그룹핑)
+    final unpinned = _notices.where((n) => n['is_pinned'] != true).toList();
+    String? currentMonth;
+    for (final n in unpinned) {
+      final createdAt = n['created_at'] as String?;
+      final dt = createdAt != null ? DateTime.tryParse(createdAt)?.toLocal() : null;
+      final monthKey = dt != null ? '${dt.year}년 ${dt.month}월' : '날짜 미상';
+
+      if (monthKey != currentMonth) {
+        currentMonth = monthKey;
+        widgets.add(
+          Padding(
+            padding: const EdgeInsets.only(top: 16, bottom: 8, left: 4),
+            child: Text(
+              monthKey,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: GxColors.steel,
+              ),
+            ),
+          ),
+        );
+      }
+      widgets.add(_buildNoticeItem(n));
+    }
+
+    // 3. 더 보기 버튼
+    if (_total > _page * _limit) {
+      widgets.add(
+        Center(
+          child: TextButton(
+            onPressed: () {
+              setState(() => _page++);
+              _loadNotices();
+            },
+            child: const Text('더 보기'),
+          ),
+        ),
+      );
+    }
+
+    return widgets;
   }
 
   Widget _buildNoticeItem(Map<String, dynamic> notice) {
