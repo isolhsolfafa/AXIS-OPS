@@ -399,10 +399,7 @@ Future<bool> startQrScanner({
 
     // 1차 시도: 후면 카메라 (모바일)
     try {
-      final envConstraints = js_util.jsify({
-        'facingMode': 'environment',
-        'advanced': [{'focusMode': 'continuous'}]
-      });
+      final envConstraints = js_util.jsify({'facingMode': 'environment'});
       final promise = js_util.callMethod(
         _scanner!,
         'start',
