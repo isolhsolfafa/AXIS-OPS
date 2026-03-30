@@ -503,7 +503,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
             child: Material(
               color: Colors.transparent,
               child: InkWell(
-                onTap: () => _handleCompleteTask(taskId, workerId),
+                onTap: () => _showCompleteDialog(taskId, workerId),
                 borderRadius: BorderRadius.circular(GxRadius.sm),
                 child: Center(child: Row(mainAxisAlignment: MainAxisAlignment.center, children: const [
                   Icon(Icons.check_circle, size: 20, color: Colors.white),
@@ -655,15 +655,68 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     );
   }
 
-  Future<void> _handleCompleteTask(int taskId, int workerId) async {
+  /// Sprint 41: 작업 종료 팝업 — 릴레이(내 작업만 종료) vs 완료(task 닫힘) 선택
+  Future<void> _showCompleteDialog(int taskId, int workerId) async {
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.lg)),
+        title: Row(
+          children: [
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: GxColors.successBg,
+                borderRadius: BorderRadius.circular(GxRadius.md),
+              ),
+              child: const Icon(Icons.check_circle, color: GxColors.success, size: 18),
+            ),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Text(
+                '작업 종료',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: GxColors.charcoal),
+              ),
+            ),
+          ],
+        ),
+        content: const Text(
+          '다음 작업자가 이어서 작업하나요?',
+          style: TextStyle(fontSize: 14, color: GxColors.slate, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'relay'),
+            child: const Text('예, 내 작업만 종료', style: TextStyle(color: GxColors.accent, fontWeight: FontWeight.w500)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'finalize'),
+            child: const Text('아니오, 작업 완료', style: TextStyle(color: GxColors.success, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+
+    if (result == null) return; // 취소
+    final finalize = result == 'finalize';
+    await _handleCompleteTask(taskId, workerId, finalize: finalize);
+  }
+
+  Future<void> _handleCompleteTask(int taskId, int workerId, {bool finalize = true}) async {
     setState(() => _isActionLoading = true);
     final taskNotifier = ref.read(taskProvider.notifier);
-    final success = await taskNotifier.completeTask(taskId: taskId, workerId: workerId);
+    final success = await taskNotifier.completeTask(taskId: taskId, workerId: workerId, finalize: finalize);
     if (mounted) {
       setState(() => _isActionLoading = false);
       if (success) {
-        _showSnack(true, '작업을 완료했습니다.', '');
-        Navigator.pop(context);
+        if (finalize) {
+          _showSnack(true, '작업을 완료했습니다.', '');
+          Navigator.pop(context);
+        } else {
+          _showSnack(true, '내 작업이 종료되었습니다. 다른 작업자가 이어서 작업할 수 있습니다.', '');
+          Navigator.pop(context);
+        }
       } else {
         _showSnack(false, '', '작업 완료에 실패했습니다.');
       }

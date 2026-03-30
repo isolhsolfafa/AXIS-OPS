@@ -151,11 +151,13 @@ class TaskService {
   /// Returns: 업데이트된 TaskItem 객체
   ///
   /// API: POST /api/app/work/complete
-  /// Request: {"task_id": int, "worker_id": int}
+  /// Request: {"task_id": int, "worker_id": int, "finalize": bool}
   /// Response: {"id": int, "completed_at": str, "duration": int, ...}
+  /// Sprint 41: finalize=false → 릴레이 종료 (task 열린 상태 유지)
   Future<TaskItem> completeTask({
     required int taskId,
     required int workerId,
+    bool finalize = true,
   }) async {
     try {
       final response = await _apiService.post(
@@ -163,6 +165,7 @@ class TaskService {
         data: {
           'task_id': taskId,
           'worker_id': workerId,
+          'finalize': finalize,
         },
       );
       return TaskItem.fromJson(response);

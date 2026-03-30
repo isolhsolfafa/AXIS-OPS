@@ -239,12 +239,14 @@ class TaskNotifier extends StateNotifier<TaskState> {
   Future<bool> completeTask({
     required int taskId,
     required int workerId,
+    bool finalize = true,
   }) async {
     state = state.copyWith(isLoading: true, clearError: true);
     try {
       final updatedTask = await _taskService.completeTask(
         taskId: taskId,
         workerId: workerId,
+        finalize: finalize,
       );
 
       // Task 목록 업데이트

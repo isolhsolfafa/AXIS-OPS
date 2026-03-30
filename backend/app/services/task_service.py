@@ -118,12 +118,19 @@ class TaskService:
             }, 400
 
         # Sprint 6 Phase C: 멀티 작업자 지원
-        # 이 작업자가 이미 이 task를 시작한 경우
+        # Sprint 41: 릴레이 재시작 허용 — 이미 완료한 작업자는 재시작 가능
         if _worker_has_started_task(task.id, worker_id):
-            return {
-                'error': 'TASK_ALREADY_STARTED',
-                'message': '이미 시작한 작업입니다.'
-            }, 400
+            # 릴레이: 이 worker가 이미 완료한 경우 → 재시작 허용
+            if _worker_already_completed_task(task.id, worker_id):
+                logger.info(
+                    f"Relay re-start: task_id={task.id}, worker_id={worker_id}"
+                )
+            else:
+                # 아직 완료 안 한 상태에서 중복 시작 → 차단 (기존 동작)
+                return {
+                    'error': 'TASK_ALREADY_STARTED',
+                    'message': '이미 시작한 작업입니다.'
+                }, 400
 
         # 작업 시작 처리 (KST 기준)
         started_at = datetime.now(Config.KST)
@@ -165,15 +172,20 @@ class TaskService:
     def complete_work(
         self,
         worker_id: int,
-        task_detail_id: int
+        task_detail_id: int,
+        finalize: bool = True
     ) -> Tuple[Dict[str, Any], int]:
         """
         작업 완료 처리 (duration 자동 계산 + completion_status 업데이트)
         Sprint 3: duration_validator 연동
+        Sprint 41: finalize 파라미터 추가 (릴레이 모드 지원)
+          finalize=True  (기본): 기존 동작 — 전원 종료 시 task 완료
+          finalize=False (릴레이): 내 작업만 종료, task는 열린 상태 유지
 
         Args:
             worker_id: 작업자 ID
             task_detail_id: 작업 ID
+            finalize: True이면 기존 동작, False이면 릴레이 종료
 
         Returns:
             (response dict, status code)
@@ -255,6 +267,22 @@ class TaskService:
             worker_id=worker_id,
             completed_at=completed_at,
         )
+
+        # Sprint 41: 릴레이 모드 — 내 completion_log만 기록하고 task는 열린 상태 유지
+        if not finalize:
+            logger.info(
+                f"Worker session ended (relay mode): "
+                f"task_id={task_detail_id}, worker_id={worker_id}"
+            )
+            return {
+                'message': '내 작업이 종료되었습니다. 다른 작업자가 이어서 작업할 수 있습니다.',
+                'task_id': task_detail_id,
+                'completed_at': completed_at.isoformat(),
+                'duration_minutes': this_worker_duration,
+                'category_completed': False,
+                'task_finished': False,
+                'relay_mode': True,
+            }, 200
 
         # 아직 완료 안 된 다른 작업자가 있는지 확인 (work_start_log 기준)
         all_workers_done = _all_workers_completed(task.id)
@@ -832,7 +860,7 @@ def _all_workers_completed(task_detail_id: int) -> bool:
 
         cur.execute(
             """
-            SELECT COUNT(*) AS started_count
+            SELECT COUNT(DISTINCT worker_id) AS started_count
             FROM work_start_log
             WHERE task_id = %s
             """,

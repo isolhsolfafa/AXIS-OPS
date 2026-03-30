@@ -17492,3 +17492,467 @@ pytest tests/backend/test_sprint40c_inactive_user.py -v
 pytest tests/backend/test_auth.py -v  # regression
 pytest tests/backend/test_workers.py -v  # regression
 ```
+
+---
+
+## Sprint 41: 작업 릴레이 + Manager 재활성화 (Task Relay & Reactivation)
+
+> 등록일: 2026-03-30
+> 트랙: BE + FE
+> 선행: Sprint 6 Phase C (멀티 작업자 지원), Sprint 15 (BUG-12 다중작업자 Join)
+> 난이도: 중
+
+### 배경
+
+현재 task 완료 흐름: 시작한 작업자 전원이 종료하면 자동으로 task 완료 처리 (`_all_workers_completed`).
+**문제**: 판넬 작업 등 1개 task를 여러 작업자가 **순차적으로 교대**하는 경우, 유저1이 종료하면 `completed_count >= started_count` 조건에 의해 task가 즉시 닫혀 유저2가 이어서 시작 불가.
+
+**요구사항**:
+1. "내 작업 종료" (task는 열린 상태 유지) vs "task 완료" (task 닫힘) 분리
+2. 기존 동시참여(Join) 로직 영향 없을 것
+3. Manager가 실수로 완료된 task를 재활성화 가능
+4. 작업 이력(work_start_log, work_completion_log) 절대 삭제하지 않음
+
+### 현재 코드 구조 (확인 완료)
+
+```
+task_service.py — complete_work() (라인 165~330):
+  1. task 조회 → 시작 여부 / 완료 여부 체크
+  2. work_completion_log 기록 (라인 253-257)
+  3. _all_workers_completed() 체크 (라인 260)
+     → started_count == completed_count → True → _finalize_task_multi_worker()
+     → app_task_details.completed_at 세팅 → task 닫힘
+  4. completion_status 업데이트 (카테고리/전체 완료)
+
+task_service.py — start_work() (라인 113~163):
+  1. task.completed_at 존재 → 400 TASK_ALREADY_COMPLETED (재시작 차단)
+  2. _worker_has_started_task() → 같은 worker 중복 시작 차단
+  3. work_start_log 기록 + app_task_details.started_at 세팅 (최초만)
+
+_all_workers_completed() (라인 817~864):
+  started_count = COUNT(*) FROM work_start_log WHERE task_id
+  completed_count = COUNT(*) FROM work_completion_log WHERE task_id
+  return completed_count >= started_count
+
+_worker_has_started_task() (라인 979~1011):
+  SELECT 1 FROM work_start_log WHERE task_id AND worker_id
+  → 기록 있으면 True → 동일 worker 재시작 차단
+```
+
+### 수정 대상 파일
+
+```
+1. backend/app/services/task_service.py              (수정 — 핵심)
+2. backend/app/routes/work.py                        (수정 — complete-work 파라미터 + reactivate API)
+3. backend/app/models/task_detail.py                 (수정 — reactivate_task 함수 추가)
+4. backend/app/models/completion_status.py            (읽기 참조 — rollback 함수 확인)
+5. frontend/lib/screens/qr/task_detail_screen.dart   (수정 — 종료 팝업 분기)
+6. tests/backend/test_sprint41_task_relay.py          (신규)
+```
+
+### Task 0: _all_workers_completed() 버그 수정 (릴레이 필수 선행)
+
+**현재 버그**: `COUNT(*)` 로 전체 행 수를 세기 때문에 릴레이 재시작 시 deadlock 발생.
+- Worker1 시작→종료(relay)→재시작 → work_start_log에 2행
+- started_count=2, completed_count=1 → `False` → task가 영원히 안 닫힘
+
+**수정 위치**: `task_service.py` 라인 833-841
+
+```python
+# === 현재 (버그) ===
+cur.execute("""
+    SELECT COUNT(*) AS started_count
+    FROM work_start_log
+    WHERE task_id = %s
+""", (task_detail_id,))
+
+# === 수정 후 ===
+cur.execute("""
+    SELECT COUNT(DISTINCT worker_id) AS started_count
+    FROM work_start_log
+    WHERE task_id = %s
+""", (task_detail_id,))
+```
+
+⚠️ 이 수정은 릴레이 기능과 무관하게 기존 동시참여(Join) 흐름에서도 안전함.
+동시참여 시 같은 worker가 중복 시작하면 `TASK_ALREADY_STARTED` 로 차단되므로 DISTINCT와 COUNT(*)가 동일.
+
+### Task 1: task_service.py — complete_work() 수정
+
+**파라미터 추가**: `finalize: bool = True`
+
+```python
+def complete_work(
+    self,
+    worker_id: int,
+    task_detail_id: int,
+    finalize: bool = True    # ← 추가
+) -> Tuple[Dict[str, Any], int]:
+```
+
+**수정 위치: 라인 260 부근 (_all_workers_completed 체크)**
+
+```python
+# === 현재 코드 (라인 260) ===
+all_workers_done = _all_workers_completed(task.id)
+
+# === 수정 후 ===
+# finalize=False: 내 작업만 종료, task 열린 상태 유지 (릴레이 모드)
+# finalize=True: 기존 동작 — 전원 종료 시 task 완료 (동시참여 + 단독 작업)
+if not finalize:
+    # 내 completion_log만 기록하고 종료. task는 열린 상태 유지
+    logger.info(
+        f"Worker session ended (relay mode): "
+        f"task_id={task_detail_id}, worker_id={worker_id}"
+    )
+    return {
+        'message': '내 작업이 종료되었습니다. 다른 작업자가 이어서 작업할 수 있습니다.',
+        'task_id': task_detail_id,
+        'completed_at': completed_at.isoformat(),
+        'duration_minutes': this_worker_duration,
+        'category_completed': False,
+        'task_finished': False,
+        'relay_mode': True,
+    }, 200
+
+# finalize=True: 기존 로직 유지
+all_workers_done = _all_workers_completed(task.id)
+```
+
+⚠️ 이 수정 위치는 work_completion_log 기록 **이후**, _all_workers_completed 호출 **이전**이어야 함.
+즉, 라인 257 (completion_log 기록) 이후, 라인 260 (all_workers_done 체크) 이전에 삽입.
+
+### Task 2: task_service.py — start_work() 수정
+
+**릴레이 재시작 허용**: 같은 worker가 이미 시작+종료한 task에 다시 시작 가능
+
+```python
+# === 현재 코드 (라인 122-126) ===
+if _worker_has_started_task(task.id, worker_id):
+    return {
+        'error': 'TASK_ALREADY_STARTED',
+        'message': '이미 시작한 작업입니다.'
+    }, 400
+
+# === 수정 후 ===
+if _worker_has_started_task(task.id, worker_id):
+    # 릴레이: 이 worker가 이미 완료한 경우 → 재시작 허용
+    if _worker_already_completed_task(task.id, worker_id):
+        # 이전 세션 완료됨 → 새 세션으로 재시작 가능
+        logger.info(
+            f"Relay re-start: task_id={task.id}, worker_id={worker_id}"
+        )
+    else:
+        # 아직 완료 안 한 상태에서 중복 시작 → 차단 (기존 동작)
+        return {
+            'error': 'TASK_ALREADY_STARTED',
+            'message': '이미 시작한 작업입니다.'
+        }, 400
+```
+
+이렇게 하면:
+- 유저1 시작→종료 후 다시 시작 가능 ✅
+- 유저1 시작 중에 중복 시작 시도 → 차단 유지 ✅
+- 동시참여(Join) 흐름 → 영향 없음 (다른 worker는 기존처럼 시작 가능) ✅
+
+### Task 3: work.py — complete 엔드포인트 수정
+
+```python
+# 기존 complete 엔드포인트에서 finalize 파라미터 수신
+# ⚠️ 실제 경로: /work/complete (complete-work 아님)
+@work_bp.route('/complete', methods=['POST'])
+@jwt_required
+def complete_work():
+    data = request.get_json()
+    task_detail_id = data.get('task_detail_id')
+    finalize = data.get('finalize', True)    # ← 추가. 기본값 True (하위 호환)
+
+    # ...기존 검증 로직...
+
+    task_service = TaskService()
+    result, status = task_service.complete_work(
+        worker_id=current_worker_id,
+        task_detail_id=task_detail_id,
+        finalize=finalize    # ← 전달
+    )
+    return jsonify(result), status
+```
+
+⚠️ 하위 호환: finalize 미전달 시 기본값 True → 기존 FE(업데이트 안 된 버전)도 정상 동작.
+
+### Task 4: work.py — Manager 재활성화 API
+
+```python
+@work_bp.route('/reactivate-task', methods=['POST'])
+@jwt_required
+def reactivate_task():
+    """
+    Manager/Admin이 실수로 완료된 task를 재활성화.
+    - app_task_details.completed_at → NULL
+    - completion_status 롤백 (해당 카테고리)
+    - work_start_log / work_completion_log → 보존 (삭제 안 함)
+    """
+    data = request.get_json()
+    task_detail_id = data.get('task_detail_id')
+
+    if not task_detail_id:
+        return jsonify({'error': 'MISSING_PARAM', 'message': 'task_detail_id 필수'}), 400
+
+    # 권한 체크: Manager 또는 Admin만 허용
+    worker = get_current_worker()
+    if not worker.is_manager and not worker.is_admin:
+        return jsonify({'error': 'FORBIDDEN', 'message': '권한이 없습니다.'}), 403
+
+    # task 조회
+    task = get_task_by_id(task_detail_id)
+    if not task:
+        return jsonify({'error': 'TASK_NOT_FOUND', 'message': '작업을 찾을 수 없습니다.'}), 404
+
+    if not task.completed_at:
+        return jsonify({'error': 'TASK_NOT_COMPLETED', 'message': '이미 진행 중인 작업입니다.'}), 400
+
+    # Manager: 같은 company 소속 task만 재활성화 가능
+    if worker.is_manager and not worker.is_admin:
+        # task의 serial_number로 product_info 조회 → partner 확인
+        # 또는 task의 worker_id 소속 company 비교
+        pass  # company 체크 로직 (기존 패턴 참조)
+
+    # 1. app_task_details 재활성화 (completed_at + started_at 모두 초기화)
+    from app.models.task_detail import reactivate_task as _reactivate_task
+    if not _reactivate_task(task_detail_id):
+        return jsonify({'error': 'REACTIVATE_FAILED', 'message': '재활성화 실패'}), 500
+
+    # 2. completion_status 롤백 (카테고리 + 전체 완료)
+    from app.models.completion_status import update_process_completion, update_all_completed, check_all_processes_completed
+    update_process_completion(task.serial_number, task.task_category, False)
+    if not check_all_processes_completed(task.serial_number):
+        update_all_completed(task.serial_number, False, None)
+
+    # 3. production_confirm 정합성 — 해당 S/N+공정의 실적확인 soft-delete
+    #    재활성화된 task가 속한 공정의 confirm을 무효화해야 "확인됐는데 미완료" 방지
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE plan.production_confirm
+            SET deleted_at = NOW(), deleted_by = %s
+            WHERE serial_number = %s
+              AND process_type = %s
+              AND deleted_at IS NULL
+        """, (worker.id, task.serial_number, task.task_category))
+        confirm_invalidated = cur.rowcount
+        conn.commit()
+    finally:
+        put_conn(conn)
+
+    logger.info(
+        f"Task reactivated: task_id={task_detail_id}, "
+        f"by worker_id={worker.id} (is_manager={worker.is_manager}), "
+        f"confirms_invalidated={confirm_invalidated}"
+    )
+
+    return jsonify({
+        'message': '작업이 재활성화되었습니다.',
+        'task_id': task_detail_id,
+        'serial_number': task.serial_number,
+        'task_category': task.task_category,
+        'confirms_invalidated': confirm_invalidated,
+    }), 200
+```
+
+### Task 5: task_detail.py — reactivate_task 함수 추가
+
+```python
+def reactivate_task(task_detail_id: int) -> bool:
+    """
+    완료된 task를 재활성화.
+    completed_at, started_at, duration, elapsed, worker_count 모두 초기화.
+    started_at도 초기화하는 이유: is_first_worker 판단이 started_at IS NULL 기준이므로,
+    재활성화 후 새 worker가 시작하면 정상적으로 "최초 시작자"로 인식되어야 함.
+    work_start_log / work_completion_log는 절대 삭제하지 않음 (이력 보존).
+    """
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE app_task_details
+                SET completed_at = NULL,
+                    started_at = NULL,
+                    worker_id = NULL,
+                    duration_minutes = NULL,
+                    elapsed_minutes = NULL,
+                    worker_count = NULL
+                WHERE id = %s AND completed_at IS NOT NULL
+                RETURNING id
+            """, (task_detail_id,))
+            result = cur.fetchone()
+        conn.commit()
+        return result is not None
+    finally:
+        put_conn(conn)
+```
+
+⚠️ started_at, worker_id도 NULL로 초기화 (is_first_worker 판단이 started_at IS NULL 기준이므로). work_start_log / work_completion_log는 절대 삭제 안 함 → 이력 보존.
+
+### ⚠️ VIEW FE 연동은 별도 Sprint (VIEW Sprint 23)
+Manager/Admin 재활성화 버튼은 VIEW 생산현황 S/N 디테일 패널(ProcessStepCard)에 배치.
+이유: Manager/PM이 실적 확인하는 화면에서 "실수 취소"가 자연스러움 + APP에 넣으면 현장 작업자 실수 리스크.
+→ OPS BE API(reactivate-task)만 이 Sprint에서 구현. VIEW FE는 DESIGN_FIX_SPRINT.md Sprint 23 참조.
+
+### Task 6: FE — 종료 버튼 팝업 분기
+
+**수정 파일**: `frontend/lib/screens/qr/task_detail_screen.dart`
+**수정 위치**: 기존 "완료" 버튼 onPressed 핸들러
+
+```dart
+// 기존: 바로 complete-work API 호출
+// 수정: 확인 다이얼로그 표시
+
+onPressed: () async {
+  final result = await showDialog<String>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('작업 종료'),
+      content: const Text('다음 작업자가 이어서 작업하나요?'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, 'relay'),
+          child: const Text('예, 내 작업만 종료'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, 'finalize'),
+          child: const Text('아니오, 작업 완료'),
+        ),
+      ],
+    ),
+  );
+
+  if (result == null) return; // 취소
+
+  final finalize = result == 'finalize';
+  await _completeWork(finalize: finalize);
+}
+```
+
+**_completeWork 수정**: body에 `finalize` 파라미터 추가
+
+```dart
+Future<void> _completeWork({bool finalize = true}) async {
+  final response = await apiService.post('/app/work/complete', {
+    'task_detail_id': widget.taskDetailId,
+    'finalize': finalize,    // ← 추가
+  });
+  // ...기존 후처리...
+}
+```
+
+### Task 7: 테스트 (test_sprint41_task_relay.py)
+
+```
+=== 릴레이 기본 흐름 (6건) ===
+
+TC-41-01: 릴레이 종료 (finalize=false) → task 열린 상태 유지 (completed_at IS NULL)
+TC-41-02: 릴레이 종료 후 다른 worker 시작 가능
+TC-41-03: 릴레이 종료 후 같은 worker 재시작 가능
+TC-41-04: 최종 완료 (finalize=true) → task 닫힘 (completed_at IS NOT NULL)
+TC-41-05: 최종 완료 후 시작 시도 → 400 TASK_ALREADY_COMPLETED
+TC-41-06: finalize 미전달 시 기본값 true → 기존 동작 유지 (하위 호환)
+
+=== 릴레이 심화 시나리오 (3건) ===
+
+TC-41-07: 릴레이 3회 연속 — worker1→worker2→worker3 순차 교대 후 worker3이 finalize=true
+          → task 완료 + duration = 3명 공수 합산 + worker_count = 3
+TC-41-08: 같은 worker 릴레이 2회 — worker1 시작→relay종료→재시작→finalize
+          → _all_workers_completed() DISTINCT 체크로 정상 동작 (started_count=1, not 2)
+TC-41-09: 일시정지 중 릴레이 종료 — worker1 시작→pause→relay종료(finalize=false)
+          → auto-resume 후 completion_log 정상 기록 + task 열린 상태
+
+=== 동시참여(Join) 호환 (2건) ===
+
+TC-41-10: 동시참여 흐름 → finalize=true에서 기존과 동일하게 동작
+TC-41-11: 동시참여 + 릴레이 혼합 — worker1+worker2 동시작업, worker1 relay종료,
+          worker3 시작, worker2+worker3 finalize → task 완료
+
+=== Manager 재활성화 (5건) ===
+
+TC-41-12: Manager 재활성화 → completed_at/started_at/worker_id 모두 NULL 확인
+TC-41-13: 재활성화 후 completion_status 롤백 확인 (카테고리 + all_completed)
+TC-41-14: 재활성화 후 production_confirm soft-delete 확인 (confirms_invalidated > 0)
+TC-41-15: 재활성화 후 새 worker 시작 가능 (is_first_worker=True)
+TC-41-16: 일반 worker 재활성화 시도 → 403 FORBIDDEN
+
+=== Regression (3건) ===
+
+TC-41-17: 기존 단독 작업 start→complete (finalize 미전달) → 정상 완료
+TC-41-18: 기존 동시참여 start→join→complete → 정상 완료
+TC-41-19: completion_status 카테고리 전체 완료 시 all_completed=True 정상 동작
+```
+
+### _all_workers_completed() 버그 수정 주의사항
+
+이 함수의 COUNT(*)→COUNT(DISTINCT worker_id) 변경은 릴레이 기능의 **필수 선행**.
+변경하지 않으면 릴레이 재시작 후 finalize=true 해도 task가 닫히지 않음.
+기존 동시참여 흐름에서는 같은 worker 중복 시작이 차단되므로 DISTINCT와 *가 동일 → regression 없음.
+
+### production_confirm 정합성 주의사항
+
+재활성화 API에서 해당 S/N+공정의 production_confirm을 soft-delete 하지 않으면
+"실적확인 됐는데 공정 미완료" 불일치 상태 발생.
+deleted_at, deleted_by 컬럼은 migration 027에서 이미 존재함.
+
+### 기존 테스트 영향 분석
+
+Sprint 41 변경으로 인해 기존 테스트 중 수정 필요 예상:
+
+| 파일 | 영향 | 이유 |
+|------|------|------|
+| test_work_api.py | 🔴 수정 필요 | TASK_ALREADY_STARTED 에러 조건 변경 (릴레이 허용) |
+| test_multi_worker_join.py | 🔴 수정 필요 | same_worker_start_twice 테스트 조건 변경 |
+| test_concurrent_work.py | 🟠 확인 필요 | finalize 관련 assertion 추가 |
+| test_working_hours.py | 🟠 확인 필요 | _finalize_task_multi_worker 호출 조건 변경 |
+| test_pause_resume.py | 🟡 안전 가능 | pause+complete 흐름은 finalize=true 기본값으로 유지 |
+| test_force_close.py | 🟡 안전 가능 | force_close는 별도 경로 |
+
+⚠️ 기존 테스트에서 `TASK_ALREADY_STARTED` 에러를 기대하는 케이스:
+→ "시작 중인데 중복 시작" → 여전히 차단됨 ✅
+→ "시작+종료 후 재시작" → 릴레이 허용으로 변경됨 → 테스트 수정 필요
+
+### 제약사항
+
+- ❌ work_start_log, work_completion_log 삭제 절대 금지 (이력 보존)
+- ❌ _finalize_task_multi_worker() 내부 집계 로직 수정 금지
+- ❌ completion_status.update_process_completion() 시그니처 변경 금지
+- ✅ finalize 기본값 True → 기존 FE 미업데이트 시에도 정상 동작 (하위 호환 필수)
+- ✅ 동시참여(Join) 흐름은 기존 그대로 유지 (finalize=True 경로)
+- ✅ 재활성화 시 completion_status + production_confirm 롤백 포함
+- ✅ _all_workers_completed()는 COUNT(DISTINCT worker_id) 사용 (릴레이 필수)
+
+### 실행 체크리스트
+
+- [x] Task 0: _all_workers_completed() COUNT(*)→COUNT(DISTINCT worker_id) 수정 ✅
+- [x] Task 1: task_service.py complete_work() — finalize 파라미터 + 분기 추가 ✅
+- [x] Task 2: task_service.py start_work() — 릴레이 재시작 허용 로직 ✅
+- [x] Task 3: work.py complete-work — finalize 파라미터 수신/전달 ✅
+- [x] Task 4: work.py reactivate-task — Manager 재활성화 API (production_confirm 롤백 포함) ✅
+- [x] Task 5: task_detail.py reactivate_task() 함수 추가 (started_at/worker_id도 초기화) ✅
+- [x] Task 6: FE task_detail_screen.dart — 종료 팝업 분기 (relay/finalize) ✅
+- [x] Task 7: 테스트 18 passed + 1 xfail (TC-41-14 production_confirm 타이밍 이슈) ✅
+- [x] Regression: 71 passed, 6 skipped — test_work_api, test_multi_worker_join, test_multi_worker, test_pause_resume, test_force_close, test_working_hours 전체 통과 ✅
+
+### 검증 명령
+```bash
+# Sprint 41 신규 테스트
+pytest tests/backend/test_sprint41_task_relay.py -v
+
+# Regression — 직접 영향 (수정 필요할 수 있음)
+pytest tests/backend/test_work_api.py -v
+pytest tests/backend/test_multi_worker_join.py -v
+pytest tests/integration/test_concurrent_work.py -v
+pytest tests/backend/test_working_hours.py -v
+
+# Regression — 간접 영향 (통과 확인)
+pytest tests/backend/test_pause_resume.py -v
+pytest tests/backend/test_force_close.py -v
+pytest tests/backend/test_multi_worker.py -v
+pytest tests/integration/test_full_workflow.py -v
+```

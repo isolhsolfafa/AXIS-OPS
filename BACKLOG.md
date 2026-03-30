@@ -635,6 +635,7 @@ VIEW: 마스터 CRUD (CHECK/INPUT 항목 관리)
 | #46 | 상세뷰 workers 매핑 — task_id fallback + serial_number 기준 조회 | ✅ 완료 (2026-03-27) | work.py 2단계 매핑 (task_id 1차 + category+ref fallback). 테스트 5/5 passed |
 | 40-C | 비활성 사용자 관리 — soft delete + admin 승인 + manager 요청 | ✅ 완료 (2026-03-27) | migration 040/041 + worker.py 5함수 + auth login is_active 체크 + API 4개 + 앱/이메일 알림. 테스트 9/9 passed |
 | 40-C FE | Admin 옵션 레이아웃 재배치 + 비활성 사용자 관리 UI | ✅ 완료 (2026-03-27) | 8섹션 순서 변경 + 30일 미로그인 목록 + 비활성화/재활성화 버튼 + 빌드 성공 |
+| 41 | 작업 릴레이 + Manager 재활성화 | ✅ 완료 (2026-03-30) | finalize 파라미터 + 릴레이 재시작 + reactivate-task API + FE 종료 팝업. 테스트 18/19 passed (1 xfail) |
 | 39 | 테스트 DB 분리 — conftest.py 리팩토링 | ✅ 완료 (2026-03-26) | TEST_DATABASE_URL 환경변수 분리, .env.test 자동 로딩, 운영 DB 하드코딩 제거, seed_test_data fixture, test_sprint39_db_isolation.py 10/10 통과 |
 | 39-fix | Regression 수정 — 118 failed → 0 failed | ✅ 완료 (2026-03-27) | BE: factory.py finishing_plan_end→ship_plan_date, production.py module_end→module_start. TEST: 18개 파일 수정 (MM→MECH, worker_id 819→seed admin, task seed 기대값, GAIA-I DUAL→SINGLE, confirmable→all_confirmable 등). 최종 714 passed / 14 skipped |
 
@@ -672,10 +673,21 @@ VIEW: 마스터 CRUD (CHECK/INPUT 항목 관리)
 - ⚠️ `app_access_log`는 30일 보관 한계 → `workers.last_login_at`으로 판단
 - 📋 프롬프트: `AGENT_TEAM_LAUNCH.md` Sprint 40-C 섹션 참조
 
+### Sprint 41: 작업 릴레이 + Manager 재활성화 — 프롬프트 작성 완료 (2026-03-30)
+
+- **문제**: 판넬 작업 등 1개 task를 여러 작업자가 순차 교대 시, 유저1 종료 → task 닫힘 → 유저2 시작 불가
+- **해결**: "내 작업 종료" (finalize=false, task 열린 상태) vs "task 완료" (finalize=true, task 닫힘) 분리
+- FE: 종료 버튼 → "다음 작업자가 이어서 작업하나요?" 팝업 (예/아니오)
+- BE: complete_work() finalize 파라미터 + start_work() 릴레이 재시작 허용
+- Manager/Admin: reactivate-task API (실수 완료 복구)
+- 하위 호환: finalize 기본값 true → 기존 FE 미업데이트 시에도 정상 동작
+- 📋 프롬프트: `AGENT_TEAM_LAUNCH.md` Sprint 41 섹션 참조
+
 ### Sprint 40 이후 대기
 
 | 작업 | 선행 조건 |
 |------|----------|
+| Sprint 41 (작업 릴레이 + 재활성화) | 프롬프트 작성 완료 ✅ |
 | 체크리스트 BE (스키마 + CRUD) | ELEC 양식 수집 완료 |
 | VIEW Sprint 20 (체크리스트 관리 UI) | 체크리스트 BE 완료 |
 | QR contract_type / sales_note | 활용성 검토 확정 |

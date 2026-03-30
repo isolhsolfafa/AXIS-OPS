@@ -547,6 +547,56 @@ def toggle_task_applicable(task_detail_id: int, is_applicable: bool) -> bool:
             put_conn(conn)
 
 
+def reactivate_task(task_detail_id: int) -> bool:
+    """
+    Sprint 41: 완료된 task를 재활성화.
+
+    completed_at, started_at, worker_id, duration_minutes, elapsed_minutes,
+    worker_count 모두 NULL로 초기화.
+
+    started_at도 초기화하는 이유: is_first_worker 판단이 started_at IS NULL
+    기준이므로, 재활성화 후 새 worker가 시작하면 정상적으로 "최초 시작자"로
+    인식되어야 함.
+
+    work_start_log / work_completion_log는 절대 삭제하지 않음 (이력 보존).
+
+    Args:
+        task_detail_id: 재활성화할 app_task_details.id
+
+    Returns:
+        성공 시 True (완료된 task가 존재하여 업데이트됨), 실패 시 False
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE app_task_details
+            SET completed_at = NULL,
+                started_at = NULL,
+                worker_id = NULL,
+                duration_minutes = NULL,
+                elapsed_minutes = NULL,
+                worker_count = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s AND completed_at IS NOT NULL
+            RETURNING id
+        """, (task_detail_id,))
+        result = cur.fetchone()
+        conn.commit()
+        if result:
+            logger.info(f"Task reactivated: id={task_detail_id}")
+        return result is not None
+    except PsycopgError as e:
+        if conn:
+            conn.rollback()
+        logger.error(f"Failed to reactivate task id={task_detail_id}: {e}")
+        return False
+    finally:
+        if conn:
+            put_conn(conn)
+
+
 def set_paused(
     task_detail_id: int,
     is_paused: bool,

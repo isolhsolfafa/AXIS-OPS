@@ -11,7 +11,7 @@ from flask import Blueprint, request, jsonify, g
 from typing import Tuple, Dict, Any
 
 from app.config import Config
-from app.middleware.jwt_auth import jwt_required, get_current_worker_id
+from app.middleware.jwt_auth import jwt_required, get_current_worker_id, get_current_worker
 from app.services.task_service import TaskService
 from app.models.task_detail import get_task_by_id, get_tasks_by_serial_number, get_tasks_by_qr_doc_id
 from app.models.completion_status import get_or_create_completion_status
@@ -176,13 +176,17 @@ def complete_work() -> Tuple[Dict[str, Any], int]:
             'message': 'task_detail_id 또는 task_id가 필요합니다.'
         }), 400
 
+    # Sprint 41: finalize 파라미터 수신 (기본값 True — 하위 호환)
+    finalize = data.get('finalize', True) if data else True
+
     # 현재 작업자 ID 추출 (JWT에서)
     worker_id = get_current_worker_id()
 
     # task_service 호출
     response, status_code = task_service.complete_work(
         worker_id=worker_id,
-        task_detail_id=task_detail_id
+        task_detail_id=task_detail_id,
+        finalize=finalize
     )
 
     # 성공 시 업데이트된 전체 TaskDetail 반환
@@ -191,11 +195,126 @@ def complete_work() -> Tuple[Dict[str, Any], int]:
         if updated_task:
             result = _task_to_dict(updated_task)
             result['category_completed'] = response.get('category_completed', False)
+            result['task_finished'] = response.get('task_finished', True)
+            result['relay_mode'] = response.get('relay_mode', False)
             if 'duration_warnings' in response:
                 result['duration_warnings'] = response['duration_warnings']
             return jsonify(result), 200
 
     return jsonify(response), status_code
+
+
+@work_bp.route("/work/reactivate-task", methods=["POST"])
+@jwt_required
+def reactivate_task_route() -> Tuple[Dict[str, Any], int]:
+    """
+    Sprint 41: Manager/Admin이 실수로 완료된 task를 재활성화.
+
+    - app_task_details.completed_at / started_at / worker_id / duration 등 초기화
+    - completion_status 롤백 (해당 카테고리 + 전체 완료)
+    - production_confirm soft-delete (정합성 유지)
+    - work_start_log / work_completion_log 보존 (이력 유지)
+
+    Request Body:
+        {"task_detail_id": int}
+
+    Response:
+        200: 재활성화 성공
+        400: 파라미터 누락 / 이미 진행 중인 task
+        403: 권한 없음 (Manager/Admin만)
+        404: task 미발견
+    """
+    data = request.get_json()
+    task_detail_id = data.get('task_detail_id') if data else None
+
+    if not task_detail_id:
+        return jsonify({'error': 'MISSING_PARAM', 'message': 'task_detail_id 필수'}), 400
+
+    # 권한 체크: Manager 또는 Admin만 허용
+    worker = get_current_worker()
+    if not worker or (not worker.is_manager and not worker.is_admin):
+        return jsonify({'error': 'FORBIDDEN', 'message': '권한이 없습니다.'}), 403
+
+    # task 조회
+    task = get_task_by_id(task_detail_id)
+    if not task:
+        return jsonify({'error': 'TASK_NOT_FOUND', 'message': '작업을 찾을 수 없습니다.'}), 404
+
+    if not task.completed_at:
+        return jsonify({'error': 'TASK_NOT_COMPLETED', 'message': '이미 진행 중인 작업입니다.'}), 400
+
+    # Manager: 같은 company 소속 task만 재활성화 가능
+    if worker.is_manager and not worker.is_admin:
+        from app.models.product_info import get_product_by_serial_number as _get_product
+        product = _get_product(task.serial_number)
+        if product:
+            company = worker.company or ''
+            # MECH task: mech_partner 확인
+            # ELEC task: elec_partner 확인
+            # TMS task: module_outsourcing 확인
+            mech_partner = getattr(product, 'mech_partner', None) or ''
+            elec_partner = getattr(product, 'elec_partner', None) or ''
+            module_outsourcing = getattr(product, 'module_outsourcing', None) or ''
+            category = task.task_category
+            allowed = False
+            if category == 'MECH' and company and company.upper() in mech_partner.upper():
+                allowed = True
+            elif category in ('ELEC',) and company and company.upper() in elec_partner.upper():
+                allowed = True
+            elif category == 'TMS' and company and company.upper() in module_outsourcing.upper():
+                allowed = True
+            elif category in ('PI', 'QI', 'SI') and company == 'GST':
+                allowed = True
+            if not allowed:
+                return jsonify({'error': 'FORBIDDEN', 'message': '자사 제품이 아닙니다.'}), 403
+
+    # 1. app_task_details 재활성화 (completed_at + started_at 등 초기화)
+    from app.models.task_detail import reactivate_task as _reactivate_task
+    if not _reactivate_task(task_detail_id):
+        return jsonify({'error': 'REACTIVATE_FAILED', 'message': '재활성화 실패'}), 500
+
+    # 2. completion_status 롤백 (카테고리 + 전체 완료)
+    from app.models.completion_status import (
+        update_process_completion, update_all_completed, check_all_processes_completed
+    )
+    update_process_completion(task.serial_number, task.task_category, False)
+    if not check_all_processes_completed(task.serial_number):
+        update_all_completed(task.serial_number, False, None)
+
+    # 3. production_confirm 정합성 — 해당 S/N+공정의 실적확인 soft-delete
+    from app.db_pool import get_conn
+    conn = get_conn()
+    confirm_invalidated = 0
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE plan.production_confirm
+            SET deleted_at = NOW(), deleted_by = %s
+            WHERE serial_number = %s
+              AND process_type = %s
+              AND deleted_at IS NULL
+        """, (worker.id, task.serial_number, task.task_category))
+        confirm_invalidated = cur.rowcount
+        conn.commit()
+    except Exception as e:
+        logger.warning(f"production_confirm soft-delete failed (non-critical): {e}")
+        conn.rollback()
+    finally:
+        put_conn(conn)
+
+    logger.info(
+        f"Task reactivated: task_id={task_detail_id}, "
+        f"by worker_id={worker.id} (is_manager={worker.is_manager}), "
+        f"confirms_invalidated={confirm_invalidated}"
+    )
+
+    return jsonify({
+        'message': '작업이 재활성화되었습니다.',
+        'task_id': task_detail_id,
+        'serial_number': task.serial_number,
+        'task_category': task.task_category,
+        'confirms_invalidated': confirm_invalidated,
+    }), 200
 
 
 @work_bp.route("/work/complete-single", methods=["POST"])
