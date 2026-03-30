@@ -241,11 +241,16 @@ class TaskService:
             }, 400
 
         # 이 작업자가 이미 완료 기록을 남긴 경우 확인
+        # Sprint 41 Fix: 릴레이 재시작한 경우(last_start > last_completion)는 재완료 허용
         if _worker_already_completed_task(task.id, worker_id):
-            return {
-                'error': 'TASK_ALREADY_COMPLETED',
-                'message': '이미 완료한 작업입니다.'
-            }, 400
+            if not _worker_restarted_after_completion(task.id, worker_id):
+                return {
+                    'error': 'TASK_ALREADY_COMPLETED',
+                    'message': '이미 완료한 작업입니다.'
+                }, 400
+            logger.info(
+                f"Relay re-completion allowed: task_id={task.id}, worker_id={worker_id}"
+            )
 
         # 완료 시간 (KST 기준)
         completed_at = datetime.now(Config.KST)
@@ -1101,6 +1106,49 @@ def _worker_already_completed_task(task_detail_id: int, worker_id: int) -> bool:
 
     except PsycopgError as e:
         logger.error(f"_worker_already_completed_task failed: task_id={task_detail_id}, worker_id={worker_id}, error={e}")
+        return False
+    finally:
+        if conn:
+            put_conn(conn)
+
+
+def _worker_restarted_after_completion(task_detail_id: int, worker_id: int) -> bool:
+    """
+    Sprint 41 Fix: 릴레이 재시작 여부 확인.
+    최신 work_start_log.started_at > 최신 work_completion_log.completed_at이면
+    릴레이 재시작한 것으로 판단.
+
+    Args:
+        task_detail_id: app_task_details.id
+        worker_id: 작업자 ID
+
+    Returns:
+        릴레이 재시작한 경우 True
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT
+                (SELECT MAX(started_at) FROM work_start_log
+                 WHERE task_id = %s AND worker_id = %s) AS last_start,
+                (SELECT MAX(completed_at) FROM work_completion_log
+                 WHERE task_id = %s AND worker_id = %s) AS last_completion
+        """, (task_detail_id, worker_id, task_detail_id, worker_id))
+
+        row = cur.fetchone()
+        if not row or not row[0] or not row[1]:
+            return False
+
+        return row[0] > row[1]  # last_start > last_completion → 재시작함
+
+    except PsycopgError as e:
+        logger.error(
+            f"_worker_restarted_after_completion failed: "
+            f"task_id={task_detail_id}, worker_id={worker_id}, error={e}"
+        )
         return False
     finally:
         if conn:
