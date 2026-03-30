@@ -244,27 +244,35 @@ def reactivate_task_route() -> Tuple[Dict[str, Any], int]:
         return jsonify({'error': 'TASK_NOT_COMPLETED', 'message': '이미 진행 중인 작업입니다.'}), 400
 
     # Manager: 같은 company 소속 task만 재활성화 가능
+    # Fix Sprint 48: company_base 추출 + 비교 방향 수정 (progress_service.py 패턴 일치)
     if worker.is_manager and not worker.is_admin:
         from app.models.product_info import get_product_by_serial_number as _get_product
         product = _get_product(task.serial_number)
         if product:
             company = worker.company or ''
-            # MECH task: mech_partner 확인
-            # ELEC task: elec_partner 확인
-            # TMS task: module_outsourcing 확인
-            mech_partner = getattr(product, 'mech_partner', None) or ''
-            elec_partner = getattr(product, 'elec_partner', None) or ''
-            module_outsourcing = getattr(product, 'module_outsourcing', None) or ''
+            # TMS(M) → TMS, TMS(E) → TMS 등 접미사 제거
+            company_base = company.upper().replace('(M)', '').replace('(E)', '')
+            mech_partner = (getattr(product, 'mech_partner', None) or '').upper()
+            elec_partner = (getattr(product, 'elec_partner', None) or '').upper()
+            module_outsourcing = (getattr(product, 'module_outsourcing', None) or '').upper()
             category = task.task_category
             allowed = False
-            if category == 'MECH' and company and company.upper() in mech_partner.upper():
-                allowed = True
-            elif category in ('ELEC',) and company and company.upper() in elec_partner.upper():
-                allowed = True
-            elif category == 'TMS' and company and company.upper() in module_outsourcing.upper():
-                allowed = True
+
+            if category == 'MECH' and company_base:
+                allowed = company_base == mech_partner or company_base in mech_partner
+
+            elif category == 'ELEC' and company_base:
+                allowed = company_base == elec_partner or company_base in elec_partner
+
+            elif category == 'TMS' and company_base:
+                allowed = (
+                    company_base == module_outsourcing or company_base in module_outsourcing
+                    or company_base == mech_partner or company_base in mech_partner
+                )
+
             elif category in ('PI', 'QI', 'SI') and company == 'GST':
                 allowed = True
+
             if not allowed:
                 return jsonify({'error': 'FORBIDDEN', 'message': '자사 제품이 아닙니다.'}), 403
 
