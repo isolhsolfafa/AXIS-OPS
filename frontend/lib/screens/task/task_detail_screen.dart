@@ -325,7 +325,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
               else if (task.status == 'in_progress' && task.myWorkStatus == 'not_started')
                 _buildJoinButton(task.id, workerId)
               else if (task.status == 'in_progress' && task.myWorkStatus == 'completed')
-                _buildMyCompletedBadge()
+                _buildRelayRestartRow(task.id, workerId)
               else if (task.status == 'in_progress' && task.isPaused)
                 _buildResumeRow(task.id)
               else if (task.status == 'in_progress' && !task.isPaused)
@@ -460,6 +460,47 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
           Text('내 작업 완료', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: GxColors.success)),
         ],
       ),
+    );
+  }
+
+  /// 릴레이 재시작 — "내 작업 완료" 상태에서 다시 시작 가능
+  Widget _buildRelayRestartRow(int taskId, int workerId) {
+    return Column(
+      children: [
+        // 상태 배지 (기존 유지)
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: GxColors.accentSoft,
+            borderRadius: BorderRadius.circular(GxRadius.sm),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.check_circle_outline, color: GxColors.accent, size: 16),
+              const SizedBox(width: 6),
+              Text('내 작업 완료',
+                style: TextStyle(color: GxColors.accent, fontSize: 13, fontWeight: FontWeight.w500)),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        // 재시작 버튼
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: _isActionLoading ? null : () => _handleStartTask(taskId, workerId),
+            icon: const Icon(Icons.replay, size: 18),
+            label: const Text('다시 시작'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: GxColors.accent,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.md)),
+              padding: const EdgeInsets.symmetric(vertical: 12),
+            ),
+          ),
+        ),
+      ],
     );
   }
 

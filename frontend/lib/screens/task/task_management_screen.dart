@@ -465,22 +465,30 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
                           ),
                         ),
                       ),
-                    // 내 작업 완료 (나는 완료, 전체 Task는 아직 진행 중)
-                    if (task.status == 'in_progress' && task.myWorkStatus == 'completed')
-                      Expanded(
-                        child: Container(
-                          height: 38,
-                          alignment: Alignment.center,
-                          decoration: BoxDecoration(
-                            color: GxColors.successBg,
-                            borderRadius: BorderRadius.circular(GxRadius.sm),
-                          ),
-                          child: const Text(
-                            '내 작업 완료',
-                            style: TextStyle(color: GxColors.success, fontWeight: FontWeight.w600, fontSize: 13),
-                          ),
+                    // 내 작업 완료 (나는 완료, 전체 Task는 아직 진행 중) + 릴레이 재시작 버튼
+                    if (task.status == 'in_progress' && task.myWorkStatus == 'completed') ...[
+                      Container(
+                        height: 38,
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: GxColors.successBg,
+                          borderRadius: BorderRadius.circular(GxRadius.sm),
+                        ),
+                        child: const Text(
+                          '내 작업 완료',
+                          style: TextStyle(color: GxColors.success, fontWeight: FontWeight.w600, fontSize: 13),
                         ),
                       ),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        icon: const Icon(Icons.replay, color: GxColors.accent, size: 20),
+                        tooltip: '다시 시작',
+                        onPressed: () => _handleStartTask(task.id, workerId),
+                        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                        padding: EdgeInsets.zero,
+                      ),
+                    ],
                     // 일시정지 상태: "일시정지" 배지 + "재개" 버튼
                     if (task.status == 'in_progress' && task.isPaused) ...[
                       Container(

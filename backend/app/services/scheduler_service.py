@@ -110,7 +110,16 @@ def init_scheduler() -> BackgroundScheduler:
         replace_existing=True
     )
 
-    logger.info("Scheduler initialized with 7 jobs")
+    # ── Sprint 41-B: 릴레이 미완료 감지 — 매 1시간 (task_reminder와 동일 주기) ──
+    _scheduler.add_job(
+        func=check_orphan_relay_tasks_job,
+        trigger=CronTrigger(minute=0),
+        id='check_orphan_relay_tasks',
+        name='릴레이 미완료 task 감지 (매 1시간)',
+        replace_existing=True
+    )
+
+    logger.info("Scheduler initialized with 8 jobs")
     return _scheduler
 
 
@@ -771,6 +780,86 @@ def send_break_end_notifications(pause_type: str, message: str) -> None:
         f"send_break_end_notifications: notified {len(notified_workers)} workers, "
         f"auto-resumed {resumed_count} pause logs (pause_type={pause_type})"
     )
+
+
+def check_orphan_relay_tasks_job() -> None:
+    """
+    Sprint 41-B: 릴레이 미완료 task 감지 → Manager 알림 (매 1시간 실행)
+
+    조건: work_completion_log 마지막 기록 후 4시간 이상 경과 + completed_at IS NULL
+    대상: MECH, ELEC, TMS 카테고리 (협력사 교대 작업 대상)
+    중복 방지: 동일 task에 대해 24시간 내 이미 RELAY_ORPHAN 알림이 있으면 발송 안 함
+    """
+    conn = None
+    try:
+        logger.info("Running check_orphan_relay_tasks_job")
+        from app.models.worker import get_db_connection as _get_db_connection
+        conn = _get_db_connection()
+        cur = conn.cursor()
+
+        # 4시간 이상 경과된 릴레이 미완료 task 조회
+        cur.execute("""
+            SELECT atd.id AS task_detail_id,
+                   atd.serial_number,
+                   atd.qr_doc_id,
+                   atd.task_category,
+                   atd.task_name,
+                   MAX(wcl.completed_at) AS last_completion_at,
+                   COUNT(DISTINCT wcl.worker_id) AS worker_count
+            FROM app_task_details atd
+            JOIN work_completion_log wcl ON wcl.task_id = atd.id
+            WHERE atd.completed_at IS NULL
+              AND atd.is_applicable = TRUE
+              AND atd.task_category IN ('MECH', 'ELEC', 'TMS')
+            GROUP BY atd.id
+            HAVING MAX(wcl.completed_at) < NOW() - INTERVAL '4 hours'
+        """)
+        orphans = cur.fetchall()
+
+        from app.services.alert_service import create_and_broadcast_alert
+        alert_count = 0
+
+        for orphan in orphans:
+            # 중복 알림 방지: 같은 task에 대해 24시간 내 이미 알림이 존재하는지 확인
+            cur.execute("""
+                SELECT 1 FROM app_alert_logs
+                WHERE alert_type = 'RELAY_ORPHAN'
+                  AND serial_number = %s
+                  AND message LIKE %s
+                  AND created_at > NOW() - INTERVAL '24 hours'
+                LIMIT 1
+            """, (orphan['serial_number'], f"%{orphan['task_name']}%"))
+
+            if cur.fetchone():
+                continue  # 24시간 내 이미 알림 발송됨
+
+            # Manager 알림 생성
+            create_and_broadcast_alert({
+                'alert_type': 'RELAY_ORPHAN',
+                'message': (
+                    f"[릴레이 미완료] {orphan['serial_number']} "
+                    f"{orphan['task_name']} — "
+                    f"작업자 {orphan['worker_count']}명 참여 후 "
+                    f"4시간 이상 미완료 상태입니다."
+                ),
+                'serial_number': orphan['serial_number'],
+                'qr_doc_id': orphan['qr_doc_id'],
+                'target_role': orphan['task_category'],  # 해당 카테고리 Manager에게
+            })
+            alert_count += 1
+
+            logger.info(
+                f"Relay orphan alert sent: task_id={orphan['task_detail_id']}, "
+                f"serial_number={orphan['serial_number']}"
+            )
+
+        logger.info(f"check_orphan_relay_tasks_job: {alert_count} alerts sent (orphans={len(orphans)})")
+
+    except Exception as e:
+        logger.error(f"check_orphan_relay_tasks_job failed: {e}", exc_info=True)
+    finally:
+        if conn:
+            put_conn(conn)
 
 
 def _cleanup_access_logs():

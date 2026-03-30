@@ -44,6 +44,16 @@ logger = logging.getLogger(__name__)
 # 유효한 공정 유형 (Sprint 6: MM→MECH, EE→ELEC)
 VALID_PROCESS_TYPES = {'MECH', 'ELEC', 'TM', 'PI', 'QI', 'SI'}
 
+# Sprint 41-B: FINAL phase task ID 목록 — 완료 시 릴레이 미완료 task 자동 마감 트리거
+FINAL_TASK_IDS = {
+    'SELF_INSPECTION',  # MECH 자주검사
+    'INSPECTION',       # ELEC 자주검사 (검수)
+    'PRESSURE_TEST',    # TMS 가압검사
+    'PI_CHAMBER',       # PI CHAMBER 가압검사
+    'QI_INSPECTION',    # QI 공정검사
+    'SI_SHIPMENT',      # SI 출하완료
+}
+
 
 class TaskService:
     """작업 관련 비즈니스 로직"""
@@ -326,6 +336,30 @@ class TaskService:
         duration_warnings = duration_validation.get('warnings', [])
         if duration_warnings:
             logger.warning(f"Duration validation warnings: task_id={task_detail_id}, warnings={duration_warnings}")
+
+        # Sprint 41-B: FINAL phase task 완료 시 → 릴레이 미완료 task 자동 마감
+        if task.task_id in FINAL_TASK_IDS:
+            from app.models.task_detail import get_orphan_relay_tasks, auto_close_relay_task
+            orphans = get_orphan_relay_tasks(task.serial_number, task.task_category)
+            auto_closed_count = 0
+            for orphan in orphans:
+                success = auto_close_relay_task(
+                    task_detail_id=orphan['task_detail_id'],
+                    last_completion_at=orphan['last_completion_at'],
+                    worker_count=orphan['worker_count'],
+                )
+                if success:
+                    auto_closed_count += 1
+                    logger.info(
+                        f"Auto-closed relay task: task_detail_id={orphan['task_detail_id']}, "
+                        f"task_name={orphan['task_name']}, "
+                        f"last_completion_at={orphan['last_completion_at']}"
+                    )
+            if auto_closed_count > 0:
+                logger.info(
+                    f"Sprint 41-B auto-close: serial_number={task.serial_number}, "
+                    f"category={task.task_category}, closed={auto_closed_count}/{len(orphans)}"
+                )
 
         # 카테고리 전체 완료 확인 (같은 serial_number + task_category)
         incomplete_tasks = get_incomplete_tasks(task.serial_number, task.task_category)

@@ -597,6 +597,91 @@ def reactivate_task(task_detail_id: int) -> bool:
             put_conn(conn)
 
 
+def get_orphan_relay_tasks(serial_number: str, task_category: str) -> List[Dict]:
+    """
+    릴레이 미완료 task 조회.
+    - completed_at IS NULL (task 미완료)
+    - work_completion_log에 1건 이상 존재 (누군가 작업은 했음)
+    - is_applicable = TRUE
+
+    Sprint 41-B: FINAL task 완료 시 자동 마감 대상 조회에 사용.
+
+    Args:
+        serial_number: 시리얼 번호
+        task_category: Task 카테고리 (MECH, ELEC, TMS 등)
+
+    Returns:
+        [{ task_detail_id, task_id, task_name, started_at,
+           last_completion_at, worker_count }]
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT atd.id AS task_detail_id,
+                   atd.task_id,
+                   atd.task_name,
+                   atd.started_at,
+                   MAX(wcl.completed_at) AS last_completion_at,
+                   COUNT(DISTINCT wcl.worker_id) AS worker_count
+            FROM app_task_details atd
+            JOIN work_completion_log wcl ON wcl.task_id = atd.id
+            WHERE atd.serial_number = %s
+              AND atd.task_category = %s
+              AND atd.completed_at IS NULL
+              AND atd.is_applicable = TRUE
+            GROUP BY atd.id, atd.task_id, atd.task_name, atd.started_at
+        """, (serial_number, task_category))
+        rows = cur.fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        put_conn(conn)
+
+
+def auto_close_relay_task(task_detail_id: int, last_completion_at, worker_count: int) -> bool:
+    """
+    릴레이 미완료 task 자동 마감.
+    마지막 work_completion_log 기준으로 completed_at 설정.
+
+    Sprint 41-B: FINAL task 완료 시 열린 릴레이 task를 자동 마감.
+    work_start_log / work_completion_log는 절대 삭제하지 않음 (이력 보존).
+
+    Args:
+        task_detail_id: app_task_details.id
+        last_completion_at: 마지막 completion_log의 completed_at
+        worker_count: 참여 작업자 수
+
+    Returns:
+        True if 업데이트 성공
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE app_task_details
+            SET completed_at = %s,
+                duration_minutes = EXTRACT(EPOCH FROM (%s - started_at)) / 60,
+                elapsed_minutes = EXTRACT(EPOCH FROM (%s - started_at)) / 60,
+                worker_count = %s,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+              AND completed_at IS NULL
+            RETURNING id
+        """, (last_completion_at, last_completion_at, last_completion_at,
+              worker_count, task_detail_id))
+        result = cur.fetchone()
+        conn.commit()
+        if result:
+            logger.info(f"auto_close_relay_task: task_detail_id={task_detail_id} closed")
+        return result is not None
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"auto_close_relay_task failed: task_id={task_detail_id}, error={e}")
+        return False
+    finally:
+        put_conn(conn)
+
+
 def set_paused(
     task_detail_id: int,
     is_paused: bool,
