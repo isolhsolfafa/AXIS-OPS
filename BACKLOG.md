@@ -46,6 +46,7 @@
 | BUG-32 | 분석 대시보드 엔드포인트 한글 미표시 | ✅ 수정 완료 (2026-03-30) | analytics.py _ENDPOINT_LABELS 40개 누락 전수 등록 (30→90개) |
 | BUG-33 | 릴레이 재완료 시 KeyError: 0 서버 에러 | ✅ 수정 완료 (2026-03-30) | _worker_restarted_after_completion() RealDictCursor dict 접근 — row[0]→row.get('last_start') |
 | #48 | 재활성화 권한 체크 `in` 비교 방향 버그 | ✅ 수정 완료 (2026-03-30) | company_base 추출 (접미사 제거) + 비교 방향 통일. TMS(M)/TMS(E) 재활성화 허용. 테스트 10/10 passed |
+| #52 | ETL 변경이력 `_FIELD_LABELS` finishing_plan_end 누락 | ✅ 수정 완료 (2026-03-31) | admin.py _FIELD_LABELS에 `finishing_plan_end: 마무리계획일` 추가. VIEW 마무리계획일 조회 400 에러 해소 |
 | FEAT-1 | 사용자 행위 트래킹 + 분석 대시보드 | ✅ BE Sprint 32 완료 (2026-03-19) | `app_access_log` 테이블 + analytics API 4개 + 30일 정리 스케줄러. VIEW 분석 대시보드는 별도 Sprint |
 
 ---

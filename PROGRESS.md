@@ -3,7 +3,14 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.3.0 (Sprint 41 작업 릴레이 + Manager 재활성화, 2026-03-30)
+> **현재 버전**: v2.3.0 (Sprint 41 + #48 + #52, 2026-03-31)
+
+---
+
+## #52: ETL 변경이력 finishing_plan_end 누락 (2026-03-31)
+
+- `backend/app/routes/admin.py` — `_FIELD_LABELS`에 `'finishing_plan_end': '마무리계획일'` 추가
+- VIEW ETL 변경이력에서 마무리계획일 필드 조회 시 400 에러 해소
 
 ---
 
