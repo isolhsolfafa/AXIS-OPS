@@ -1146,3 +1146,4 @@ VALUES ('📱 OPS v2.2.1 업데이트 안내', '본문...', '2.2.1', TRUE, {admi
 | v2.3.0 | 2026-03-30 | Sprint 41-B | 릴레이 미완료 task 자동 마감 (FINAL task 트리거) + Manager 알림 (4시간 경과) |
 | v2.3.0 | 2026-03-30 | #48 | 재활성화 권한 체크 비교 방향 버그 — company_base 추출 + TMS(M)/TMS(E) 허용 |
 | v2.3.0 | 2026-03-31 | #52 | ETL 변경이력 _FIELD_LABELS finishing_plan_end 누락 — 마무리계획일 조회 허용 |
+| v2.3.0 | 2026-03-31 | #51 | progress API에 sales_order 필드 추가 — O/N 그룹핑용 (VIEW Sprint 24 선행) |
