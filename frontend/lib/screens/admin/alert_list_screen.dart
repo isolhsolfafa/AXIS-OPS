@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../../providers/alert_provider.dart';
 import '../../models/alert_log.dart';
 import '../../utils/design_system.dart';
+import '../checklist/tm_checklist_screen.dart';
 
 /// 알림 목록 화면
 ///
@@ -90,13 +91,27 @@ class _AlertListScreenState extends ConsumerState<AlertListScreen>
       await ref.read(alertProvider.notifier).markAsRead(alert.id);
     }
 
-    // 알림 상세 다이얼로그 표시
-    if (mounted) {
-      showDialog(
-        context: context,
-        builder: (context) => _AlertDetailDialog(alert: alert),
-      );
+    if (!mounted) return;
+
+    // CHECKLIST_TM_READY 알림 → TM 체크리스트 화면으로 이동
+    if (alert.alertType == 'CHECKLIST_TM_READY') {
+      final sn = alert.serialNumber;
+      if (sn != null && sn.isNotEmpty) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => TmChecklistScreen(serialNumber: sn),
+          ),
+        );
+        return;
+      }
     }
+
+    // 나머지 알림 타입 → 상세 다이얼로그 표시
+    showDialog(
+      context: context,
+      builder: (context) => _AlertDetailDialog(alert: alert),
+    );
   }
 
   @override
@@ -348,6 +363,8 @@ class _AlertListScreenState extends ConsumerState<AlertListScreen>
         return GxColors.success;
       case 'WORKER_REJECTED':
         return GxColors.danger;
+      case 'CHECKLIST_TM_READY':
+        return GxColors.accent;
       default:
         return GxColors.info;
     }
@@ -369,6 +386,8 @@ class _AlertListScreenState extends ConsumerState<AlertListScreen>
         return Icons.check_circle;
       case 'cancel':
         return Icons.cancel;
+      case 'checklist':
+        return Icons.checklist;
       default:
         return Icons.info;
     }
@@ -496,6 +515,8 @@ class _AlertDetailDialog extends StatelessWidget {
         return '작업자 승인';
       case 'WORKER_REJECTED':
         return '작업자 거부';
+      case 'CHECKLIST_TM_READY':
+        return 'TM 체크리스트 검수 요청';
       default:
         return '알림';
     }
@@ -513,6 +534,8 @@ class _AlertDetailDialog extends StatelessWidget {
         return GxColors.success;
       case 'WORKER_REJECTED':
         return GxColors.danger;
+      case 'CHECKLIST_TM_READY':
+        return GxColors.accent;
       default:
         return GxColors.info;
     }
@@ -534,6 +557,8 @@ class _AlertDetailDialog extends StatelessWidget {
         return Icons.check_circle;
       case 'cancel':
         return Icons.cancel;
+      case 'checklist':
+        return Icons.checklist;
       default:
         return Icons.info;
     }

@@ -56,6 +56,10 @@ SETTING_KEYS: Dict[str, Dict[str, Any]] = {
     # string_list (JSON 배열) — Sprint 31C PI 위임
     'pi_capable_mech_partners': {'type': 'string_list', 'default': []},
     'pi_gst_override_lines':    {'type': 'string_list', 'default': []},
+    # string — Sprint 52 TM 체크리스트 옵션
+    'tm_checklist_1st_checker': {'type': 'string', 'default': 'is_manager', 'allowed': ['is_manager', 'user']},
+    'tm_checklist_issue_alert': {'type': 'bool', 'default': True},
+    'tm_checklist_scope':       {'type': 'string', 'default': 'product_code', 'allowed': ['product_code', 'all']},
 }
 
 ALLOWED_KEYS = set(SETTING_KEYS.keys())
@@ -95,6 +99,12 @@ def _validate_setting(key: str, value: Any) -> str | None:
                 return f'{key}[{i}]: 빈 문자열이 아닌 문자열이어야 합니다.'
         if len(value) != len(set(value)):
             return f'{key}: 중복 값이 포함되어 있습니다.'
+
+    elif stype == 'string':
+        allowed = meta.get('allowed')
+        if allowed and value not in allowed:
+            return f'{key}는 {allowed} 중 하나여야 합니다. (입력값: {value})'
+        return None
 
     return None
 from app.services.scheduler_service import trigger_unfinished_task_check_manually
@@ -1486,6 +1496,23 @@ def update_settings() -> Tuple[Dict[str, Any], int]:
         500: {"error": "INTERNAL_SERVER_ERROR", "message": "..."}
     """
     data = request.get_json(silent=True) or {}
+
+    # Sprint 52: 단일 키-값 형식 지원 {"setting_key": "key", "setting_value": value}
+    if 'setting_key' in data and 'setting_value' in data and len(data) == 2:
+        single_key = data['setting_key']
+        single_val = data['setting_value']
+        if single_key not in ALLOWED_KEYS:
+            return jsonify({
+                'error': 'INVALID_REQUEST',
+                'message': f'허용되지 않은 설정 키: {single_key}'
+            }), 400
+        error = _validate_setting(single_key, single_val)
+        if error:
+            return jsonify({'error': 'VALIDATION_ERROR', 'message': error}), 400
+        success = update_setting(single_key, single_val, updated_by=g.worker_id)
+        if not success:
+            return jsonify({'error': 'INTERNAL_SERVER_ERROR', 'message': '설정 저장 실패'}), 500
+        return jsonify({'message': '설정이 저장되었습니다.', 'updated_keys': [single_key]}), 200
 
     # Sprint 34: SETTING_KEYS 레지스트리 기반 검증
     update_pairs = {k: v for k, v in data.items() if k in ALLOWED_KEYS}

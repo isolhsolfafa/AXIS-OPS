@@ -131,6 +131,7 @@ class AlertLog {
         return 3; // 높음
       case 'PROCESS_READY':
       case 'UNFINISHED_AT_CLOSING':
+      case 'CHECKLIST_TM_READY':
         return 2; // 중간
       default:
         return 1; // 낮음
@@ -155,6 +156,8 @@ class AlertLog {
         return 'check_circle';
       case 'WORKER_REJECTED':
         return 'cancel';
+      case 'CHECKLIST_TM_READY':
+        return 'checklist';
       default:
         return 'info';
     }

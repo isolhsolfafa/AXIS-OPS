@@ -385,6 +385,11 @@ class TaskService:
         # MECH TANK_DOCKING 완료 → ELEC 관리자에게 TANK_DOCKING_COMPLETE 알림
         self._trigger_completion_alerts(task)
 
+        # Sprint 52: TM TANK_MODULE 완료 → 체크리스트 준비 알림
+        checklist_ready = False
+        if task.task_category == 'TMS' and task.task_id == 'TANK_MODULE':
+            checklist_ready = self._trigger_tm_checklist_alert(task, worker_id)
+
         response = {
             'message': '작업이 완료되었습니다.',
             'task_id': task_detail_id,
@@ -395,6 +400,10 @@ class TaskService:
             'category_completed': category_completed,
             'task_finished': True,
         }
+
+        # Sprint 52: Manager가 직접 완료한 경우 FE에서 체크리스트 화면 진입 유도
+        if checklist_ready:
+            response['checklist_ready'] = True
 
         # Sprint 3: duration 경고가 있으면 응답에 포함
         if duration_warnings:
@@ -530,6 +539,70 @@ class TaskService:
         finally:
             if conn:
                 put_conn(conn)
+
+    def _trigger_tm_checklist_alert(self, task, completing_worker_id: int) -> bool:
+        """
+        TMS TANK_MODULE 완료 시 체크리스트 준비 알림 처리 (Sprint 52)
+
+        Case A: 완료자(completing_worker_id)가 is_manager=True
+          → 알림 미발송, checklist_ready=True 반환 (FE에서 바로 체크리스트 화면으로 이동)
+
+        Case B: 완료자가 일반 작업자(is_manager=False)
+          → TMS is_manager에게 CHECKLIST_TM_READY 알림 발송
+          → checklist_ready=False 반환
+
+        ⚠️ try-except로 감싸기 — 알림 실패해도 task 완료 정상 처리
+
+        Args:
+            task: 완료된 TaskDetail 객체
+            completing_worker_id: 완료 요청한 작업자 ID
+
+        Returns:
+            True: 완료자가 manager (FE에서 checklist_ready 팝업 표시)
+            False: 일반 작업자 또는 알림 처리 완료
+        """
+        try:
+            from app.models.worker import get_worker_by_id as _get_worker_by_id
+            from app.services.process_validator import get_managers_for_role
+
+            completing_worker = _get_worker_by_id(completing_worker_id)
+            is_completing_manager = completing_worker and completing_worker.is_manager
+
+            if is_completing_manager:
+                # Manager가 직접 완료 → FE에 checklist_ready 플래그만 전달
+                logger.info(
+                    f"TM TANK_MODULE completed by manager: task_id={task.id}, "
+                    f"worker_id={completing_worker_id}, checklist_ready=True"
+                )
+                return True
+            else:
+                # 일반 작업자 완료 → TMS manager에게 알림
+                tms_managers = get_managers_for_role('TM')
+                from app.models.alert_log import create_alert
+                for manager_id in tms_managers:
+                    alert_id = create_alert(
+                        alert_type='CHECKLIST_TM_READY',
+                        message=(
+                            f"[{task.serial_number}] Tank Module 작업 완료 — "
+                            f"체크리스트 검수가 필요합니다"
+                        ),
+                        serial_number=task.serial_number,
+                        qr_doc_id=task.qr_doc_id,
+                        triggered_by_worker_id=completing_worker_id,
+                        target_worker_id=manager_id,
+                        target_role='TM',
+                    )
+                    if alert_id:
+                        logger.info(
+                            f"CHECKLIST_TM_READY alert: task_id={task.id}, "
+                            f"manager_id={manager_id}, alert_id={alert_id}"
+                        )
+                return False
+
+        except Exception as e:
+            # 알림 실패해도 task 완료는 정상 처리
+            logger.error(f"_trigger_tm_checklist_alert failed (non-blocking): {e}")
+            return False
 
     def get_tasks_by_product(
         self,

@@ -199,6 +199,9 @@ def complete_work() -> Tuple[Dict[str, Any], int]:
             result['relay_mode'] = response.get('relay_mode', False)
             if 'duration_warnings' in response:
                 result['duration_warnings'] = response['duration_warnings']
+            # Sprint 52: Manager가 TM TANK_MODULE 직접 완료 시 FE 체크리스트 진입 유도
+            if response.get('checklist_ready'):
+                result['checklist_ready'] = True
             return jsonify(result), 200
 
     return jsonify(response), status_code

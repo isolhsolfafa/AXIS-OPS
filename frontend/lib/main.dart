@@ -14,6 +14,7 @@ import 'screens/task/task_management_screen.dart';
 import 'screens/manager/manager_pending_tasks_screen.dart';
 import 'screens/gst/gst_products_screen.dart';
 import 'screens/checklist/checklist_screen.dart';
+import 'screens/checklist/tm_checklist_screen.dart';
 import 'screens/settings/profile_screen.dart';
 import 'screens/settings/pin_settings_screen.dart';
 import 'screens/progress/sn_progress_screen.dart';
@@ -169,6 +170,13 @@ class GAxisApp extends ConsumerWidget {
             serialNumber: serialNumber,
             category: category,
           );
+        },
+        '/tm-checklist': (context) {
+          final args = ModalRoute.of(context)?.settings.arguments;
+          final serialNumber = args is Map<String, dynamic>
+              ? (args['serial_number'] as String? ?? '')
+              : '';
+          return TmChecklistScreen(serialNumber: serialNumber);
         },
       },
     );
