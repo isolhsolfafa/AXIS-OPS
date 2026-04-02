@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/alert_log.dart';
 import '../services/alert_service.dart';
+import '../services/notification_feedback_service.dart';
 import '../services/websocket_service.dart';
 import 'auth_provider.dart';
 
@@ -240,6 +241,11 @@ class AlertNotifier extends StateNotifier<AlertState> {
       state = state.copyWith(
         alerts: updatedAlerts,
         unreadCount: newUnreadCount,
+      );
+
+      // 포그라운드 알림 피드백 (소리 + 진동)
+      NotificationFeedbackService.instance.playAlertFeedback(
+        alertType: newAlert.alertType,
       );
 
       print('[AlertProvider] New alert received: ${newAlert.alertType}');

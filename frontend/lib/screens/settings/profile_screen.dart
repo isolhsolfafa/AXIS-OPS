@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../providers/auth_provider.dart';
+import '../../services/notification_feedback_service.dart';
 import '../../utils/design_system.dart';
 import '../../utils/app_version.dart';
 
@@ -18,12 +20,67 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   bool _pinRegistered = false;
   bool _isLoading = true;
 
+  // ===== 알림 설정 상태 =====
+  bool _soundEnabled = true;
+  bool _vibrationEnabled = true;
+  String _alertSoundType = 'basic_beep';
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkPinStatus();
+      _loadNotificationSettings();
     });
+  }
+
+  /// SharedPreferences에서 알림 설정 로드
+  Future<void> _loadNotificationSettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (mounted) {
+        setState(() {
+          _soundEnabled = prefs.getBool('alert_sound_enabled') ?? true;
+          _vibrationEnabled = prefs.getBool('alert_vibration_enabled') ?? true;
+          _alertSoundType = prefs.getString('alert_sound_type') ?? 'basic_beep';
+        });
+      }
+    } catch (e) {
+      debugPrint('[ProfileScreen] 알림 설정 로드 실패: $e');
+    }
+  }
+
+  /// 알림 소리 ON/OFF 저장
+  Future<void> _setSoundEnabled(bool value) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('alert_sound_enabled', value);
+      if (mounted) setState(() => _soundEnabled = value);
+    } catch (e) {
+      debugPrint('[ProfileScreen] 알림 소리 설정 저장 실패: $e');
+    }
+  }
+
+  /// 알림 진동 ON/OFF 저장
+  Future<void> _setVibrationEnabled(bool value) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('alert_vibration_enabled', value);
+      if (mounted) setState(() => _vibrationEnabled = value);
+    } catch (e) {
+      debugPrint('[ProfileScreen] 알림 진동 설정 저장 실패: $e');
+    }
+  }
+
+  /// 알림 소리 타입 저장
+  Future<void> _setSoundType(String value) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('alert_sound_type', value);
+      if (mounted) setState(() => _alertSoundType = value);
+    } catch (e) {
+      debugPrint('[ProfileScreen] 알림 소리 타입 저장 실패: $e');
+    }
   }
 
   Future<void> _checkPinStatus() async {
@@ -306,6 +363,155 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   ),
                   const SizedBox(height: 24),
 
+                  // 알림 설정 섹션
+                  _buildSectionHeader('알림 설정', Icons.notifications_active),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: GxGlass.cardSm(radius: GxRadius.lg),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // 알림 소리 드롭다운 + 미리듣기
+                        Row(
+                          children: [
+                            Container(
+                              width: 36,
+                              height: 36,
+                              decoration: BoxDecoration(
+                                color: GxColors.accentSoft,
+                                borderRadius: BorderRadius.circular(GxRadius.md),
+                              ),
+                              child: const Icon(Icons.music_note_outlined, size: 18, color: GxColors.accent),
+                            ),
+                            const SizedBox(width: 12),
+                            const Expanded(
+                              child: Text(
+                                '알림음 종류',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w500,
+                                  color: GxColors.graphite,
+                                ),
+                              ),
+                            ),
+                            DropdownButton<String>(
+                              value: _alertSoundType,
+                              underline: const SizedBox.shrink(),
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: GxColors.graphite,
+                              ),
+                              items: NotificationFeedbackService.soundOptions
+                                  .map((opt) => DropdownMenuItem<String>(
+                                        value: opt['value'],
+                                        child: Text(opt['label']!),
+                                      ))
+                                  .toList(),
+                              onChanged: (v) {
+                                if (v != null) _setSoundType(v);
+                              },
+                            ),
+                            const SizedBox(width: 4),
+                            // 미리듣기 버튼
+                            IconButton(
+                              icon: const Icon(Icons.play_arrow, size: 20, color: GxColors.accent),
+                              tooltip: '미리듣기',
+                              onPressed: () {
+                                NotificationFeedbackService.instance.previewSound(_alertSoundType);
+                              },
+                              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                              padding: EdgeInsets.zero,
+                            ),
+                          ],
+                        ),
+                        const Divider(color: GxColors.mist, height: 20),
+
+                        // 알림 소리 ON/OFF
+                        Row(
+                          children: [
+                            Container(
+                              width: 36,
+                              height: 36,
+                              decoration: BoxDecoration(
+                                color: _soundEnabled ? GxColors.accentSoft : GxColors.mist,
+                                borderRadius: BorderRadius.circular(GxRadius.md),
+                              ),
+                              child: Icon(
+                                _soundEnabled ? Icons.volume_up : Icons.volume_off,
+                                size: 18,
+                                color: _soundEnabled ? GxColors.accent : GxColors.silver,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            const Expanded(
+                              child: Text(
+                                '알림 소리',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w500,
+                                  color: GxColors.graphite,
+                                ),
+                              ),
+                            ),
+                            Switch(
+                              value: _soundEnabled,
+                              activeColor: GxColors.accent,
+                              onChanged: _setSoundEnabled,
+                            ),
+                          ],
+                        ),
+                        const Divider(color: GxColors.mist, height: 20),
+
+                        // 알림 진동 ON/OFF
+                        Row(
+                          children: [
+                            Container(
+                              width: 36,
+                              height: 36,
+                              decoration: BoxDecoration(
+                                color: _vibrationEnabled ? GxColors.accentSoft : GxColors.mist,
+                                borderRadius: BorderRadius.circular(GxRadius.md),
+                              ),
+                              child: Icon(
+                                Icons.vibration,
+                                size: 18,
+                                color: _vibrationEnabled ? GxColors.accent : GxColors.silver,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            const Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    '알림 진동',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w500,
+                                      color: GxColors.graphite,
+                                    ),
+                                  ),
+                                  SizedBox(height: 2),
+                                  Text(
+                                    'iOS Safari는 진동 미지원',
+                                    style: TextStyle(fontSize: 11, color: GxColors.silver),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Switch(
+                              value: _vibrationEnabled,
+                              activeColor: GxColors.accent,
+                              onChanged: _setVibrationEnabled,
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+
                   // 앱 정보 섹션
                   _buildSectionHeader('앱 정보'),
                   const SizedBox(height: 8),
@@ -326,15 +532,32 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     );
   }
 
-  Widget _buildSectionHeader(String title) {
-    return Text(
-      title,
-      style: const TextStyle(
-        fontSize: 12,
-        fontWeight: FontWeight.w600,
-        color: GxColors.steel,
-        letterSpacing: 0.5,
-      ),
+  Widget _buildSectionHeader(String title, [IconData? icon]) {
+    if (icon == null) {
+      return Text(
+        title,
+        style: const TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          color: GxColors.steel,
+          letterSpacing: 0.5,
+        ),
+      );
+    }
+    return Row(
+      children: [
+        Icon(icon, size: 14, color: GxColors.steel),
+        const SizedBox(width: 6),
+        Text(
+          title,
+          style: const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: GxColors.steel,
+            letterSpacing: 0.5,
+          ),
+        ),
+      ],
     );
   }
 
