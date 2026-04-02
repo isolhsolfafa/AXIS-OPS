@@ -1151,3 +1151,4 @@ VALUES ('📱 OPS v2.2.1 업데이트 안내', '본문...', '2.2.1', TRUE, {admi
 | v2.4.0 | 2026-04-02 | Sprint 53 | 알림 소리 + 진동 — Web Audio API 비프음 5종, 프로필 설정 드롭다운 + 미리듣기 |
 | v2.5.0 | 2026-04-02 | Sprint 52-A | TM 체크리스트 보완 — COMMON seed 15항목, scope='all' 수정, item_type 컬럼 |
 | v2.5.0 | 2026-04-02 | Sprint 54 | 공정 흐름 알림 트리거 — partner 분기 + admin_settings on/off 5개 + FE 설정 UI |
+| v2.5.0 | 2026-04-02 | Sprint 52-BF | TM 체크리스트 BUG-FIX #1~#5 — FE 키 매핑, checklistReady 전환, 체크리스트 버튼, null 방어, 2상태 토글 |
