@@ -49,6 +49,7 @@
 | #52 | ETL 변경이력 `_FIELD_LABELS` finishing_plan_end 누락 | ✅ 수정 완료 (2026-03-31) | admin.py _FIELD_LABELS에 `finishing_plan_end: 마무리계획일` 추가. VIEW 마무리계획일 조회 400 에러 해소 |
 | #51 | progress API에 `sales_order` 필드 추가 | ✅ 완료 (2026-03-31) | progress_service.py CTE+SELECT+sn_map 3곳 추가. regression 23 passed |
 | 52 | TM 체크리스트 Phase 1 — Partner 검수 시스템 | ✅ 완료 (2026-04-01) | migration 043 + checklist_service.py + TM API 3개 + Admin CRUD 4개 + task 알림 + FE 화면. 테스트 39/39 passed |
+| 53 | 알림 소리 + 진동 — 포그라운드 알림 피드백 | ✅ 완료 (2026-04-02) | Web Audio API 비프음 5종 + navigator.vibrate + 프로필 설정 드롭다운. 패키지 추가 0 |
 | FEAT-1 | 사용자 행위 트래킹 + 분석 대시보드 | ✅ BE Sprint 32 완료 (2026-03-19) | `app_access_log` 테이블 + analytics API 4개 + 30일 정리 스케줄러. VIEW 분석 대시보드는 별도 Sprint |
 
 ---

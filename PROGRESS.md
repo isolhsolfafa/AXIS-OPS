@@ -3,7 +3,23 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.4.0 (Sprint 52 TM 체크리스트, 2026-04-01)
+> **현재 버전**: v2.4.0 (Sprint 52 + 53, 2026-04-02)
+
+---
+
+## Sprint 53: 알림 소리 + 진동 — 포그라운드 알림 피드백 (2026-04-02)
+
+**목적**: WebSocket 알림 수신 시 소리 + 진동 피드백 (작업자 인지 개선)
+
+**신규 파일**:
+- `frontend/lib/services/notification_feedback_service.dart` — Web Audio API 비프음 5종 + navigator.vibrate + 2초 도배 방지
+
+**수정 파일**:
+- `frontend/lib/providers/alert_provider.dart` — _handleNewAlert에서 피드백 호출
+- `frontend/lib/screens/settings/profile_screen.dart` — 알림 설정 섹션 (소리 드롭다운 5종 + 미리듣기 + 소리/진동 토글)
+
+**패키지 추가**: 없음 (Web Audio API + dart:js_util 직접 사용)
+**빌드**: 성공
 
 ---
 
