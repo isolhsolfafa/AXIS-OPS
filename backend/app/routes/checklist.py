@@ -806,7 +806,7 @@ def upsert_tm_checklist_record() -> Tuple[Dict[str, Any], int]:
             'message': '필수 필드가 누락되었습니다. (serial_number, master_id, check_result)'
         }), 400
 
-    check_result = data.get('check_result', '').strip().upper()
+    check_result = (data.get('check_result') or '').strip().upper()
     if check_result not in ('PASS', 'NA'):
         return jsonify({
             'error': 'INVALID_CHECK_RESULT',
