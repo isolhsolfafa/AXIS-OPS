@@ -89,7 +89,7 @@ def get_tm_checklist(serial_number: str, judgment_phase: int = 1) -> Dict[str, A
 
         # master 필터 조건 결정
         if scope == 'all' or not product_code:
-            master_filter_sql = "cm.category = 'TM'"
+            master_filter_sql = "cm.product_code = 'COMMON' AND cm.category = 'TM'"
             master_params: list = []
         else:
             master_filter_sql = "cm.product_code = %s AND cm.category = 'TM'"
@@ -311,7 +311,7 @@ def _check_tm_completion(serial_number: str, judgment_phase: int = 1) -> bool:
         product_code = product_row['product_code'] if product_row else None
 
         if scope == 'all' or not product_code:
-            master_filter = "cm.category = 'TM'"
+            master_filter = "cm.product_code = 'COMMON' AND cm.category = 'TM'"
             master_params: list = []
         else:
             master_filter = "cm.product_code = %s AND cm.category = 'TM'"
@@ -446,7 +446,7 @@ def get_tm_checklist_status(serial_number: str, judgment_phase: int = 1) -> Dict
         product_code = product_row['product_code'] if product_row else None
 
         if scope == 'all' or not product_code:
-            master_filter = "cm.category = 'TM'"
+            master_filter = "cm.product_code = 'COMMON' AND cm.category = 'TM'"
             master_params: list = []
         else:
             master_filter = "cm.product_code = %s AND cm.category = 'TM'"

@@ -233,6 +233,51 @@ def get_task_by_serial_and_id(serial_number: str, task_category: str, task_id: s
             put_conn(conn)
 
 
+def get_task_by_qr_category_id(
+    qr_doc_id: str,
+    task_category: str,
+    task_id: str,
+) -> Optional['TaskDetail']:
+    """
+    qr_doc_id + task_category + task_id 조합으로 단일 task 조회.
+    Sprint 54: 테스트 헬퍼 및 API에서 qr 기반 task 특정 시 사용.
+
+    Args:
+        qr_doc_id: QR 문서 ID
+        task_category: Task 카테고리 (MECH, ELEC, TMS, ...)
+        task_id: Task 식별자 (PRESSURE_TEST, TANK_DOCKING, ...)
+
+    Returns:
+        TaskDetail 객체, 없으면 None
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT * FROM app_task_details
+            WHERE qr_doc_id = %s AND task_category = %s AND task_id = %s
+            ORDER BY id
+            LIMIT 1
+            """,
+            (qr_doc_id, task_category, task_id),
+        )
+        row = cur.fetchone()
+        if row:
+            return TaskDetail.from_db_row(row)
+        return None
+    except PsycopgError as e:
+        logger.error(
+            f"Failed to get task by qr_doc_id={qr_doc_id}, "
+            f"task_category={task_category}, task_id={task_id}: {e}"
+        )
+        return None
+    finally:
+        if conn:
+            put_conn(conn)
+
+
 def get_tasks_by_serial_number(
     serial_number: str,
     task_category: Optional[str] = None

@@ -1149,3 +1149,5 @@ VALUES ('📱 OPS v2.2.1 업데이트 안내', '본문...', '2.2.1', TRUE, {admi
 | v2.3.0 | 2026-03-31 | #51 | progress API에 sales_order 필드 추가 — O/N 그룹핑용 (VIEW Sprint 24 선행) |
 | v2.4.0 | 2026-04-01 | Sprint 52 | TM 체크리스트 Phase 1 — checklist_service, TM API 3개, Admin CRUD 4개, 알림 트리거, FE 화면 |
 | v2.4.0 | 2026-04-02 | Sprint 53 | 알림 소리 + 진동 — Web Audio API 비프음 5종, 프로필 설정 드롭다운 + 미리듣기 |
+| v2.5.0 | 2026-04-02 | Sprint 52-A | TM 체크리스트 보완 — COMMON seed 15항목, scope='all' 수정, item_type 컬럼 |
+| v2.5.0 | 2026-04-02 | Sprint 54 | 공정 흐름 알림 트리거 — partner 분기 + admin_settings on/off 5개 + FE 설정 UI |

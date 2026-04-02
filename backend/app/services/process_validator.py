@@ -134,6 +134,94 @@ def validate_process_start(
     }
 
 
+def _partner_to_company(partner_value: str, partner_field: str) -> str:
+    """
+    product_info의 partner 값 → workers.company 변환
+
+    Args:
+        partner_value: 'TMS', 'FNI', 'BAT', 'P&S', 'C&A' 등
+        partner_field: 'mech_partner' | 'elec_partner' | 'module_outsourcing'
+
+    Returns:
+        workers.company 값 (예: 'TMS(M)', 'TMS(E)', 'FNI')
+    """
+    val = partner_value.upper().strip()
+    if val == 'TMS':
+        if partner_field == 'elec_partner':
+            return 'TMS(E)'
+        else:  # mech_partner, module_outsourcing
+            return 'TMS(M)'
+    return val  # FNI, BAT, P&S, C&A 등 그대로
+
+
+def get_managers_by_partner(serial_number: str, partner_field: str) -> List[int]:
+    """
+    S/N의 product_info에서 partner_field 값 조회 → 해당 company의 매니저 ID 반환
+
+    Args:
+        serial_number: 'GBWS-6798'
+        partner_field: 'mech_partner' | 'elec_partner' | 'module_outsourcing'
+
+    Returns:
+        매니저 worker_id 리스트. partner 값 없거나 매니저 없으면 빈 리스트.
+
+    사용 예:
+        get_managers_by_partner('GBWS-6798', 'mech_partner')
+        → product_info.mech_partner = 'FNI'
+        → company = 'FNI'
+        → workers WHERE company='FNI' AND is_manager=TRUE
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # 1. product_info에서 partner 값 조회
+        allowed_fields = ('mech_partner', 'elec_partner', 'module_outsourcing')
+        if partner_field not in allowed_fields:
+            logger.error(f"Invalid partner_field: {partner_field}")
+            return []
+
+        cur.execute(
+            f"SELECT {partner_field} FROM plan.product_info WHERE serial_number = %s",
+            (serial_number,)
+        )
+        row = cur.fetchone()
+        if not row or not row[partner_field]:
+            logger.warning(f"No {partner_field} for serial_number={serial_number}")
+            return []
+
+        partner_value = row[partner_field]
+        company = _partner_to_company(partner_value, partner_field)
+
+        # 2. 해당 company의 매니저 조회
+        cur.execute(
+            """
+            SELECT id FROM workers
+            WHERE company = %s
+              AND is_manager = TRUE
+              AND approval_status = 'approved'
+            """,
+            (company,)
+        )
+        manager_rows = cur.fetchall()
+        manager_ids = [r['id'] for r in manager_rows]
+
+        logger.info(
+            f"get_managers_by_partner: sn={serial_number}, "
+            f"{partner_field}={partner_value}, company={company}, "
+            f"managers={manager_ids}"
+        )
+        return manager_ids
+
+    except PsycopgError as e:
+        logger.error(f"get_managers_by_partner failed: {e}")
+        return []
+    finally:
+        if conn:
+            put_conn(conn)
+
+
 def get_managers_for_role(role: str) -> List[int]:
     """
     특정 역할의 관리자 목록 조회

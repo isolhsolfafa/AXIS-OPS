@@ -13,7 +13,10 @@ from typing import Tuple, Dict, Any
 from app.config import Config
 from app.middleware.jwt_auth import jwt_required, get_current_worker_id, get_current_worker
 from app.services.task_service import TaskService
-from app.models.task_detail import get_task_by_id, get_tasks_by_serial_number, get_tasks_by_qr_doc_id
+from app.models.task_detail import (
+    get_task_by_id, get_tasks_by_serial_number, get_tasks_by_qr_doc_id,
+    get_task_by_qr_category_id,
+)
 from app.models.completion_status import get_or_create_completion_status
 from app.models.product_info import get_product_by_serial_number
 from app.models.work_pause_log import create_pause, resume_pause, get_active_pause, get_pauses_by_task
@@ -114,15 +117,36 @@ def start_work() -> Tuple[Dict[str, Any], int]:
     """
     data = request.get_json()
 
-    # 필수 필드 확인 (task_detail_id 또는 task_id 허용)
+    # 필수 필드 확인
+    # - task_detail_id: int (DB PK) → 직접 사용
+    # - task_id: int (DB PK 별칭) → 직접 사용
+    # - qr_doc_id + task_category + task_id(string) → Sprint 54: qr 기반 task 조회
     task_detail_id = None
     if data:
-        task_detail_id = data.get('task_detail_id') or data.get('task_id')
+        raw = data.get('task_detail_id') or data.get('task_id')
+        # task_detail_id/task_id가 정수(또는 숫자 문자열)인 경우만 직접 사용
+        if raw is not None and str(raw).isdigit():
+            task_detail_id = int(raw)
+
+    # qr 기반 조회 분기: task_detail_id가 없고 qr_doc_id + task_category + task_id(문자열) 제공 시
+    if not task_detail_id and data:
+        qr_doc_id = data.get('qr_doc_id')
+        task_category = data.get('task_category')
+        task_id_str = data.get('task_id')  # 문자열 task_id (PRESSURE_TEST 등)
+        if qr_doc_id and task_category and task_id_str and not str(task_id_str).isdigit():
+            task_obj = get_task_by_qr_category_id(qr_doc_id, task_category, task_id_str)
+            if task_obj:
+                task_detail_id = task_obj.id
+            else:
+                return jsonify({
+                    'error': 'TASK_NOT_FOUND',
+                    'message': f'작업을 찾을 수 없습니다: qr_doc_id={qr_doc_id}, category={task_category}, task_id={task_id_str}'
+                }), 404
 
     if not task_detail_id:
         return jsonify({
             'error': 'INVALID_REQUEST',
-            'message': 'task_detail_id 또는 task_id가 필요합니다.'
+            'message': 'task_detail_id 또는 (qr_doc_id + task_category + task_id)가 필요합니다.'
         }), 400
 
     # 현재 작업자 ID 추출 (JWT에서)
@@ -165,15 +189,36 @@ def complete_work() -> Tuple[Dict[str, Any], int]:
     """
     data = request.get_json()
 
-    # 필수 필드 확인 (task_detail_id 또는 task_id 허용)
+    # 필수 필드 확인
+    # - task_detail_id: int (DB PK) → 직접 사용
+    # - task_id: int (DB PK 별칭) → 직접 사용
+    # - qr_doc_id + task_category + task_id(string) → Sprint 54: qr 기반 task 조회
     task_detail_id = None
     if data:
-        task_detail_id = data.get('task_detail_id') or data.get('task_id')
+        raw = data.get('task_detail_id') or data.get('task_id')
+        # task_detail_id/task_id가 정수(또는 숫자 문자열)인 경우만 직접 사용
+        if raw is not None and str(raw).isdigit():
+            task_detail_id = int(raw)
+
+    # qr 기반 조회 분기: task_detail_id가 없고 qr_doc_id + task_category + task_id(문자열) 제공 시
+    if not task_detail_id and data:
+        qr_doc_id = data.get('qr_doc_id')
+        task_category = data.get('task_category')
+        task_id_str = data.get('task_id')  # 문자열 task_id (PRESSURE_TEST 등)
+        if qr_doc_id and task_category and task_id_str and not str(task_id_str).isdigit():
+            task_obj = get_task_by_qr_category_id(qr_doc_id, task_category, task_id_str)
+            if task_obj:
+                task_detail_id = task_obj.id
+            else:
+                return jsonify({
+                    'error': 'TASK_NOT_FOUND',
+                    'message': f'작업을 찾을 수 없습니다: qr_doc_id={qr_doc_id}, category={task_category}, task_id={task_id_str}'
+                }), 404
 
     if not task_detail_id:
         return jsonify({
             'error': 'INVALID_REQUEST',
-            'message': 'task_detail_id 또는 task_id가 필요합니다.'
+            'message': 'task_detail_id 또는 (qr_doc_id + task_category + task_id)가 필요합니다.'
         }), 400
 
     # Sprint 41: finalize 파라미터 수신 (기본값 True — 하위 호환)

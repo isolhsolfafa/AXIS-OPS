@@ -3,7 +3,23 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.4.0 (Sprint 52 + 53, 2026-04-02)
+> **현재 버전**: v2.5.0 (Sprint 52-A + 54, 2026-04-02)
+
+---
+
+## Sprint 52-A: TM 체크리스트 보완 — COMMON seed (2026-04-02)
+
+- `backend/migrations/043a_tm_checklist_seed.sql` — scope='all', UNIQUE 4컬럼, item_type, COMMON 15항목 seed
+- `backend/app/services/checklist_service.py` — scope='all' → product_code='COMMON' 필터 3곳
+- `backend/app/routes/admin.py` — default 'all' + `backend/app/routes/checklist.py` — ON CONFLICT 4컬럼
+
+## Sprint 54: 공정 흐름 알림 트리거 프레임워크 (2026-04-02)
+
+- `backend/app/services/process_validator.py` — _partner_to_company + get_managers_by_partner
+- `backend/app/services/task_service.py` — _trigger_completion_alerts partner 분기 + admin_settings on/off
+- `backend/migrations/044_alert_trigger_settings.sql` — 5키 + ELEC_COMPLETE enum
+- `frontend/lib/screens/admin/admin_options_screen.dart` — 공정 흐름도 + 트리거 5개 토글
+- **테스트**: 30/34 passed (4 FE 수동 skip)
 
 ---
 

@@ -104,7 +104,7 @@ def tm_manager_id(db_conn, seed_test_data, create_test_worker):
 
 
 def _insert_product(db_conn, serial_number, model='GAIA-I', sales_order='6408',
-                    product_code='ALL'):
+                    product_code='COMMON'):
     cursor = db_conn.cursor()
     cursor.execute("""
         INSERT INTO plan.product_info
@@ -121,7 +121,7 @@ def _insert_product(db_conn, serial_number, model='GAIA-I', sales_order='6408',
     cursor.close()
 
 
-def _insert_tm_master_items(db_conn, product_code='ALL', count=15):
+def _insert_tm_master_items(db_conn, product_code='COMMON', count=15):
     """checklist_master에 TM 카테고리 테스트 데이터 INSERT (item_group별 15항목)"""
     groups = ['BURNER', 'REACTOR', 'EXHAUST', 'TANK']
     items = []
@@ -136,8 +136,8 @@ def _insert_tm_master_items(db_conn, product_code='ALL', count=15):
             INSERT INTO checklist.checklist_master
                 (product_code, category, item_group, item_name, item_order, is_active, updated_at)
             VALUES (%s, %s, %s, %s, %s, TRUE, NOW())
-            ON CONFLICT (product_code, category, item_name) DO UPDATE
-                SET item_group = EXCLUDED.item_group, item_order = EXCLUDED.item_order
+            ON CONFLICT (product_code, category, item_group, item_name) DO UPDATE
+                SET item_order = EXCLUDED.item_order
             RETURNING id
         """, item)
         row = cursor.fetchone()
@@ -342,11 +342,11 @@ class TestTmChecklistApi:
     def setup_product_and_master(self, db_conn, seed_test_data):
         """각 테스트 전 공통 제품 + master 데이터 준비"""
         sn = f'{_PREFIX}API'
-        _insert_product(db_conn, sn, product_code='ALL')
+        _insert_product(db_conn, sn, product_code='COMMON')
         _set_admin_setting(db_conn, 'tm_checklist_scope', 'product_code')
         _set_admin_setting(db_conn, 'tm_checklist_1st_checker', 'is_manager')
         self.sn = sn
-        self.master_ids = _insert_tm_master_items(db_conn, product_code='ALL', count=15)
+        self.master_ids = _insert_tm_master_items(db_conn, product_code='COMMON', count=15)
         yield
         # 테스트 후 checklist_record 정리 (테스트 격리)
         cursor = db_conn.cursor()
@@ -523,7 +523,7 @@ class TestTmAlerts:
 
     @pytest.fixture(autouse=True)
     def setup(self, db_conn, seed_test_data):
-        # 고유 product_code 사용 — TestTmChecklistApi(product_code='ALL', count=15)와 격리
+        # 고유 product_code 사용 — TestTmChecklistApi(product_code='COMMON', count=15)와 격리
         alert_product_code = 'ALERT_ONLY'
         sn = f'{_PREFIX}ALERT'
         _insert_product(db_conn, sn, product_code=alert_product_code)
@@ -807,14 +807,14 @@ class TestAdminChecklistCrud:
 
     @pytest.fixture(autouse=True)
     def setup(self, db_conn, seed_test_data):
-        _insert_tm_master_items(db_conn, product_code='ALL', count=5)
+        _insert_tm_master_items(db_conn, product_code='COMMON', count=5)
         # 비활성 항목 1개 추가
         cursor = db_conn.cursor()
         cursor.execute("""
             INSERT INTO checklist.checklist_master
                 (product_code, category, item_group, item_name, item_order, is_active, updated_at)
             VALUES ('ALL', 'TM', 'TANK', 'TM 비활성 항목', 99, FALSE, NOW())
-            ON CONFLICT (product_code, category, item_name) DO NOTHING
+            ON CONFLICT (product_code, category, item_group, item_name) DO NOTHING
         """)
         db_conn.commit()
         cursor.close()
@@ -1038,14 +1038,14 @@ class TestRegression:
     @pytest.fixture(autouse=True)
     def setup(self, db_conn, seed_test_data):
         sn = f'{_PREFIX}REG'
-        _insert_product(db_conn, sn, product_code='ALL')
+        _insert_product(db_conn, sn, product_code='COMMON')
         # MECH 카테고리 마스터 항목 추가
         cursor = db_conn.cursor()
         cursor.execute("""
             INSERT INTO checklist.checklist_master
                 (product_code, category, item_group, item_name, item_order, is_active, updated_at)
             VALUES ('ALL', 'MECH', NULL, 'MECH 점검항목 1', 1, TRUE, NOW())
-            ON CONFLICT (product_code, category, item_name) DO NOTHING
+            ON CONFLICT (product_code, category, item_group, item_name) DO NOTHING
         """)
         db_conn.commit()
         cursor.close()

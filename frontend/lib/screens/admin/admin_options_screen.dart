@@ -24,6 +24,13 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
   bool _locationQrRequired = true; // Location QR 필수 여부 (기본: true)
   bool _isLoadingSettings = false;
 
+  // 알림 트리거 설정 (Sprint 54)
+  bool _alertTmToMechEnabled = true;
+  bool _alertMechToElecEnabled = true;
+  bool _alertElecToPiEnabled = false;
+  bool _alertTmTankModuleToElecEnabled = false;
+  bool _alertMechPressureToQiEnabled = false;
+
   // PI 위임 설정 (Sprint 34-A)
   List<String> _piCapableMechPartners = [];
   List<String> _piGstOverrideLines = [];
@@ -286,6 +293,12 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
           }
           _geoLatController.text = _geoLat;
           _geoLngController.text = _geoLng;
+          // 알림 트리거 설정 (Sprint 54)
+          _alertTmToMechEnabled = response['alert_tm_to_mech_enabled'] as bool? ?? true;
+          _alertMechToElecEnabled = response['alert_mech_to_elec_enabled'] as bool? ?? true;
+          _alertElecToPiEnabled = response['alert_elec_to_pi_enabled'] as bool? ?? false;
+          _alertTmTankModuleToElecEnabled = response['alert_tm_tank_module_to_elec_enabled'] as bool? ?? false;
+          _alertMechPressureToQiEnabled = response['alert_mech_pressure_to_qi_enabled'] as bool? ?? false;
           _isLoadingSettings = false;
         });
       }
@@ -306,6 +319,11 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
           if (key == 'auto_pause_enabled') _autoPauseEnabled = value;
           if (key == 'geo_check_enabled') _geolocationEnabled = value;
           if (key == 'geo_strict_mode') _geoStrictMode = value;
+          if (key == 'alert_tm_to_mech_enabled') _alertTmToMechEnabled = value;
+          if (key == 'alert_mech_to_elec_enabled') _alertMechToElecEnabled = value;
+          if (key == 'alert_elec_to_pi_enabled') _alertElecToPiEnabled = value;
+          if (key == 'alert_tm_tank_module_to_elec_enabled') _alertTmTankModuleToElecEnabled = value;
+          if (key == 'alert_mech_pressure_to_qi_enabled') _alertMechPressureToQiEnabled = value;
         });
         _showSnack('설정이 저장되었습니다.', isError: false);
       }
@@ -1463,10 +1481,160 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
                       ),
               ),
 
+              const SizedBox(height: 24),
+
+              // ===== 섹션 8: 알림 트리거 설정 (Sprint 54) =====
+              _buildSectionHeader(
+                icon: Icons.notifications_active,
+                iconBg: const Color(0xFFFEF3C7),
+                iconColor: const Color(0xFFD97706),
+                title: '알림 트리거 설정',
+                subtitle: '공정 간 알림 발송 조건 제어',
+              ),
+              const SizedBox(height: 10),
+              Container(
+                decoration: GxGlass.cardSm(radius: GxRadius.lg),
+                child: _isLoadingSettings
+                    ? const Padding(
+                        padding: EdgeInsets.all(20),
+                        child: Center(child: CircularProgressIndicator(color: GxColors.accent, strokeWidth: 2)),
+                      )
+                    : Column(
+                        children: [
+                          // 공정 흐름도
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+                            child: _buildAlertFlowDiagram(),
+                          ),
+                          const Divider(height: 1, color: GxColors.mist),
+                          // 메인 트리거 3개
+                          _buildSettingToggle(
+                            title: 'TM → MECH 알림',
+                            subtitle: 'TM 가압검사 완료 시 MECH 관리자에게 알림 전송',
+                            value: _alertTmToMechEnabled,
+                            onChanged: (v) => _updateSetting('alert_tm_to_mech_enabled', v),
+                            isFirst: true,
+                          ),
+                          const Divider(height: 1, color: GxColors.mist),
+                          _buildSettingToggle(
+                            title: 'MECH → ELEC 알림',
+                            subtitle: 'MECH Tank Docking 완료 시 ELEC 관리자에게 알림 전송',
+                            value: _alertMechToElecEnabled,
+                            onChanged: (v) => _updateSetting('alert_mech_to_elec_enabled', v),
+                          ),
+                          const Divider(height: 1, color: GxColors.mist),
+                          _buildSettingToggle(
+                            title: 'ELEC → PI 알림',
+                            subtitle: 'ELEC 자주검사 완료 시 PI 담당자에게 알림 전송',
+                            value: _alertElecToPiEnabled,
+                            onChanged: (v) => _updateSetting('alert_elec_to_pi_enabled', v),
+                          ),
+                          const Divider(height: 1, color: GxColors.mist),
+                          // 추가 트리거 (기본 OFF)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+                            child: Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: GxColors.cloud,
+                                    borderRadius: BorderRadius.circular(GxRadius.sm),
+                                    border: Border.all(color: GxColors.mist, width: 1),
+                                  ),
+                                  child: const Text(
+                                    '추가 트리거',
+                                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: GxColors.slate),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          _buildSettingToggle(
+                            title: 'TM(Tank) → ELEC 알림',
+                            subtitle: 'TM Tank Module 완료(가압검사 제외) 시 ELEC 알림 (GAIA)',
+                            value: _alertTmTankModuleToElecEnabled,
+                            onChanged: (v) => _updateSetting('alert_tm_tank_module_to_elec_enabled', v),
+                          ),
+                          const Divider(height: 1, color: GxColors.mist),
+                          _buildSettingToggle(
+                            title: 'MECH 가압(DRAGON) → QI 알림',
+                            subtitle: 'DRAGON 모델 MECH 가압검사 완료 시 QI 담당자에게 알림',
+                            value: _alertMechPressureToQiEnabled,
+                            onChanged: (v) => _updateSetting('alert_mech_pressure_to_qi_enabled', v),
+                          ),
+                        ],
+                      ),
+              ),
+
               const SizedBox(height: 32),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  /// 알림 트리거 공정 흐름도 (TM → MECH → ELEC → PI → QI)
+  Widget _buildAlertFlowDiagram() {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildFlowNode('TM', const Color(0xFF0D9488), const Color(0xFFCCFBF1)),
+          _buildFlowArrow(_alertTmToMechEnabled),
+          _buildFlowNode('MECH', const Color(0xFFEA580C), const Color(0xFFFFEDD5)),
+          _buildFlowArrow(_alertMechToElecEnabled),
+          _buildFlowNode('ELEC', GxColors.info, GxColors.infoBg),
+          _buildFlowArrow(_alertElecToPiEnabled),
+          _buildFlowNode('PI', const Color(0xFF7C3AED), const Color(0xFFEDE9FE)),
+          _buildFlowArrow(false, isPassive: true),
+          _buildFlowNode('QI', const Color(0xFF2563EB), const Color(0xFFDBEAFE)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFlowNode(String label, Color textColor, Color bgColor) {
+    return Container(
+      width: 44,
+      height: 36,
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(GxRadius.sm),
+        border: Border.all(color: textColor.withValues(alpha: 0.4), width: 1),
+      ),
+      child: Center(
+        child: Text(
+          label,
+          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: textColor),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFlowArrow(bool isActive, {bool isPassive = false}) {
+    final color = isPassive
+        ? GxColors.mist
+        : isActive
+            ? GxColors.accent
+            : GxColors.steel.withValues(alpha: 0.4);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 14,
+            height: 2,
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(1),
+            ),
+          ),
+          Icon(Icons.arrow_right, size: 16, color: color),
+        ],
       ),
     );
   }

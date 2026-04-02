@@ -414,57 +414,86 @@ class TaskService:
     def _trigger_completion_alerts(self, task) -> None:
         """
         특정 Task 완료 시 연계 알림 트리거
-        Sprint 31A: 다모델 알람 확장
+        Sprint 54: partner 기반 분기 + admin_settings on/off
 
-        트리거 규칙:
-          - TMS PRESSURE_TEST 완료 (GAIA/iVAS)
-            → DUAL: L+R 모두 완료 시 1회만 → MECH 매니저
-            → SINGLE: 즉시 → MECH 매니저
-          - MECH PRESSURE_TEST 완료 (DRAGON)
-            → 즉시 → QI 매니저
-          - MECH TANK_DOCKING 완료
-            → 즉시 → ELEC 매니저
-          - PI 전체 완료 (SWS/GALLANT)
-            → QI 매니저 (같은 부서이므로 옵션)
+        트리거 규칙 (공정 흐름 순서):
+          trigger①: TMS 완료 → mech_partner company 매니저
+            - TMS PRESSURE_TEST 완료 (가압완료)
+            - 단, mech_partner = module_outsourcing 회사면 같은 회사이므로 스킵
+            - admin_settings: alert_tm_to_mech_enabled
+          trigger②: MECH TANK_DOCKING 완료 → elec_partner company 매니저
+            - admin_settings: alert_mech_to_elec_enabled
+          trigger③: ELEC 자주검사 전체 완료 → PI 매니저 (GST)
+            - admin_settings: alert_elec_to_pi_enabled
 
         Args:
             task: 완료된 TaskDetail 객체
         """
-        trigger = None
+        from app.models.alert_log import create_alert
+        from app.services.process_validator import get_managers_by_partner, get_managers_for_role
+        from app.models.admin_settings import get_setting
+        from app.models.product_info import get_product_by_serial_number
 
+        trigger = None  # (alert_type, partner_field_or_role, action_label, settings_key)
+
+        # ─── trigger① TMS → MECH (가압완료) ───
         if task.task_id == 'PRESSURE_TEST':
             if task.task_category == 'TMS':
-                # GAIA/iVAS: DUAL이면 L+R 모두 완료 확인
                 if self._is_dual_pressure_all_done(task.serial_number):
-                    trigger = ('TMS_TANK_COMPLETE', 'MECH', 'TMS 가압검사 완료')
+                    trigger = ('TMS_TANK_COMPLETE', 'mech_partner', 'TMS 가압검사 완료', 'alert_tm_to_mech_enabled')
             elif task.task_category == 'MECH':
                 # DRAGON: MECH 가압검사 완료 → QI 매니저
-                trigger = ('TMS_TANK_COMPLETE', 'QI', 'MECH 가압검사 완료')
+                trigger = ('TMS_TANK_COMPLETE', 'QI', 'MECH 가압검사 완료', 'alert_mech_pressure_to_qi_enabled')
 
-        # Sprint 37-A: TANK_MODULE 완료 + tm_pressure_test_required=false → 알람
+        # Sprint 37-A: TANK_MODULE 완료 + tm_pressure_test_required=false → elec_partner (admin_settings on/off)
         elif task.task_id == 'TANK_MODULE' and task.task_category == 'TMS':
             if not self._is_tm_pressure_test_required():
-                trigger = ('TMS_TANK_COMPLETE', 'MECH', 'TMS 탱크모듈 완료 (가압검사 제외)')
+                trigger = ('TMS_TANK_COMPLETE', 'elec_partner', 'TMS 탱크모듈 완료 (가압검사 제외)', 'alert_tm_tank_module_to_elec_enabled')
 
+        # ─── trigger②: MECH TANK_DOCKING → ELEC (도킹완료) ───
         elif task.task_category == 'MECH' and task.task_id == 'TANK_DOCKING':
-            trigger = ('TANK_DOCKING_COMPLETE', 'ELEC', 'Tank Docking 완료')
+            trigger = ('TANK_DOCKING_COMPLETE', 'elec_partner', 'Tank Docking 완료', 'alert_mech_to_elec_enabled')
 
-        elif task.task_category == 'PI':
-            # PI 전체 완료 시 → QI 매니저 알람 (옵션: 같은 부서)
-            incomplete_pi = get_incomplete_tasks(task.serial_number, 'PI')
-            if len(incomplete_pi) == 0:
-                trigger = ('TMS_TANK_COMPLETE', 'QI', 'PI 검사 완료')
+        # ─── trigger③: ELEC 자주검사 전체 완료 → PI (GST) ───
+        elif task.task_category == 'ELEC':
+            incomplete_elec = get_incomplete_tasks(task.serial_number, 'ELEC')
+            if len(incomplete_elec) == 0:
+                trigger = ('ELEC_COMPLETE', 'PI', 'ELEC 자주검사 완료', 'alert_elec_to_pi_enabled')
 
         if trigger is None:
             return
 
-        alert_type, target_role, action_label = trigger
+        alert_type, target_source, action_label, settings_key = trigger
 
         try:
-            from app.models.alert_log import create_alert
-            from app.services.process_validator import get_managers_for_role
+            # admin_settings on/off 체크
+            if not get_setting(settings_key, True):
+                logger.info(f"Alert trigger disabled: {settings_key}=false, skipping {alert_type}")
+                return
 
-            managers = get_managers_for_role(target_role)
+            # partner 기반 매니저 조회 vs role 기반 (QI 등)
+            if target_source in ('mech_partner', 'elec_partner', 'module_outsourcing'):
+                # ── 같은 회사 스킵 로직 (trigger①) ──
+                # mech_partner = module_outsourcing 회사면 같은 협력사 → 알림 불필요
+                if target_source == 'mech_partner':
+                    product = get_product_by_serial_number(task.serial_number)
+                    if product:
+                        mech = (product.mech_partner or '').upper()
+                        module = (product.module_outsourcing or '').upper()
+                        if mech and module and mech == module:
+                            logger.info(
+                                f"Same company skip: mech_partner={mech} == module_outsourcing={module}, "
+                                f"sn={task.serial_number}"
+                            )
+                            return
+
+                managers = get_managers_by_partner(task.serial_number, target_source)
+                target_role_label = target_source  # 로그용
+            else:
+                # QI, PI 등 role 기반 (GST 단일 회사)
+                managers = get_managers_for_role(target_source)
+                target_role_label = target_source
+
             for manager_id in managers:
                 alert_id = create_alert(
                     alert_type=alert_type,
@@ -476,15 +505,15 @@ class TaskService:
                     qr_doc_id=task.qr_doc_id,
                     triggered_by_worker_id=task.worker_id,
                     target_worker_id=manager_id,
-                    target_role=target_role
+                    target_role=target_role_label
                 )
                 if alert_id:
                     logger.info(
-                        f"Completion alert created: type={alert_type}, "
-                        f"task_id={task.id}, manager_id={manager_id}, alert_id={alert_id}"
+                        f"Completion alert: type={alert_type}, sn={task.serial_number}, "
+                        f"manager={manager_id}, source={target_source}"
                     )
+
         except Exception as e:
-            # 알림 실패가 작업 완료 자체를 방해하지 않도록 로그만 남김
             logger.error(f"Failed to trigger completion alert: {e}")
 
     def _is_dual_pressure_all_done(self, serial_number: str) -> bool:
@@ -563,7 +592,6 @@ class TaskService:
         """
         try:
             from app.models.worker import get_worker_by_id as _get_worker_by_id
-            from app.services.process_validator import get_managers_for_role
 
             completing_worker = _get_worker_by_id(completing_worker_id)
             is_completing_manager = completing_worker and completing_worker.is_manager
@@ -576,8 +604,9 @@ class TaskService:
                 )
                 return True
             else:
-                # 일반 작업자 완료 → TMS manager에게 알림
-                tms_managers = get_managers_for_role('TM')
+                # 일반 작업자 완료 → module_outsourcing company 매니저에게 알림
+                from app.services.process_validator import get_managers_by_partner
+                tms_managers = get_managers_by_partner(task.serial_number, 'module_outsourcing')
                 from app.models.alert_log import create_alert
                 for manager_id in tms_managers:
                     alert_id = create_alert(
@@ -590,7 +619,7 @@ class TaskService:
                         qr_doc_id=task.qr_doc_id,
                         triggered_by_worker_id=completing_worker_id,
                         target_worker_id=manager_id,
-                        target_role='TM',
+                        target_role='module_outsourcing',
                     )
                     if alert_id:
                         logger.info(

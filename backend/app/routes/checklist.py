@@ -677,19 +677,23 @@ def import_checklist_master() -> Tuple[Dict[str, Any], int]:
                 if 'description' in col_idx and row[col_idx['description']]:
                     description = str(row[col_idx['description']]).strip()
 
+                item_group = None
+                if 'item_group' in col_idx and row[col_idx['item_group']]:
+                    item_group = str(row[col_idx['item_group']]).strip()
+
                 cur.execute(
                     """
                     INSERT INTO checklist.checklist_master
-                        (product_code, category, item_name, item_order, description, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, NOW())
-                    ON CONFLICT (product_code, category, item_name) DO UPDATE
+                        (product_code, category, item_group, item_name, item_order, description, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (product_code, category, item_group, item_name) DO UPDATE
                     SET item_order  = EXCLUDED.item_order,
                         description = EXCLUDED.description,
                         updated_at  = NOW()
                     RETURNING id,
                               (xmax = 0) AS is_new
                     """,
-                    (product_code, category, item_name, item_order, description)
+                    (product_code, category, item_group, item_name, item_order, description)
                 )
                 result = cur.fetchone()
                 if result and result['is_new']:

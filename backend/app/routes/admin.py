@@ -59,7 +59,13 @@ SETTING_KEYS: Dict[str, Dict[str, Any]] = {
     # string — Sprint 52 TM 체크리스트 옵션
     'tm_checklist_1st_checker': {'type': 'string', 'default': 'is_manager', 'allowed': ['is_manager', 'user']},
     'tm_checklist_issue_alert': {'type': 'bool', 'default': True},
-    'tm_checklist_scope':       {'type': 'string', 'default': 'product_code', 'allowed': ['product_code', 'all']},
+    'tm_checklist_scope':       {'type': 'string', 'default': 'all', 'allowed': ['product_code', 'all']},
+    # bool — Sprint 54 알림 트리거 on/off
+    'alert_tm_to_mech_enabled':              {'type': 'bool', 'default': True},
+    'alert_mech_to_elec_enabled':            {'type': 'bool', 'default': True},
+    'alert_elec_to_pi_enabled':              {'type': 'bool', 'default': False},
+    'alert_mech_pressure_to_qi_enabled':     {'type': 'bool', 'default': False},
+    'alert_tm_tank_module_to_elec_enabled':  {'type': 'bool', 'default': False},
 }
 
 ALLOWED_KEYS = set(SETTING_KEYS.keys())
