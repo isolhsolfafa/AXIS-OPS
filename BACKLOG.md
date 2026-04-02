@@ -52,7 +52,7 @@
 | 53 | 알림 소리 + 진동 — 포그라운드 알림 피드백 | ✅ 완료 (2026-04-02) | Web Audio API 비프음 5종 + navigator.vibrate + 프로필 설정 드롭다운. 패키지 추가 0 |
 | 52-A | TM 체크리스트 보완 — COMMON seed + scope 수정 | ✅ 완료 (2026-04-02) | migration 043a + COMMON 15항목 + item_type 컬럼 + scope='all' 기본값 |
 | 54 | 공정 흐름 알림 트리거 — partner 분기 + admin_settings | ✅ 완료 (2026-04-02) | process_validator + task_service + migration 044 + FE 설정 UI. 테스트 30/34 (4 FE skip) |
-| 52-BF | TM 체크리스트 BUG-FIX #1~#5 | ✅ 수정 완료 (2026-04-02) | #1 FE 키 매핑 7곳, #2 checklistReady 자동 전환, #3 TANK_MODULE 체크리스트 버튼, #4 check_result=null 500→400, #5 토글 PASS↔NA 2상태 |
+| 52-BF | TM 체크리스트 BUG-FIX #1~#6 | ✅ 수정 완료 (2026-04-02) | #1~#5 + #6 알림 메시지 [S/N\|O/N] 포맷 + 팝업 QR 행 제거 |
 | FEAT-1 | 사용자 행위 트래킹 + 분석 대시보드 | ✅ BE Sprint 32 완료 (2026-03-19) | `app_access_log` 테이블 + analytics API 4개 + 30일 정리 스케줄러. VIEW 분석 대시보드는 별도 Sprint |
 
 ---
