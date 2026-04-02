@@ -73,7 +73,7 @@ class _TmChecklistScreenState extends ConsumerState<TmChecklistScreen> {
       // 초기 expanded 상태: 처음 로드 시 모두 펼침
       final newExpanded = <String, bool>{};
       for (final g in groups) {
-        final groupName = g['group'] as String? ?? '';
+        final groupName = g['group_name'] as String? ?? '';
         newExpanded[groupName] = _expanded[groupName] ?? true;
       }
 
@@ -129,7 +129,7 @@ class _TmChecklistScreenState extends ConsumerState<TmChecklistScreen> {
     Map<String, dynamic> item,
     String groupName,
   ) async {
-    final masterId = item['id'] as int?;
+    final masterId = item['master_id'] as int?;
     if (masterId == null) return;
     if (_updatingIds.contains(masterId)) return;
 
@@ -180,7 +180,7 @@ class _TmChecklistScreenState extends ConsumerState<TmChecklistScreen> {
 
   /// 코멘트(note) 입력 다이얼로그
   Future<void> _showCommentDialog(Map<String, dynamic> item) async {
-    final masterId = item['id'] as int?;
+    final masterId = item['master_id'] as int?;
     if (masterId == null) return;
 
     final currentNote = item['note'] as String? ?? '';
@@ -205,7 +205,7 @@ class _TmChecklistScreenState extends ConsumerState<TmChecklistScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              item['check_name'] as String? ?? '',
+              item['item_name'] as String? ?? '',
               style: const TextStyle(
                 fontSize: 12,
                 color: GxColors.steel,
@@ -311,7 +311,7 @@ class _TmChecklistScreenState extends ConsumerState<TmChecklistScreen> {
     _groups = _groups.map((g) {
       final items = (g['items'] as List? ?? []).map((item) {
         final i = item as Map<String, dynamic>;
-        if (i['id'] == masterId) {
+        if (i['master_id'] == masterId) {
           return Map<String, dynamic>.from(i)..addAll(fields);
         }
         return i;
@@ -535,7 +535,7 @@ class _TmChecklistScreenState extends ConsumerState<TmChecklistScreen> {
   }
 
   Widget _buildGroupTile(Map<String, dynamic> group) {
-    final groupName = group['group'] as String? ?? '';
+    final groupName = group['group_name'] as String? ?? '';
     final items = (group['items'] as List? ?? [])
         .cast<Map<String, dynamic>>();
     final isExpanded = _expanded[groupName] ?? true;
@@ -623,8 +623,8 @@ class _TmChecklistScreenState extends ConsumerState<TmChecklistScreen> {
   }
 
   Widget _buildCheckItem(Map<String, dynamic> item) {
-    final masterId = item['id'] as int?;
-    final checkName = item['check_name'] as String? ?? '-';
+    final masterId = item['master_id'] as int?;
+    final checkName = item['item_name'] as String? ?? '-';
     final checkResult = item['check_result'] as String?;
     final note = item['note'] as String?;
     final isUpdating = masterId != null && _updatingIds.contains(masterId);
