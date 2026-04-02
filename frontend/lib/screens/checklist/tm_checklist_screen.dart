@@ -118,11 +118,10 @@ class _TmChecklistScreenState extends ConsumerState<TmChecklistScreen> {
   double get _progress => _totalCount > 0 ? _checkedCount / _totalCount : 0;
   bool get _isAllDone => _totalCount > 0 && _checkedCount == _totalCount;
 
-  /// PASS → NA → null 순환 토글
-  String? _nextResult(String? current) {
-    if (current == null) return 'PASS';
+  /// PASS → NA → PASS 순환 토글 (2상태 루프)
+  String _nextResult(String? current) {
     if (current == 'PASS') return 'NA';
-    return null; // NA → null (미체크)
+    return 'PASS'; // null 또는 NA → PASS
   }
 
   Future<void> _toggleResult(

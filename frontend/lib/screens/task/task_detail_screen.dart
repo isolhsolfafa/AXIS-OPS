@@ -332,7 +332,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
               else if (task.status == 'in_progress' && !task.isPaused)
                 _buildInProgressRow(task.id, workerId)
               else if (task.status == 'completed')
-                _buildCompletedBadge(),
+                _buildCompletedBadge(task),
             ],
           ),
         ),
@@ -611,23 +611,66 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     );
   }
 
-  Widget _buildCompletedBadge() {
-    return Container(
-      height: 48,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: GxColors.successBg,
-        borderRadius: BorderRadius.circular(GxRadius.sm),
-        border: Border.all(color: GxColors.success.withValues(alpha: 0.3), width: 1.5),
-      ),
-      child: const Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.check_circle, color: GxColors.success, size: 20),
-          SizedBox(width: 8),
-          Text('작업 완료됨', style: TextStyle(color: GxColors.success, fontWeight: FontWeight.w600, fontSize: 15)),
+  Widget _buildCompletedBadge(TaskItem task) {
+    final bool showChecklist = task.taskId == 'TANK_MODULE' && task.taskCategory == 'TMS';
+
+    return Column(
+      children: [
+        Container(
+          height: 48,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: GxColors.successBg,
+            borderRadius: BorderRadius.circular(GxRadius.sm),
+            border: Border.all(color: GxColors.success.withValues(alpha: 0.3), width: 1.5),
+          ),
+          child: const Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.check_circle, color: GxColors.success, size: 20),
+              SizedBox(width: 8),
+              Text('작업 완료됨', style: TextStyle(color: GxColors.success, fontWeight: FontWeight.w600, fontSize: 15)),
+            ],
+          ),
+        ),
+        // Sprint 52: TANK_MODULE 완료 시 체크리스트 진입 버튼
+        if (showChecklist) ...[
+          const SizedBox(height: 10),
+          Container(
+            height: 48,
+            decoration: BoxDecoration(
+              gradient: GxGradients.accentButton,
+              borderRadius: BorderRadius.circular(GxRadius.sm),
+            ),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(GxRadius.sm),
+                onTap: () {
+                  final taskState = ref.read(taskProvider);
+                  final serialNumber = taskState.currentSerialNumber;
+                  if (serialNumber != null) {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => TmChecklistScreen(serialNumber: serialNumber),
+                      ),
+                    );
+                  }
+                },
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.checklist, size: 20, color: Colors.white),
+                    SizedBox(width: 8),
+                    Text('체크리스트 검수', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.white)),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ],
-      ),
+      ],
     );
   }
 
