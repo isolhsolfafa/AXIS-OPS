@@ -5,6 +5,7 @@ import '../../providers/auth_provider.dart';
 import '../../models/task_item.dart';
 import '../../utils/design_system.dart';
 import 'task_detail_screen.dart';
+import '../checklist/tm_checklist_screen.dart';
 
 /// Task 관리 화면
 ///
@@ -776,14 +777,28 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
     final finalize = result == 'finalize';
 
     final taskNotifier = ref.read(taskProvider.notifier);
-    final success = await taskNotifier.completeTask(
+    final completeResult = await taskNotifier.completeTask(
       taskId: taskId,
       workerId: workerId,
       finalize: finalize,
     );
 
     if (mounted) {
-      if (success) {
+      if (completeResult.success) {
+        // Sprint 52 BUG-FIX: 매니저 직접 완료 시 체크리스트 화면 전환
+        if (completeResult.checklistReady) {
+          final taskState = ref.read(taskProvider);
+          final serialNumber = taskState.currentSerialNumber;
+          if (serialNumber != null) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => TmChecklistScreen(serialNumber: serialNumber),
+              ),
+            );
+            return;
+          }
+        }
         final message = finalize
             ? '작업을 완료했습니다.'
             : '내 작업이 종료되었습니다. 다른 작업자가 이어서 작업할 수 있습니다.';

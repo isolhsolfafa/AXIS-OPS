@@ -236,14 +236,16 @@ class TaskNotifier extends StateNotifier<TaskState> {
   /// [workerId]: 작업자 ID
   ///
   /// Returns: 완료 성공 여부
-  Future<bool> completeTask({
+  /// Returns: ({bool success, bool checklistReady})
+  /// Sprint 52 BUG-FIX: checklistReady — 매니저 직접 완료 시 체크리스트 화면 전환용
+  Future<({bool success, bool checklistReady})> completeTask({
     required int taskId,
     required int workerId,
     bool finalize = true,
   }) async {
     state = state.copyWith(isLoading: true, clearError: true);
     try {
-      final updatedTask = await _taskService.completeTask(
+      final result = await _taskService.completeTask(
         taskId: taskId,
         workerId: workerId,
         finalize: finalize,
@@ -251,13 +253,13 @@ class TaskNotifier extends StateNotifier<TaskState> {
 
       // Task 목록 업데이트
       final updatedTasks = state.tasks.map((task) {
-        return task.id == taskId ? updatedTask : task;
+        return task.id == taskId ? result.task : task;
       }).toList();
 
       state = state.copyWith(
         isLoading: false,
         tasks: updatedTasks,
-        selectedTask: updatedTask,
+        selectedTask: result.task,
       );
 
       // 완료 후 공정 완료 상태 새로고침
@@ -265,13 +267,13 @@ class TaskNotifier extends StateNotifier<TaskState> {
         await refreshCompletionStatus(state.currentSerialNumber!);
       }
 
-      return true;
+      return (success: true, checklistReady: result.checklistReady);
     } catch (e) {
       state = state.copyWith(
         isLoading: false,
         errorMessage: _extractErrorMessage(e),
       );
-      return false;
+      return (success: false, checklistReady: false);
     }
   }
 

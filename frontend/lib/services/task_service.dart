@@ -148,13 +148,14 @@ class TaskService {
   /// [taskId]: app_task_details의 ID
   /// [workerId]: 작업자 ID
   ///
-  /// Returns: 업데이트된 TaskItem 객체
+  /// Returns: ({TaskItem task, bool checklistReady})
   ///
   /// API: POST /api/app/work/complete
   /// Request: {"task_id": int, "worker_id": int, "finalize": bool}
   /// Response: {"id": int, "completed_at": str, "duration": int, ...}
   /// Sprint 41: finalize=false → 릴레이 종료 (task 열린 상태 유지)
-  Future<TaskItem> completeTask({
+  /// Sprint 52 BUG-FIX: checklist_ready 플래그 전달 (매니저 직접 완료 시)
+  Future<({TaskItem task, bool checklistReady})> completeTask({
     required int taskId,
     required int workerId,
     bool finalize = true,
@@ -168,7 +169,9 @@ class TaskService {
           'finalize': finalize,
         },
       );
-      return TaskItem.fromJson(response);
+      final task = TaskItem.fromJson(response);
+      final checklistReady = response['checklist_ready'] == true;
+      return (task: task, checklistReady: checklistReady);
     } catch (e) {
       rethrow;
     }

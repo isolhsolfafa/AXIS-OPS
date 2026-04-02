@@ -4,6 +4,7 @@ import '../../models/task_item.dart';
 import '../../providers/task_provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../utils/design_system.dart';
+import '../checklist/tm_checklist_screen.dart';
 
 /// Task 상세 화면
 ///
@@ -747,10 +748,25 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   Future<void> _handleCompleteTask(int taskId, int workerId, {bool finalize = true}) async {
     setState(() => _isActionLoading = true);
     final taskNotifier = ref.read(taskProvider.notifier);
-    final success = await taskNotifier.completeTask(taskId: taskId, workerId: workerId, finalize: finalize);
+    final result = await taskNotifier.completeTask(taskId: taskId, workerId: workerId, finalize: finalize);
     if (mounted) {
       setState(() => _isActionLoading = false);
-      if (success) {
+      if (result.success) {
+        // Sprint 52 BUG-FIX: 매니저 직접 완료 시 체크리스트 화면 전환
+        if (result.checklistReady) {
+          final taskState = ref.read(taskProvider);
+          final serialNumber = taskState.currentSerialNumber;
+          if (serialNumber != null) {
+            Navigator.pop(context, finalize ? 'finalize' : 'relay');
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => TmChecklistScreen(serialNumber: serialNumber),
+              ),
+            );
+            return;
+          }
+        }
         // 이전 화면(task_management)에서 토스트 표시 — Scaffold 소멸 방지
         Navigator.pop(context, finalize ? 'finalize' : 'relay');
       } else {
