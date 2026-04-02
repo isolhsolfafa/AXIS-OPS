@@ -19663,6 +19663,36 @@ after:
 
 첫 탭 PASS, 두번째 탭 NA, 이후 PASS↔NA 무한 루프. BE에 null이 전송되지 않음.
 
+### BUG-FIX #6 (Sprint 52): 알림 메시지에 O/N 추가 + QR 문서 제거
+
+적용일: 2026-04-02
+
+**요구사항**: 알림 팝업에서 QR 문서(DOC_xxx) 제거, 대신 O/N(수주번호) 표시.
+
+**수정 방식**: BE 메시지 텍스트에 O/N 포함 + FE 팝업에서 QR 문서 행 제거.
+DB 스키마 변경 없이 모든 알림 타입에 일관 적용.
+
+```
+메시지 포맷 변경:
+  before: [TEST-1111] TMS 가압검사 완료: 가압검사 작업이 완료되었습니다.
+  after:  [TEST-1111 | O/N: SO-12345] TMS 가압검사 완료: 가압검사 작업이 완료되었습니다.
+  (O/N 없을 시: [TEST-1111] ... 그대로)
+```
+
+**수정 파일 3개**:
+
+```
+1. backend/app/services/task_service.py
+   - _trigger_completion_alerts(): _sn_label() 헬퍼 추가
+     — get_product_by_serial_number로 sales_order 조회
+     — O/N 있으면 [S/N | O/N: xxx], 없으면 [S/N]
+   - _trigger_tm_checklist_alert(): 동일 패턴 적용
+
+2. frontend/lib/screens/admin/alert_list_screen.dart
+   - _AlertDetailDialog: QR 문서 행 제거
+     (qrDocId 표시 라인 삭제)
+```
+
 ### Task 5: 알림 탭 → TM 체크리스트 화면 연동 (FE)
 
 파일: 알림 목록 화면 (기존 alert 관련 screen)

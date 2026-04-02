@@ -461,7 +461,6 @@ class _AlertDetailDialog extends StatelessWidget {
             _buildInfoRow('시간', _formatFullDateTime(alert.createdAt)),
             if (alert.serialNumber != null)
               _buildInfoRow('시리얼 번호', alert.serialNumber!),
-            if (alert.qrDocId != null) _buildInfoRow('QR 문서', alert.qrDocId!),
             if (alert.targetRole != null)
               _buildInfoRow('대상', alert.targetRole!),
             _buildInfoRow('읽음 상태', alert.isRead ? '읽음' : '안읽음'),

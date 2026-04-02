@@ -434,6 +434,12 @@ class TaskService:
         from app.models.admin_settings import get_setting
         from app.models.product_info import get_product_by_serial_number
 
+        def _sn_label(sn: str) -> str:
+            """[S/N | O/N: xxx] 포맷 생성"""
+            product = get_product_by_serial_number(sn)
+            on = product.sales_order if product and product.sales_order else None
+            return f"[{sn} | O/N: {on}]" if on else f"[{sn}]"
+
         trigger = None  # (alert_type, partner_field_or_role, action_label, settings_key)
 
         # ─── trigger① TMS → MECH (가압완료) ───
@@ -494,11 +500,12 @@ class TaskService:
                 managers = get_managers_for_role(target_source)
                 target_role_label = target_source
 
+            label = _sn_label(task.serial_number)
             for manager_id in managers:
                 alert_id = create_alert(
                     alert_type=alert_type,
                     message=(
-                        f"[{task.serial_number}] {action_label}: "
+                        f"{label} {action_label}: "
                         f"{task.task_name} 작업이 완료되었습니다."
                     ),
                     serial_number=task.serial_number,
@@ -608,11 +615,15 @@ class TaskService:
                 from app.services.process_validator import get_managers_by_partner
                 tms_managers = get_managers_by_partner(task.serial_number, 'module_outsourcing')
                 from app.models.alert_log import create_alert
+                from app.models.product_info import get_product_by_serial_number as _get_product
+                product = _get_product(task.serial_number)
+                on = product.sales_order if product and product.sales_order else None
+                label = f"[{task.serial_number} | O/N: {on}]" if on else f"[{task.serial_number}]"
                 for manager_id in tms_managers:
                     alert_id = create_alert(
                         alert_type='CHECKLIST_TM_READY',
                         message=(
-                            f"[{task.serial_number}] Tank Module 작업 완료 — "
+                            f"{label} Tank Module 작업 완료 — "
                             f"체크리스트 검수가 필요합니다"
                         ),
                         serial_number=task.serial_number,
