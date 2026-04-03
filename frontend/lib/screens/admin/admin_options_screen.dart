@@ -101,7 +101,11 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
   static const List<String> _lineOptions = ['JP', 'P4', 'P5', 'FAB2'];
 
   /// PI 위임 대상 모델 옵션 (model_config prefix 기준)
-  static const List<String> _modelPrefixOptions = ['GAIA', 'DRAGON', 'GALLANT', 'MITHAS', 'SDS', 'SWS'];
+  static const List<String> _modelPrefixOptions = [
+    'GAIA-I', 'GAIA-II', 'GAIA-P', 'GAIA-ADVANCE',
+    'DRAGON', 'GALLANT', 'MITHAS', 'SDS', 'SWS',
+    'iVAS', 'IVAS',
+  ];
 
   /// company 필터 적용된 가입 대기 목록
   List<Map<String, dynamic>> get _filteredPendingWorkers {

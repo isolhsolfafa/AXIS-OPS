@@ -5,7 +5,7 @@
 INSERT INTO admin_settings (setting_key, setting_value, description)
 VALUES (
     'pi_delegate_models',
-    '["GAIA", "DRAGON"]',
+    '["GAIA-I", "GAIA-II", "GAIA-P", "DRAGON", "iVAS", "IVAS"]',
     'PI 위임 대상 모델 prefix 목록 (이 목록에 있는 모델만 mech_partner 기반 PI 위임 적용)'
 )
 ON CONFLICT (setting_key) DO NOTHING;
