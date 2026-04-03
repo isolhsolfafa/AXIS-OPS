@@ -100,6 +100,7 @@ def _get_checklist_by_category(
         # item_type 컬럼이 없는 경우 fallback
         item_type = row['item_type'] if 'item_type' in row.keys() else 'CHECK'
         items.append({
+            'master_id': row['master_id'],
             'item_group': row['item_group'] or '기타',
             'item_name': row['item_name'],
             'item_type': item_type,
