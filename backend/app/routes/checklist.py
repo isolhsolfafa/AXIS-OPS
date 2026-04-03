@@ -8,10 +8,10 @@ import logging
 from flask import Blueprint, request, jsonify
 from typing import Tuple, Dict, Any
 
-from app.middleware.jwt_auth import jwt_required, admin_required, get_current_worker_id
+from app.middleware.jwt_auth import jwt_required, admin_required, view_access_required, get_current_worker_id
 from app.models.worker import get_worker_by_id, get_db_connection
 from psycopg2 import Error as PsycopgError
-from app.db_pool import put_conn
+from app.db_pool import put_conn, get_conn
 from app.services import checklist_service
 
 
@@ -905,4 +905,232 @@ def get_tm_checklist_status(serial_number: str) -> Tuple[Dict[str, Any], int]:
         phase = 1
 
     result = checklist_service.get_tm_checklist_status(serial_number, judgment_phase=phase)
+    return jsonify(result), 200
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sprint 54: 체크리스트 성적서 API
+# ─────────────────────────────────────────────────────────────────────────────
+
+@checklist_bp.route("/api/admin/checklist/report/orders", methods=["GET"])
+@jwt_required
+@view_access_required
+def get_checklist_report_orders() -> Tuple[Dict[str, Any], int]:
+    """
+    체크리스트 성적서 — O/N 기준 S/N 목록 + 진행률 (#54-A, Sprint 54)
+
+    Query Parameters:
+        sales_order: str (부분/완전 일치) — O/N 기준 검색
+        serial_number: str (부분 일치, ILIKE) — S/N 기준 검색
+        두 파라미터 동시 → OR 조건 (합집합)
+
+    Headers:
+        Authorization: Bearer {token}
+
+    Response:
+        200: {
+            "sales_order": str|null,
+            "products": [
+                {
+                    "serial_number": str,
+                    "model": str|null,
+                    "overall_percent": float  -- 체크리스트 전체 진행률 (0.0 ~ 100.0)
+                }, ...
+            ]
+        }
+        400: {"error": "INVALID_REQUEST", "message": "..."}
+        500: {"error": "INTERNAL_ERROR", "message": "..."}
+    """
+    sales_order = request.args.get('sales_order', '').strip()
+    serial_number = request.args.get('serial_number', '').strip()
+
+    if not sales_order and not serial_number:
+        return jsonify({'error': 'INVALID_REQUEST', 'message': 'sales_order 또는 serial_number 필수'}), 400
+
+    conn = None
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+
+        # product_info 검색
+        conditions = []
+        params: list = []
+        if sales_order:
+            conditions.append("p.sales_order = %s")
+            params.append(sales_order)
+        if serial_number:
+            conditions.append("p.serial_number ILIKE %s")
+            params.append(f"%{serial_number}%")
+
+        where_clause = " OR ".join(conditions)
+
+        cur.execute(
+            f"""
+            SELECT p.serial_number, p.model, p.sales_order
+            FROM plan.product_info p
+            WHERE {where_clause}
+            ORDER BY p.serial_number
+            """,
+            params
+        )
+        products = cur.fetchall()
+
+        if not products:
+            return jsonify({'sales_order': sales_order or None, 'products': []}), 200
+
+        # 체크리스트 진행률 — 배치 쿼리 (N+1 방지)
+        sns = [p['serial_number'] for p in products]
+
+        # scope 조회
+        cur.execute(
+            "SELECT setting_value FROM admin_settings WHERE setting_key = 'tm_checklist_scope'"
+        )
+        scope_row = cur.fetchone()
+        scope = 'product_code'
+        if scope_row:
+            sv = scope_row['setting_value']
+            scope = sv if isinstance(sv, str) else str(sv)
+
+        result_products = []
+
+        if scope == 'all':
+            # 배치: master 항목 수 (S/N 무관, COMMON 기준 1회)
+            cur.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM checklist.checklist_master
+                WHERE product_code = 'COMMON' AND is_active = TRUE
+                """
+            )
+            master_total = cur.fetchone()['total']
+
+            # 배치: S/N별 checked 카운트 (ANY 1회)
+            cur.execute(
+                """
+                SELECT cr.serial_number,
+                       COUNT(cr.id) FILTER (WHERE cr.check_result IN ('PASS','NA')) AS checked
+                FROM checklist.checklist_record cr
+                JOIN checklist.checklist_master cm ON cm.id = cr.master_id
+                WHERE cr.serial_number = ANY(%s)
+                  AND cr.judgment_phase = 1
+                  AND cm.product_code = 'COMMON'
+                  AND cm.is_active = TRUE
+                GROUP BY cr.serial_number
+                """,
+                (sns,)
+            )
+            checked_map = {row['serial_number']: row['checked'] for row in cur.fetchall()}
+
+            for p in products:
+                sn = p['serial_number']
+                chk = checked_map.get(sn, 0)
+                percent = round(chk / master_total * 100, 1) if master_total > 0 else 0.0
+                result_products.append({
+                    'serial_number': sn,
+                    'model': p['model'],
+                    'overall_percent': percent,
+                })
+        else:
+            # product_code별 scope — CROSS JOIN으로 S/N별 master+record 배치 집계
+            cur.execute(
+                """
+                SELECT p.serial_number,
+                       COUNT(cm.id) AS total,
+                       COUNT(cr.id) FILTER (WHERE cr.check_result IN ('PASS','NA')) AS checked
+                FROM plan.product_info p
+                JOIN checklist.checklist_master cm
+                    ON cm.product_code = COALESCE(p.product_code, 'COMMON')
+                   AND cm.is_active = TRUE
+                LEFT JOIN checklist.checklist_record cr
+                    ON cr.master_id = cm.id
+                   AND cr.serial_number = p.serial_number
+                   AND cr.judgment_phase = 1
+                WHERE p.serial_number = ANY(%s)
+                GROUP BY p.serial_number
+                """,
+                (sns,)
+            )
+            stats_map = {row['serial_number']: row for row in cur.fetchall()}
+
+            for p in products:
+                sn = p['serial_number']
+                stat = stats_map.get(sn, {'total': 0, 'checked': 0})
+                total = stat['total']
+                chk = stat['checked']
+                percent = round(chk / total * 100, 1) if total > 0 else 0.0
+                result_products.append({
+                    'serial_number': sn,
+                    'model': p['model'],
+                    'overall_percent': percent,
+                })
+
+        return jsonify({
+            'sales_order': sales_order or (products[0]['sales_order'] if products else None),
+            'products': result_products,
+        }), 200
+
+    except PsycopgError as e:
+        logger.error(f"checklist report orders error: {e}")
+        return jsonify({'error': 'INTERNAL_ERROR', 'message': '데이터 조회 실패'}), 500
+    finally:
+        if conn:
+            put_conn(conn)
+
+
+@checklist_bp.route("/api/admin/checklist/report/<string:serial_number>", methods=["GET"])
+@jwt_required
+@view_access_required
+def get_checklist_report_detail(serial_number: str) -> Tuple[Dict[str, Any], int]:
+    """
+    체크리스트 성적서 — S/N 전체 카테고리 조회 (#54-B, Sprint 54)
+
+    Path Parameters:
+        serial_number: 제품 시리얼 번호
+
+    Query Parameters:
+        phase: 판정 차수 (기본 1)
+
+    Headers:
+        Authorization: Bearer {token}
+
+    Response:
+        200: {
+            "serial_number": str,
+            "model": str|null,
+            "sales_order": str|null,
+            "customer": str|null,
+            "categories": [
+                {
+                    "category": str,
+                    "items": [
+                        {
+                            "item_group": str,
+                            "item_name": str,
+                            "item_type": str,
+                            "description": str|null,
+                            "check_result": "PASS"|"NA"|null,
+                            "checked_by_name": str|null,
+                            "checked_at": str|null,
+                            "note": str|null
+                        }, ...
+                    ],
+                    "summary": {"total": int, "checked": int, "percent": float}
+                }, ...
+            ],
+            "generated_at": str  -- KST ISO 형식
+        }
+        404: {"error": "PRODUCT_NOT_FOUND", "message": "..."}
+        500: {"error": "INTERNAL_ERROR", "message": "..."}
+    """
+    try:
+        phase = int(request.args.get('phase', 1))
+    except (ValueError, TypeError):
+        phase = 1
+
+    result = checklist_service.get_checklist_report(serial_number, judgment_phase=phase)
+
+    if 'error' in result:
+        status_code = 404 if result['error'] == 'PRODUCT_NOT_FOUND' else 500
+        return jsonify(result), status_code
+
     return jsonify(result), 200

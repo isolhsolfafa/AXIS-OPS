@@ -1,9 +1,11 @@
 """
 TM 체크리스트 서비스 (Sprint 52)
 체크리스트 조회 / 항목 체크 / 완료 판정 + 알림
+Sprint 54: _get_checklist_by_category() 추출, get_checklist_report() 추가
 """
 
 import logging
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
 
 from psycopg2 import Error as PsycopgError
@@ -15,9 +17,118 @@ from app.db_pool import put_conn
 logger = logging.getLogger(__name__)
 
 
+def _get_checklist_by_category(
+    cur,
+    serial_number: str,
+    category: str,
+    product_code: Optional[str],
+    scope: str,
+    judgment_phase: int = 1,
+) -> Dict[str, Any]:
+    """카테고리별 체크리스트 조회 — 공통 로직 (Sprint 54)
+
+    get_tm_checklist() 내부 로직을 추출. master+record LEFT JOIN + 그룹핑 + summary.
+    TM/MECH/ELEC 모두 동일 패턴.
+
+    Args:
+        cur: DB cursor (외부에서 connection 관리)
+        serial_number: S/N
+        category: 'TM', 'MECH', 'ELEC' 등
+        product_code: 제품 코드 (scope='product_code' 시 사용)
+        scope: 'all' | 'product_code'
+        judgment_phase: 판정 차수
+
+    Returns:
+        {
+            "category": str,
+            "items": [
+                {
+                    "item_group": str,
+                    "item_name": str,
+                    "item_type": str,
+                    "description": str|null,
+                    "check_result": "PASS"|"NA"|null,
+                    "checked_by_name": str|null,
+                    "checked_at": str|null,
+                    "note": str|null
+                }, ...
+            ],
+            "summary": { "total": int, "checked": int, "percent": float }
+        }
+    """
+    # master 필터 조건 (기존 get_tm_checklist 패턴)
+    if scope == 'all' or not product_code:
+        master_filter_sql = "cm.product_code = 'COMMON' AND cm.category = %s"
+        master_params: list = [category]
+    else:
+        master_filter_sql = "cm.product_code = %s AND cm.category = %s"
+        master_params = [product_code, category]
+
+    query = f"""
+        SELECT
+            cm.id          AS master_id,
+            cm.item_group,
+            cm.item_name,
+            cm.item_type,
+            cm.item_order,
+            cm.description,
+            cr.check_result,
+            cr.checked_by,
+            w.name         AS checked_by_name,
+            cr.checked_at,
+            cr.note
+        FROM checklist.checklist_master cm
+        LEFT JOIN checklist.checklist_record cr
+            ON cr.master_id      = cm.id
+           AND cr.serial_number  = %s
+           AND cr.judgment_phase = %s
+        LEFT JOIN workers w ON w.id = cr.checked_by
+        WHERE {master_filter_sql}
+          AND cm.is_active = TRUE
+        ORDER BY cm.item_group ASC NULLS LAST, cm.item_order ASC, cm.id ASC
+    """
+    params: list = [serial_number, judgment_phase] + master_params
+    cur.execute(query, params)
+    rows = cur.fetchall()
+
+    items = []
+    total = 0
+    checked = 0
+
+    for row in rows:
+        check_result = row['check_result']
+        # item_type 컬럼이 없는 경우 fallback
+        item_type = row['item_type'] if 'item_type' in row.keys() else 'CHECK'
+        items.append({
+            'item_group': row['item_group'] or '기타',
+            'item_name': row['item_name'],
+            'item_type': item_type,
+            'description': row['description'],
+            'check_result': check_result,
+            'checked_by_name': row['checked_by_name'],
+            'checked_at': row['checked_at'].isoformat() if row['checked_at'] else None,
+            'note': row['note'],
+        })
+        total += 1
+        if check_result in ('PASS', 'NA'):
+            checked += 1
+
+    percent = round(checked / total * 100, 1) if total > 0 else 0.0
+
+    return {
+        'category': category,
+        'items': items,
+        'summary': {
+            'total': total,
+            'checked': checked,
+            'percent': percent,
+        },
+    }
+
+
 def get_tm_checklist(serial_number: str, judgment_phase: int = 1) -> Dict[str, Any]:
     """
-    TM 체크리스트 조회 (item_group별 그룹핑 응답)
+    TM 체크리스트 조회 (item_group별 그룹핑 응답) — 기존 API 호환 유지 (Sprint 54 wrapper)
 
     checklist_master (category='TM') + checklist_record LEFT JOIN.
     admin_settings.tm_checklist_scope 에 따라 master 필터링:
@@ -38,9 +149,9 @@ def get_tm_checklist(serial_number: str, judgment_phase: int = 1) -> Dict[str, A
                     "group_name": str,
                     "items": [
                         {
-                            "master_id": int,
+                            "item_group": str,
                             "item_name": str,
-                            "item_order": int,
+                            "item_type": str,
                             "description": str|null,
                             "check_result": "PASS"|"NA"|null,
                             "checked_by_name": str|null,
@@ -87,74 +198,23 @@ def get_tm_checklist(serial_number: str, judgment_phase: int = 1) -> Dict[str, A
             sv = scope_row['setting_value']
             scope = sv if isinstance(sv, str) else str(sv)
 
-        # master 필터 조건 결정
-        if scope == 'all' or not product_code:
-            master_filter_sql = "cm.product_code = 'COMMON' AND cm.category = 'TM'"
-            master_params: list = []
-        else:
-            master_filter_sql = "cm.product_code = %s AND cm.category = 'TM'"
-            master_params = [product_code]
+        # 공통 함수 호출
+        cat_data = _get_checklist_by_category(
+            cur, serial_number, 'TM', product_code, scope, judgment_phase
+        )
 
-        # checklist_master + checklist_record LEFT JOIN
-        query = f"""
-            SELECT
-                cm.id          AS master_id,
-                cm.item_group,
-                cm.item_name,
-                cm.item_order,
-                cm.description,
-                cr.check_result,
-                cr.checked_by,
-                w.name         AS checked_by_name,
-                cr.checked_at,
-                cr.note
-            FROM checklist.checklist_master cm
-            LEFT JOIN checklist.checklist_record cr
-                ON cr.master_id      = cm.id
-               AND cr.serial_number  = %s
-               AND cr.judgment_phase = %s
-            LEFT JOIN workers w ON w.id = cr.checked_by
-            WHERE {master_filter_sql}
-              AND cm.is_active = TRUE
-            ORDER BY cm.item_group ASC NULLS LAST, cm.item_order ASC, cm.id ASC
-        """
-        params: list = [serial_number, judgment_phase] + master_params
-        cur.execute(query, params)
-        rows = cur.fetchall()
-
-        # item_group별 그룹핑
+        # 기존 응답 형태 유지: groups 배열 (item_group별 그룹핑)
         groups_dict: Dict[str, list] = {}
-        total = 0
-        checked = 0
+        for item in cat_data['items']:
+            gname = item['item_group']
+            if gname not in groups_dict:
+                groups_dict[gname] = []
+            groups_dict[gname].append(item)
 
-        for row in rows:
-            group_name = row['item_group'] or '기타'
-            if group_name not in groups_dict:
-                groups_dict[group_name] = []
+        groups = [{'group_name': gn, 'items': items} for gn, items in groups_dict.items()]
 
-            check_result = row['check_result']
-            item = {
-                'master_id': row['master_id'],
-                'item_name': row['item_name'],
-                'item_order': row['item_order'],
-                'description': row['description'],
-                'check_result': check_result,
-                'checked_by_name': row['checked_by_name'],
-                'checked_at': row['checked_at'].isoformat() if row['checked_at'] else None,
-                'note': row['note'],
-            }
-            groups_dict[group_name].append(item)
-            total += 1
-            if check_result in ('PASS', 'NA'):
-                checked += 1
-
-        groups = [
-            {'group_name': gname, 'items': items}
-            for gname, items in groups_dict.items()
-        ]
-
-        remaining = total - checked
-        is_complete = (total > 0 and remaining == 0)
+        total = cat_data['summary']['total']
+        checked = cat_data['summary']['checked']
 
         return {
             'serial_number': serial_number,
@@ -164,8 +224,8 @@ def get_tm_checklist(serial_number: str, judgment_phase: int = 1) -> Dict[str, A
             'summary': {
                 'total': total,
                 'checked': checked,
-                'remaining': remaining,
-                'is_complete': is_complete,
+                'remaining': total - checked,
+                'is_complete': total > 0 and checked == total,
             },
         }
 
@@ -178,6 +238,114 @@ def get_tm_checklist(serial_number: str, judgment_phase: int = 1) -> Dict[str, A
             'groups': [],
             'summary': {'total': 0, 'checked': 0, 'remaining': 0, 'is_complete': False},
         }
+    finally:
+        if conn:
+            put_conn(conn)
+
+
+def get_checklist_report(serial_number: str, judgment_phase: int = 1) -> Dict[str, Any]:
+    """S/N 전체 체크리스트 성적서 조회 (#54-B, Sprint 54)
+
+    모든 활성 카테고리를 순회하여 성적서 데이터 반환.
+    현재 TM만 master 데이터 존재. MECH/ELEC 마스터 확정 시 자동 포함.
+
+    Args:
+        serial_number: 제품 시리얼 번호
+        judgment_phase: 판정 차수 (기본 1)
+
+    Returns:
+        {
+            "serial_number": str,
+            "model": str|null,
+            "sales_order": str|null,
+            "customer": str|null,
+            "categories": [
+                {
+                    "category": str,
+                    "items": [...],
+                    "summary": {"total": int, "checked": int, "percent": float}
+                }, ...
+            ],
+            "generated_at": str  -- KST ISO 형식
+        }
+        또는 {"error": "PRODUCT_NOT_FOUND", "message": "..."} (404)
+        또는 {"error": "INTERNAL_ERROR", "message": "..."} (500)
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # product_info 조회
+        cur.execute(
+            """
+            SELECT product_code, sales_order, model, customer
+            FROM plan.product_info WHERE serial_number = %s
+            """,
+            (serial_number,)
+        )
+        product_row = cur.fetchone()
+        if not product_row:
+            return {'error': 'PRODUCT_NOT_FOUND', 'message': f'S/N {serial_number} 없음'}
+
+        product_code = product_row['product_code']
+        sales_order = product_row['sales_order']
+        model = product_row['model']
+        customer = product_row['customer']
+
+        # scope 조회
+        cur.execute(
+            "SELECT setting_value FROM admin_settings WHERE setting_key = 'tm_checklist_scope'"
+        )
+        scope_row = cur.fetchone()
+        scope = 'product_code'
+        if scope_row:
+            sv = scope_row['setting_value']
+            scope = sv if isinstance(sv, str) else str(sv)
+
+        # 활성 카테고리 목록 조회 (master에 존재하는 것만)
+        if scope == 'all' or not product_code:
+            cur.execute(
+                """
+                SELECT DISTINCT category FROM checklist.checklist_master
+                WHERE product_code = 'COMMON' AND is_active = TRUE
+                ORDER BY category
+                """
+            )
+        else:
+            cur.execute(
+                """
+                SELECT DISTINCT category FROM checklist.checklist_master
+                WHERE product_code = %s AND is_active = TRUE
+                ORDER BY category
+                """,
+                (product_code,)
+            )
+        cat_rows = cur.fetchall()
+
+        categories = []
+        for cat_row in cat_rows:
+            cat = cat_row['category']
+            cat_data = _get_checklist_by_category(
+                cur, serial_number, cat, product_code, scope, judgment_phase
+            )
+            if cat_data['summary']['total'] > 0:
+                categories.append(cat_data)
+
+        kst = timezone(timedelta(hours=9))
+
+        return {
+            'serial_number': serial_number,
+            'model': model,
+            'sales_order': sales_order,
+            'customer': customer,
+            'categories': categories,
+            'generated_at': datetime.now(kst).isoformat(),
+        }
+
+    except PsycopgError as e:
+        logger.error(f"get_checklist_report failed: serial={serial_number}, error={e}")
+        return {'error': 'INTERNAL_ERROR', 'message': '데이터 조회 실패'}
     finally:
         if conn:
             put_conn(conn)
