@@ -54,6 +54,7 @@
 | 54 | 공정 흐름 알림 트리거 — partner 분기 + admin_settings | ✅ 완료 (2026-04-02) | process_validator + task_service + migration 044 + FE 설정 UI. 테스트 30/34 (4 FE skip) |
 | 52-BF | TM 체크리스트 BUG-FIX #1~#6 | ✅ 수정 완료 (2026-04-02) | #1~#5 + #6 알림 메시지 [S/N\|O/N] 포맷 + 팝업 QR 행 제거 |
 | 31C-A | PI 위임 모델별 옵션 — pi_delegate_models | ✅ 완료 (2026-04-03) | allowlist 방식. GAIA/DRAGON 위임, SWS GST PI 직접. 테스트 18/18 passed |
+| 53 | monthly-summary API weeks + totals 집계 | ✅ 완료 (2026-04-03) | 금요일 기준 주차-월 매핑 + MECH/ELEC/TM completed/confirmed. 테스트 18/18 passed |
 | FEAT-1 | 사용자 행위 트래킹 + 분석 대시보드 | ✅ BE Sprint 32 완료 (2026-03-19) | `app_access_log` 테이블 + analytics API 4개 + 30일 정리 스케줄러. VIEW 분석 대시보드는 별도 Sprint |
 
 ---

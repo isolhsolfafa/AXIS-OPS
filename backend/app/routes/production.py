@@ -21,6 +21,41 @@ logger = logging.getLogger(__name__)
 production_bp = Blueprint("production", __name__, url_prefix="/api/admin/production")
 
 
+def _weeks_for_month(year: int, month: int) -> List[Tuple[str, date, date]]:
+    """해당 월에 포함되는 ISO 주차 목록 반환 (금요일 기준)
+
+    Returns: [("W14", monday, next_monday), ...]
+    금요일이 해당 월에 속하는 주차만 포함
+    """
+    from calendar import monthrange
+    _, last_day = monthrange(year, month)
+    month_start = date(year, month, 1)
+    month_end = date(year, month, last_day)
+
+    weeks = []
+    monday = month_start - timedelta(days=month_start.weekday())
+
+    while True:
+        friday = monday + timedelta(days=4)
+        if friday > month_end:
+            break
+        if friday.year == year and friday.month == month:
+            week_label = f"W{monday.isocalendar()[1]:02d}"
+            weeks.append((week_label, monday, monday + timedelta(days=7)))
+        monday += timedelta(days=7)
+        if monday > month_end + timedelta(days=7):
+            break
+
+    return weeks
+
+
+def _date_to_week_label(d) -> str:
+    """date → 'W14' 형식 주차 라벨"""
+    if isinstance(d, str):
+        d = date.fromisoformat(d)
+    return f"W{d.isocalendar()[1]:02d}"
+
+
 def _get_week_range(year: int, week: int):
     """ISO 주차 → (월요일, 다음주 월요일) 반환"""
     jan4 = date(year, 1, 4)
@@ -698,13 +733,6 @@ def get_monthly_summary() -> Tuple[Dict[str, Any], int]:
         """, (month_str,))
         confirm_rows = cur.fetchall()
 
-        # 주차별 집계
-        weekly = defaultdict(lambda: {'orders': 0, 'sns': 0, 'confirms': {}})
-        for row in order_rows:
-            # S/N의 mech_start 기준 주차 계산 (이미 월 범위 내)
-            # 간단히 O/N 단위로 첫 주차 배정
-            pass
-
         confirms_by_week = defaultdict(dict)
         for row in confirm_rows:
             confirms_by_week[row['confirmed_week']][row['process_type']] = {
@@ -712,11 +740,87 @@ def get_monthly_summary() -> Tuple[Dict[str, Any], int]:
                 'sn_count': row['confirmed_sn_count'],
             }
 
+        # ── weeks/totals 집계 ──────────────────────────────────────────
+        # S/N별 MECH/ELEC/TM 공정 완료 여부 LATERAL JOIN 쿼리
+        cur.execute("""
+            SELECT p.serial_number, p.mech_end,
+                   CASE WHEN mech.total > 0 AND mech.total = mech.done THEN 1 ELSE 0 END AS mech_completed,
+                   CASE WHEN elec.total > 0 AND elec.total = elec.done THEN 1 ELSE 0 END AS elec_completed,
+                   CASE WHEN tm.total > 0 AND tm.total = tm.done  THEN 1 ELSE 0 END AS tm_completed
+            FROM plan.product_info p
+            LEFT JOIN LATERAL (
+                SELECT COUNT(*) AS total, COUNT(completed_at) AS done
+                FROM app_task_details WHERE serial_number = p.serial_number
+                AND task_category = 'MECH' AND is_applicable = TRUE
+            ) mech ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT COUNT(*) AS total, COUNT(completed_at) AS done
+                FROM app_task_details WHERE serial_number = p.serial_number
+                AND task_category = 'ELEC' AND is_applicable = TRUE
+            ) elec ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT COUNT(*) AS total, COUNT(completed_at) AS done
+                FROM app_task_details WHERE serial_number = p.serial_number
+                AND task_category = 'TMS' AND task_id = 'TANK_MODULE' AND is_applicable = TRUE
+            ) tm ON TRUE
+            WHERE p.mech_start >= %s AND p.mech_start < %s
+        """, (start_date, end_date))
+        sn_rows = cur.fetchall()
+
+        # 주차 목록 초기화
+        weeks_info = _weeks_for_month(year_val, month_val)
+        week_labels = [w[0] for w in weeks_info]
+
+        week_data: Dict[str, Dict] = {}
+        for label, _mon, _next_mon in weeks_info:
+            week_data[label] = {
+                'mech': {'completed': 0, 'confirmed': 0},
+                'elec': {'completed': 0, 'confirmed': 0},
+                'tm':   {'completed': 0, 'confirmed': 0},
+            }
+
+        # S/N별 mech_end 기준 주차 배정 → completed 집계
+        for row in sn_rows:
+            if not row['mech_end']:
+                continue
+            sn_week = _date_to_week_label(row['mech_end'])
+            if sn_week not in week_data:
+                continue
+            if row['mech_completed']:
+                week_data[sn_week]['mech']['completed'] += 1
+            if row['elec_completed']:
+                week_data[sn_week]['elec']['completed'] += 1
+            if row['tm_completed']:
+                week_data[sn_week]['tm']['completed'] += 1
+
+        # confirmed: production_confirm 기록 기준 (confirmed_week 키 매핑)
+        for label in week_labels:
+            week_confirms = confirms_by_week.get(label, {})
+            for proc_type in ('MECH', 'ELEC', 'TM'):
+                if proc_type in week_confirms:
+                    week_data[label][proc_type.lower()]['confirmed'] = week_confirms[proc_type]['sn_count']
+
+        # totals = weeks 합계
+        totals: Dict[str, Dict] = {
+            'mech': {'completed': 0, 'confirmed': 0},
+            'elec': {'completed': 0, 'confirmed': 0},
+            'tm':   {'completed': 0, 'confirmed': 0},
+        }
+        for wd in week_data.values():
+            for proc in ('mech', 'elec', 'tm'):
+                totals[proc]['completed'] += wd[proc]['completed']
+                totals[proc]['confirmed'] += wd[proc]['confirmed']
+
         return jsonify({
             'month': month_str,
             'total_orders': total_orders,
             'total_sns': total_sns,
-            'confirms': dict(confirms_by_week),
+            'weeks': [
+                {'week': label, **week_data[label]}
+                for label in week_labels
+            ],
+            'totals': totals,
+            'confirms': dict(confirms_by_week),  # 기존 유지
             'orders': [
                 {
                     'sales_order': r['sales_order'],
