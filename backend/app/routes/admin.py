@@ -56,6 +56,7 @@ SETTING_KEYS: Dict[str, Dict[str, Any]] = {
     # string_list (JSON 배열) — Sprint 31C PI 위임
     'pi_capable_mech_partners': {'type': 'string_list', 'default': []},
     'pi_gst_override_lines':    {'type': 'string_list', 'default': []},
+    'pi_delegate_models':       {'type': 'string_list', 'default': []},
     # string — Sprint 52 TM 체크리스트 옵션
     'tm_checklist_1st_checker': {'type': 'string', 'default': 'is_manager', 'allowed': ['is_manager', 'user']},
     'tm_checklist_issue_alert': {'type': 'bool', 'default': True},

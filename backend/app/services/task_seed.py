@@ -498,7 +498,8 @@ def get_task_categories_for_worker(
     product_elec_partner: Optional[str],
     product_module_outsourcing: Optional[str],
     worker_active_role: Optional[str] = None,
-    product_line: Optional[str] = None
+    product_line: Optional[str] = None,
+    product_model: Optional[str] = None
 ) -> Optional[List[str]]:
     """
     작업자의 company + role + 제품 협력사 정보를 기반으로
@@ -523,11 +524,20 @@ def get_task_categories_for_worker(
         product_module_outsourcing: plan.product_info.module_outsourcing
         worker_active_role: workers.active_role (Sprint 11)
         product_line: plan.product_info.line (Sprint 31C)
+        product_model: plan.product_info.model (Sprint 31C-A — pi_delegate_models 체크)
 
     Returns:
         보여줄 task_category 리스트 (예: ['MECH'], ['ELEC'], ['TMS', 'MECH', 'PI'])
     """
     categories: List[str] = []
+
+    def _is_delegate_model() -> bool:
+        """현재 제품 모델이 pi_delegate_models에 속하는지 확인."""
+        if not product_model:
+            return False
+        delegate_models = get_setting('pi_delegate_models', [])
+        model_upper = product_model.strip().upper()
+        return any(model_upper.startswith(m.upper()) for m in delegate_models)
 
     # GST 사내직원: active_role > role 기반 (PI, QI, SI, ADMIN)
     if worker_company == 'GST' or worker_role in ('PI', 'QI', 'SI', 'ADMIN'):
@@ -539,8 +549,13 @@ def get_task_categories_for_worker(
             # pi_capable_mech_partners: mech_partner 컬럼 값 기준 (예: ["TMS"])
             pi_capable = get_setting('pi_capable_mech_partners', [])
             mech_upper = product_mech_partner.upper() if product_mech_partner else ''
-            if pi_capable and mech_upper and mech_upper in [p.upper() for p in pi_capable]:
-                # mech_partner가 PI 가능 협력사 → GST PI 제외 (단, override 라인이면 유지)
+            if (
+                _is_delegate_model()
+                and pi_capable
+                and mech_upper
+                and mech_upper in [p.upper() for p in pi_capable]
+            ):
+                # mech_partner가 PI 가능 협력사 + 위임 모델 → GST PI 제외 (단, override 라인이면 유지)
                 override_lines = get_setting('pi_gst_override_lines', [])
                 line_upper = product_line.strip().upper() if product_line else ''
                 is_override = any(line_upper.startswith(p.upper()) for p in override_lines)
@@ -559,9 +574,12 @@ def get_task_categories_for_worker(
             categories.append('TMS')
         if product_mech_partner and product_mech_partner.upper() == 'TMS':
             categories.append('MECH')
-            # Sprint 31C: PI 위임 — worker_company가 pi_capable 회사인지 확인
+            # Sprint 31C-A: PI 위임 — 위임 모델 + pi_capable 회사인지 확인
             pi_capable = get_setting('pi_capable_mech_partners', [])
-            if product_mech_partner.upper() in [p.upper() for p in pi_capable]:
+            if (
+                _is_delegate_model()
+                and product_mech_partner.upper() in [p.upper() for p in pi_capable]
+            ):
                 override_lines = get_setting('pi_gst_override_lines', [])
                 line_upper = product_line.strip().upper() if product_line else ''
                 is_override = any(line_upper.startswith(p.upper()) for p in override_lines)
@@ -573,9 +591,12 @@ def get_task_categories_for_worker(
     if worker_company in ('FNI', 'BAT'):
         if product_mech_partner and product_mech_partner.upper() == worker_company.upper():
             categories.append('MECH')
-            # Sprint 31C: PI 위임 (향후 확장 대비)
+            # Sprint 31C-A: PI 위임 — 위임 모델 + pi_capable 회사인지 확인
             pi_capable = get_setting('pi_capable_mech_partners', [])
-            if product_mech_partner.upper() in [p.upper() for p in pi_capable]:
+            if (
+                _is_delegate_model()
+                and product_mech_partner.upper() in [p.upper() for p in pi_capable]
+            ):
                 override_lines = get_setting('pi_gst_override_lines', [])
                 line_upper = product_line.strip().upper() if product_line else ''
                 is_override = any(line_upper.startswith(p.upper()) for p in override_lines)
@@ -629,6 +650,7 @@ def filter_tasks_for_worker(
         product_module_outsourcing=product.module_outsourcing if product else None,
         worker_active_role=worker_active_role,
         product_line=product.line if product else None,
+        product_model=product.model if product else None,
     )
 
     # None = 필터 없음 (ADMIN), 빈 리스트면 매칭 없음 → 빈 결과
