@@ -31,9 +31,10 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
   bool _alertTmTankModuleToElecEnabled = false;
   bool _alertMechPressureToQiEnabled = false;
 
-  // PI 위임 설정 (Sprint 34-A)
+  // PI 위임 설정 (Sprint 34-A + 31C-A)
   List<String> _piCapableMechPartners = [];
   List<String> _piGstOverrideLines = [];
+  List<String> _piDelegateModels = [];
 
   // 위치 보안 설정 (Sprint 19-D)
   bool _geolocationEnabled = false;
@@ -98,6 +99,9 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
 
   /// GST Override 라인 옵션
   static const List<String> _lineOptions = ['JP', 'P4', 'P5', 'FAB2'];
+
+  /// PI 위임 대상 모델 옵션 (model_config prefix 기준)
+  static const List<String> _modelPrefixOptions = ['GAIA', 'DRAGON', 'GALLANT', 'MITHAS', 'SDS', 'SWS'];
 
   /// company 필터 적용된 가입 대기 목록
   List<Map<String, dynamic>> get _filteredPendingWorkers {
@@ -280,6 +284,11 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
           _piGstOverrideLines = (rawLines is List)
               ? rawLines.map((e) => e.toString()).toList()
               : <String>[];
+          // PI 위임 대상 모델 (Sprint 31C-A)
+          final rawDelegateModels = response['pi_delegate_models'];
+          _piDelegateModels = (rawDelegateModels is List)
+              ? rawDelegateModels.map((e) => e.toString()).toList()
+              : <String>[];
           // 위치 보안 설정 (Sprint 19-D)
           _geolocationEnabled = response['geo_check_enabled'] as bool? ?? false;
           _geoStrictMode = response['geo_strict_mode'] as bool? ?? false;
@@ -354,6 +363,7 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
         setState(() {
           if (key == 'pi_capable_mech_partners') _piCapableMechPartners = value;
           if (key == 'pi_gst_override_lines') _piGstOverrideLines = value;
+          if (key == 'pi_delegate_models') _piDelegateModels = value;
         });
         _showSnack('설정이 저장되었습니다.', isError: false);
       }
@@ -1171,45 +1181,6 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
               ),
               const SizedBox(height: 24),
 
-              // ===== 섹션 3: PI 위임 설정 (Sprint 34-A) =====
-              _buildSectionHeader(
-                icon: Icons.assignment_ind,
-                iconBg: const Color(0xFFFEF3C7),
-                iconColor: const Color(0xFFD97706),
-                title: 'PI 위임 설정',
-                subtitle: 'PI 검사를 수행할 수 있는 협력사 / GST Override 라인',
-              ),
-              const SizedBox(height: 10),
-              Container(
-                decoration: GxGlass.cardSm(radius: GxRadius.lg),
-                child: _isLoadingSettings
-                    ? const Padding(
-                        padding: EdgeInsets.all(20),
-                        child: Center(child: CircularProgressIndicator(color: GxColors.accent, strokeWidth: 2)),
-                      )
-                    : Column(
-                        children: [
-                          _buildChipListSetting(
-                            title: 'PI 위임 가능 MECH 협력사',
-                            subtitle: '선택된 협력사의 MECH 작업자가 PI 검사 수행 가능',
-                            values: _piCapableMechPartners,
-                            allOptions: _mechPartnerOptions,
-                            settingKey: 'pi_capable_mech_partners',
-                            isFirst: true,
-                          ),
-                          const Divider(height: 1, color: GxColors.mist),
-                          _buildChipListSetting(
-                            title: 'PI GST Override 라인',
-                            subtitle: '선택된 라인은 협력사 위임 제외, GST PI 직접 검사',
-                            values: _piGstOverrideLines,
-                            allOptions: _lineOptions,
-                            settingKey: 'pi_gst_override_lines',
-                          ),
-                        ],
-                      ),
-              ),
-              const SizedBox(height: 24),
-
               // ===== 섹션 4: 미종료 작업 목록 =====
               _buildSectionHeader(
                 icon: Icons.warning_amber,
@@ -1481,6 +1452,53 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
                       ),
               ),
 
+              const SizedBox(height: 24),
+
+              // ===== PI 위임 설정 (Sprint 34-A + 31C-A) =====
+              _buildSectionHeader(
+                icon: Icons.assignment_ind,
+                iconBg: const Color(0xFFFEF3C7),
+                iconColor: const Color(0xFFD97706),
+                title: 'PI 위임 설정',
+                subtitle: 'PI 검사를 수행할 수 있는 협력사 / GST Override 라인 / 위임 대상 모델',
+              ),
+              const SizedBox(height: 10),
+              Container(
+                decoration: GxGlass.cardSm(radius: GxRadius.lg),
+                child: _isLoadingSettings
+                    ? const Padding(
+                        padding: EdgeInsets.all(20),
+                        child: Center(child: CircularProgressIndicator(color: GxColors.accent, strokeWidth: 2)),
+                      )
+                    : Column(
+                        children: [
+                          _buildChipListSetting(
+                            title: 'PI 위임 가능 MECH 협력사',
+                            subtitle: '선택된 협력사의 MECH 작업자가 PI 검사 수행 가능',
+                            values: _piCapableMechPartners,
+                            allOptions: _mechPartnerOptions,
+                            settingKey: 'pi_capable_mech_partners',
+                            isFirst: true,
+                          ),
+                          const Divider(height: 1, color: GxColors.mist),
+                          _buildChipListSetting(
+                            title: 'PI GST Override 라인',
+                            subtitle: '선택된 라인은 협력사 위임 제외, GST PI 직접 검사',
+                            values: _piGstOverrideLines,
+                            allOptions: _lineOptions,
+                            settingKey: 'pi_gst_override_lines',
+                          ),
+                          const Divider(height: 1, color: GxColors.mist),
+                          _buildChipListSetting(
+                            title: 'PI 위임 대상 모델',
+                            subtitle: '이 목록의 모델만 협력사 PI 위임 적용 (미등록 모델은 GST PI 직접)',
+                            values: _piDelegateModels,
+                            allOptions: _modelPrefixOptions,
+                            settingKey: 'pi_delegate_models',
+                          ),
+                        ],
+                      ),
+              ),
               const SizedBox(height: 24),
 
               // ===== 섹션 8: 알림 트리거 설정 (Sprint 54) =====
