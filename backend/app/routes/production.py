@@ -713,10 +713,11 @@ def get_monthly_summary() -> Tuple[Dict[str, Any], int]:
         cur.execute("""
             SELECT p.sales_order, COUNT(*) AS sn_count, MAX(p.model) AS model
             FROM plan.product_info p
-            WHERE p.mech_start >= %s AND p.mech_start < %s
+            WHERE (p.mech_end >= %s AND p.mech_end < %s)
+               OR (p.mech_end IS NULL AND p.mech_start >= %s AND p.mech_start < %s)
             GROUP BY p.sales_order
             ORDER BY p.sales_order
-        """, (start_date, end_date))
+        """, (start_date, end_date, start_date, end_date))
         order_rows = cur.fetchall()
 
         total_orders = len(order_rows)
@@ -763,8 +764,9 @@ def get_monthly_summary() -> Tuple[Dict[str, Any], int]:
                 FROM app_task_details WHERE serial_number = p.serial_number
                 AND task_category = 'TMS' AND task_id = 'TANK_MODULE' AND is_applicable = TRUE
             ) tm ON TRUE
-            WHERE p.mech_start >= %s AND p.mech_start < %s
-        """, (start_date, end_date))
+            WHERE (p.mech_end >= %s AND p.mech_end < %s)
+               OR (p.mech_end IS NULL AND p.mech_start >= %s AND p.mech_start < %s)
+        """, (start_date, end_date, start_date, end_date))
         sn_rows = cur.fetchall()
 
         # 주차 목록 초기화
