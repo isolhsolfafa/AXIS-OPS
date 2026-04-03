@@ -626,6 +626,7 @@ class _TmChecklistScreenState extends ConsumerState<TmChecklistScreen> {
     final checkName = item['item_name'] as String? ?? '-';
     final checkResult = item['check_result'] as String?;
     final note = item['note'] as String?;
+    final description = item['description'] as String?;
     final isUpdating = masterId != null && _updatingIds.contains(masterId);
 
     return Container(
@@ -681,6 +682,18 @@ class _TmChecklistScreenState extends ConsumerState<TmChecklistScreen> {
                           decorationColor: GxColors.silver,
                         ),
                       ),
+                      if (description != null && description.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          description,
+                          style: const TextStyle(
+                            fontSize: 10,
+                            color: GxColors.silver,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
                       if (note != null && note.isNotEmpty) ...[
                         const SizedBox(height: 2),
                         Row(
