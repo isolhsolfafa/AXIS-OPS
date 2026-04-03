@@ -56,6 +56,9 @@
 | 31C-A | PI 위임 모델별 옵션 — pi_delegate_models | ✅ 완료 (2026-04-03) | allowlist 방식. GAIA/DRAGON 위임, SWS GST PI 직접. 테스트 18/18 passed |
 | 53 | monthly-summary API weeks + totals 집계 | ✅ 완료 (2026-04-03) | 금요일 기준 주차-월 매핑 + MECH/ELEC/TM completed/confirmed. 테스트 18/18 passed |
 | 54 | 체크리스트 성적서 API — O/N 검색 + S/N 성적서 | ✅ 완료 (2026-04-03) | _get_checklist_by_category 공통 추출 + report/orders + report/{sn} 배치 쿼리. 테스트 19/19 passed |
+| BUG-34 | 체크리스트 master_id 응답 누락 | ✅ 수정 (2026-04-03) | _get_checklist_by_category items에 master_id 추가 → FE 토글 정상 |
+| BUG-35 | #53 monthly-summary mech_start→mech_end 필터 | ✅ 수정 (2026-04-03) | mech_end 기준 + NULL fallback. GBWS-6905 등 3월 시작→4월 종료 제품 포함 |
+| 54-FE | TM 체크리스트 description 표시 | ✅ 완료 (2026-04-03) | 항목명 아래 검사방법/기준 fontSize 10 silver |
 | FEAT-1 | 사용자 행위 트래킹 + 분석 대시보드 | ✅ BE Sprint 32 완료 (2026-03-19) | `app_access_log` 테이블 + analytics API 4개 + 30일 정리 스케줄러. VIEW 분석 대시보드는 별도 Sprint |
 
 ---

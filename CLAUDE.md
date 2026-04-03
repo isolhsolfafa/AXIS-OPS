@@ -1155,3 +1155,4 @@ VALUES ('📱 OPS v2.2.1 업데이트 안내', '본문...', '2.2.1', TRUE, {admi
 | v2.6.0 | 2026-04-03 | Sprint 31C-A | PI 위임 모델별 옵션 — pi_delegate_models allowlist, SWS GST PI 직접 |
 | v2.6.0 | 2026-04-03 | Sprint 53 | monthly-summary API weeks + totals — 금요일 기준 주차-월 매핑 |
 | v2.6.0 | 2026-04-03 | Sprint 54 | 체크리스트 성적서 API — O/N 검색 + S/N 성적서 (배치 쿼리) |
+| v2.6.0 | 2026-04-03 | BUG-FIX | master_id 응답 누락 수정, #53 mech_start→mech_end 필터, description 표시 |

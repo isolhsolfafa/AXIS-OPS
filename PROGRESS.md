@@ -3,9 +3,15 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.6.0 (Sprint 31C-A + 53 + 54, 2026-04-03)
+> **현재 버전**: v2.6.0 (Sprint 31C-A + 53 + 54 + BUG-34/35, 2026-04-03)
 
 ---
+
+## BUG-34/35 + description FE (2026-04-03)
+
+- **BUG-34**: checklist_service.py `_get_checklist_by_category` items에 `master_id` 누락 → FE 토글 미작동 수정
+- **BUG-35**: production.py monthly-summary 필터 `mech_start` → `mech_end` 기준 변경 + NULL fallback
+- **description FE**: tm_checklist_screen.dart 항목명 아래 검사방법/기준 표시
 
 ## Sprint 54: 체크리스트 성적서 API (2026-04-03)
 
