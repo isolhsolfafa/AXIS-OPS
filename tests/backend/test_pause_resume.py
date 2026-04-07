@@ -816,3 +816,239 @@ class TestPauseAuth:
         )
         data = response.get_json()
         assert data.get('error') == 'INVALID_REQUEST'
+
+
+# ============================================================
+# TestPauseCoworkerResume: BUG-6 다중작업자 동료 재개 테스트
+# ============================================================
+class TestPauseCoworkerResume:
+    """
+    BUG-6: 다중작업자 Task에서 동료가 resume 시 403 FORBIDDEN 버그
+    Partner 회사(FNI, C&A) 다중작업자 환경에서 같은 task의 동료가
+    일시정지를 재개할 수 있어야 함.
+
+    TC-PR-19 ~ TC-PR-22
+    """
+
+    @pytest.fixture
+    def fni_worker_a(self, create_test_worker, get_auth_token):
+        """FNI 소속 작업자 A"""
+        unique_email = f'fni_a_{int(time.time() * 1000)}@pause_test.com'
+        worker_id = create_test_worker(
+            email=unique_email,
+            password='Test123!',
+            name='FNI Worker A',
+            role='ELEC',
+            company='FNI',
+            approval_status='approved',
+            email_verified=True
+        )
+        token = get_auth_token(worker_id, role='ELEC')
+        return {'id': worker_id, 'email': unique_email, 'token': token}
+
+    @pytest.fixture
+    def fni_worker_b(self, create_test_worker, get_auth_token):
+        """FNI 소속 작업자 B (동료)"""
+        unique_email = f'fni_b_{int(time.time() * 1000)}@pause_test.com'
+        worker_id = create_test_worker(
+            email=unique_email,
+            password='Test123!',
+            name='FNI Worker B',
+            role='ELEC',
+            company='FNI',
+            approval_status='approved',
+            email_verified=True
+        )
+        token = get_auth_token(worker_id, role='ELEC')
+        return {'id': worker_id, 'email': unique_email, 'token': token}
+
+    @pytest.fixture
+    def unrelated_worker(self, create_test_worker, get_auth_token):
+        """무관한 제3자 작업자 (다른 회사, 해당 task에 참여하지 않음)"""
+        unique_email = f'unrelated_{int(time.time() * 1000)}@pause_test.com'
+        worker_id = create_test_worker(
+            email=unique_email,
+            password='Test123!',
+            name='Unrelated Worker',
+            role='MECH',
+            company='BAT',
+            approval_status='approved',
+            email_verified=True
+        )
+        token = get_auth_token(worker_id, role='MECH')
+        return {'id': worker_id, 'email': unique_email, 'token': token}
+
+    @pytest.fixture
+    def multi_worker_task(
+        self, db_conn, create_test_product, create_test_task,
+        fni_worker_a, fni_worker_b
+    ):
+        """
+        다중작업자 task 생성:
+        - worker_a가 task 생성 + start_log
+        - worker_b도 start_log에 추가 (다중작업자)
+        """
+        suffix = f'{int(time.time() * 1000)}'
+        qr_doc_id = f'DOC-BUG6-{suffix}'
+        serial_number = f'SN-BUG6-{suffix}'
+
+        create_test_product(
+            qr_doc_id=qr_doc_id,
+            serial_number=serial_number
+        )
+
+        started_at = datetime.now(timezone.utc)
+
+        # worker_a로 task 생성 (work_start_log 자동 삽입)
+        task_id = create_test_task(
+            worker_id=fni_worker_a['id'],
+            serial_number=serial_number,
+            qr_doc_id=qr_doc_id,
+            task_category='ELEC',
+            task_id='WIRING_CHECK',
+            task_name='배선 점검',
+            started_at=started_at
+        )
+
+        # worker_b의 start_log 추가 (다중작업자 시뮬레이션)
+        if db_conn:
+            cursor = db_conn.cursor()
+            cursor.execute("""
+                INSERT INTO work_start_log
+                    (task_id, worker_id, serial_number, qr_doc_id,
+                     task_category, task_id_ref, task_name, started_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (task_id, fni_worker_b['id'], serial_number, qr_doc_id,
+                  'ELEC', 'WIRING_CHECK', '배선 점검', started_at))
+            db_conn.commit()
+            cursor.close()
+
+        return task_id
+
+    def test_coworker_can_resume_partner_task(
+        self, client, fni_worker_a, fni_worker_b,
+        multi_worker_task, db_conn
+    ):
+        """
+        TC-PR-19: 다중작업자 task — 동료(start_log 있음)가 resume → 200 성공
+
+        Flow: worker_a가 일시정지 → worker_b(같은 task 참여자)가 재개
+        Expected:
+        - Status 200
+        - DB: is_paused == False
+        """
+        task_id = multi_worker_task
+
+        # worker_a가 일시정지
+        pause_resp = _pause_task(client, fni_worker_a['token'], task_id)
+        assert pause_resp.status_code == 200, (
+            f"Pause failed: {pause_resp.get_json()}"
+        )
+
+        # worker_b(동료)가 재개
+        resume_resp = _resume_task(client, fni_worker_b['token'], task_id)
+
+        assert resume_resp.status_code == 200, (
+            f"BUG-6: Coworker resume should succeed but got "
+            f"{resume_resp.status_code}: {resume_resp.get_json()}"
+        )
+
+        # DB 확인
+        state = _get_task_state(db_conn, task_id)
+        assert state.get('is_paused') is False, (
+            "DB: is_paused should be False after coworker resume"
+        )
+
+    def test_unrelated_worker_cannot_resume(
+        self, client, fni_worker_a, unrelated_worker,
+        multi_worker_task
+    ):
+        """
+        TC-PR-20: 다중작업자 task — 무관한 제3자(start_log 없음)가 resume → 403
+
+        Flow: worker_a가 일시정지 → 무관한 작업자가 재개 시도
+        Expected:
+        - Status 403
+        - error: FORBIDDEN
+        """
+        task_id = multi_worker_task
+
+        # worker_a가 일시정지
+        pause_resp = _pause_task(client, fni_worker_a['token'], task_id)
+        assert pause_resp.status_code == 200
+
+        # 무관한 제3자가 재개 시도
+        resume_resp = _resume_task(client, unrelated_worker['token'], task_id)
+
+        assert resume_resp.status_code == 403, (
+            f"Unrelated worker should be rejected, got "
+            f"{resume_resp.status_code}: {resume_resp.get_json()}"
+        )
+        data = resume_resp.get_json()
+        assert data.get('error') == 'FORBIDDEN'
+
+    def test_pause_owner_can_resume_own_pause(
+        self, client, fni_worker_a, multi_worker_task, db_conn
+    ):
+        """
+        TC-PR-21: Partner 다중작업자 — pause한 본인이 resume → 200 성공
+
+        Flow: worker_a(FNI)가 일시정지 → worker_a 본인이 재개
+        Expected:
+        - Status 200
+        - DB: is_paused == False
+        """
+        task_id = multi_worker_task
+
+        pause_resp = _pause_task(client, fni_worker_a['token'], task_id)
+        assert pause_resp.status_code == 200
+
+        resume_resp = _resume_task(client, fni_worker_a['token'], task_id)
+
+        assert resume_resp.status_code == 200, (
+            f"Pause owner resume should succeed: {resume_resp.get_json()}"
+        )
+
+        state = _get_task_state(db_conn, task_id)
+        assert state.get('is_paused') is False
+
+    def test_partner_single_worker_resume(
+        self, client, fni_worker_a, db_conn,
+        create_test_product, create_test_task
+    ):
+        """
+        TC-PR-22: Partner 단독작업자 — pause한 본인이 resume → 200 성공
+
+        단독작업(worker_count=1)에서 FNI 작업자가 본인 pause/resume.
+        기존 TC-PR-02와 유사하나 company='FNI'(Partner) 확인.
+        """
+        suffix = f'{int(time.time() * 1000)}_single'
+        qr_doc_id = f'DOC-BUG6-{suffix}'
+        serial_number = f'SN-BUG6-{suffix}'
+
+        create_test_product(
+            qr_doc_id=qr_doc_id,
+            serial_number=serial_number
+        )
+
+        task_id = create_test_task(
+            worker_id=fni_worker_a['id'],
+            serial_number=serial_number,
+            qr_doc_id=qr_doc_id,
+            task_category='ELEC',
+            task_id='SINGLE_CHECK',
+            task_name='단독 점검',
+            started_at=datetime.now(timezone.utc)
+        )
+
+        pause_resp = _pause_task(client, fni_worker_a['token'], task_id)
+        assert pause_resp.status_code == 200
+
+        resume_resp = _resume_task(client, fni_worker_a['token'], task_id)
+
+        assert resume_resp.status_code == 200, (
+            f"Partner single worker resume should succeed: {resume_resp.get_json()}"
+        )
+
+        state = _get_task_state(db_conn, task_id)
+        assert state.get('is_paused') is False

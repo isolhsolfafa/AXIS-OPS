@@ -1042,8 +1042,9 @@ def resume_work() -> Tuple[Dict[str, Any], int]:
             'message': '활성 일시정지 로그를 찾을 수 없습니다.'
         }), 404
 
-    # 권한 확인: 일시정지한 작업자 본인 또는 관리자 또는 GST 동료
+    # 권한 확인: 일시정지한 작업자 본인 또는 관리자 또는 GST 동료 또는 같은 task 참여자
     from app.models.worker import get_worker_by_id
+    from app.services.task_service import _worker_has_started_task
     current_worker = get_worker_by_id(worker_id)
     is_admin = current_worker and (current_worker.is_admin or current_worker.is_manager)
     # Sprint 11: GST 작업자 간 cross-worker 재개 허용
@@ -1052,7 +1053,19 @@ def resume_work() -> Tuple[Dict[str, Any], int]:
         pause_worker = get_worker_by_id(active_pause.worker_id) if active_pause.worker_id else None
         if pause_worker and pause_worker.company == 'GST':
             gst_cross_allowed = True
+    # BUG-6: 같은 task에 참여 중인 동료 작업자(work_start_log 기록 있음) 재개 허용
+    task_coworker_allowed = False
     if active_pause.worker_id != worker_id and not is_admin and not gst_cross_allowed:
+        task_coworker_allowed = _worker_has_started_task(task_detail_id, worker_id)
+    logger.info(
+        f"Resume permission check: pause_worker={active_pause.worker_id}, "
+        f"jwt_worker={worker_id}, is_admin={is_admin}, "
+        f"gst_cross={gst_cross_allowed}, task_coworker={task_coworker_allowed}"
+    )
+    if (active_pause.worker_id != worker_id
+            and not is_admin
+            and not gst_cross_allowed
+            and not task_coworker_allowed):
         return jsonify({
             'error': 'FORBIDDEN',
             'message': '일시정지를 해제할 권한이 없습니다.'
