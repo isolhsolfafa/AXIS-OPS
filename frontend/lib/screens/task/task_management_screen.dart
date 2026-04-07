@@ -231,8 +231,9 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
     IconData statusIcon;
     String statusText;
 
-    // 일시정지 상태 우선 처리
-    if (task.isPaused) {
+    // 본인 기준 일시정지 상태 우선 사용 (myPauseStatus), 하위호환으로 isPaused 유지
+    final bool amIPaused = task.myPauseStatus == 'paused';
+    if (amIPaused) {
       statusColor = GxColors.warning;
       statusBg = GxColors.warningBg;
       statusIcon = Icons.pause_circle;
@@ -490,8 +491,8 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
                         padding: EdgeInsets.zero,
                       ),
                     ],
-                    // 일시정지 상태: "일시정지" 배지 + "재개" 버튼
-                    if (task.status == 'in_progress' && task.isPaused) ...[
+                    // 일시정지 상태 (본인 기준): "일시정지" 배지 + "재개" 버튼
+                    if (task.status == 'in_progress' && amIPaused) ...[
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                         margin: const EdgeInsets.only(right: 8),
@@ -538,8 +539,8 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
                         ),
                       ),
                     ],
-                    // 진행 중 (미일시정지): 일시정지 + 완료 버튼
-                    if (task.status == 'in_progress' && !task.isPaused) ...[
+                    // 진행 중 (미일시정지, 본인 기준): 일시정지 + 완료 버튼
+                    if (task.status == 'in_progress' && !amIPaused) ...[
                       // 일시정지 버튼
                       SizedBox(
                         width: 38,
@@ -575,7 +576,7 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
                             child: Material(
                               color: Colors.transparent,
                               child: InkWell(
-                                onTap: () => _handleCompleteTask(task.id, workerId),
+                                onTap: () => _handleCompleteTask(task.id, workerId, taskIdStr: task.taskId),
                                 borderRadius: BorderRadius.circular(GxRadius.sm),
                                 child: Center(
                                   child: Row(
@@ -733,7 +734,63 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
     }
   }
 
-  Future<void> _handleCompleteTask(int taskId, int workerId) async {
+  // FINAL task ID 목록 — 릴레이 불가, 항상 finalize=true
+  static const _kFinalTaskIds = {
+    'SELF_INSPECTION',
+    'INSPECTION',
+    'PRESSURE_TEST',
+    'PI_CHAMBER',
+    'QI_INSPECTION',
+    'SI_SHIPMENT',
+  };
+
+  Future<void> _handleCompleteTask(int taskId, int workerId, {String? taskIdStr}) async {
+    // Sprint 55: FINAL task는 릴레이 팝업 없이 바로 finalize=true 처리
+    if (taskIdStr != null && _kFinalTaskIds.contains(taskIdStr)) {
+      final taskNotifier = ref.read(taskProvider.notifier);
+      final completeResult = await taskNotifier.completeTask(
+        taskId: taskId,
+        workerId: workerId,
+        finalize: true,
+      );
+      if (mounted) {
+        if (completeResult.success) {
+          if (completeResult.checklistReady) {
+            final taskState = ref.read(taskProvider);
+            final serialNumber = taskState.currentSerialNumber;
+            if (serialNumber != null) {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => TmChecklistScreen(serialNumber: serialNumber),
+                ),
+              );
+              return;
+            }
+          }
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('작업을 완료했습니다.'),
+              backgroundColor: GxColors.success,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.sm)),
+            ),
+          );
+        } else {
+          final errorMessage = ref.read(taskProvider).errorMessage;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(errorMessage ?? '작업 완료에 실패했습니다.'),
+              backgroundColor: GxColors.danger,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.sm)),
+            ),
+          );
+        }
+      }
+      return;
+    }
+
     // Sprint 41: 릴레이 다이얼로그 — 목록 화면에서도 동일하게 표시
     final result = await showDialog<String>(
       context: context,

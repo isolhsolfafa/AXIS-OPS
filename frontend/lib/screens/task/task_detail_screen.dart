@@ -70,7 +70,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     IconData statusIcon;
     String statusText;
 
-    if (task.isPaused) {
+    // 본인 기준 일시정지 상태 우선 사용 (myPauseStatus), 하위호환으로 isPaused 유지
+    final bool amIPaused = task.myPauseStatus == 'paused';
+    if (amIPaused) {
       statusColor = GxColors.warning;
       statusBg = GxColors.warningBg;
       statusIcon = Icons.pause_circle;
@@ -167,8 +169,8 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                         style: TextStyle(color: statusColor, fontWeight: FontWeight.w600, fontSize: 13),
                       ),
                     ),
-                    // 일시정지 경과 시간 표시
-                    if (task.isPaused && task.totalPauseMinutes > 0) ...[
+                    // 일시정지 경과 시간 표시 (본인 기준)
+                    if (amIPaused && task.totalPauseMinutes > 0) ...[
                       const SizedBox(height: 8),
                       Text(
                         '누적 일시정지: ${_formatMinutes(task.totalPauseMinutes)}',
@@ -327,9 +329,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                 _buildJoinButton(task.id, workerId)
               else if (task.status == 'in_progress' && task.myWorkStatus == 'completed')
                 _buildRelayRestartRow(task.id, workerId)
-              else if (task.status == 'in_progress' && task.isPaused)
+              else if (task.status == 'in_progress' && amIPaused)
                 _buildResumeRow(task.id)
-              else if (task.status == 'in_progress' && !task.isPaused)
+              else if (task.status == 'in_progress' && !amIPaused)
                 _buildInProgressRow(task.id, workerId)
               else if (task.status == 'completed')
                 _buildCompletedBadge(task),
@@ -740,8 +742,27 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     );
   }
 
+  // FINAL task ID 목록 — 릴레이 불가, 항상 finalize=true
+  static const _kFinalTaskIds = {
+    'SELF_INSPECTION',
+    'INSPECTION',
+    'PRESSURE_TEST',
+    'PI_CHAMBER',
+    'QI_INSPECTION',
+    'SI_SHIPMENT',
+  };
+
   /// Sprint 41: 작업 종료 팝업 — 릴레이(내 작업만 종료) vs 완료(task 닫힘) 선택
+  /// Sprint 55: FINAL task는 릴레이 팝업 없이 바로 finalize=true 처리
   Future<void> _showCompleteDialog(int taskId, int workerId) async {
+    // FINAL task 판정 — 릴레이 팝업 미표시, 바로 완료 처리
+    final taskState = ref.read(taskProvider);
+    final task = taskState.selectedTask;
+    if (task != null && _kFinalTaskIds.contains(task.taskId)) {
+      await _handleCompleteTask(taskId, workerId, finalize: true);
+      return;
+    }
+
     final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(

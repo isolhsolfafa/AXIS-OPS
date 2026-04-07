@@ -59,7 +59,8 @@
 | BUG-34 | 체크리스트 master_id 응답 누락 | ✅ 수정 (2026-04-03) | _get_checklist_by_category items에 master_id 추가 → FE 토글 정상 |
 | BUG-35 | #53 monthly-summary mech_start→mech_end 필터 | ✅ 수정 (2026-04-03) | mech_end 기준 + NULL fallback. GBWS-6905 등 3월 시작→4월 종료 제품 포함 |
 | 54-FE | TM 체크리스트 description 표시 | ✅ 완료 (2026-04-03) | 항목명 아래 검사방법/기준 fontSize 10 silver |
-| BUG-6 | 다중작업자 동료 resume 403 FORBIDDEN | ✅ 수정 완료 (2026-04-07) | work.py — task coworker(start_log) 허용 조건 추가. 테스트 28/28 passed |
+| BUG-6 | 다중작업자 동료 resume 403 FORBIDDEN | ✅ 수정 완료 (2026-04-07) | work.py — task coworker 허용 → Sprint 55에서 worker별 pause로 근본 해결 |
+| 55 | Worker별 Pause/Resume + Auto-Finalize | ✅ 완료 (2026-04-07) | 개인별 pause, 전원 relay auto-finalize, FINAL task 릴레이 불가. 테스트 27/27 + regression 28/28 |
 | FEAT-1 | 사용자 행위 트래킹 + 분석 대시보드 | ✅ BE Sprint 32 완료 (2026-03-19) | `app_access_log` 테이블 + analytics API 4개 + 30일 정리 스케줄러. VIEW 분석 대시보드는 별도 Sprint |
 
 ---

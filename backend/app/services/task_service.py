@@ -255,22 +255,28 @@ class TaskService:
         # 완료 시간 (KST 기준)
         completed_at = datetime.now(Config.KST)
 
-        # Sprint 9: 일시정지 중인 작업이면 자동 재개 처리
-        if task.is_paused:
-            from app.models.work_pause_log import get_active_pause, resume_pause
-            from app.models.task_detail import set_paused
-            active_pause = get_active_pause(task_detail_id)
-            if active_pause:
-                updated_pause = resume_pause(active_pause.id, completed_at)
-                if updated_pause:
-                    pause_duration = updated_pause.pause_duration_minutes or 0
-                    new_total_pause_minutes = task.total_pause_minutes + pause_duration
-                    set_paused(task_detail_id, is_paused=False, total_pause_minutes=new_total_pause_minutes)
-                    # task 객체 갱신
-                    task = get_task_by_id(task_detail_id)
-                else:
-                    set_paused(task_detail_id, is_paused=False)
-                    task = get_task_by_id(task_detail_id)
+        # Sprint 55 (3-C): FINAL task는 finalize=true 강제 (릴레이 불가)
+        if task.task_id in FINAL_TASK_IDS and not finalize:
+            logger.info(
+                f"FINAL task forced finalize: task_id={task_detail_id}, "
+                f"task_name={task.task_id}"
+            )
+            finalize = True
+
+        # Sprint 55 (3-D): 본인의 개인 pause 자동 resume
+        # 기존: task.is_paused 기준 (task 전체 pause 여부)
+        # 변경: get_active_pause_by_worker() — 본인의 pause만 resume
+        from app.models.work_pause_log import get_active_pause_by_worker, resume_pause
+        from app.models.task_detail import set_paused
+        my_pause = get_active_pause_by_worker(task_detail_id, worker_id)
+        if my_pause:
+            updated_pause = resume_pause(my_pause.id, completed_at)
+            if updated_pause:
+                pause_duration = updated_pause.pause_duration_minutes or 0
+                new_total_pause_minutes = task.total_pause_minutes + pause_duration
+                set_paused(task_detail_id, is_paused=False, total_pause_minutes=new_total_pause_minutes)
+                # task 객체 갱신
+                task = get_task_by_id(task_detail_id)
             else:
                 set_paused(task_detail_id, is_paused=False)
                 task = get_task_by_id(task_detail_id)
@@ -283,24 +289,40 @@ class TaskService:
             completed_at=completed_at,
         )
 
+        # Sprint 55 (3-B): auto-finalize — 전원 completion_log 도달 시 자동 finalize
         # Sprint 41: 릴레이 모드 — 내 completion_log만 기록하고 task는 열린 상태 유지
+        auto_finalized = False
         if not finalize:
-            logger.info(
-                f"Worker session ended (relay mode): "
-                f"task_id={task_detail_id}, worker_id={worker_id}"
-            )
-            return {
-                'message': '내 작업이 종료되었습니다. 다른 작업자가 이어서 작업할 수 있습니다.',
-                'task_id': task_detail_id,
-                'completed_at': completed_at.isoformat(),
-                'duration_minutes': this_worker_duration,
-                'category_completed': False,
-                'task_finished': False,
-                'relay_mode': True,
-            }, 200
+            all_workers_done = _all_workers_completed(task.id)
+            if all_workers_done:
+                # 전원 completion_log 있음 → auto-finalize
+                auto_finalized = True
+                logger.info(
+                    f"Auto-finalize triggered: all workers completed via relay, "
+                    f"task_id={task_detail_id}, last_worker={worker_id}"
+                )
+                # fall-through to finalize logic below (return 하지 않음)
+            else:
+                logger.info(
+                    f"Worker session ended (relay mode): "
+                    f"task_id={task_detail_id}, worker_id={worker_id}"
+                )
+                return {
+                    'message': '내 작업이 종료되었습니다. 다른 작업자가 이어서 작업할 수 있습니다.',
+                    'task_id': task_detail_id,
+                    'completed_at': completed_at.isoformat(),
+                    'duration_minutes': this_worker_duration,
+                    'category_completed': False,
+                    'task_finished': False,
+                    'relay_mode': True,
+                }, 200
 
         # 아직 완료 안 된 다른 작업자가 있는지 확인 (work_start_log 기준)
-        all_workers_done = _all_workers_completed(task.id)
+        # auto-finalize된 경우 이미 all_workers_done=True이므로 재호출 스킵
+        if auto_finalized:
+            all_workers_done = True
+        else:
+            all_workers_done = _all_workers_completed(task.id)
 
         if not all_workers_done:
             # 마지막 작업자가 아직 아님 → Task 자체는 미완료 유지
@@ -400,6 +422,10 @@ class TaskService:
             'category_completed': category_completed,
             'task_finished': True,
         }
+
+        # Sprint 55 (3-B): auto-finalize 플래그 — FE가 릴레이 모드와 구분 가능
+        if auto_finalized:
+            response['auto_finalized'] = True
 
         # Sprint 52: Manager가 직접 완료한 경우 FE에서 체크리스트 화면 진입 유도
         if checklist_ready:
@@ -996,14 +1022,21 @@ def _record_completion_log(task, worker_id: int, completed_at: datetime) -> Opti
 
 def _all_workers_completed(task_detail_id: int) -> bool:
     """
-    work_start_log에 기록된 모든 작업자가 work_completion_log에도
-    완료 기록이 있는지 확인.
+    전원 최종 완료 여부 확인 (릴레이 재시작 안전).
+
+    Sprint 55: COUNT(*) 방식 → MAX 타임스탬프 방식으로 변경.
+    릴레이 재시작 시 동일 worker가 completion_log 2건 생성해도 정확히 판정.
+
+    판정 기준: 각 worker의 MAX(completed_at) >= MAX(started_at)
+    - completion 없음 → 미완료
+    - MAX(start) > MAX(completion) → 재시작함 → 미완료
+    - MAX(completion) >= MAX(start) → 최종 완료
 
     Args:
         task_detail_id: app_task_details.id
 
     Returns:
-        모든 작업자 완료 시 True
+        모든 작업자 최종 완료 시 True
     """
     conn = None
     try:
@@ -1012,33 +1045,159 @@ def _all_workers_completed(task_detail_id: int) -> bool:
 
         cur.execute(
             """
-            SELECT COUNT(DISTINCT worker_id) AS started_count
-            FROM work_start_log
-            WHERE task_id = %s
+            WITH worker_final_status AS (
+                SELECT wsl.worker_id,
+                       MAX(wsl.started_at) AS last_start,
+                       MAX(wcl.completed_at) AS last_complete
+                FROM work_start_log wsl
+                LEFT JOIN work_completion_log wcl
+                    ON wsl.task_id = wcl.task_id AND wsl.worker_id = wcl.worker_id
+                WHERE wsl.task_id = %s
+                GROUP BY wsl.worker_id
+            )
+            SELECT
+                COUNT(*) AS total_workers,
+                COUNT(CASE
+                    WHEN last_complete IS NOT NULL
+                     AND last_complete >= last_start
+                    THEN 1
+                END) AS completed_workers
+            FROM worker_final_status
             """,
             (task_detail_id,)
         )
-        started_count = cur.fetchone()['started_count']
+        row = cur.fetchone()
+        if not row:
+            return True  # 시작 기록 없음 → 단일 작업자 완료로 처리
 
-        cur.execute(
-            """
-            SELECT COUNT(*) AS completed_count
-            FROM work_completion_log
-            WHERE task_id = %s
-            """,
-            (task_detail_id,)
-        )
-        completed_count = cur.fetchone()['completed_count']
+        total_workers = row['total_workers']
+        completed_workers = row['completed_workers']
 
         # 시작한 작업자가 없으면 단일 작업자 완료로 처리
-        if started_count == 0:
+        if total_workers == 0:
             return True
 
-        return completed_count >= started_count
+        return total_workers == completed_workers
 
     except PsycopgError as e:
         logger.error(f"_all_workers_completed failed: task_id={task_detail_id}, error={e}")
         return True  # 오류 시 완료로 처리 (작업 블로킹 방지)
+    finally:
+        if conn:
+            put_conn(conn)
+
+
+def _all_active_workers_paused(task_detail_id: int) -> bool:
+    """
+    현재 active worker 전원이 paused 상태인지 확인.
+
+    Sprint 55: 개인별 pause 판정 — task.is_paused = 전원 paused일 때만 true.
+
+    ⚠️ active worker 판정 기준 (릴레이 재시작 안전):
+    - completion_log가 없거나
+    - MAX(start_log.started_at) > MAX(completion_log.completed_at) (재시작한 경우)
+
+    단독작업자(1인): 본인 pause = task pause (기존 동작 유지)
+
+    Args:
+        task_detail_id: app_task_details.id
+
+    Returns:
+        active worker 전원이 paused이면 True (active worker 없으면 False)
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            WITH worker_status AS (
+                SELECT wsl.worker_id,
+                       MAX(wsl.started_at) AS last_start,
+                       MAX(wcl.completed_at) AS last_complete
+                FROM work_start_log wsl
+                LEFT JOIN work_completion_log wcl
+                    ON wsl.task_id = wcl.task_id AND wsl.worker_id = wcl.worker_id
+                WHERE wsl.task_id = %s
+                GROUP BY wsl.worker_id
+            ),
+            active_workers AS (
+                SELECT worker_id
+                FROM worker_status
+                WHERE last_complete IS NULL
+                   OR last_start > last_complete
+            ),
+            paused_workers AS (
+                SELECT DISTINCT worker_id
+                FROM work_pause_log
+                WHERE task_detail_id = %s AND resumed_at IS NULL
+            )
+            SELECT
+                COUNT(aw.worker_id) AS active_count,
+                COUNT(pw.worker_id) AS paused_active_count
+            FROM active_workers aw
+            LEFT JOIN paused_workers pw ON aw.worker_id = pw.worker_id
+            """,
+            (task_detail_id, task_detail_id)
+        )
+        row = cur.fetchone()
+        if not row:
+            return False
+
+        active_count = row['active_count']
+        paused_active_count = row['paused_active_count']
+
+        # active worker가 없으면 False (빈 task에 is_paused=true 방지)
+        if active_count == 0:
+            return False
+
+        return active_count == paused_active_count
+
+    except PsycopgError as e:
+        logger.error(f"_all_active_workers_paused failed: task_id={task_detail_id}, error={e}")
+        return False
+    finally:
+        if conn:
+            put_conn(conn)
+
+
+def _is_worker_paused(task_detail_id: int, worker_id: int) -> bool:
+    """
+    특정 작업자가 현재 paused 상태인지 확인.
+
+    Sprint 55: 개인별 pause 상태 조회 (my_pause_status 응답용)
+
+    Args:
+        task_detail_id: app_task_details.id
+        worker_id: 작업자 ID
+
+    Returns:
+        해당 worker의 활성 pause가 있으면 True
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT 1 FROM work_pause_log
+            WHERE task_detail_id = %s
+              AND worker_id = %s
+              AND resumed_at IS NULL
+            LIMIT 1
+            """,
+            (task_detail_id, worker_id)
+        )
+        return cur.fetchone() is not None
+
+    except PsycopgError as e:
+        logger.error(
+            f"_is_worker_paused failed: task_id={task_detail_id}, "
+            f"worker_id={worker_id}, error={e}"
+        )
+        return False
     finally:
         if conn:
             put_conn(conn)

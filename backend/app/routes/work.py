@@ -19,7 +19,13 @@ from app.models.task_detail import (
 )
 from app.models.completion_status import get_or_create_completion_status
 from app.models.product_info import get_product_by_serial_number
-from app.models.work_pause_log import create_pause, resume_pause, get_active_pause, get_pauses_by_task
+from app.models.work_pause_log import (
+    create_pause,
+    resume_pause,
+    get_active_pause,
+    get_active_pause_by_worker,
+    get_pauses_by_task,
+)
 from app.models.task_detail import set_paused
 from app.models.admin_settings import get_all_settings
 from app.models.worker import get_worker_by_id, deactivate_worker
@@ -909,6 +915,8 @@ def pause_work() -> Tuple[Dict[str, Any], int]:
     """
     data = request.get_json(silent=True) or {}
     task_detail_id = data.get('task_detail_id')
+    # Sprint 55: pause_type을 요청 본문에서 읽기 (기본값: 'manual')
+    pause_type = data.get('pause_type', 'manual')
 
     if not task_detail_id:
         return jsonify({
@@ -940,8 +948,9 @@ def pause_work() -> Tuple[Dict[str, Any], int]:
             'message': '이미 완료된 작업입니다.'
         }), 400
 
-    # 이미 일시정지 중
-    if task.is_paused:
+    # Sprint 55: 개인별 pause — is_paused(task 전체) 대신 본인의 활성 pause 여부 확인
+    from app.services.task_service import _is_worker_paused, _all_active_workers_paused
+    if _is_worker_paused(task_detail_id, worker_id):
         return jsonify({
             'error': 'TASK_ALREADY_PAUSED',
             'message': '이미 일시정지된 작업입니다.'
@@ -965,26 +974,33 @@ def pause_work() -> Tuple[Dict[str, Any], int]:
             }), 403
 
     # 일시정지 로그 생성
-    pause_log = create_pause(task_detail_id, worker_id, pause_type='manual')
+    pause_log = create_pause(task_detail_id, worker_id, pause_type=pause_type)
     if not pause_log:
         return jsonify({
             'error': 'PAUSE_FAILED',
             'message': '일시정지 처리에 실패했습니다.'
         }), 500
 
-    # 작업 상태 업데이트
-    set_paused(task_detail_id, is_paused=True)
+    # Sprint 55: task.is_paused = 전원 paused일 때만 true
+    all_paused = _all_active_workers_paused(task_detail_id)
+    set_paused(task_detail_id, is_paused=all_paused)
 
-    logger.info(f"Task paused: task_id={task_detail_id}, worker_id={worker_id}")
+    logger.info(
+        f"Task paused: task_id={task_detail_id}, worker_id={worker_id}, "
+        f"task_is_paused={all_paused}"
+    )
 
     # 업데이트된 전체 TaskDetail 반환 (FE TaskItem.fromJson 호환)
     updated_task = get_task_by_id(task_detail_id)
     if updated_task:
-        return jsonify(_task_to_dict(updated_task)), 200
+        result = _task_to_dict(updated_task)
+        result['my_pause_status'] = 'paused'
+        return jsonify(result), 200
 
     return jsonify({
         'message': '작업이 일시정지되었습니다.',
         'paused_at': pause_log.paused_at.isoformat(),
+        'my_pause_status': 'paused',
     }), 200
 
 
@@ -1027,49 +1043,34 @@ def resume_work() -> Tuple[Dict[str, Any], int]:
             'message': '작업을 찾을 수 없습니다.'
         }), 404
 
-    # 일시정지 상태가 아닌 경우
-    if not task.is_paused:
-        return jsonify({
-            'error': 'TASK_NOT_PAUSED',
-            'message': '일시정지 중인 작업이 아닙니다.'
-        }), 400
-
-    # 활성 일시정지 로그 조회
-    active_pause = get_active_pause(task_detail_id)
-    if not active_pause:
-        return jsonify({
-            'error': 'PAUSE_NOT_FOUND',
-            'message': '활성 일시정지 로그를 찾을 수 없습니다.'
-        }), 404
-
-    # 권한 확인: 일시정지한 작업자 본인 또는 관리자 또는 GST 동료 또는 같은 task 참여자
+    # Sprint 55: 본인의 활성 pause 조회 (task 전체 is_paused 상태 무관)
     from app.models.worker import get_worker_by_id
-    from app.services.task_service import _worker_has_started_task
+    from app.services.task_service import _all_active_workers_paused, _is_worker_paused
     current_worker = get_worker_by_id(worker_id)
     is_admin = current_worker and (current_worker.is_admin or current_worker.is_manager)
-    # Sprint 11: GST 작업자 간 cross-worker 재개 허용
-    gst_cross_allowed = False
-    if current_worker and current_worker.company == 'GST':
-        pause_worker = get_worker_by_id(active_pause.worker_id) if active_pause.worker_id else None
-        if pause_worker and pause_worker.company == 'GST':
-            gst_cross_allowed = True
-    # BUG-6: 같은 task에 참여 중인 동료 작업자(work_start_log 기록 있음) 재개 허용
-    task_coworker_allowed = False
-    if active_pause.worker_id != worker_id and not is_admin and not gst_cross_allowed:
-        task_coworker_allowed = _worker_has_started_task(task_detail_id, worker_id)
+
+    # 본인의 활성 pause 조회
+    active_pause = get_active_pause_by_worker(task_detail_id, worker_id)
+
+    if not active_pause:
+        # admin/manager는 임의 작업자의 pause도 resume 가능 (override)
+        if is_admin:
+            active_pause = get_active_pause(task_detail_id)
+            if not active_pause:
+                return jsonify({
+                    'error': 'PAUSE_NOT_FOUND',
+                    'message': '활성 일시정지 로그를 찾을 수 없습니다.'
+                }), 404
+        else:
+            return jsonify({
+                'error': 'PAUSE_NOT_FOUND',
+                'message': '본인의 활성 일시정지를 찾을 수 없습니다.'
+            }), 404
+
     logger.info(
         f"Resume permission check: pause_worker={active_pause.worker_id}, "
-        f"jwt_worker={worker_id}, is_admin={is_admin}, "
-        f"gst_cross={gst_cross_allowed}, task_coworker={task_coworker_allowed}"
+        f"jwt_worker={worker_id}, is_admin={is_admin}"
     )
-    if (active_pause.worker_id != worker_id
-            and not is_admin
-            and not gst_cross_allowed
-            and not task_coworker_allowed):
-        return jsonify({
-            'error': 'FORBIDDEN',
-            'message': '일시정지를 해제할 권한이 없습니다.'
-        }), 403
 
     # 재개 처리
     resumed_at = datetime.now(Config.KST)
@@ -1083,22 +1084,29 @@ def resume_work() -> Tuple[Dict[str, Any], int]:
     # 누적 일시정지 시간 업데이트
     pause_duration = updated_pause.pause_duration_minutes or 0
     new_total_pause_minutes = task.total_pause_minutes + pause_duration
-    set_paused(task_detail_id, is_paused=False, total_pause_minutes=new_total_pause_minutes)
+
+    # Sprint 55: task.is_paused 재판정 (전원 paused 여부)
+    all_paused = _all_active_workers_paused(task_detail_id)
+    set_paused(task_detail_id, is_paused=all_paused, total_pause_minutes=new_total_pause_minutes)
 
     logger.info(
         f"Task resumed: task_id={task_detail_id}, worker_id={worker_id}, "
-        f"pause_duration={pause_duration}m, total_pause={new_total_pause_minutes}m"
+        f"pause_duration={pause_duration}m, total_pause={new_total_pause_minutes}m, "
+        f"task_is_paused={all_paused}"
     )
 
     # 업데이트된 전체 TaskDetail 반환 (FE TaskItem.fromJson 호환)
     updated_task = get_task_by_id(task_detail_id)
     if updated_task:
-        return jsonify(_task_to_dict(updated_task)), 200
+        result = _task_to_dict(updated_task)
+        result['my_pause_status'] = 'paused' if _is_worker_paused(task_detail_id, worker_id) else 'working'
+        return jsonify(result), 200
 
     return jsonify({
         'message': '작업이 재개되었습니다.',
         'resumed_at': resumed_at.isoformat(),
         'pause_duration_minutes': pause_duration,
+        'my_pause_status': 'working',
     }), 200
 
 

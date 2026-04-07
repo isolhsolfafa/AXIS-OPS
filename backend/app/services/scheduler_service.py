@@ -675,9 +675,11 @@ def force_pause_all_active_tasks(pause_type: str, message: str) -> None:
                 except Exception as e:
                     logger.warning(f"Failed to create BREAK_TIME_PAUSE alert for worker_id={worker_id}: {e}")
 
-        # task 자체의 is_paused 상태 업데이트 (1명이라도 pause 되었으면)
+        # Sprint 55: task.is_paused = 전원 paused일 때만 true (재판정)
         if task_paused:
-            set_paused(task_id, is_paused=True)
+            from app.services.task_service import _all_active_workers_paused
+            all_paused = _all_active_workers_paused(task_id)
+            set_paused(task_id, is_paused=all_paused)
 
     logger.info(f"force_pause_all_active_tasks: created {paused_count} pause logs (pause_type={pause_type})")
 
@@ -741,22 +743,29 @@ def send_break_end_notifications(pause_type: str, message: str) -> None:
         task_detail_id = row['task_detail_id']
         current_total_pause = row['total_pause_minutes'] or 0
 
-        # BUG-7 Fix: 자동 재개 처리 — pause_log resume + task is_paused 해제
+        # BUG-7 Fix: 자동 재개 처리 — pause_log resume + task is_paused 재판정
         try:
             updated_pause = resume_pause(pause_log_id, now_kst)
             if updated_pause:
                 pause_duration = updated_pause.pause_duration_minutes or 0
                 new_total_pause_minutes = current_total_pause + pause_duration
-                set_paused(task_detail_id, is_paused=False, total_pause_minutes=new_total_pause_minutes)
+                # Sprint 55: is_paused 재판정 (전원 paused 여부)
+                from app.services.task_service import _all_active_workers_paused
+                all_paused = _all_active_workers_paused(task_detail_id)
+                set_paused(task_detail_id, is_paused=all_paused, total_pause_minutes=new_total_pause_minutes)
                 resumed_count += 1
             else:
-                # resume 실패해도 is_paused는 해제
-                set_paused(task_detail_id, is_paused=False)
+                # resume 실패해도 is_paused는 재판정
+                from app.services.task_service import _all_active_workers_paused
+                all_paused = _all_active_workers_paused(task_detail_id)
+                set_paused(task_detail_id, is_paused=all_paused)
         except Exception as e:
             logger.warning(f"Failed to auto-resume pause_log_id={pause_log_id}: {e}")
             # resume 실패해도 알림은 계속 발송
             try:
-                set_paused(task_detail_id, is_paused=False)
+                from app.services.task_service import _all_active_workers_paused
+                all_paused = _all_active_workers_paused(task_detail_id)
+                set_paused(task_detail_id, is_paused=all_paused)
             except Exception:
                 pass
 

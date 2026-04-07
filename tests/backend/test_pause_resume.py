@@ -359,12 +359,13 @@ class TestPauseBasic:
 
     def test_resume_not_paused(self, client, pause_worker, make_task):
         """
-        TC-PR-07: 일시정지 상태가 아닌 작업 재개 시도 → 400 TASK_NOT_PAUSED
+        TC-PR-07: 일시정지 상태가 아닌 작업 재개 시도 → 400 또는 404
+
+        [Sprint 55 호환]
+        Sprint 55 전: 400 TASK_NOT_PAUSED
+        Sprint 55 후: 404 PAUSE_NOT_FOUND (본인 active pause 없음)
 
         Flow: 시작 → 재개 시도 (일시정지 없이)
-        Expected:
-        - Status 400
-        - error: TASK_NOT_PAUSED
         """
         task_id = make_task(
             worker_id=pause_worker['id'],
@@ -373,7 +374,6 @@ class TestPauseBasic:
 
         response = _resume_task(client, pause_worker['token'], task_id)
 
-        # 일시정지 상태가 아니면 400 TASK_NOT_PAUSED 또는 404 TASK_NOT_FOUND
         assert response.status_code in (400, 404), f"Expected 400 or 404, got {response.status_code}"
         data = response.get_json()
         assert data.get('error') in ('TASK_NOT_PAUSED', 'TASK_NOT_FOUND', 'PAUSE_NOT_FOUND')
@@ -382,12 +382,16 @@ class TestPauseBasic:
         self, client, pause_worker, second_worker, make_task
     ):
         """
-        TC-PR-08: 다른 작업자가 재개 시도 → 403 FORBIDDEN
+        TC-PR-08: 다른 작업자가 재개 시도 → 403 또는 404
+
+        [Sprint 55 업데이트]
+        Sprint 55 전: 403 FORBIDDEN (권한 체크)
+        Sprint 55 후: 404 PAUSE_NOT_FOUND (B에게 active pause 없음)
+        두 경우 모두 허용 (Sprint 55 구현 전후 호환)
 
         Flow: 작업자A 시작 → 일시정지 → 작업자B 재개 시도
         Expected:
-        - Status 403
-        - error: FORBIDDEN
+        - Status 403 (현재) 또는 404 (Sprint 55 후)
         """
         task_id = make_task(
             worker_id=pause_worker['id'],
@@ -399,11 +403,11 @@ class TestPauseBasic:
 
         resume_resp = _resume_task(client, second_worker['token'], task_id)
 
-        assert resume_resp.status_code == 403, (
-            f"Expected 403, got {resume_resp.status_code}: {resume_resp.get_json()}"
+        assert resume_resp.status_code in (403, 404), (
+            f"Expected 403 or 404, got {resume_resp.status_code}: {resume_resp.get_json()}"
         )
         data = resume_resp.get_json()
-        assert data.get('error') == 'FORBIDDEN'
+        assert data.get('error') in ('FORBIDDEN', 'PAUSE_NOT_FOUND')
 
     def test_admin_can_resume(
         self, client, pause_worker, pause_admin, make_task, db_conn
@@ -925,17 +929,21 @@ class TestPauseCoworkerResume:
 
         return task_id
 
-    def test_coworker_can_resume_partner_task(
+    def test_coworker_cannot_resume_partner_task(
         self, client, fni_worker_a, fni_worker_b,
         multi_worker_task, db_conn
     ):
         """
-        TC-PR-19: 다중작업자 task — 동료(start_log 있음)가 resume → 200 성공
+        TC-PR-19: 다중작업자 task — 동료가 resume → 404 PAUSE_NOT_FOUND
 
-        Flow: worker_a가 일시정지 → worker_b(같은 task 참여자)가 재개
+        [Sprint 55 업데이트]
+        BUG-6 임시 해결(coworker resume 허용)은 Sprint 55에서 폐기.
+        Sprint 55 원칙: 본인 pause만 resume 가능. B에게는 active pause 없음.
+
+        Flow: worker_a가 일시정지 → worker_b(동료)가 재개 시도
         Expected:
-        - Status 200
-        - DB: is_paused == False
+        - Status 404 (PAUSE_NOT_FOUND — B의 active pause 없음)
+        - A의 pause 여전히 active
         """
         task_id = multi_worker_task
 
@@ -945,31 +953,40 @@ class TestPauseCoworkerResume:
             f"Pause failed: {pause_resp.get_json()}"
         )
 
-        # worker_b(동료)가 재개
+        # worker_b(동료)가 재개 시도 → 본인 pause 없으므로 404
         resume_resp = _resume_task(client, fni_worker_b['token'], task_id)
 
-        assert resume_resp.status_code == 200, (
-            f"BUG-6: Coworker resume should succeed but got "
+        assert resume_resp.status_code == 404, (
+            f"Sprint 55: Coworker has no active pause → 404 expected, got "
             f"{resume_resp.status_code}: {resume_resp.get_json()}"
         )
 
-        # DB 확인
-        state = _get_task_state(db_conn, task_id)
-        assert state.get('is_paused') is False, (
-            "DB: is_paused should be False after coworker resume"
-        )
+        # A의 pause 여전히 active
+        if db_conn:
+            cursor = db_conn.cursor()
+            cursor.execute(
+                """SELECT COUNT(*) FROM work_pause_log
+                   WHERE task_detail_id = %s AND worker_id = %s
+                   AND resumed_at IS NULL""",
+                (task_id, fni_worker_a['id'])
+            )
+            active_cnt = cursor.fetchone()[0]
+            cursor.close()
+            assert active_cnt == 1, "A's pause should still be active"
 
     def test_unrelated_worker_cannot_resume(
         self, client, fni_worker_a, unrelated_worker,
         multi_worker_task
     ):
         """
-        TC-PR-20: 다중작업자 task — 무관한 제3자(start_log 없음)가 resume → 403
+        TC-PR-20: 다중작업자 task — 무관한 제3자(start_log 없음)가 resume → 403 또는 404
+
+        [Sprint 55 업데이트]
+        본인 pause만 조회하므로 무관한 제3자는 PAUSE_NOT_FOUND(404) 반환.
 
         Flow: worker_a가 일시정지 → 무관한 작업자가 재개 시도
         Expected:
-        - Status 403
-        - error: FORBIDDEN
+        - Status 403 (Sprint 55 전) 또는 404 (Sprint 55 후)
         """
         task_id = multi_worker_task
 
@@ -980,7 +997,7 @@ class TestPauseCoworkerResume:
         # 무관한 제3자가 재개 시도
         resume_resp = _resume_task(client, unrelated_worker['token'], task_id)
 
-        assert resume_resp.status_code == 403, (
+        assert resume_resp.status_code in (403, 404), (
             f"Unrelated worker should be rejected, got "
             f"{resume_resp.status_code}: {resume_resp.get_json()}"
         )

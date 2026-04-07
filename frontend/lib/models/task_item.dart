@@ -29,6 +29,7 @@ class TaskItem {
   final DateTime? updatedAt;
   final String? myStatus; // 이 작업자의 참여 상태 ('not_started', 'in_progress', 'completed')
   final String taskType; // 'NORMAL' 또는 'SINGLE_ACTION'
+  final String myPauseStatus; // 본인 기준 일시정지 상태: 'paused' | 'working'
 
   TaskItem({
     required this.id,
@@ -51,6 +52,7 @@ class TaskItem {
     this.updatedAt,
     this.myStatus,
     this.taskType = 'NORMAL',
+    this.myPauseStatus = 'working',
   });
 
   /// JSON에서 TaskItem 객체 생성
@@ -116,6 +118,7 @@ class TaskItem {
           : null,
       myStatus: json['my_status'] as String?,
       taskType: json['task_type'] as String? ?? 'NORMAL',
+      myPauseStatus: json['my_pause_status'] as String? ?? 'working',
     );
   }
 
@@ -142,6 +145,7 @@ class TaskItem {
       'updated_at': updatedAt?.toIso8601String(),
       'my_status': myStatus,
       'task_type': taskType,
+      'my_pause_status': myPauseStatus,
     };
   }
 
@@ -167,6 +171,7 @@ class TaskItem {
     DateTime? updatedAt,
     String? myStatus,
     String? taskType,
+    String? myPauseStatus,
   }) {
     return TaskItem(
       id: id ?? this.id,
@@ -189,6 +194,7 @@ class TaskItem {
       updatedAt: updatedAt ?? this.updatedAt,
       myStatus: myStatus ?? this.myStatus,
       taskType: taskType ?? this.taskType,
+      myPauseStatus: myPauseStatus ?? this.myPauseStatus,
     );
   }
 
@@ -257,7 +263,8 @@ class TaskItem {
         other.createdAt == createdAt &&
         other.updatedAt == updatedAt &&
         other.myStatus == myStatus &&
-        other.taskType == taskType;
+        other.taskType == taskType &&
+        other.myPauseStatus == myPauseStatus;
   }
 
   @override
@@ -281,6 +288,8 @@ class TaskItem {
       createdAt,
       updatedAt,
       myStatus,
+      taskType,
+      myPauseStatus,
     );
   }
 }

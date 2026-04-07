@@ -232,6 +232,92 @@ def get_active_pause(task_detail_id: int) -> Optional[WorkPauseLog]:
             put_conn(conn)
 
 
+def get_active_pause_by_worker(task_detail_id: int, worker_id: int) -> Optional[WorkPauseLog]:
+    """
+    특정 작업자의 활성 일시정지 조회 (resumed_at IS NULL).
+
+    Sprint 55: Worker별 독립 pause/resume 지원
+
+    Args:
+        task_detail_id: 작업 ID
+        worker_id: 작업자 ID
+
+    Returns:
+        해당 작업자의 활성 WorkPauseLog, 없으면 None
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT * FROM work_pause_log
+            WHERE task_detail_id = %s
+              AND worker_id = %s
+              AND resumed_at IS NULL
+            ORDER BY paused_at DESC
+            LIMIT 1
+            """,
+            (task_detail_id, worker_id)
+        )
+
+        row = cur.fetchone()
+        if row:
+            return WorkPauseLog.from_db_row(row)
+        return None
+
+    except PsycopgError as e:
+        logger.error(
+            f"Failed to get active pause by worker: "
+            f"task_detail_id={task_detail_id}, worker_id={worker_id}, error={e}"
+        )
+        return None
+    finally:
+        if conn:
+            put_conn(conn)
+
+
+def get_active_pauses_for_task(task_detail_id: int) -> List[WorkPauseLog]:
+    """
+    해당 task의 모든 활성 일시정지 조회 (worker별).
+
+    Sprint 55: _all_active_workers_paused() 헬퍼에서 사용
+
+    Args:
+        task_detail_id: 작업 ID
+
+    Returns:
+        활성 WorkPauseLog 리스트 (paused_at DESC)
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT * FROM work_pause_log
+            WHERE task_detail_id = %s
+              AND resumed_at IS NULL
+            ORDER BY paused_at DESC
+            """,
+            (task_detail_id,)
+        )
+
+        rows = cur.fetchall()
+        return [WorkPauseLog.from_db_row(row) for row in rows]
+
+    except PsycopgError as e:
+        logger.error(
+            f"Failed to get active pauses for task_detail_id={task_detail_id}: {e}"
+        )
+        return []
+    finally:
+        if conn:
+            put_conn(conn)
+
+
 def get_pauses_by_task(task_detail_id: int) -> List[WorkPauseLog]:
     """
     작업의 전체 일시정지 이력 조회

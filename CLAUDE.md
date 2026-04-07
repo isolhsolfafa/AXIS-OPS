@@ -1157,3 +1157,4 @@ VALUES ('📱 OPS v2.2.1 업데이트 안내', '본문...', '2.2.1', TRUE, {admi
 | v2.6.0 | 2026-04-03 | Sprint 54 | 체크리스트 성적서 API — O/N 검색 + S/N 성적서 (배치 쿼리) |
 | v2.6.0 | 2026-04-03 | BUG-FIX | master_id 응답 누락 수정, #53 mech_start→mech_end 필터, description 표시 |
 | v2.6.0 | 2026-04-07 | BUG-6 | 다중작업자 동료 resume 403 — task coworker 허용 조건 추가 |
+| v2.7.0 | 2026-04-07 | Sprint 55 | Worker별 Pause/Resume + Auto-Finalize + FINAL task 릴레이 불가 |
