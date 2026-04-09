@@ -1302,7 +1302,7 @@ def get_managers() -> Tuple[Dict[str, Any], int]:
         conn = get_db_connection()
         cur = conn.cursor()
 
-        where_clauses = ["approval_status = 'approved'"]
+        where_clauses = ["approval_status = 'approved'", "is_active = TRUE"]
         params: List[Any] = []
 
         if company:
@@ -1752,6 +1752,7 @@ def _get_attendance_data(target_start_kst, target_end_kst, company_filter=None):
               AND pa.check_time <  %s
             WHERE w.company != 'GST'
               AND w.approval_status = 'approved'
+              AND w.is_active = TRUE
         """
         params = [target_start_kst, target_end_kst]
 
@@ -2010,6 +2011,7 @@ def _get_attendance_trend_data(
               AND pa.check_time >= %s AND pa.check_time < %s
               AND w.company != 'GST'
               AND w.approval_status = 'approved'
+              AND w.is_active = TRUE
         """
         params: List[Any] = [range_start, range_end]
         if company_filter:
@@ -2021,7 +2023,7 @@ def _get_attendance_trend_data(
         checkin_rows = {row['check_date']: row for row in cur.fetchall()}
 
         # 전체 등록 인원
-        reg_query = "SELECT COUNT(*) AS cnt FROM workers WHERE company != 'GST' AND approval_status = 'approved'"
+        reg_query = "SELECT COUNT(*) AS cnt FROM workers WHERE company != 'GST' AND approval_status = 'approved' AND is_active = TRUE"
         reg_params: List[Any] = []
         if company_filter:
             reg_query += " AND company = %s"
