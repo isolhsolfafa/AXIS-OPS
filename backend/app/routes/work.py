@@ -168,7 +168,12 @@ def start_work() -> Tuple[Dict[str, Any], int]:
     if status_code == 200:
         updated_task = get_task_by_id(task_detail_id)
         if updated_task:
-            return jsonify(_task_to_dict(updated_task)), 200
+            result = _task_to_dict(updated_task)
+            # Sprint 57: ELEC INSPECTION 시작 → 체크리스트 팝업
+            if updated_task.task_category == 'ELEC' and updated_task.task_id == 'INSPECTION':
+                result['checklist_ready'] = True
+                result['checklist_category'] = 'ELEC'
+            return jsonify(result), 200
 
     return jsonify(response), status_code
 
@@ -253,6 +258,11 @@ def complete_work() -> Tuple[Dict[str, Any], int]:
             # Sprint 52: Manager가 TM TANK_MODULE 직접 완료 시 FE 체크리스트 진입 유도
             if response.get('checklist_ready'):
                 result['checklist_ready'] = True
+            if response.get('checklist_category'):
+                result['checklist_category'] = response['checklist_category']
+            # Sprint 57: ELEC IF_2 완료 시 체크리스트 상태
+            if 'elec_close_blocked' in response:
+                result['elec_close_blocked'] = response['elec_close_blocked']
             return jsonify(result), 200
 
     return jsonify(response), status_code

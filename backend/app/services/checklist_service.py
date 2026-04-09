@@ -1,7 +1,8 @@
 """
-TM 체크리스트 서비스 (Sprint 52)
+체크리스트 서비스 (Sprint 52 TM + Sprint 57 ELEC)
 체크리스트 조회 / 항목 체크 / 완료 판정 + 알림
 Sprint 54: _get_checklist_by_category() 추출, get_checklist_report() 추가
+Sprint 57: ELEC 체크리스트 + Dual-Trigger 닫기 + checker_role
 """
 
 import logging
@@ -72,6 +73,7 @@ def _get_checklist_by_category(
             cm.item_type,
             cm.item_order,
             cm.description,
+            COALESCE(cm.checker_role, 'WORKER') AS checker_role,
             cr.check_result,
             cr.checked_by,
             w.name         AS checked_by_name,
@@ -105,6 +107,7 @@ def _get_checklist_by_category(
             'item_name': row['item_name'],
             'item_type': item_type,
             'description': row['description'],
+            'checker_role': row.get('checker_role', 'WORKER'),
             'check_result': check_result,
             'checked_by_name': row['checked_by_name'],
             'checked_at': row['checked_at'].isoformat() if row['checked_at'] else None,
@@ -660,6 +663,287 @@ def get_tm_checklist_status(serial_number: str, judgment_phase: int = 1) -> Dict
             'checked_count': 0,
             'total_count': 0,
         }
+    finally:
+        if conn:
+            put_conn(conn)
+
+
+# ═══════════════════════════════════════════════════════
+#  Sprint 57: ELEC 체크리스트
+# ═══════════════════════════════════════════════════════
+
+def get_elec_checklist(serial_number: str, judgment_phase: int = 1) -> Dict[str, Any]:
+    """ELEC 체크리스트 조회 (Sprint 57) — TM과 동일 패턴"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            "SELECT pi.product_code, pi.sales_order, pi.model "
+            "FROM plan.product_info pi WHERE pi.serial_number = %s",
+            (serial_number,)
+        )
+        product_row = cur.fetchone()
+        product_code = product_row['product_code'] if product_row else None
+        sales_order = product_row['sales_order'] if product_row else None
+        model = product_row['model'] if product_row else None
+
+        data = _get_checklist_by_category(
+            cur, serial_number, 'ELEC', product_code, 'all', judgment_phase
+        )
+
+        from collections import OrderedDict
+        groups_dict: OrderedDict = OrderedDict()
+        for item in data['items']:
+            g = item['item_group']
+            if g not in groups_dict:
+                groups_dict[g] = []
+            groups_dict[g].append(item)
+
+        groups = [{'group_name': k, 'items': v} for k, v in groups_dict.items()]
+
+        summary = data['summary']
+        summary['remaining'] = summary['total'] - summary['checked']
+        summary['is_complete'] = (summary['remaining'] == 0 and summary['total'] > 0)
+
+        return {
+            'serial_number': serial_number,
+            'sales_order': sales_order,
+            'model': model,
+            'judgment_phase': judgment_phase,
+            'groups': groups,
+            'summary': summary,
+        }
+
+    except PsycopgError as e:
+        logger.error(f"get_elec_checklist failed: serial={serial_number}, error={e}")
+        raise
+    finally:
+        if conn:
+            put_conn(conn)
+
+
+def upsert_elec_check(
+    serial_number: str,
+    master_id: int,
+    check_result: str,
+    note: Optional[str],
+    worker_id: int,
+    judgment_phase: int = 1,
+) -> Dict[str, Any]:
+    """ELEC 체크리스트 항목 체크 (UPSERT) — Sprint 57. manager 제한 없음."""
+    if check_result not in ('PASS', 'NA'):
+        raise ValueError(f"INVALID_CHECK_RESULT: '{check_result}'")
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            "SELECT id FROM checklist.checklist_master WHERE id = %s AND category = 'ELEC'",
+            (master_id,)
+        )
+        if not cur.fetchone():
+            raise ValueError(f"MASTER_NOT_FOUND: master_id={master_id} (ELEC)")
+
+        cur.execute(
+            """
+            INSERT INTO checklist.checklist_record
+                (serial_number, master_id, judgment_phase, check_result,
+                 checked_by, checked_at, note, updated_at)
+            VALUES (%s, %s, %s, %s, %s, NOW(), %s, NOW())
+            ON CONFLICT (serial_number, master_id, judgment_phase) DO UPDATE
+            SET check_result = EXCLUDED.check_result,
+                checked_by   = EXCLUDED.checked_by,
+                checked_at   = EXCLUDED.checked_at,
+                note         = EXCLUDED.note,
+                updated_at   = NOW()
+            RETURNING id
+            """,
+            (serial_number, master_id, judgment_phase, check_result, worker_id, note)
+        )
+        conn.commit()
+
+        is_complete = check_elec_completion(serial_number, judgment_phase)
+
+        # Dual-Trigger 경로 2: 체크리스트 완료 + IF_2 이미 완료 → ELEC 닫기
+        elec_closed = False
+        if is_complete:
+            elec_closed = _try_elec_close(serial_number)
+
+        return {
+            'master_id': master_id,
+            'check_result': check_result,
+            'is_complete': is_complete,
+            'elec_closed': elec_closed,
+        }
+
+    except PsycopgError as e:
+        if conn:
+            conn.rollback()
+        logger.error(f"upsert_elec_check failed: serial={serial_number}, error={e}")
+        raise
+    finally:
+        if conn:
+            put_conn(conn)
+
+
+def check_elec_completion(serial_number: str, judgment_phase: int = 1) -> bool:
+    """ELEC 체크리스트 완료 판정 — GST(QI) 항목 제외. 중복 알림 방지 포함."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # NULL인 항목 수 (GST 전용 항목 제외)
+        cur.execute(
+            """
+            SELECT COUNT(*) AS null_count
+            FROM checklist.checklist_master cm
+            LEFT JOIN checklist.checklist_record cr
+                ON cr.master_id      = cm.id
+               AND cr.serial_number  = %s
+               AND cr.judgment_phase = %s
+            WHERE cm.category   = 'ELEC'
+              AND cm.is_active  = TRUE
+              AND COALESCE(cm.checker_role, 'WORKER') != 'QI'
+              AND cr.check_result IS NULL
+            """,
+            (serial_number, judgment_phase)
+        )
+        null_count = cur.fetchone()['null_count']
+        if null_count > 0:
+            return False
+
+        # 전체 항목 수 (GST 제외)
+        cur.execute(
+            """
+            SELECT COUNT(*) AS total_count
+            FROM checklist.checklist_master cm
+            WHERE cm.category = 'ELEC'
+              AND cm.is_active = TRUE
+              AND COALESCE(cm.checker_role, 'WORKER') != 'QI'
+            """
+        )
+        total_count = cur.fetchone()['total_count']
+        if total_count == 0:
+            return False
+
+        # ISSUE note 알림 (중복 방지: 동일 S/N ELEC CHECKLIST_ISSUE 이미 존재 시 스킵)
+        cur.execute(
+            "SELECT setting_value FROM admin_settings WHERE setting_key = 'elec_checklist_issue_alert'"
+        )
+        alert_row = cur.fetchone()
+        issue_alert_enabled = True
+        if alert_row:
+            sv = alert_row['setting_value']
+            if isinstance(sv, str):
+                issue_alert_enabled = sv.lower() in ('true', '1')
+
+        if issue_alert_enabled:
+            cur.execute(
+                """
+                SELECT id FROM app_alert_logs
+                WHERE alert_type = 'CHECKLIST_ISSUE'
+                  AND serial_number = %s
+                  AND message LIKE '[[]' || %s || '%%ELEC%%'
+                LIMIT 1
+                """,
+                (serial_number, serial_number)
+            )
+            already_alerted = cur.fetchone() is not None
+
+            if not already_alerted:
+                cur.execute(
+                    """
+                    SELECT cr.note, cm.item_name
+                    FROM checklist.checklist_record cr
+                    JOIN checklist.checklist_master cm ON cm.id = cr.master_id
+                    WHERE cr.serial_number  = %s
+                      AND cr.judgment_phase = %s
+                      AND cr.note IS NOT NULL AND cr.note != ''
+                      AND cm.category = 'ELEC'
+                      AND cm.is_active = TRUE
+                    """,
+                    (serial_number, judgment_phase)
+                )
+                issue_rows = cur.fetchall()
+
+                if issue_rows:
+                    from app.services.alert_service import create_and_broadcast_alert
+                    for issue_row in issue_rows:
+                        try:
+                            create_and_broadcast_alert({
+                                'alert_type': 'CHECKLIST_ISSUE',
+                                'message': f'[{serial_number}] ELEC 체크리스트 ISSUE: {issue_row["item_name"]} - {issue_row["note"]}',
+                                'serial_number': serial_number,
+                                'target_role': 'ELEC',
+                            })
+                        except Exception as ae:
+                            logger.error(f"check_elec_completion: CHECKLIST_ISSUE alert failed: {ae}")
+
+        return True
+
+    except PsycopgError as e:
+        logger.error(f"check_elec_completion failed: serial={serial_number}, error={e}")
+        return False
+    finally:
+        if conn:
+            put_conn(conn)
+
+
+def _try_elec_close(serial_number: str) -> bool:
+    """Dual-Trigger 경로 2: 체크리스트 완료 시 IF_2 확인 → 양쪽 완료면 ELEC 닫기."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT td.id
+            FROM app_task_details td
+            JOIN work_completion_log wcl ON wcl.task_id = td.id
+            WHERE td.serial_number = %s
+              AND td.task_id = 'IF_2'
+              AND td.task_category = 'ELEC'
+            LIMIT 1
+            """,
+            (serial_number,)
+        )
+        if_2_completed = cur.fetchone() is not None
+
+        if not if_2_completed:
+            logger.info(
+                f"ELEC checklist complete but IF_2 not yet done (waiting path 1): "
+                f"serial={serial_number}"
+            )
+            return False
+
+        cur.execute(
+            """
+            UPDATE completion_status
+            SET elec_completed = TRUE,
+                updated_at = NOW()
+            WHERE serial_number = %s
+              AND elec_completed = FALSE
+            """,
+            (serial_number,)
+        )
+        conn.commit()
+
+        logger.info(
+            f"ELEC close triggered (path 2: checklist last): serial={serial_number}"
+        )
+        return True
+
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        logger.error(f"_try_elec_close failed (non-blocking): serial={serial_number}, error={e}")
+        return False
     finally:
         if conn:
             put_conn(conn)

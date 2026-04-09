@@ -47,7 +47,7 @@ VALID_PROCESS_TYPES = {'MECH', 'ELEC', 'TM', 'PI', 'QI', 'SI'}
 # Sprint 41-B: FINAL phase task ID 목록 — 완료 시 릴레이 미완료 task 자동 마감 트리거
 FINAL_TASK_IDS = {
     'SELF_INSPECTION',  # MECH 자주검사
-    'INSPECTION',       # ELEC 자주검사 (검수)
+    'IF_2',             # ELEC I.F 2 (Sprint 57: INSPECTION→IF_2)
     'PRESSURE_TEST',    # TMS 가압검사
     'PI_CHAMBER',       # PI CHAMBER 가압검사
     'QI_INSPECTION',    # QI 공정검사
@@ -412,6 +412,23 @@ class TaskService:
         if task.task_category == 'TMS' and task.task_id == 'TANK_MODULE':
             checklist_ready = self._trigger_tm_checklist_alert(task, worker_id)
 
+        # Sprint 57: ELEC IF_2 완료 → ELEC 닫기 판정 (Dual-Trigger 경로 1)
+        elec_close_blocked = False
+        if task.task_category == 'ELEC' and task.task_id == 'IF_2':
+            from app.services.checklist_service import check_elec_completion
+            elec_checklist_complete = check_elec_completion(task.serial_number)
+            if elec_checklist_complete:
+                logger.info(
+                    f"ELEC close triggered (path 1: IF_2 last): "
+                    f"serial={task.serial_number}, task_id={task_detail_id}"
+                )
+            else:
+                elec_close_blocked = True
+                logger.info(
+                    f"ELEC IF_2 completed but checklist incomplete (waiting path 2): "
+                    f"serial={task.serial_number}, task_id={task_detail_id}"
+                )
+
         response = {
             'message': '작업이 완료되었습니다.',
             'task_id': task_detail_id,
@@ -430,6 +447,14 @@ class TaskService:
         # Sprint 52: Manager가 직접 완료한 경우 FE에서 체크리스트 화면 진입 유도
         if checklist_ready:
             response['checklist_ready'] = True
+
+        # Sprint 57: ELEC IF_2 완료 응답에 체크리스트 상태 포함
+        if task.task_category == 'ELEC' and task.task_id == 'IF_2':
+            response['elec_close_blocked'] = elec_close_blocked
+            if elec_close_blocked:
+                response['message'] = 'I.F 2 완료 — 체크리스트 미완료 항목이 있습니다.'
+                response['checklist_ready'] = True
+                response['checklist_category'] = 'ELEC'
 
         # Sprint 3: duration 경고가 있으면 응답에 포함
         if duration_warnings:

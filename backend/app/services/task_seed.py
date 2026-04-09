@@ -76,7 +76,7 @@ ELEC_TASKS: List[TaskTemplate] = [
     TaskTemplate('WIRING',       '배선 포설',          'PRE_DOCKING',  False),
     TaskTemplate('IF_1',         'I.F 1',             'PRE_DOCKING',  False),
     TaskTemplate('IF_2',         'I.F 2',             'POST_DOCKING', False),
-    TaskTemplate('INSPECTION',   '자주검사 (검수)',    'FINAL',        False),
+    TaskTemplate('INSPECTION',   '자주검사 (검수)',    'POST_DOCKING', False),
 ]
 
 # TMS Tasks (2개) — GAIA(is_tms=True)만 생성

@@ -5,7 +5,7 @@ checklist 스키마의 checklist_master + checklist_record CRUD
 """
 
 import logging
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, g
 from typing import Tuple, Dict, Any
 
 from app.middleware.jwt_auth import jwt_required, admin_required, view_access_required, get_current_worker_id
@@ -1134,3 +1134,44 @@ def get_checklist_report_detail(serial_number: str) -> Tuple[Dict[str, Any], int
         return jsonify(result), status_code
 
     return jsonify(result), 200
+
+
+# ═══ Sprint 57: ELEC 체크리스트 ═══
+
+@checklist_bp.route('/elec/<serial_number>', methods=['GET'])
+@jwt_required
+def get_elec_checklist_api(serial_number):
+    """ELEC 체크리스트 조회 (Sprint 57)"""
+    judgment_phase = request.args.get('phase', 1, type=int)
+    from app.services.checklist_service import get_elec_checklist
+    try:
+        result = get_elec_checklist(serial_number, judgment_phase)
+        return jsonify(result), 200
+    except Exception as e:
+        return jsonify({'error': 'CHECKLIST_ERROR', 'message': str(e)}), 500
+
+
+@checklist_bp.route('/elec/check', methods=['PUT'])
+@jwt_required
+def upsert_elec_check_api():
+    """ELEC 체크리스트 항목 체크 (Sprint 57) — manager 제한 없음"""
+    data = request.get_json()
+    if not data or 'serial_number' not in data or 'master_id' not in data or 'check_result' not in data:
+        return jsonify({'error': 'INVALID_REQUEST', 'message': 'serial_number, master_id, check_result 필수'}), 400
+
+    worker_id = g.worker_id
+    from app.services.checklist_service import upsert_elec_check
+    try:
+        result = upsert_elec_check(
+            serial_number=data['serial_number'],
+            master_id=data['master_id'],
+            check_result=data['check_result'],
+            note=data.get('note'),
+            worker_id=worker_id,
+            judgment_phase=data.get('judgment_phase', 1),
+        )
+        return jsonify(result), 200
+    except ValueError as ve:
+        return jsonify({'error': 'VALIDATION_ERROR', 'message': str(ve)}), 400
+    except Exception as e:
+        return jsonify({'error': 'CHECKLIST_ERROR', 'message': str(e)}), 500
