@@ -3,7 +3,24 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.7.1 (Sprint 55-B/56 + 비활성 사용자 필터, 2026-04-09)
+> **현재 버전**: v2.8.0 (Sprint 57 ELEC 체크리스트 + Dual-Trigger, 2026-04-09)
+
+---
+
+## Sprint 57: ELEC 공정 시퀀스 변경 + 체크리스트 (2026-04-09)
+
+**목적**: ELEC INSPECTION freeroll 전환 + 체크리스트 + Dual-Trigger 닫기 (IF_2 + 체크리스트 양방향)
+
+**수정 파일**:
+- `backend/app/services/task_service.py` — FINAL_TASK_IDS INSPECTION→IF_2, Dual-Trigger 경로 1
+- `backend/app/services/checklist_service.py` — ELEC 함수 4개 + checker_role SELECT 확장
+- `backend/app/services/task_seed.py` — INSPECTION phase FINAL→POST_DOCKING
+- `backend/app/routes/checklist.py` — ELEC 조회/체크 엔드포인트 2개
+- `backend/app/routes/work.py` — start_work checklist_ready + complete_work elec_close_blocked
+- `backend/migrations/046_elec_checklist.sql` — checker_role, phase1_na 컬럼
+- `backend/scripts/seed_elec_checklist.py` — 31항목 (24 WORKER + 7 QI)
+
+**DB 변경**: migration 046 + seed 31항목 운영 적용 완료
 
 ---
 

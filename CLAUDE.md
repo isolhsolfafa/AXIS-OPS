@@ -1163,3 +1163,4 @@ VALUES ('📱 OPS v2.2.1 업데이트 안내', '본문...', '2.2.1', TRUE, {admi
 | v2.7.1 | 2026-04-09 | Sprint 55-B | Task 목록 API my_pause_status 누락 — 화면 재진입 시 pause 상태 소실 수정 |
 | v2.7.1 | 2026-04-09 | Sprint 56 | QR 목록 API elec_start 필드 + 필터 + 정렬 추가 |
 | v2.7.1 | 2026-04-09 | #55 | 비활성 사용자 목록 노출 — workers/managers/출퇴근 API is_active 필터, migration 040 운영 실행 |
+| v2.8.0 | 2026-04-09 | Sprint 57 | ELEC 공정 시퀀스 변경 + 체크리스트 — INSPECTION freeroll, IF_2 FINAL, Dual-Trigger 닫기, 31항목 seed |
