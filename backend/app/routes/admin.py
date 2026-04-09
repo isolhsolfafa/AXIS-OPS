@@ -350,6 +350,11 @@ def get_workers() -> Tuple[Dict[str, Any], int]:
             elif is_manager_filter.lower() in ('false', '0'):
                 where_clauses.append("is_manager = FALSE AND is_admin = FALSE")
 
+        # 비활성 사용자 기본 제외 (show_inactive=true로 포함 가능)
+        show_inactive = request.args.get('show_inactive', 'false').lower() in ('true', '1')
+        if not show_inactive:
+            where_clauses.append("is_active = TRUE")
+
         where_sql = " AND ".join(where_clauses) if where_clauses else "TRUE"
         params.append(limit)
 
