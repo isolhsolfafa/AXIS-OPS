@@ -121,25 +121,41 @@ def _insert_product(db_conn, serial_number, model='GAIA-I', sales_order='6408',
     cursor.close()
 
 
-def _insert_tm_master_items(db_conn, product_code='COMMON', count=15):
-    """checklist_master에 TM 카테고리 테스트 데이터 INSERT (item_group별 15항목)"""
-    groups = ['BURNER', 'REACTOR', 'EXHAUST', 'TANK']
-    items = []
-    for i in range(count):
-        grp = groups[i % len(groups)]
-        items.append((product_code, 'TM', grp, f'TM 점검항목 {i+1}', i + 1))
+def _get_tm_master_ids(db_conn, product_code='COMMON', limit=None):
+    """migration 043a seed에서 생성된 TM master 항목 ID 조회 (운영 동일 데이터 사용)"""
+    cursor = db_conn.cursor()
+    query = """
+        SELECT id FROM checklist.checklist_master
+        WHERE product_code = %s AND category = 'TM' AND is_active = TRUE
+        ORDER BY item_group, item_order
+    """
+    if limit:
+        query += f" LIMIT {int(limit)}"
+    cursor.execute(query, (product_code,))
+    master_ids = [row[0] for row in cursor.fetchall()]
+    cursor.close()
+    return master_ids
 
+
+def _insert_tm_master_items(db_conn, product_code='COMMON', count=15):
+    """migration seed 데이터 조회 반환. product_code가 COMMON이 아닌 경우만 INSERT."""
+    if product_code == 'COMMON':
+        return _get_tm_master_ids(db_conn, product_code, limit=count)
+
+    # COMMON이 아닌 경우 (ALERT_ONLY 등 테스트 전용) — 별도 INSERT
+    groups = ['BURNER', 'REACTOR', 'EXHAUST', 'TANK']
     cursor = db_conn.cursor()
     master_ids = []
-    for item in items:
+    for i in range(count):
+        grp = groups[i % len(groups)]
         cursor.execute("""
             INSERT INTO checklist.checklist_master
                 (product_code, category, item_group, item_name, item_order, is_active, updated_at)
-            VALUES (%s, %s, %s, %s, %s, TRUE, NOW())
+            VALUES (%s, 'TM', %s, %s, %s, TRUE, NOW())
             ON CONFLICT (product_code, category, item_group, item_name) DO UPDATE
                 SET item_order = EXCLUDED.item_order
             RETURNING id
-        """, item)
+        """, (product_code, grp, f'TM 점검항목 {i+1}', i + 1))
         row = cursor.fetchone()
         master_ids.append(row[0])
     db_conn.commit()

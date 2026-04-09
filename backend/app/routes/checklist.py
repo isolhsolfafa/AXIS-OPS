@@ -1138,7 +1138,7 @@ def get_checklist_report_detail(serial_number: str) -> Tuple[Dict[str, Any], int
 
 # ═══ Sprint 57: ELEC 체크리스트 ═══
 
-@checklist_bp.route('/elec/<serial_number>', methods=['GET'])
+@checklist_bp.route('/api/app/checklist/elec/<serial_number>', methods=['GET'])
 @jwt_required
 def get_elec_checklist_api(serial_number):
     """ELEC 체크리스트 조회 (Sprint 57)"""
@@ -1151,7 +1151,7 @@ def get_elec_checklist_api(serial_number):
         return jsonify({'error': 'CHECKLIST_ERROR', 'message': str(e)}), 500
 
 
-@checklist_bp.route('/elec/check', methods=['PUT'])
+@checklist_bp.route('/api/app/checklist/elec/check', methods=['PUT'])
 @jwt_required
 def upsert_elec_check_api():
     """ELEC 체크리스트 항목 체크 (Sprint 57) — manager 제한 없음"""

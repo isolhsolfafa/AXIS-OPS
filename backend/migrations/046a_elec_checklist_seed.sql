@@ -1,0 +1,36 @@
+-- Sprint 57: ELEC 체크리스트 31항목 seed (24 WORKER + 7 QI)
+INSERT INTO checklist.checklist_master
+    (product_code, category, item_group, item_name, item_order, description, is_active, checker_role, phase1_na)
+VALUES
+    ('COMMON', 'ELEC', 'PANEL 검사', 'SUS Fitting 조임 상태', 1, 'GAP GAUGE / 측수 검사', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'PANEL 검사', 'Gas Nozzle Cover 힘 여부', 2, 'Jig 활용 Center 확인 / 육안 검사', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'PANEL 검사', '클램프 체결', 3, '조립 유동 여부 / 측수 검사', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'PANEL 검사', 'Packing 조립 확인', 4, '적용 여부 / 육안 검사', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'PANEL 검사', 'Packing Guide 고정 확인', 5, '유동 여부 / 육안 검사', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'PANEL 검사', 'SUS Fitting 조임 상태 (EXHAUST)', 6, 'GAP GAUGE / 측수 검사', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'PANEL 검사', 'BCW Nozzle Spray 방향', 7, '아래 방향 / 육안 검사', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'PANEL 검사', 'Fitting 조임 상태', 8, '조립 유동 여부 / 측수 검사', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'PANEL 검사', 'Tube 조임 상태', 9, '조립 유동 여부 / 측수 검사', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'PANEL 검사', '클램프 체결 (REACTOR)', 10, '조립 유동 여부 / 측수 검사', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'PANEL 검사', 'Cir Line Tubing', 11, '조립 유동 여부 / 측수 검사', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', '조립 검사', 'Cir Pump Spec 확인', 1, '조립 도면과 현물 1:1 확인 / 육안 검사', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', '조립 검사', 'Flow Sensor Swirl Orifice', 2, 'Swirl Orifice 적용 조립 / 육안 검사', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', '조립 검사', 'Tank 내부 이물질 확인', 3, 'Tank 투시창 이용 확인 / 육안 검사', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', '조립 검사', '열교환기 Spec 확인', 4, '조립 도면과 현물 1:1 확인 / 육안 검사', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', '조립 검사', '버너 위 배선 상태', 5, '현장 조립 후 확인 / 육안 검사', TRUE, 'WORKER', TRUE),
+    ('COMMON', 'ELEC', '조립 검사', '전장 BOX 내부 배선 상태', 6, '배선 정리 상태 / 육안 검사', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 1', 1, '특별관리 / 육안 검사', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 2', 2, '특별관리 / 육안 검사', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 3', 3, '특별관리 / 육안 검사', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 4', 4, '특별관리 / 육안 검사', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 5', 5, '특별관리 / 육안 검사', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 6', 6, '특별관리 / 육안 검사', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 7', 7, '특별관리 / 육안 검사', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 1 (GST)', 8, '특별관리 — GST 검증 / 육안 검사', TRUE, 'QI', FALSE),
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 2 (GST)', 9, '특별관리 — GST 검증 / 육안 검사', TRUE, 'QI', FALSE),
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 3 (GST)', 10, '특별관리 — GST 검증 / 육안 검사', TRUE, 'QI', FALSE),
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 4 (GST)', 11, '특별관리 — GST 검증 / 육안 검사', TRUE, 'QI', FALSE),
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 5 (GST)', 12, '특별관리 — GST 검증 / 육안 검사', TRUE, 'QI', FALSE),
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 6 (GST)', 13, '특별관리 — GST 검증 / 육안 검사', TRUE, 'QI', FALSE),
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 7 (GST)', 14, '특별관리 — GST 검증 / 육안 검사', TRUE, 'QI', FALSE)
+ON CONFLICT (product_code, category, item_group, item_name) DO NOTHING;
