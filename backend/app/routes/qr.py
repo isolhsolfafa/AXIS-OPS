@@ -54,6 +54,7 @@ def get_qr_list() -> Tuple[Dict[str, Any], int]:
             "serial_number": "p.serial_number",
             "model": "p.model",
             "mech_start": "p.mech_start",
+            "elec_start": "p.elec_start",
             "module_start": "p.module_start",
             "sales_order": "p.sales_order",
         }
@@ -80,7 +81,7 @@ def get_qr_list() -> Tuple[Dict[str, Any], int]:
             params.append(status_filter)
 
         # 날짜 범위 필터
-        allowed_date_fields = {"mech_start": "p.mech_start", "module_start": "p.module_start"}
+        allowed_date_fields = {"mech_start": "p.mech_start", "elec_start": "p.elec_start", "module_start": "p.module_start"}
         if date_field in allowed_date_fields:
             col = allowed_date_fields[date_field]
             if date_from:
@@ -118,6 +119,7 @@ def get_qr_list() -> Tuple[Dict[str, Any], int]:
                 p.mech_partner,
                 p.elec_partner,
                 p.mech_start,
+                p.elec_start,
                 p.module_start,
                 p.ship_plan_date,
                 p.prod_date,
@@ -171,6 +173,7 @@ def get_qr_list() -> Tuple[Dict[str, Any], int]:
                 "mech_partner": row['mech_partner'],
                 "elec_partner": row['elec_partner'],
                 "mech_start": row['mech_start'].isoformat() if row['mech_start'] else None,
+                "elec_start": row['elec_start'].isoformat() if row['elec_start'] else None,
                 "module_start": row['module_start'].isoformat() if row['module_start'] else None,
                 "ship_plan_date": row['ship_plan_date'].isoformat() if row['ship_plan_date'] else None,
                 "prod_date": row['prod_date'].isoformat() if row['prod_date'] else None,
