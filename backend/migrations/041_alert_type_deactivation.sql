@@ -1,6 +1,3 @@
 -- Migration 041: alert_type_enum에 WORKER_DEACTIVATION_REQUEST 추가 (Sprint 40-C)
-BEGIN;
-
+-- ⚠️ ALTER TYPE ADD VALUE는 트랜잭션 내 실행 불가 → BEGIN/COMMIT 제거
 ALTER TYPE alert_type_enum ADD VALUE IF NOT EXISTS 'WORKER_DEACTIVATION_REQUEST';
-
-COMMIT;

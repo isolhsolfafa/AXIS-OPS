@@ -1158,3 +1158,6 @@ VALUES ('📱 OPS v2.2.1 업데이트 안내', '본문...', '2.2.1', TRUE, {admi
 | v2.6.0 | 2026-04-03 | BUG-FIX | master_id 응답 누락 수정, #53 mech_start→mech_end 필터, description 표시 |
 | v2.6.0 | 2026-04-07 | BUG-6 | 다중작업자 동료 resume 403 — task coworker 허용 조건 추가 |
 | v2.7.0 | 2026-04-07 | Sprint 55 | Worker별 Pause/Resume + Auto-Finalize + FINAL task 릴레이 불가 |
+| v2.7.0 | 2026-04-08 | INFRA-1 | Migration 자동 실행 시스템 — migration_runner.py + migration_history 테이블, 041~045 운영 적용 |
+| v2.7.0 | 2026-04-08 | TEST-AL20 | Alert 20종 전체 검증 테스트 38TC — is_relay 버그 수정, TC-PR-20 assert 수정 |
+| v2.7.1 | 2026-04-09 | Sprint 55-B | Task 목록 API my_pause_status 누락 — 화면 재진입 시 pause 상태 소실 수정 |

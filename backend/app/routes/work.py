@@ -625,8 +625,9 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
         except Exception as e:
             logger.warning(f"Workers batch query failed: {e}")
 
-    # my_status 일괄 조회 (현재 작업자의 참여 상태: not_started / in_progress / completed)
+    # my_status + my_pause_status 일괄 조회 (Sprint 55-B: 화면 재진입 시 pause 상태 유지)
     my_status_map: Dict[int, str] = {}
+    my_pause_map: Dict[int, str] = {}
     if task_db_ids:
         try:
             worker_id = get_current_worker_id()
@@ -640,16 +641,23 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
                            WHEN wcl.id IS NOT NULL THEN 'completed'
                            WHEN wsl.id IS NOT NULL THEN 'in_progress'
                            ELSE 'not_started'
-                       END AS my_status
+                       END AS my_status,
+                       CASE
+                           WHEN wpl.id IS NOT NULL THEN 'paused'
+                           ELSE 'working'
+                       END AS my_pause_status
                 FROM app_task_details t
                 LEFT JOIN work_start_log wsl ON wsl.task_id = t.id AND wsl.worker_id = %s
                 LEFT JOIN work_completion_log wcl ON wcl.task_id = t.id AND wcl.worker_id = %s
+                LEFT JOIN work_pause_log wpl ON wpl.task_detail_id = t.id AND wpl.worker_id = %s
+                                                AND wpl.resumed_at IS NULL
                 WHERE t.id = ANY(%s)
                 """,
-                (worker_id, worker_id, task_db_ids)
+                (worker_id, worker_id, worker_id, task_db_ids)
             )
             for row in cur2.fetchall():
                 my_status_map[row['task_id']] = row['my_status']
+                my_pause_map[row['task_id']] = row['my_pause_status']
             conn2.close()
         except Exception as e:
             logger.warning(f"my_status batch query failed: {e}")
@@ -672,6 +680,7 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
             }]
         item['workers'] = workers_list
         item['my_status'] = my_status_map.get(tid, 'not_started') if tid else 'not_started'
+        item['my_pause_status'] = my_pause_map.get(tid, 'working') if tid else 'working'
 
     return jsonify(task_list), 200
 

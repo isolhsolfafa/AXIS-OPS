@@ -82,6 +82,11 @@ def create_app(config_class: type = Config) -> Flask:
         from app.schema_check import ensure_schema
         ensure_schema()
 
+    # Migration 자동 실행 — 미실행 migration 순차 적용
+    if not app.config.get('TESTING', False):
+        from app.migration_runner import run_migrations
+        run_migrations()
+
     # 블루프린트 등록
     from app.routes.auth import auth_bp
     from app.routes.work import work_bp

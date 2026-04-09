@@ -1002,7 +1002,8 @@ class TestPauseCoworkerResume:
             f"{resume_resp.status_code}: {resume_resp.get_json()}"
         )
         data = resume_resp.get_json()
-        assert data.get('error') == 'FORBIDDEN'
+        # Sprint 55: worker별 pause → 본인 pause 없으면 PAUSE_NOT_FOUND(404)
+        assert data.get('error') in ('FORBIDDEN', 'PAUSE_NOT_FOUND')
 
     def test_pause_owner_can_resume_own_pause(
         self, client, fni_worker_a, multi_worker_task, db_conn
