@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-04-08 (Migration 자동 실행 시스템 도입)
+> 마지막 업데이트: 2026-04-09 (Sprint 56 QR elec_start)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -64,6 +64,7 @@
 | INFRA-1 | Migration 자동 실행 시스템 | ✅ 완료 (2026-04-08) | migration_runner.py + migration_history 테이블. 앱 시작 시 미실행 migration 순차 적용. 041~045 운영 적용 완료 |
 | TEST-AL20 | Alert 20종 전체 검증 테스트 | ✅ 완료 (2026-04-08) | test_alert_all20_verify.py 38TC (36 passed, 2 skipped). 검토 후 is_relay 버그 등 3건 수정. TC-PR-20 assert 수정 |
 | 55-B | Task 목록 API my_pause_status 누락 | ✅ 완료 (2026-04-09) | work.py get_tasks_by_serial() work_pause_log JOIN 추가. 테스트 5/5 + regression 8/8 passed |
+| 56 | QR 목록 API elec_start 필드 + 필터 | ✅ 완료 (2026-04-09) | qr.py 4곳 수정. QR regression 23/23 passed |
 | FEAT-1 | 사용자 행위 트래킹 + 분석 대시보드 | ✅ BE Sprint 32 완료 (2026-03-19) | `app_access_log` 테이블 + analytics API 4개 + 30일 정리 스케줄러. VIEW 분석 대시보드는 별도 Sprint |
 
 ---
@@ -392,8 +393,8 @@ CLAUDE.md Phase 계획 기반. 시급도순.
 
 ## 🟡 체크리스트 확장 설계 (MECH/ELEC/TM 자주검사)
 
-> 마지막 업데이트: 2026-03-26
-> 상태: MECH 전체 확정 (#1~#20), TM 확인 완료, VIEW 연동 설계 완료 — ELEC 대기, 목업 제작 예정
+> 마지막 업데이트: 2026-04-09
+> 상태: MECH 전체 확정 (#1~#20), TM 확인 완료, VIEW 연동 설계 완료, **ELEC 양식 수집 완료 → Sprint 57 할당**
 
 ### 배경
 - 기존 Sprint 11 `checklist` 스키마 (checklist_master + checklist_record) 확장
@@ -542,9 +543,26 @@ VIEW: 마스터 CRUD (CHECK/INPUT 항목 관리)
 5. **BE+VIEW**: S/N 카드 레벨 summary 집계 API (Phase 2)
 
 ### 미결정 사항
-- RV-1: 단순 item_name vs BOM 기반 확장 → ELEC 양식 확인 후 최종 결정
+- RV-1: 단순 item_name vs BOM 기반 확장 → ~~ELEC 양식 확인 후 최종 결정~~ **ELEC 양식 수집 완료 (2026-04-09)**
 - `second_judgment_required` 저장 위치: master 행마다 vs 별도 설정 테이블 (admin_settings 등)
-- ELEC 양식 수집 대기 중
+- ~~ELEC 양식 수집 대기 중~~ **✅ 완료 — 전장외주검사성적서 3그룹 24항목 + GST 검증 7항목**
+- **Sprint 57 할당**: ELEC 공정 시퀀스 변경 + 체크리스트 구현 (AGENT_TEAM_LAUNCH.md 참조)
+
+### ELEC 양식 분석 (전장외주검사성적서)
+> 소스: `+_전장외주검사성적서.xlsx` → sheet `GIAA-I S SEC (2)`
+> Sprint 57 할당 (2026-04-09)
+
+| Group | 항목 수 | 검사주체 | 비고 |
+|-------|--------|---------|------|
+| PANEL 검사 | 11 | ELEC 외주 전담 (2~3명) | 1차/2차 동일 인원 |
+| 조립 검사 | 6 | ELEC 외주 전담 (동일) | 버너 위 배선 1차 N.A |
+| JIG 검사 및 특별관리 POINT | 7 + 7(GST) | ELEC 외주 + QI | GST 담당자 별도 phase |
+
+**ELEC 공정 시퀀스 변경**:
+- INSPECTION: FINAL → freeroll (시작 시 체크리스트 팝업)
+- IF_2: → FINAL (ELEC 닫기 트리거)
+- 닫기 조건: 체크리스트 완료(GST 제외) + IF_2 완료
+- **TM과 공통 패턴**: `checklist_ready` + `checklist_category` 응답
 
 ---
 
