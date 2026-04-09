@@ -65,6 +65,7 @@
 | TEST-AL20 | Alert 20종 전체 검증 테스트 | ✅ 완료 (2026-04-08) | test_alert_all20_verify.py 38TC (36 passed, 2 skipped). 검토 후 is_relay 버그 등 3건 수정. TC-PR-20 assert 수정 |
 | 55-B | Task 목록 API my_pause_status 누락 | ✅ 완료 (2026-04-09) | work.py get_tasks_by_serial() work_pause_log JOIN 추가. 테스트 5/5 + regression 8/8 passed |
 | 56 | QR 목록 API elec_start 필드 + 필터 | ✅ 완료 (2026-04-09) | qr.py 4곳 수정. QR regression 23/23 passed |
+| #55 | 비활성 사용자 목록 노출 수정 | ✅ 완료 (2026-04-09) | admin.py workers/managers/출퇴근 API에 is_active=TRUE 필터. migration 040 운영 실행 |
 | FEAT-1 | 사용자 행위 트래킹 + 분석 대시보드 | ✅ BE Sprint 32 완료 (2026-03-19) | `app_access_log` 테이블 + analytics API 4개 + 30일 정리 스케줄러. VIEW 분석 대시보드는 별도 Sprint |
 
 ---

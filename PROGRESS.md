@@ -3,7 +3,17 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.7.0 (Sprint 55 Worker별 Pause + Auto-Finalize, 2026-04-07)
+> **현재 버전**: v2.7.1 (Sprint 55-B/56 + 비활성 사용자 필터, 2026-04-09)
+
+---
+
+## #55 비활성 사용자 목록 노출 수정 (2026-04-09)
+
+**수정 파일**: `backend/app/routes/admin.py` (3곳)
+- `GET /api/admin/workers` — `is_active=TRUE` 기본 필터 추가 (`show_inactive=true`로 해제 가능)
+- `GET /api/admin/managers` — `is_active=TRUE` 조건 추가
+- 출퇴근 대시보드 쿼리 2곳 + 등록인원 카운트 — 동일 필터 추가
+- 운영 DB migration 040 수동 실행 (is_active/deactivated_at/last_login_at 컬럼 추가)
 
 ---
 
