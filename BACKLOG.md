@@ -70,8 +70,9 @@
 | BUG-36 | Dual 제품 TANK_MODULE 일괄 처리 | ✅ Sprint 57-C 수정 (2026-04-10) | get_incomplete_tasks qr_doc_id 옵션 + TMS qr_doc_id 필터. DUAL L/R 독립 완료 판정 |
 | 57-C | ELEC seed 교체 + SELECT/INPUT 스키마 | ✅ 완료 (2026-04-10) | migration 047. 실제 전장외주검사성적서 31항목 + select_options/selected_value/input_value + qr_doc_id UNIQUE. 34/34 passed |
 | 57-FE | ELEC 체크리스트 FE 연동 | ✅ 완료 (2026-04-10) | startTask/completeTask Record 반환, _kFinalTaskIds 동기화, ElecChecklistScreen 신규, 체크리스트 버튼 ELEC 확장, 2차 배선 judgment_phase 수정 |
-| BUG-37 | TM DUAL L/R 체크리스트 분리 미완 | 🔧 진행 필요 | FE qrDocId 전달 준비 완료. BE TM PUT에 qr_doc_id 파라미터 연동 + upsert_tm_check에 qr_doc_id 전달 필요. DUAL 제품에서 L 체크 시 R도 같이 체크되는 문제 |
-| BUG-38 | ELEC SELECT 타입 TUBE 색상 드롭다운 | 🔍 검증 필요 | FE DropdownButton 구현됨. 실기기에서 선택 + 저장 + 재조회 동작 확인 필요 |
+| BUG-37 | TM DUAL L/R 체크리스트 분리 미완 | 🔧 Sprint 57-D | **근본 원인**: TM PUT(L848-854) qr_doc_id 미수신 → upsert_tm_check(L386) 파라미터 없음 → INSERT SQL(L439) qr_doc_id='' 하드코딩 → DUAL L/R 동일 키 ON CONFLICT → R이 L record 덮어씀. ELEC PUT(L1156)은 정상. **수정**: PUT body qr_doc_id 추출 + upsert 시그니처 추가 + SQL 파라미터 전달. L+R 모두 완료 → MECH 알림 |
+| BUG-38 | ELEC SELECT 타입 TUBE 색상 드롭다운 | ✅ 코드 완료 → QA 검증 | BE: select_options GET 반환 + selected_value PUT/UPSERT 완료. FE: DropdownButton SELECT 타입 렌더링 + 상태관리 + API 전송 완료. **실기기 QA만 필요** |
+| BUG-39 | ELEC 2차 배선 체크 저장 안 됨 | 🔧 진행 필요 | PUT에 judgment_phase 추가했으나 여전히 미동작. BE/FE 디버깅 필요 — phase=2 record 생성/조회 확인 |
 | FEAT-1 | 사용자 행위 트래킹 + 분석 대시보드 | ✅ BE Sprint 32 완료 (2026-03-19) | `app_access_log` 테이블 + analytics API 4개 + 30일 정리 스케줄러. VIEW 분석 대시보드는 별도 Sprint |
 
 ---
