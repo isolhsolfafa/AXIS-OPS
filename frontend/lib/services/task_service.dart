@@ -125,7 +125,7 @@ class TaskService {
   /// API: POST /api/app/work/start
   /// Request: {"task_id": int, "worker_id": int}
   /// Response: {"id": int, "started_at": str, ...}
-  Future<TaskItem> startTask({
+  Future<({TaskItem task, bool checklistReady, String? checklistCategory})> startTask({
     required int taskId,
     required int workerId,
   }) async {
@@ -137,7 +137,10 @@ class TaskService {
           'worker_id': workerId,
         },
       );
-      return TaskItem.fromJson(response);
+      final task = TaskItem.fromJson(response);
+      final checklistReady = response['checklist_ready'] == true;
+      final checklistCategory = response['checklist_category'] as String?;
+      return (task: task, checklistReady: checklistReady, checklistCategory: checklistCategory);
     } catch (e) {
       rethrow;
     }
@@ -155,7 +158,7 @@ class TaskService {
   /// Response: {"id": int, "completed_at": str, "duration": int, ...}
   /// Sprint 41: finalize=false → 릴레이 종료 (task 열린 상태 유지)
   /// Sprint 52 BUG-FIX: checklist_ready 플래그 전달 (매니저 직접 완료 시)
-  Future<({TaskItem task, bool checklistReady})> completeTask({
+  Future<({TaskItem task, bool checklistReady, String? checklistCategory})> completeTask({
     required int taskId,
     required int workerId,
     bool finalize = true,
@@ -171,7 +174,8 @@ class TaskService {
       );
       final task = TaskItem.fromJson(response);
       final checklistReady = response['checklist_ready'] == true;
-      return (task: task, checklistReady: checklistReady);
+      final checklistCategory = response['checklist_category'] as String?;
+      return (task: task, checklistReady: checklistReady, checklistCategory: checklistCategory);
     } catch (e) {
       rethrow;
     }

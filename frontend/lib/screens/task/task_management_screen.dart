@@ -6,6 +6,7 @@ import '../../models/task_item.dart';
 import '../../utils/design_system.dart';
 import 'task_detail_screen.dart';
 import '../checklist/tm_checklist_screen.dart';
+import '../checklist/elec_checklist_screen.dart';
 
 /// Task 관리 화면
 ///
@@ -649,13 +650,21 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
 
   Future<void> _handleStartTask(int taskId, int workerId) async {
     final taskNotifier = ref.read(taskProvider.notifier);
-    final success = await taskNotifier.startTask(
+    final startResult = await taskNotifier.startTask(
       taskId: taskId,
       workerId: workerId,
     );
 
     if (mounted) {
-      if (success) {
+      // Sprint 57-FE: ELEC INSPECTION start → 체크리스트 자동 이동
+      if (startResult.success && startResult.checklistReady && startResult.checklistCategory != null) {
+        final sn = ref.read(taskProvider).currentSerialNumber;
+        if (sn != null) {
+          _navigateToChecklist(startResult.checklistCategory!, sn);
+          return;
+        }
+      }
+      if (startResult.success) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: const Text('작업을 시작했습니다.'),
@@ -676,6 +685,17 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
         );
       }
     }
+  }
+
+  /// Sprint 57-FE: 카테고리별 체크리스트 화면 분기
+  void _navigateToChecklist(String category, String serialNumber) {
+    Widget screen;
+    if (category == 'ELEC') {
+      screen = ElecChecklistScreen(serialNumber: serialNumber);
+    } else {
+      screen = TmChecklistScreen(serialNumber: serialNumber);
+    }
+    Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
   }
 
   Future<void> _handlePauseTask(int taskId) async {
@@ -737,7 +757,7 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
   // FINAL task ID 목록 — 릴레이 불가, 항상 finalize=true
   static const _kFinalTaskIds = {
     'SELF_INSPECTION',
-    'INSPECTION',
+    'IF_2',
     'PRESSURE_TEST',
     'PI_CHAMBER',
     'QI_INSPECTION',
@@ -759,12 +779,7 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
             final taskState = ref.read(taskProvider);
             final serialNumber = taskState.currentSerialNumber;
             if (serialNumber != null) {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => TmChecklistScreen(serialNumber: serialNumber),
-                ),
-              );
+              _navigateToChecklist(completeResult.checklistCategory ?? 'TM', serialNumber);
               return;
             }
           }
@@ -842,17 +857,12 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
 
     if (mounted) {
       if (completeResult.success) {
-        // Sprint 52 BUG-FIX: 매니저 직접 완료 시 체크리스트 화면 전환
+        // Sprint 57-FE: 체크리스트 화면 전환 (TM/ELEC category 분기)
         if (completeResult.checklistReady) {
           final taskState = ref.read(taskProvider);
           final serialNumber = taskState.currentSerialNumber;
           if (serialNumber != null) {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => TmChecklistScreen(serialNumber: serialNumber),
-              ),
-            );
+            _navigateToChecklist(completeResult.checklistCategory ?? 'TM', serialNumber);
             return;
           }
         }

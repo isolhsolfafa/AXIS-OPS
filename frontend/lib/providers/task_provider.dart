@@ -198,35 +198,35 @@ class TaskNotifier extends StateNotifier<TaskState> {
   /// [taskId]: app_task_details의 ID
   /// [workerId]: 작업자 ID
   ///
-  /// Returns: 시작 성공 여부
-  Future<bool> startTask({
+  /// Returns: ({bool success, bool checklistReady, String? checklistCategory})
+  Future<({bool success, bool checklistReady, String? checklistCategory})> startTask({
     required int taskId,
     required int workerId,
   }) async {
     state = state.copyWith(isLoading: true, clearError: true);
     try {
-      final updatedTask = await _taskService.startTask(
+      final result = await _taskService.startTask(
         taskId: taskId,
         workerId: workerId,
       );
 
       // Task 목록 업데이트
       final updatedTasks = state.tasks.map((task) {
-        return task.id == taskId ? updatedTask : task;
+        return task.id == taskId ? result.task : task;
       }).toList();
 
       state = state.copyWith(
         isLoading: false,
         tasks: updatedTasks,
-        selectedTask: updatedTask,
+        selectedTask: result.task,
       );
-      return true;
+      return (success: true, checklistReady: result.checklistReady, checklistCategory: result.checklistCategory);
     } catch (e) {
       state = state.copyWith(
         isLoading: false,
         errorMessage: _extractErrorMessage(e),
       );
-      return false;
+      return (success: false, checklistReady: false, checklistCategory: null);
     }
   }
 
@@ -236,9 +236,9 @@ class TaskNotifier extends StateNotifier<TaskState> {
   /// [workerId]: 작업자 ID
   ///
   /// Returns: 완료 성공 여부
-  /// Returns: ({bool success, bool checklistReady})
+  /// Returns: ({bool success, bool checklistReady, String? checklistCategory})
   /// Sprint 52 BUG-FIX: checklistReady — 매니저 직접 완료 시 체크리스트 화면 전환용
-  Future<({bool success, bool checklistReady})> completeTask({
+  Future<({bool success, bool checklistReady, String? checklistCategory})> completeTask({
     required int taskId,
     required int workerId,
     bool finalize = true,
@@ -267,13 +267,13 @@ class TaskNotifier extends StateNotifier<TaskState> {
         await refreshCompletionStatus(state.currentSerialNumber!);
       }
 
-      return (success: true, checklistReady: result.checklistReady);
+      return (success: true, checklistReady: result.checklistReady, checklistCategory: result.checklistCategory);
     } catch (e) {
       state = state.copyWith(
         isLoading: false,
         errorMessage: _extractErrorMessage(e),
       );
-      return (success: false, checklistReady: false);
+      return (success: false, checklistReady: false, checklistCategory: null);
     }
   }
 

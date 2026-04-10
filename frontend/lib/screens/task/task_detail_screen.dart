@@ -5,6 +5,7 @@ import '../../providers/task_provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../utils/design_system.dart';
 import '../checklist/tm_checklist_screen.dart';
+import '../checklist/elec_checklist_screen.dart';
 
 /// Task 상세 화면
 ///
@@ -614,7 +615,8 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   }
 
   Widget _buildCompletedBadge(TaskItem task) {
-    final bool showChecklist = task.taskId == 'TANK_MODULE' && task.taskCategory == 'TMS';
+    final bool showChecklist = (task.taskId == 'TANK_MODULE' && task.taskCategory == 'TMS')
+        || task.taskCategory == 'ELEC';  // Sprint 57-FE: ELEC 전체 task에서 체크리스트 진입 가능
 
     return Column(
       children: [
@@ -652,11 +654,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                   final taskState = ref.read(taskProvider);
                   final serialNumber = taskState.currentSerialNumber;
                   if (serialNumber != null) {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => TmChecklistScreen(serialNumber: serialNumber),
-                      ),
+                    _navigateToChecklist(
+                      task.taskCategory == 'ELEC' ? 'ELEC' : 'TM',
+                      serialNumber,
                     );
                   }
                 },
@@ -681,18 +681,37 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   Future<void> _handleStartTask(int taskId, int workerId) async {
     setState(() => _isActionLoading = true);
     final taskNotifier = ref.read(taskProvider.notifier);
-    final success = await taskNotifier.startTask(taskId: taskId, workerId: workerId);
+    final startResult = await taskNotifier.startTask(taskId: taskId, workerId: workerId);
     if (mounted) {
       setState(() => _isActionLoading = false);
-      if (!success) {
+      if (!startResult.success) {
         final errorMessage = ref.read(taskProvider).errorMessage ?? '';
         if (errorMessage.contains('LOCATION_QR_REQUIRED')) {
           _showLocationQrRequiredDialog();
           return;
         }
       }
-      _showSnack(success, '작업을 시작했습니다.', '작업 시작에 실패했습니다.');
+      // Sprint 57-FE: ELEC INSPECTION start → 체크리스트 자동 이동
+      if (startResult.success && startResult.checklistReady && startResult.checklistCategory != null) {
+        final sn = ref.read(taskProvider).currentSerialNumber;
+        if (sn != null) {
+          _navigateToChecklist(startResult.checklistCategory!, sn);
+          return;
+        }
+      }
+      _showSnack(startResult.success, '작업을 시작했습니다.', '작업 시작에 실패했습니다.');
     }
+  }
+
+  /// Sprint 57-FE: 카테고리별 체크리스트 화면 분기
+  void _navigateToChecklist(String category, String serialNumber) {
+    Widget screen;
+    if (category == 'ELEC') {
+      screen = ElecChecklistScreen(serialNumber: serialNumber);
+    } else {
+      screen = TmChecklistScreen(serialNumber: serialNumber);
+    }
+    Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
   }
 
   /// Location QR 인증 필요 다이얼로그
@@ -745,7 +764,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   // FINAL task ID 목록 — 릴레이 불가, 항상 finalize=true
   static const _kFinalTaskIds = {
     'SELF_INSPECTION',
-    'INSPECTION',
+    'IF_2',
     'PRESSURE_TEST',
     'PI_CHAMBER',
     'QI_INSPECTION',
@@ -816,18 +835,13 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     if (mounted) {
       setState(() => _isActionLoading = false);
       if (result.success) {
-        // Sprint 52 BUG-FIX: 매니저 직접 완료 시 체크리스트 화면 전환
+        // Sprint 57-FE: 체크리스트 화면 전환 (TM/ELEC category 분기)
         if (result.checklistReady) {
           final taskState = ref.read(taskProvider);
           final serialNumber = taskState.currentSerialNumber;
           if (serialNumber != null) {
             Navigator.pop(context, finalize ? 'finalize' : 'relay');
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => TmChecklistScreen(serialNumber: serialNumber),
-              ),
-            );
+            _navigateToChecklist(result.checklistCategory ?? 'TM', serialNumber);
             return;
           }
         }
