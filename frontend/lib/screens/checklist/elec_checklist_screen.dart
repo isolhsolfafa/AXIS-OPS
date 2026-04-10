@@ -191,6 +191,7 @@ class _ElecChecklistScreenState extends ConsumerState<ElecChecklistScreen> {
         'master_id': masterId,
         'check_result': nextResult,
         'note': item['note'],
+        'judgment_phase': _currentPhase,
       };
       if (item['selected_value'] != null) {
         putData['selected_value'] = item['selected_value'];
@@ -331,6 +332,7 @@ class _ElecChecklistScreenState extends ConsumerState<ElecChecklistScreen> {
           'master_id': masterId,
           'check_result': item['check_result'],
           'note': result.isEmpty ? null : result,
+          'judgment_phase': _currentPhase,
         },
       );
     } catch (e) {
