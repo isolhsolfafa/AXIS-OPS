@@ -336,6 +336,12 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                 _buildInProgressRow(task.id, workerId)
               else if (task.status == 'completed')
                 _buildCompletedBadge(task),
+              // Sprint 57-FE: ELEC 진행 중 체크리스트 재진입 버튼
+              if (task.taskCategory == 'ELEC' && task.status == 'in_progress')
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: _buildChecklistButton(task),
+                ),
             ],
           ),
         ),
@@ -703,13 +709,46 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     }
   }
 
+  /// Sprint 57-FE: ELEC 진행 중 체크리스트 버튼
+  Widget _buildChecklistButton(TaskItem task) {
+    return Container(
+      height: 44,
+      decoration: BoxDecoration(
+        color: GxColors.accentSoft,
+        borderRadius: BorderRadius.circular(GxRadius.sm),
+        border: Border.all(color: GxColors.accent, width: 1.5),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () {
+            final sn = ref.read(taskProvider).currentSerialNumber;
+            if (sn != null) {
+              _navigateToChecklist(
+                task.taskCategory == 'ELEC' ? 'ELEC' : 'TM',
+                sn,
+                qrDocId: task.qrDocId,
+              );
+            }
+          },
+          borderRadius: BorderRadius.circular(GxRadius.sm),
+          child: const Center(child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Icon(Icons.checklist, size: 20, color: GxColors.accent),
+            SizedBox(width: 6),
+            Text('체크리스트', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: GxColors.accent)),
+          ])),
+        ),
+      ),
+    );
+  }
+
   /// Sprint 57-FE: 카테고리별 체크리스트 화면 분기
-  void _navigateToChecklist(String category, String serialNumber) {
+  void _navigateToChecklist(String category, String serialNumber, {String? qrDocId}) {
     Widget screen;
     if (category == 'ELEC') {
       screen = ElecChecklistScreen(serialNumber: serialNumber);
     } else {
-      screen = TmChecklistScreen(serialNumber: serialNumber);
+      screen = TmChecklistScreen(serialNumber: serialNumber, qrDocId: qrDocId);
     }
     Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
   }
@@ -840,8 +879,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
           final taskState = ref.read(taskProvider);
           final serialNumber = taskState.currentSerialNumber;
           if (serialNumber != null) {
+            final selectedTask = taskState.selectedTask;
             Navigator.pop(context, finalize ? 'finalize' : 'relay');
-            _navigateToChecklist(result.checklistCategory ?? 'TM', serialNumber);
+            _navigateToChecklist(result.checklistCategory ?? 'TM', serialNumber, qrDocId: selectedTask?.qrDocId);
             return;
           }
         }

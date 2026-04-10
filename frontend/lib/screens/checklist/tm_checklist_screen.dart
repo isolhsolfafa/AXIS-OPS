@@ -15,8 +15,9 @@ import '../../utils/design_system.dart';
 /// 3. task_detail_screen TM 카테고리 완료 상태 → '체크리스트' 버튼
 class TmChecklistScreen extends ConsumerStatefulWidget {
   final String serialNumber;
+  final String? qrDocId;  // Sprint 57-C: DUAL L/R 분리용
 
-  const TmChecklistScreen({super.key, required this.serialNumber});
+  const TmChecklistScreen({super.key, required this.serialNumber, this.qrDocId});
 
   @override
   ConsumerState<TmChecklistScreen> createState() => _TmChecklistScreenState();
@@ -55,8 +56,9 @@ class _TmChecklistScreenState extends ConsumerState<TmChecklistScreen> {
 
     try {
       final apiService = ref.read(apiServiceProvider);
+      final qrParam = widget.qrDocId != null ? '&qr_doc_id=${widget.qrDocId}' : '';
       final response = await apiService.get(
-        '/app/checklist/tm/${widget.serialNumber}',
+        '/app/checklist/tm/${widget.serialNumber}?phase=1$qrParam',
       );
 
       String? salesOrder;
@@ -143,15 +145,14 @@ class _TmChecklistScreenState extends ConsumerState<TmChecklistScreen> {
 
     try {
       final apiService = ref.read(apiServiceProvider);
-      await apiService.put(
-        '/app/checklist/tm/check',
-        data: {
+      final putData = {
           'serial_number': widget.serialNumber,
           'master_id': masterId,
           'check_result': nextResult,
           'note': item['note'],
-        },
-      );
+        };
+      if (widget.qrDocId != null) putData['qr_doc_id'] = widget.qrDocId!;
+      await apiService.put('/app/checklist/tm/check', data: putData);
     } catch (e) {
       // 실패 시 롤백
       setState(() {
@@ -274,15 +275,14 @@ class _TmChecklistScreenState extends ConsumerState<TmChecklistScreen> {
 
     try {
       final apiService = ref.read(apiServiceProvider);
-      await apiService.put(
-        '/app/checklist/tm/check',
-        data: {
+      final noteData = {
           'serial_number': widget.serialNumber,
           'master_id': masterId,
           'check_result': item['check_result'],
           'note': result.isEmpty ? null : result,
-        },
-      );
+        };
+      if (widget.qrDocId != null) noteData['qr_doc_id'] = widget.qrDocId!;
+      await apiService.put('/app/checklist/tm/check', data: noteData);
     } catch (e) {
       // 실패 시 롤백
       setState(() {
