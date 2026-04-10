@@ -72,9 +72,9 @@ def _upsert_checklist_record(db_conn, serial_number, master_id, check_result, wo
     cursor = db_conn.cursor()
     cursor.execute("""
         INSERT INTO checklist.checklist_record
-            (serial_number, master_id, judgment_phase, check_result, checked_by, checked_at, note, updated_at)
-        VALUES (%s, %s, %s, %s, %s, NOW(), %s, NOW())
-        ON CONFLICT (serial_number, master_id, judgment_phase) DO UPDATE
+            (serial_number, master_id, judgment_phase, check_result, checked_by, checked_at, note, qr_doc_id, updated_at)
+        VALUES (%s, %s, %s, %s, %s, NOW(), %s, '', NOW())
+        ON CONFLICT (serial_number, master_id, judgment_phase, qr_doc_id) DO UPDATE
             SET check_result = EXCLUDED.check_result,
                 checked_by   = EXCLUDED.checked_by,
                 checked_at   = NOW(),

@@ -389,7 +389,9 @@ class TaskService:
                 )
 
         # 카테고리 전체 완료 확인 (같은 serial_number + task_category)
-        incomplete_tasks = get_incomplete_tasks(task.serial_number, task.task_category)
+        # BUG-36: TMS DUAL은 qr_doc_id 기준으로 탱크별 독립 완료 판정
+        _qr_filter = task.qr_doc_id if task.task_category == 'TMS' else None
+        incomplete_tasks = get_incomplete_tasks(task.serial_number, task.task_category, qr_doc_id=_qr_filter)
         category_completed = len(incomplete_tasks) == 0
 
         # completion_status 업데이트 (카테고리 전체 완료 시, serial_number 기준)

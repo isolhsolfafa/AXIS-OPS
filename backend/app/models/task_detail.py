@@ -515,13 +515,15 @@ def complete_single_action(task_detail_id: int, completed_at: datetime, worker_i
             put_conn(conn)
 
 
-def get_incomplete_tasks(serial_number: str, task_category: str) -> List[TaskDetail]:
+def get_incomplete_tasks(serial_number: str, task_category: str, qr_doc_id: str = None) -> List[TaskDetail]:
     """
     미완료 작업 목록 조회 (completed_at IS NULL)
+    qr_doc_id 지정 시 해당 QR 범위만 조회 (DUAL L/R 분리).
 
     Args:
         serial_number: 시리얼 번호
         task_category: Task 카테고리
+        qr_doc_id: QR 문서 ID (옵션 — DUAL L/R 분리 판정용)
 
     Returns:
         미완료 TaskDetail 리스트
@@ -531,17 +533,31 @@ def get_incomplete_tasks(serial_number: str, task_category: str) -> List[TaskDet
         conn = get_db_connection()
         cur = conn.cursor()
 
-        cur.execute(
-            """
-            SELECT * FROM app_task_details
-            WHERE serial_number = %s
-              AND task_category = %s
-              AND completed_at IS NULL
-              AND is_applicable = TRUE
-            ORDER BY id
-            """,
-            (serial_number, task_category)
-        )
+        if qr_doc_id:
+            cur.execute(
+                """
+                SELECT * FROM app_task_details
+                WHERE serial_number = %s
+                  AND task_category = %s
+                  AND qr_doc_id = %s
+                  AND completed_at IS NULL
+                  AND is_applicable = TRUE
+                ORDER BY id
+                """,
+                (serial_number, task_category, qr_doc_id)
+            )
+        else:
+            cur.execute(
+                """
+                SELECT * FROM app_task_details
+                WHERE serial_number = %s
+                  AND task_category = %s
+                  AND completed_at IS NULL
+                  AND is_applicable = TRUE
+                ORDER BY id
+                """,
+                (serial_number, task_category)
+            )
 
         rows = cur.fetchall()
         return [TaskDetail.from_db_row(row) for row in rows]

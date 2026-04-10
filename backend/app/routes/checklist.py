@@ -210,9 +210,9 @@ def upsert_checklist_record() -> Tuple[Dict[str, Any], int]:
         cur.execute(
             f"""
             INSERT INTO checklist.checklist_record
-                (serial_number, master_id, judgment_phase, is_checked, checked_by, checked_at, note, updated_at)
-            VALUES (%s, %s, 1, %s, %s, {checked_at_expr}, %s, NOW())
-            ON CONFLICT (serial_number, master_id, judgment_phase) DO UPDATE
+                (serial_number, master_id, judgment_phase, is_checked, checked_by, checked_at, note, qr_doc_id, updated_at)
+            VALUES (%s, %s, 1, %s, %s, {checked_at_expr}, %s, '', NOW())
+            ON CONFLICT (serial_number, master_id, judgment_phase, qr_doc_id) DO UPDATE
             SET is_checked  = EXCLUDED.is_checked,
                 checked_by  = EXCLUDED.checked_by,
                 checked_at  = EXCLUDED.checked_at,
@@ -1143,9 +1143,10 @@ def get_checklist_report_detail(serial_number: str) -> Tuple[Dict[str, Any], int
 def get_elec_checklist_api(serial_number):
     """ELEC 체크리스트 조회 (Sprint 57)"""
     judgment_phase = request.args.get('phase', 1, type=int)
+    qr_doc_id = request.args.get('qr_doc_id', '')
     from app.services.checklist_service import get_elec_checklist
     try:
-        result = get_elec_checklist(serial_number, judgment_phase)
+        result = get_elec_checklist(serial_number, judgment_phase, qr_doc_id=qr_doc_id)
         return jsonify(result), 200
     except Exception as e:
         return jsonify({'error': 'CHECKLIST_ERROR', 'message': str(e)}), 500
@@ -1169,6 +1170,9 @@ def upsert_elec_check_api():
             note=data.get('note'),
             worker_id=worker_id,
             judgment_phase=data.get('judgment_phase', 1),
+            selected_value=data.get('selected_value'),
+            input_value=data.get('input_value'),
+            qr_doc_id=data.get('qr_doc_id', ''),
         )
         return jsonify(result), 200
     except ValueError as ve:

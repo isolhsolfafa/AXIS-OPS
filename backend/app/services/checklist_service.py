@@ -25,6 +25,7 @@ def _get_checklist_by_category(
     product_code: Optional[str],
     scope: str,
     judgment_phase: int = 1,
+    qr_doc_id: str = '',
 ) -> Dict[str, Any]:
     """카테고리별 체크리스트 조회 — 공통 로직 (Sprint 54)
 
@@ -74,22 +75,27 @@ def _get_checklist_by_category(
             cm.item_order,
             cm.description,
             COALESCE(cm.checker_role, 'WORKER') AS checker_role,
+            COALESCE(cm.phase1_na, FALSE) AS phase1_na,
+            cm.select_options,
             cr.check_result,
             cr.checked_by,
             w.name         AS checked_by_name,
             cr.checked_at,
-            cr.note
+            cr.note,
+            cr.selected_value,
+            cr.input_value
         FROM checklist.checklist_master cm
         LEFT JOIN checklist.checklist_record cr
             ON cr.master_id      = cm.id
            AND cr.serial_number  = %s
            AND cr.judgment_phase = %s
+           AND cr.qr_doc_id     = %s
         LEFT JOIN workers w ON w.id = cr.checked_by
         WHERE {master_filter_sql}
           AND cm.is_active = TRUE
         ORDER BY cm.item_group ASC NULLS LAST, cm.item_order ASC, cm.id ASC
     """
-    params: list = [serial_number, judgment_phase] + master_params
+    params: list = [serial_number, judgment_phase, qr_doc_id] + master_params
     cur.execute(query, params)
     rows = cur.fetchall()
 
@@ -101,6 +107,18 @@ def _get_checklist_by_category(
         check_result = row['check_result']
         # item_type 컬럼이 없는 경우 fallback
         item_type = row['item_type'] if 'item_type' in row.keys() else 'CHECK'
+        # Sprint 57-FE: phase1_na 자동 N.A (1차 배선 — 현장 조립 전 검사 불가 항목)
+        phase1_na = row.get('phase1_na', False)
+        if phase1_na and judgment_phase == 1 and check_result is None:
+            check_result = 'NA'
+        # select_options JSON 파싱
+        select_options = row.get('select_options')
+        if select_options and isinstance(select_options, str):
+            import json
+            try:
+                select_options = json.loads(select_options)
+            except Exception:
+                pass
         items.append({
             'master_id': row['master_id'],
             'item_group': row['item_group'] or '기타',
@@ -108,10 +126,14 @@ def _get_checklist_by_category(
             'item_type': item_type,
             'description': row['description'],
             'checker_role': row.get('checker_role', 'WORKER'),
+            'phase1_na': phase1_na,
+            'select_options': select_options,
             'check_result': check_result,
             'checked_by_name': row['checked_by_name'],
             'checked_at': row['checked_at'].isoformat() if row['checked_at'] else None,
             'note': row['note'],
+            'selected_value': row.get('selected_value'),
+            'input_value': row.get('input_value'),
         })
         total += 1
         if check_result in ('PASS', 'NA'):
@@ -403,13 +425,13 @@ def upsert_tm_check(
         if not cur.fetchone():
             raise ValueError(f"MASTER_NOT_FOUND: master_id={master_id} 없음")
 
-        # UPSERT checklist_record (serial_number, master_id, judgment_phase)
+        # UPSERT checklist_record (Sprint 57-C: UNIQUE에 qr_doc_id 포함)
         cur.execute(
             """
             INSERT INTO checklist.checklist_record
-                (serial_number, master_id, judgment_phase, check_result, checked_by, checked_at, note, updated_at)
-            VALUES (%s, %s, %s, %s, %s, NOW(), %s, NOW())
-            ON CONFLICT (serial_number, master_id, judgment_phase) DO UPDATE
+                (serial_number, master_id, judgment_phase, check_result, checked_by, checked_at, note, qr_doc_id, updated_at)
+            VALUES (%s, %s, %s, %s, %s, NOW(), %s, '', NOW())
+            ON CONFLICT (serial_number, master_id, judgment_phase, qr_doc_id) DO UPDATE
             SET check_result = EXCLUDED.check_result,
                 checked_by   = EXCLUDED.checked_by,
                 checked_at   = EXCLUDED.checked_at,
@@ -489,7 +511,7 @@ def _check_tm_completion(serial_number: str, judgment_phase: int = 1) -> bool:
             master_filter = "cm.product_code = %s AND cm.category = 'TM'"
             master_params = [product_code]
 
-        # NULL인 항목 수 확인
+        # NULL인 항목 수 확인 (Sprint 57-C: qr_doc_id='' 기본 — TM SINGLE/ELEC 호환)
         null_check_query = f"""
             SELECT COUNT(*) AS null_count
             FROM checklist.checklist_master cm
@@ -497,6 +519,7 @@ def _check_tm_completion(serial_number: str, judgment_phase: int = 1) -> bool:
                 ON cr.master_id      = cm.id
                AND cr.serial_number  = %s
                AND cr.judgment_phase = %s
+               AND cr.qr_doc_id     = ''
             WHERE {master_filter}
               AND cm.is_active = TRUE
               AND cr.check_result IS NULL
@@ -672,8 +695,8 @@ def get_tm_checklist_status(serial_number: str, judgment_phase: int = 1) -> Dict
 #  Sprint 57: ELEC 체크리스트
 # ═══════════════════════════════════════════════════════
 
-def get_elec_checklist(serial_number: str, judgment_phase: int = 1) -> Dict[str, Any]:
-    """ELEC 체크리스트 조회 (Sprint 57) — TM과 동일 패턴"""
+def get_elec_checklist(serial_number: str, judgment_phase: int = 1, qr_doc_id: str = '') -> Dict[str, Any]:
+    """ELEC 체크리스트 조회 (Sprint 57/57-C) — TM과 동일 패턴 + qr_doc_id"""
     conn = None
     try:
         conn = get_db_connection()
@@ -690,7 +713,7 @@ def get_elec_checklist(serial_number: str, judgment_phase: int = 1) -> Dict[str,
         model = product_row['model'] if product_row else None
 
         data = _get_checklist_by_category(
-            cur, serial_number, 'ELEC', product_code, 'all', judgment_phase
+            cur, serial_number, 'ELEC', product_code, 'all', judgment_phase, qr_doc_id=qr_doc_id
         )
 
         from collections import OrderedDict
@@ -731,8 +754,11 @@ def upsert_elec_check(
     note: Optional[str],
     worker_id: int,
     judgment_phase: int = 1,
+    selected_value: Optional[str] = None,
+    input_value: Optional[str] = None,
+    qr_doc_id: str = '',
 ) -> Dict[str, Any]:
-    """ELEC 체크리스트 항목 체크 (UPSERT) — Sprint 57. manager 제한 없음."""
+    """ELEC 체크리스트 항목 체크 (UPSERT) — Sprint 57/57-C. manager 제한 없음."""
     if check_result not in ('PASS', 'NA'):
         raise ValueError(f"INVALID_CHECK_RESULT: '{check_result}'")
 
@@ -752,17 +778,21 @@ def upsert_elec_check(
             """
             INSERT INTO checklist.checklist_record
                 (serial_number, master_id, judgment_phase, check_result,
-                 checked_by, checked_at, note, updated_at)
-            VALUES (%s, %s, %s, %s, %s, NOW(), %s, NOW())
-            ON CONFLICT (serial_number, master_id, judgment_phase) DO UPDATE
-            SET check_result = EXCLUDED.check_result,
-                checked_by   = EXCLUDED.checked_by,
-                checked_at   = EXCLUDED.checked_at,
-                note         = EXCLUDED.note,
-                updated_at   = NOW()
+                 checked_by, checked_at, note, selected_value, input_value,
+                 qr_doc_id, updated_at)
+            VALUES (%s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s, NOW())
+            ON CONFLICT (serial_number, master_id, judgment_phase, qr_doc_id) DO UPDATE
+            SET check_result   = EXCLUDED.check_result,
+                checked_by     = EXCLUDED.checked_by,
+                checked_at     = EXCLUDED.checked_at,
+                note           = EXCLUDED.note,
+                selected_value = EXCLUDED.selected_value,
+                input_value    = EXCLUDED.input_value,
+                updated_at     = NOW()
             RETURNING id
             """,
-            (serial_number, master_id, judgment_phase, check_result, worker_id, note)
+            (serial_number, master_id, judgment_phase, check_result, worker_id,
+             note, selected_value, input_value, qr_doc_id)
         )
         conn.commit()
 
@@ -797,7 +827,7 @@ def check_elec_completion(serial_number: str, judgment_phase: int = 1) -> bool:
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # NULL인 항목 수 (GST 전용 항목 제외)
+        # NULL인 항목 수 (GST 전용 항목 제외, Sprint 57-C: qr_doc_id='' 기본)
         cur.execute(
             """
             SELECT COUNT(*) AS null_count
@@ -806,6 +836,7 @@ def check_elec_completion(serial_number: str, judgment_phase: int = 1) -> bool:
                 ON cr.master_id      = cm.id
                AND cr.serial_number  = %s
                AND cr.judgment_phase = %s
+               AND cr.qr_doc_id     = ''
             WHERE cm.category   = 'ELEC'
               AND cm.is_active  = TRUE
               AND COALESCE(cm.checker_role, 'WORKER') != 'QI'
