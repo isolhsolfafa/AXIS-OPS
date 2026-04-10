@@ -275,6 +275,13 @@ def get_tm_checklist(serial_number: str, judgment_phase: int = 1, qr_doc_id: str
             put_conn(conn)
 
 
+def _is_report_dual_model(model: Optional[str]) -> bool:
+    """성적서용 DUAL 모델 감지 — model명에 'DUAL' 포함 여부"""
+    if not model:
+        return False
+    return 'DUAL' in model.upper().split()
+
+
 def get_checklist_report(serial_number: str, judgment_phase: int = 1) -> Dict[str, Any]:
     """S/N 전체 체크리스트 성적서 조회 (#54-B, Sprint 54)
 
@@ -355,14 +362,76 @@ def get_checklist_report(serial_number: str, judgment_phase: int = 1) -> Dict[st
             )
         cat_rows = cur.fetchall()
 
+        # Sprint 30-BE: DUAL 모델 감지 (TM L/R 분기용)
+        is_dual = _is_report_dual_model(model)
+
         categories = []
         for cat_row in cat_rows:
             cat = cat_row['category']
-            cat_data = _get_checklist_by_category(
-                cur, serial_number, cat, product_code, scope, judgment_phase
-            )
-            if cat_data['summary']['total'] > 0:
-                categories.append(cat_data)
+
+            if cat == 'ELEC':
+                # ── ELEC: Phase 1(1차 배선) + Phase 2(2차 배선) 각각 조회 ──
+                for phase_num, phase_label in [(1, '1차 배선'), (2, '2차 배선')]:
+                    p_data = _get_checklist_by_category(
+                        cur, serial_number, cat, product_code, scope, phase_num
+                    )
+                    # Phase 1: JIG 그룹 제외 (get_elec_checklist 동일 로직)
+                    if phase_num == 1:
+                        p_data['items'] = [
+                            i for i in p_data['items']
+                            if i['item_group'] != 'JIG 검사 및 특별관리 POINT'
+                        ]
+                    items = p_data['items']
+                    total = len(items)
+                    checked = sum(1 for i in items if i.get('check_result') in ('PASS', 'NA'))
+                    p_data['summary'] = {
+                        'total': total,
+                        'checked': checked,
+                        'percent': round(checked / total * 100, 1) if total > 0 else 0.0,
+                    }
+                    p_data['phase'] = phase_num
+                    p_data['phase_label'] = phase_label
+                    if total > 0:
+                        categories.append(p_data)
+
+            elif cat == 'TM' and is_dual:
+                # ── TM DUAL: L/R 탱크별 분리 조회 ──
+                cur.execute(
+                    """
+                    SELECT DISTINCT qr_doc_id
+                    FROM app_task_details
+                    WHERE serial_number = %s
+                      AND task_category = 'TMS'
+                      AND qr_doc_id != ''
+                    ORDER BY qr_doc_id
+                    """,
+                    (serial_number,)
+                )
+                tank_rows = cur.fetchall()
+                for tank_row in tank_rows:
+                    tank_qr = tank_row['qr_doc_id']
+                    if tank_qr.endswith('-L'):
+                        tank_label = 'L Tank'
+                    elif tank_qr.endswith('-R'):
+                        tank_label = 'R Tank'
+                    else:
+                        tank_label = tank_qr
+                    t_data = _get_checklist_by_category(
+                        cur, serial_number, cat, product_code, scope,
+                        judgment_phase, qr_doc_id=tank_qr
+                    )
+                    t_data['qr_doc_id'] = tank_qr
+                    t_data['phase_label'] = tank_label
+                    if t_data['summary']['total'] > 0:
+                        categories.append(t_data)
+
+            else:
+                # ── MECH / TM(SINGLE) 등: 기존 동일 ──
+                cat_data = _get_checklist_by_category(
+                    cur, serial_number, cat, product_code, scope, judgment_phase
+                )
+                if cat_data['summary']['total'] > 0:
+                    categories.append(cat_data)
 
         kst = timezone(timedelta(hours=9))
 

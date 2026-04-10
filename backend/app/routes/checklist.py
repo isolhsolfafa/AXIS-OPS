@@ -981,91 +981,27 @@ def get_checklist_report_orders() -> Tuple[Dict[str, Any], int]:
         if not products:
             return jsonify({'sales_order': sales_order or None, 'products': []}), 200
 
-        # 체크리스트 진행률 — 배치 쿼리 (N+1 방지)
-        sns = [p['serial_number'] for p in products]
-
-        # scope 조회
-        cur.execute(
-            "SELECT setting_value FROM admin_settings WHERE setting_key = 'tm_checklist_scope'"
-        )
-        scope_row = cur.fetchone()
-        scope = 'product_code'
-        if scope_row:
-            sv = scope_row['setting_value']
-            scope = sv if isinstance(sv, str) else str(sv)
-
+        # Sprint 30-BE: get_checklist_report 재활용 (ELEC Phase 1+2 + TM DUAL 자동 반영)
         result_products = []
-
-        if scope == 'all':
-            # 배치: master 항목 수 (S/N 무관, COMMON 기준 1회)
-            cur.execute(
-                """
-                SELECT COUNT(*) AS total
-                FROM checklist.checklist_master
-                WHERE product_code = 'COMMON' AND is_active = TRUE
-                """
-            )
-            master_total = cur.fetchone()['total']
-
-            # 배치: S/N별 checked 카운트 (ANY 1회)
-            cur.execute(
-                """
-                SELECT cr.serial_number,
-                       COUNT(cr.id) FILTER (WHERE cr.check_result IN ('PASS','NA')) AS checked
-                FROM checklist.checklist_record cr
-                JOIN checklist.checklist_master cm ON cm.id = cr.master_id
-                WHERE cr.serial_number = ANY(%s)
-                  AND cr.judgment_phase = 1
-                  AND cm.product_code = 'COMMON'
-                  AND cm.is_active = TRUE
-                GROUP BY cr.serial_number
-                """,
-                (sns,)
-            )
-            checked_map = {row['serial_number']: row['checked'] for row in cur.fetchall()}
-
-            for p in products:
-                sn = p['serial_number']
-                chk = checked_map.get(sn, 0)
-                percent = round(chk / master_total * 100, 1) if master_total > 0 else 0.0
+        for p in products:
+            sn = p['serial_number']
+            report = checklist_service.get_checklist_report(sn, judgment_phase=1)
+            if 'error' in report:
                 result_products.append({
                     'serial_number': sn,
                     'model': p['model'],
-                    'overall_percent': percent,
+                    'overall_percent': 0.0,
                 })
-        else:
-            # product_code별 scope — CROSS JOIN으로 S/N별 master+record 배치 집계
-            cur.execute(
-                """
-                SELECT p.serial_number,
-                       COUNT(cm.id) AS total,
-                       COUNT(cr.id) FILTER (WHERE cr.check_result IN ('PASS','NA')) AS checked
-                FROM plan.product_info p
-                JOIN checklist.checklist_master cm
-                    ON cm.product_code = COALESCE(p.product_code, 'COMMON')
-                   AND cm.is_active = TRUE
-                LEFT JOIN checklist.checklist_record cr
-                    ON cr.master_id = cm.id
-                   AND cr.serial_number = p.serial_number
-                   AND cr.judgment_phase = 1
-                WHERE p.serial_number = ANY(%s)
-                GROUP BY p.serial_number
-                """,
-                (sns,)
-            )
-            stats_map = {row['serial_number']: row for row in cur.fetchall()}
-
-            for p in products:
-                sn = p['serial_number']
-                stat = stats_map.get(sn, {'total': 0, 'checked': 0})
-                total = stat['total']
-                chk = stat['checked']
-                percent = round(chk / total * 100, 1) if total > 0 else 0.0
-                result_products.append({
-                    'serial_number': sn,
-                    'model': p['model'],
-                    'overall_percent': percent,
-                })
+                continue
+            cats = report.get('categories', [])
+            total = sum(c['summary']['total'] for c in cats)
+            checked = sum(c['summary']['checked'] for c in cats)
+            percent = round(checked / total * 100, 1) if total > 0 else 0.0
+            result_products.append({
+                'serial_number': sn,
+                'model': p['model'],
+                'overall_percent': percent,
+            })
 
         return jsonify({
             'sales_order': sales_order or (products[0]['sales_order'] if products else None),
@@ -1125,12 +1061,8 @@ def get_checklist_report_detail(serial_number: str) -> Tuple[Dict[str, Any], int
         404: {"error": "PRODUCT_NOT_FOUND", "message": "..."}
         500: {"error": "INTERNAL_ERROR", "message": "..."}
     """
-    try:
-        phase = int(request.args.get('phase', 1))
-    except (ValueError, TypeError):
-        phase = 1
-
-    result = checklist_service.get_checklist_report(serial_number, judgment_phase=phase)
+    # Sprint 30-BE: ELEC Phase 1+2 자동 분리, TM DUAL 자동 분기
+    result = checklist_service.get_checklist_report(serial_number, judgment_phase=1)
 
     if 'error' in result:
         status_code = 404 if result['error'] == 'PRODUCT_NOT_FOUND' else 500
