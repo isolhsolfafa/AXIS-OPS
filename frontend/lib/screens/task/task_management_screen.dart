@@ -662,7 +662,7 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
         if (sn != null) {
           final task = ref.read(taskProvider).selectedTask;
           final phase = (task?.taskCategory == 'QI') ? 2 : null;
-          _navigateToChecklist(startResult.checklistCategory!, sn, initialPhase: phase);
+          _navigateToChecklist(startResult.checklistCategory!, sn, initialPhase: phase, qrDocId: task?.qrDocId);
           return;
         }
       }
@@ -689,13 +689,13 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
     }
   }
 
-  /// Sprint 57-FE: 카테고리별 체크리스트 화면 분기
-  void _navigateToChecklist(String category, String serialNumber, {int? initialPhase}) {
+  /// Sprint 57-FE/E: 카테고리별 체크리스트 화면 분기
+  void _navigateToChecklist(String category, String serialNumber, {int? initialPhase, String? qrDocId}) {
     Widget screen;
     if (category == 'ELEC') {
       screen = ElecChecklistScreen(serialNumber: serialNumber, initialPhase: initialPhase);
     } else {
-      screen = TmChecklistScreen(serialNumber: serialNumber);
+      screen = TmChecklistScreen(serialNumber: serialNumber, qrDocId: qrDocId);
     }
     Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
   }
@@ -783,7 +783,7 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
             if (serialNumber != null) {
               final selTask = taskState.selectedTask;
               final phase = (selTask?.taskCategory == 'QI') ? 2 : null;
-              _navigateToChecklist(completeResult.checklistCategory ?? 'TM', serialNumber, initialPhase: phase);
+              _navigateToChecklist(completeResult.checklistCategory ?? 'TM', serialNumber, initialPhase: phase, qrDocId: selTask?.qrDocId);
               return;
             }
           }
@@ -868,7 +868,7 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
           if (serialNumber != null) {
             final selTask = taskState.selectedTask;
             final phase = (selTask?.taskCategory == 'QI') ? 2 : null;
-            _navigateToChecklist(completeResult.checklistCategory ?? 'TM', serialNumber, initialPhase: phase);
+            _navigateToChecklist(completeResult.checklistCategory ?? 'TM', serialNumber, initialPhase: phase, qrDocId: selTask?.qrDocId);
             return;
           }
         }

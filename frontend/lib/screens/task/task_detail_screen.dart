@@ -665,6 +665,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                       _navigateToChecklist(
                         task.taskCategory == 'ELEC' ? 'ELEC' : 'TM',
                         serialNumber,
+                        qrDocId: task.qrDocId,
                       );
                     }
                   }
@@ -700,11 +701,17 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
           return;
         }
       }
-      // Sprint 57-FE: ELEC INSPECTION start → 체크리스트 자동 이동
+      // Sprint 57-FE/E: ELEC/QI start → 체크리스트 자동 이동
       if (startResult.success && startResult.checklistReady && startResult.checklistCategory != null) {
         final sn = ref.read(taskProvider).currentSerialNumber;
         if (sn != null) {
-          _navigateToChecklist(startResult.checklistCategory!, sn);
+          final task = ref.read(taskProvider).selectedTask;
+          final phase = (task?.taskCategory == 'QI') ? 2 : null;
+          _navigateToChecklist(
+            startResult.checklistCategory!, sn,
+            initialPhase: phase,
+            qrDocId: task?.qrDocId,
+          );
           return;
         }
       }
