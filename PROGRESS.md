@@ -3,7 +3,26 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.8.0 (Sprint 57 ELEC 체크리스트 + Dual-Trigger, 2026-04-09)
+> **현재 버전**: v2.8.1 (Sprint 57-C ELEC seed 교체 + BUG-36 DUAL, 2026-04-10)
+
+---
+
+## Sprint 57-C: ELEC seed 교체 + BUG-36 DUAL + SELECT/INPUT 스키마 (2026-04-10)
+
+**목적**: (1) ELEC 체크리스트 seed를 실제 전장외주검사성적서 양식으로 전체 교체, (2) BUG-36 DUAL L/R TANK_MODULE 일괄 처리 수정, (3) SELECT/INPUT 체크리스트 타입 스키마 확장
+
+**수정 파일**:
+- `backend/migrations/047_elec_checklist_seed_fix.sql` — seed 교체 + select_options/selected_value/input_value/qr_doc_id 컬럼 + UNIQUE 제약 4컬럼
+- `backend/scripts/seed_elec_checklist.py` — 실제 양식 31항목 (TUBE 색상 SELECT 타입 포함)
+- `backend/app/services/checklist_service.py` — _get_checklist_by_category qr_doc_id JOIN + phase1_na auto-NA + select_options 응답 + ON CONFLICT 4컬럼
+- `backend/app/models/task_detail.py` — get_incomplete_tasks qr_doc_id 옵션 (BUG-36)
+- `backend/app/services/task_service.py` — TMS qr_doc_id 필터 (BUG-36)
+- `backend/app/routes/checklist.py` — ELEC PUT selected_value/input_value + 기존 UPSERT ON CONFLICT 4컬럼
+- `tests/backend/test_sprint52_tm_checklist.py` — ON CONFLICT 4컬럼 + qr_doc_id 반영
+- `tests/backend/test_sprint54_checklist_report.py` — ON CONFLICT 4컬럼 반영
+
+**DB 변경**: migration 047 운영 적용 완료
+**테스트**: ELEC 13/13 + TM regression 2/2 + Report 19/19 = **34/34 passed**
 
 ---
 

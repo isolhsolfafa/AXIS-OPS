@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-04-10 (Sprint 57 ELEC 체크리스트 v2.8.0)
+> 마지막 업데이트: 2026-04-10 (Sprint 57-C v2.8.1)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -67,6 +67,8 @@
 | 56 | QR 목록 API elec_start 필드 + 필터 | ✅ 완료 (2026-04-09) | qr.py 4곳 수정. QR regression 23/23 passed |
 | #55 | 비활성 사용자 목록 노출 수정 | ✅ 완료 (2026-04-09) | admin.py workers/managers/출퇴근 API에 is_active=TRUE 필터. migration 040 운영 실행 |
 | 57 | ELEC 공정 시퀀스 변경 + 체크리스트 | ✅ 완료 (2026-04-09) | INSPECTION freeroll, IF_2 FINAL, Dual-Trigger 닫기, 체크리스트 31항목, migration 046/046a. 테스트 13/13 + TM regression 3/3 |
+| BUG-36 | Dual 제품 TANK_MODULE 일괄 처리 | ✅ Sprint 57-C 수정 (2026-04-10) | get_incomplete_tasks qr_doc_id 옵션 + TMS qr_doc_id 필터. DUAL L/R 독립 완료 판정 |
+| 57-C | ELEC seed 교체 + SELECT/INPUT 스키마 | ✅ 완료 (2026-04-10) | migration 047. 실제 전장외주검사성적서 31항목 + select_options/selected_value/input_value + qr_doc_id UNIQUE. 34/34 passed |
 | FEAT-1 | 사용자 행위 트래킹 + 분석 대시보드 | ✅ BE Sprint 32 완료 (2026-03-19) | `app_access_log` 테이블 + analytics API 4개 + 30일 정리 스케줄러. VIEW 분석 대시보드는 별도 Sprint |
 
 ---
@@ -731,5 +733,5 @@ VIEW: 마스터 CRUD (CHECK/INPUT 항목 관리)
 |------|----------|
 | Sprint 41 (작업 릴레이 + 재활성화) | 프롬프트 작성 완료 ✅ |
 | 체크리스트 BE (스키마 + CRUD) | ELEC 양식 수집 완료 |
-| VIEW Sprint 20 (체크리스트 관리 UI) | 체크리스트 BE 완료 |
+| VIEW Sprint 20 (체크리스트 관리 UI) | 체크리스트 BE 완료 ✅ |
 | QR contract_type / sales_note | 활용성 검토 확정 |
