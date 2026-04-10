@@ -766,8 +766,9 @@ def get_tm_checklist(serial_number: str) -> Tuple[Dict[str, Any], int]:
         phase = int(request.args.get('phase', 1))
     except (ValueError, TypeError):
         phase = 1
+    qr_doc_id = request.args.get('qr_doc_id', '')
 
-    result = checklist_service.get_tm_checklist(serial_number, judgment_phase=phase)
+    result = checklist_service.get_tm_checklist(serial_number, judgment_phase=phase, qr_doc_id=qr_doc_id)
     return jsonify(result), 200
 
 

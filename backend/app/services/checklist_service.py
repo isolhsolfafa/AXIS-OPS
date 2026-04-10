@@ -158,7 +158,7 @@ def _get_checklist_by_category(
     }
 
 
-def get_tm_checklist(serial_number: str, judgment_phase: int = 1) -> Dict[str, Any]:
+def get_tm_checklist(serial_number: str, judgment_phase: int = 1, qr_doc_id: str = '') -> Dict[str, Any]:
     """
     TM 체크리스트 조회 (item_group별 그룹핑 응답) — 기존 API 호환 유지 (Sprint 54 wrapper)
 
@@ -232,7 +232,7 @@ def get_tm_checklist(serial_number: str, judgment_phase: int = 1) -> Dict[str, A
 
         # 공통 함수 호출
         cat_data = _get_checklist_by_category(
-            cur, serial_number, 'TM', product_code, scope, judgment_phase
+            cur, serial_number, 'TM', product_code, scope, judgment_phase, qr_doc_id=qr_doc_id
         )
 
         # 기존 응답 형태 유지: groups 배열 (item_group별 그룹핑)
