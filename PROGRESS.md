@@ -3,7 +3,41 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.8.1 (Sprint 57-C ELEC seed 교체 + BUG-36 DUAL, 2026-04-10)
+> **현재 버전**: v2.9.0 (Sprint 57-D/E + 30-BE ELEC 체크리스트 + TM DUAL + 성적서 API, 2026-04-10)
+
+---
+
+## Sprint 30-BE: 성적서 API ELEC Phase 분리 + TM DUAL L/R 분기 (2026-04-10)
+
+**수정 파일**:
+- `backend/app/services/checklist_service.py` — `_is_report_dual_model()` + `get_checklist_report()` ELEC Phase 1+2 자동분리 + TM DUAL L/R 탱크별 조회
+- `backend/app/routes/checklist.py` — report_detail phase 제거, report_orders `get_checklist_report()` 재활용
+**테스트**: Report 19/19 + ELEC 14/14 = 33/33 passed
+
+---
+
+## Sprint 57-D/E: BUG-37 TM DUAL + BUG-39 QI 체크리스트 + BUG-40 버튼 시점 (2026-04-10)
+
+**수정 파일**:
+- `backend/app/routes/checklist.py` — TM PUT qr_doc_id 추출
+- `backend/app/services/checklist_service.py` — upsert_tm_check qr_doc_id 파라미터
+- `backend/app/routes/work.py` — QI_INSPECTION start → checklist_ready
+- `frontend/lib/screens/checklist/elec_checklist_screen.dart` — `_isQiBlocked` QI 역할 검증 + initialPhase
+- `frontend/lib/screens/task/task_detail_screen.dart` — `_hasChecklistAccess` + qrDocId 전달 6곳
+- `frontend/lib/screens/task/task_management_screen.dart` — QI 분기 + qrDocId 전달
+**테스트**: Sprint 57-D 35/35 passed + flutter build 성공
+
+---
+
+## Sprint 57-FE: ELEC 체크리스트 FE 연동 (2026-04-10)
+
+**수정 파일**:
+- `frontend/lib/services/task_service.dart` — startTask/completeTask Record 반환
+- `frontend/lib/providers/task_provider.dart` — startTask/completeTask 확장
+- `frontend/lib/screens/task/task_detail_screen.dart` — _kFinalTaskIds + checklist 분기 + 검수 버튼
+- `frontend/lib/screens/task/task_management_screen.dart` — 동일 분기
+- `frontend/lib/screens/checklist/elec_checklist_screen.dart` — 신규 (Phase 탭 + QI 비활성 + phase1_na + SELECT DropdownButton)
+**빌드**: flutter build web 성공
 
 ---
 
