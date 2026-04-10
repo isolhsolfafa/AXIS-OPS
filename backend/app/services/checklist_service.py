@@ -93,7 +93,13 @@ def _get_checklist_by_category(
         LEFT JOIN workers w ON w.id = cr.checked_by
         WHERE {master_filter_sql}
           AND cm.is_active = TRUE
-        ORDER BY cm.item_group ASC NULLS LAST, cm.item_order ASC, cm.id ASC
+        ORDER BY
+            CASE cm.item_group
+                WHEN 'BURNER' THEN 1 WHEN 'REACTOR' THEN 2 WHEN 'EXHAUST' THEN 3 WHEN 'TANK' THEN 4
+                WHEN 'PANEL 검사' THEN 1 WHEN '조립 검사' THEN 2 WHEN 'JIG 검사 및 특별관리 POINT' THEN 3
+                ELSE 99
+            END ASC,
+            cm.item_order ASC, cm.id ASC
     """
     params: list = [serial_number, judgment_phase, qr_doc_id] + master_params
     cur.execute(query, params)
@@ -716,9 +722,14 @@ def get_elec_checklist(serial_number: str, judgment_phase: int = 1, qr_doc_id: s
             cur, serial_number, 'ELEC', product_code, 'all', judgment_phase, qr_doc_id=qr_doc_id
         )
 
+        # Sprint 57-C: Phase 1에서 JIG 그룹 제외 (2차 배선에서만 표시)
+        items = data['items']
+        if judgment_phase == 1:
+            items = [i for i in items if i['item_group'] != 'JIG 검사 및 특별관리 POINT']
+
         from collections import OrderedDict
         groups_dict: OrderedDict = OrderedDict()
-        for item in data['items']:
+        for item in items:
             g = item['item_group']
             if g not in groups_dict:
                 groups_dict[g] = []
@@ -726,9 +737,17 @@ def get_elec_checklist(serial_number: str, judgment_phase: int = 1, qr_doc_id: s
 
         groups = [{'group_name': k, 'items': v} for k, v in groups_dict.items()]
 
-        summary = data['summary']
-        summary['remaining'] = summary['total'] - summary['checked']
-        summary['is_complete'] = (summary['remaining'] == 0 and summary['total'] > 0)
+        # summary 재계산 (Phase 1 JIG 제외 반영)
+        total = len(items)
+        checked = sum(1 for i in items if i['check_result'] in ('PASS', 'NA'))
+        percent = round(checked / total * 100, 1) if total > 0 else 0.0
+        summary = {
+            'total': total,
+            'checked': checked,
+            'percent': percent,
+            'remaining': total - checked,
+            'is_complete': (total - checked == 0 and total > 0),
+        }
 
         return {
             'serial_number': serial_number,

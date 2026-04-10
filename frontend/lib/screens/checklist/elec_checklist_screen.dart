@@ -6,7 +6,7 @@ import '../../utils/design_system.dart';
 /// ELEC 전용 체크리스트 화면
 ///
 /// ELEC(전장) 작업 완료 후 검수하는 체크리스트
-/// Phase 탭: 1차(판넬) / 2차(현장) 전환
+/// Phase 탭: 1차 배선 / 2차 배선 전환
 /// 그룹별 ExpansionTile 구조
 /// 각 항목: PASS / NA 2상태 토글 + 코멘트 입력
 /// checker_role == 'QI' → GST 담당 전용 (일반 사용자 터치 불가)
@@ -186,14 +186,18 @@ class _ElecChecklistScreenState extends ConsumerState<ElecChecklistScreen> {
 
     try {
       final apiService = ref.read(apiServiceProvider);
+      final putData = <String, dynamic>{
+        'serial_number': widget.serialNumber,
+        'master_id': masterId,
+        'check_result': nextResult,
+        'note': item['note'],
+      };
+      if (item['selected_value'] != null) {
+        putData['selected_value'] = item['selected_value'];
+      }
       await apiService.put(
         '/app/checklist/elec/check',
-        data: {
-          'serial_number': widget.serialNumber,
-          'master_id': masterId,
-          'check_result': nextResult,
-          'note': item['note'],
-        },
+        data: putData,
       );
     } catch (e) {
       // 실패 시 롤백
@@ -527,7 +531,7 @@ class _ElecChecklistScreenState extends ConsumerState<ElecChecklistScreen> {
     );
   }
 
-  /// Phase 전환 탭 (1차 판넬 / 2차 현장)
+  /// Phase 전환 탭 (1차 배선 / 2차 배선)
   Widget _buildPhaseTab() {
     return Container(
       color: GxColors.white,
@@ -537,14 +541,14 @@ class _ElecChecklistScreenState extends ConsumerState<ElecChecklistScreen> {
           Expanded(
             child: _buildPhaseButton(
               phase: 1,
-              label: '1차 (판넬)',
+              label: '1차 배선',
             ),
           ),
           const SizedBox(width: 8),
           Expanded(
             child: _buildPhaseButton(
               phase: 2,
-              label: '2차 (현장)',
+              label: '2차 배선',
             ),
           ),
         ],
@@ -736,6 +740,9 @@ class _ElecChecklistScreenState extends ConsumerState<ElecChecklistScreen> {
     final isUpdating = masterId != null && _updatingIds.contains(masterId);
     final isQi = _isQiOnly(item);
     final isNa = _isPhase1Na(item);
+    final itemType = item['item_type'] as String?;
+    final selectOptions = item['select_options'] as List?;
+    final selectedValue = item['selected_value'] as String?;
 
     // Phase 1 N.A 항목 — 고정 표시
     if (isNa) {
@@ -889,6 +896,61 @@ class _ElecChecklistScreenState extends ConsumerState<ElecChecklistScreen> {
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                      // SELECT 타입: 드롭다운 옵션 표시
+                      if (itemType == 'SELECT' &&
+                          selectOptions != null &&
+                          selectOptions.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Container(
+                          height: 32,
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          decoration: BoxDecoration(
+                            color: GxColors.snow,
+                            borderRadius:
+                                BorderRadius.circular(GxRadius.sm),
+                            border:
+                                Border.all(color: GxColors.mist, width: 1),
+                          ),
+                          child: DropdownButton<String>(
+                            value: selectedValue,
+                            isExpanded: true,
+                            underline: const SizedBox.shrink(),
+                            hint: const Text(
+                              '선택하세요',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: GxColors.silver,
+                              ),
+                            ),
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: GxColors.graphite,
+                            ),
+                            icon: const Icon(
+                              Icons.arrow_drop_down,
+                              size: 18,
+                              color: GxColors.steel,
+                            ),
+                            items: selectOptions
+                                .map((opt) => DropdownMenuItem<String>(
+                                      value: opt.toString(),
+                                      child: Text(opt.toString()),
+                                    ))
+                                .toList(),
+                            onChanged: (isQi || isUpdating)
+                                ? null
+                                : (value) {
+                                    if (value == null) return;
+                                    setState(() {
+                                      _updateItemInGroups(
+                                        masterId!,
+                                        {'selected_value': value},
+                                      );
+                                    });
+                                  },
+                          ),
                         ),
                       ],
                       if (note != null && note.isNotEmpty) ...[
