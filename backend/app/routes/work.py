@@ -173,6 +173,10 @@ def start_work() -> Tuple[Dict[str, Any], int]:
             if updated_task.task_category == 'ELEC' and updated_task.task_id == 'INSPECTION':
                 result['checklist_ready'] = True
                 result['checklist_category'] = 'ELEC'
+            # Sprint 57-E: QI 공정검사 시작 → ELEC 체크리스트 Phase 2 팝업
+            if updated_task.task_category == 'QI' and updated_task.task_id == 'QI_INSPECTION':
+                result['checklist_ready'] = True
+                result['checklist_category'] = 'ELEC'
             return jsonify(result), 200
 
     return jsonify(response), status_code

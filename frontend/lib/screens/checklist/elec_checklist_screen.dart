@@ -13,8 +13,9 @@ import '../../utils/design_system.dart';
 /// phase1_na == true && phase==1 → "N.A (1차 해당없음)" 고정
 class ElecChecklistScreen extends ConsumerStatefulWidget {
   final String serialNumber;
+  final int? initialPhase;
 
-  const ElecChecklistScreen({super.key, required this.serialNumber});
+  const ElecChecklistScreen({super.key, required this.serialNumber, this.initialPhase});
 
   @override
   ConsumerState<ElecChecklistScreen> createState() =>
@@ -29,7 +30,7 @@ class _ElecChecklistScreenState extends ConsumerState<ElecChecklistScreen> {
   String? _salesOrder;
 
   // 현재 선택된 Phase (1 또는 2)
-  int _currentPhase = 1;
+  late int _currentPhase;
 
   // 그룹별 체크리스트 데이터
   List<Map<String, dynamic>> _groups = [];
@@ -43,6 +44,7 @@ class _ElecChecklistScreenState extends ConsumerState<ElecChecklistScreen> {
   @override
   void initState() {
     super.initState();
+    _currentPhase = widget.initialPhase ?? 1;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _fetchChecklist();
     });
@@ -136,9 +138,14 @@ class _ElecChecklistScreenState extends ConsumerState<ElecChecklistScreen> {
     return 'PASS';
   }
 
-  /// 항목이 QI 전용인지 확인
-  bool _isQiOnly(Map<String, dynamic> item) {
-    return item['checker_role'] == 'QI';
+  /// 항목이 QI 전용이고 현재 사용자가 QI가 아닌 경우 차단
+  bool _isQiBlocked(Map<String, dynamic> item) {
+    if (item['checker_role'] != 'QI') return false;
+    final authState = ref.read(authProvider);
+    final worker = authState.currentWorker;
+    if (worker == null) return true;
+    final role = worker.role;
+    return role != 'QI';
   }
 
   /// 항목이 Phase 1 N.A인지 확인
@@ -151,7 +158,7 @@ class _ElecChecklistScreenState extends ConsumerState<ElecChecklistScreen> {
     String groupName,
   ) async {
     // QI 전용 항목 차단
-    if (_isQiOnly(item)) {
+    if (_isQiBlocked(item)) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -228,7 +235,7 @@ class _ElecChecklistScreenState extends ConsumerState<ElecChecklistScreen> {
   /// 코멘트(note) 입력 다이얼로그
   Future<void> _showCommentDialog(Map<String, dynamic> item) async {
     // QI 전용 또는 Phase1 NA 항목은 코멘트도 차단
-    if (_isQiOnly(item) || _isPhase1Na(item)) return;
+    if (_isQiBlocked(item) || _isPhase1Na(item)) return;
 
     final masterId = item['master_id'] as int?;
     if (masterId == null) return;
@@ -740,7 +747,7 @@ class _ElecChecklistScreenState extends ConsumerState<ElecChecklistScreen> {
     final note = item['note'] as String?;
     final description = item['description'] as String?;
     final isUpdating = masterId != null && _updatingIds.contains(masterId);
-    final isQi = _isQiOnly(item);
+    final isQi = _isQiBlocked(item);
     final isNa = _isPhase1Na(item);
     final itemType = item['item_type'] as String?;
     final selectOptions = item['select_options'] as List?;

@@ -336,8 +336,8 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                 _buildInProgressRow(task.id, workerId)
               else if (task.status == 'completed')
                 _buildCompletedBadge(task),
-              // Sprint 57-FE: ELEC 진행 중 체크리스트 재진입 버튼
-              if (task.taskCategory == 'ELEC' && task.status == 'in_progress')
+              // Sprint 57-FE: 체크리스트 진입 버튼 (ELEC / TMS TANK_MODULE / QI)
+              if (_hasChecklistAccess(task) && task.status == 'in_progress')
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
                   child: _buildChecklistButton(task),
@@ -621,8 +621,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   }
 
   Widget _buildCompletedBadge(TaskItem task) {
-    final bool showChecklist = (task.taskId == 'TANK_MODULE' && task.taskCategory == 'TMS')
-        || task.taskCategory == 'ELEC';  // Sprint 57-FE: ELEC 전체 task에서 체크리스트 진입 가능
+    final bool showChecklist = _hasChecklistAccess(task);
 
     return Column(
       children: [
@@ -660,10 +659,14 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                   final taskState = ref.read(taskProvider);
                   final serialNumber = taskState.currentSerialNumber;
                   if (serialNumber != null) {
-                    _navigateToChecklist(
-                      task.taskCategory == 'ELEC' ? 'ELEC' : 'TM',
-                      serialNumber,
-                    );
+                    if (task.taskCategory == 'QI') {
+                      _navigateToChecklist('ELEC', serialNumber, initialPhase: 2);
+                    } else {
+                      _navigateToChecklist(
+                        task.taskCategory == 'ELEC' ? 'ELEC' : 'TM',
+                        serialNumber,
+                      );
+                    }
                   }
                 },
                 child: const Row(
@@ -724,11 +727,15 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
           onTap: () {
             final sn = ref.read(taskProvider).currentSerialNumber;
             if (sn != null) {
-              _navigateToChecklist(
-                task.taskCategory == 'ELEC' ? 'ELEC' : 'TM',
-                sn,
-                qrDocId: task.qrDocId,
-              );
+              if (task.taskCategory == 'QI') {
+                _navigateToChecklist('ELEC', sn, initialPhase: 2);
+              } else {
+                _navigateToChecklist(
+                  task.taskCategory == 'ELEC' ? 'ELEC' : 'TM',
+                  sn,
+                  qrDocId: task.qrDocId,
+                );
+              }
             }
           },
           borderRadius: BorderRadius.circular(GxRadius.sm),
@@ -742,11 +749,19 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     );
   }
 
+  /// Sprint 57-E: 체크리스트 접근 가능 여부 (ELEC / TMS TANK_MODULE / QI)
+  bool _hasChecklistAccess(TaskItem task) {
+    if (task.taskCategory == 'ELEC') return true;
+    if (task.taskId == 'TANK_MODULE' && task.taskCategory == 'TMS') return true;
+    if (task.taskId == 'QI_INSPECTION' && task.taskCategory == 'QI') return true;
+    return false;
+  }
+
   /// Sprint 57-FE: 카테고리별 체크리스트 화면 분기
-  void _navigateToChecklist(String category, String serialNumber, {String? qrDocId}) {
+  void _navigateToChecklist(String category, String serialNumber, {String? qrDocId, int? initialPhase}) {
     Widget screen;
     if (category == 'ELEC') {
-      screen = ElecChecklistScreen(serialNumber: serialNumber);
+      screen = ElecChecklistScreen(serialNumber: serialNumber, initialPhase: initialPhase);
     } else {
       screen = TmChecklistScreen(serialNumber: serialNumber, qrDocId: qrDocId);
     }

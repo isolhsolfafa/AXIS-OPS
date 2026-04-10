@@ -656,11 +656,13 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
     );
 
     if (mounted) {
-      // Sprint 57-FE: ELEC INSPECTION start → 체크리스트 자동 이동
+      // Sprint 57-FE/E: ELEC/QI start → 체크리스트 자동 이동
       if (startResult.success && startResult.checklistReady && startResult.checklistCategory != null) {
         final sn = ref.read(taskProvider).currentSerialNumber;
         if (sn != null) {
-          _navigateToChecklist(startResult.checklistCategory!, sn);
+          final task = ref.read(taskProvider).selectedTask;
+          final phase = (task?.taskCategory == 'QI') ? 2 : null;
+          _navigateToChecklist(startResult.checklistCategory!, sn, initialPhase: phase);
           return;
         }
       }
@@ -688,10 +690,10 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
   }
 
   /// Sprint 57-FE: 카테고리별 체크리스트 화면 분기
-  void _navigateToChecklist(String category, String serialNumber) {
+  void _navigateToChecklist(String category, String serialNumber, {int? initialPhase}) {
     Widget screen;
     if (category == 'ELEC') {
-      screen = ElecChecklistScreen(serialNumber: serialNumber);
+      screen = ElecChecklistScreen(serialNumber: serialNumber, initialPhase: initialPhase);
     } else {
       screen = TmChecklistScreen(serialNumber: serialNumber);
     }
@@ -779,7 +781,9 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
             final taskState = ref.read(taskProvider);
             final serialNumber = taskState.currentSerialNumber;
             if (serialNumber != null) {
-              _navigateToChecklist(completeResult.checklistCategory ?? 'TM', serialNumber);
+              final selTask = taskState.selectedTask;
+              final phase = (selTask?.taskCategory == 'QI') ? 2 : null;
+              _navigateToChecklist(completeResult.checklistCategory ?? 'TM', serialNumber, initialPhase: phase);
               return;
             }
           }
@@ -857,12 +861,14 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
 
     if (mounted) {
       if (completeResult.success) {
-        // Sprint 57-FE: 체크리스트 화면 전환 (TM/ELEC category 분기)
+        // Sprint 57-E: 체크리스트 화면 전환 (TM/ELEC/QI category 분기)
         if (completeResult.checklistReady) {
           final taskState = ref.read(taskProvider);
           final serialNumber = taskState.currentSerialNumber;
           if (serialNumber != null) {
-            _navigateToChecklist(completeResult.checklistCategory ?? 'TM', serialNumber);
+            final selTask = taskState.selectedTask;
+            final phase = (selTask?.taskCategory == 'QI') ? 2 : null;
+            _navigateToChecklist(completeResult.checklistCategory ?? 'TM', serialNumber, initialPhase: phase);
             return;
           }
         }
