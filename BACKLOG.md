@@ -69,6 +69,9 @@
 | 57 | ELEC 공정 시퀀스 변경 + 체크리스트 | ✅ 완료 (2026-04-09) | INSPECTION freeroll, IF_2 FINAL, Dual-Trigger 닫기, 체크리스트 31항목, migration 046/046a. 테스트 13/13 + TM regression 3/3 |
 | BUG-36 | Dual 제품 TANK_MODULE 일괄 처리 | ✅ Sprint 57-C 수정 (2026-04-10) | get_incomplete_tasks qr_doc_id 옵션 + TMS qr_doc_id 필터. DUAL L/R 독립 완료 판정 |
 | 57-C | ELEC seed 교체 + SELECT/INPUT 스키마 | ✅ 완료 (2026-04-10) | migration 047. 실제 전장외주검사성적서 31항목 + select_options/selected_value/input_value + qr_doc_id UNIQUE. 34/34 passed |
+| 57-FE | ELEC 체크리스트 FE 연동 | ✅ 완료 (2026-04-10) | startTask/completeTask Record 반환, _kFinalTaskIds 동기화, ElecChecklistScreen 신규, 체크리스트 버튼 ELEC 확장, 2차 배선 judgment_phase 수정 |
+| BUG-37 | TM DUAL L/R 체크리스트 분리 미완 | 🔧 진행 필요 | FE qrDocId 전달 준비 완료. BE TM PUT에 qr_doc_id 파라미터 연동 + upsert_tm_check에 qr_doc_id 전달 필요. DUAL 제품에서 L 체크 시 R도 같이 체크되는 문제 |
+| BUG-38 | ELEC SELECT 타입 TUBE 색상 드롭다운 | 🔍 검증 필요 | FE DropdownButton 구현됨. 실기기에서 선택 + 저장 + 재조회 동작 확인 필요 |
 | FEAT-1 | 사용자 행위 트래킹 + 분석 대시보드 | ✅ BE Sprint 32 완료 (2026-03-19) | `app_access_log` 테이블 + analytics API 4개 + 30일 정리 스케줄러. VIEW 분석 대시보드는 별도 Sprint |
 
 ---
