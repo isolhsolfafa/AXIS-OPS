@@ -848,6 +848,7 @@ def upsert_tm_checklist_record() -> Tuple[Dict[str, Any], int]:
     serial_number = data['serial_number']
     master_id = data['master_id']
     note = data.get('note') or None
+    qr_doc_id = data.get('qr_doc_id', '')  # Sprint 57-D: DUAL L/R 분리
     try:
         phase = int(data.get('phase', 1))
     except (ValueError, TypeError):
@@ -861,6 +862,7 @@ def upsert_tm_checklist_record() -> Tuple[Dict[str, Any], int]:
             note=note,
             worker_id=worker_id,
             judgment_phase=phase,
+            qr_doc_id=qr_doc_id,
         )
         return jsonify(result), 200
 

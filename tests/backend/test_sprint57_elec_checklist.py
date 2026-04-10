@@ -108,19 +108,28 @@ class TestElecBasic:
         assert data.get('checklist_ready') is True
         assert data.get('checklist_category') == 'ELEC'
 
-    def test_tc57_04_get_elec_checklist_31_items(self):
-        """TC-57-04: GET checklist/elec/{sn} -> 31항목"""
+    def test_tc57_04_get_elec_checklist_phase1_17_items(self):
+        """TC-57-04: GET checklist/elec/{sn} phase=1 -> 17항목 (JIG 제외)"""
         resp = self.client.get(
-            f'/api/app/checklist/elec/{self.sn}',
+            f'/api/app/checklist/elec/{self.sn}?phase=1',
+            headers={'Authorization': f'Bearer {self.token}'}
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()['summary']['total'] == 17  # PANEL 11 + 조립 6
+
+    def test_tc57_04a_get_elec_checklist_phase2_31_items(self):
+        """TC-57-04a: GET checklist/elec/{sn} phase=2 -> 31항목 (전체)"""
+        resp = self.client.get(
+            f'/api/app/checklist/elec/{self.sn}?phase=2',
             headers={'Authorization': f'Bearer {self.token}'}
         )
         assert resp.status_code == 200
         assert resp.get_json()['summary']['total'] == 31
 
     def test_tc57_04b_checker_role_in_response(self):
-        """TC-57-04b: 응답에 checker_role 포함 (WORKER + QI)"""
+        """TC-57-04b: Phase 2 응답에 checker_role 포함 (WORKER + QI)"""
         resp = self.client.get(
-            f'/api/app/checklist/elec/{self.sn}',
+            f'/api/app/checklist/elec/{self.sn}?phase=2',
             headers={'Authorization': f'Bearer {self.token}'}
         )
         items = [i for g in resp.get_json()['groups'] for i in g['items']]

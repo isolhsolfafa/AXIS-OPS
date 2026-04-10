@@ -390,6 +390,7 @@ def upsert_tm_check(
     note: Optional[str],
     worker_id: int,
     judgment_phase: int = 1,
+    qr_doc_id: str = '',
 ) -> Dict[str, Any]:
     """
     TM 체크리스트 항목 체크 (UPSERT)
@@ -436,7 +437,7 @@ def upsert_tm_check(
             """
             INSERT INTO checklist.checklist_record
                 (serial_number, master_id, judgment_phase, check_result, checked_by, checked_at, note, qr_doc_id, updated_at)
-            VALUES (%s, %s, %s, %s, %s, NOW(), %s, '', NOW())
+            VALUES (%s, %s, %s, %s, %s, NOW(), %s, %s, NOW())
             ON CONFLICT (serial_number, master_id, judgment_phase, qr_doc_id) DO UPDATE
             SET check_result = EXCLUDED.check_result,
                 checked_by   = EXCLUDED.checked_by,
@@ -445,7 +446,7 @@ def upsert_tm_check(
                 updated_at   = NOW()
             RETURNING id
             """,
-            (serial_number, master_id, judgment_phase, check_result, worker_id, note)
+            (serial_number, master_id, judgment_phase, check_result, worker_id, note, qr_doc_id)
         )
         conn.commit()
 
