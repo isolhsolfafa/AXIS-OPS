@@ -1114,3 +1114,56 @@ def upsert_elec_check_api():
         return jsonify({'error': 'VALIDATION_ERROR', 'message': str(ve)}), 400
     except Exception as e:
         return jsonify({'error': 'CHECKLIST_ERROR', 'message': str(e)}), 500
+
+
+@checklist_bp.route('/api/app/checklist/elec/<serial_number>/status', methods=['GET'])
+@jwt_required
+def get_elec_checklist_status(serial_number):
+    """ELEC 체크리스트 상태 조회 — Phase별 동적 COUNT (Sprint 58-BE)"""
+    phase = request.args.get('phase', type=int)
+
+    if phase:
+        total, checked = _get_elec_phase_counts(serial_number, phase)
+    else:
+        t1, c1 = _get_elec_phase_counts(serial_number, 1)
+        t2, c2 = _get_elec_phase_counts(serial_number, 2)
+        total, checked = t1 + t2, c1 + c2
+
+    return jsonify({
+        'serial_number': serial_number,
+        'total_count': total,
+        'checked_count': checked,
+        'is_complete': total > 0 and checked >= total,
+    }), 200
+
+
+def _get_elec_phase_counts(serial_number: str, phase: int) -> tuple:
+    """Phase별 (total, checked) 반환. Phase 1은 JIG 제외, QI 항상 제외. 동적 COUNT."""
+    from app.models.worker import get_db_connection
+    from app.db_pool import put_conn
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        jig_condition = "AND cm.item_group != 'JIG 검사 및 특별관리 POINT'" if phase == 1 else ""
+        cur.execute(
+            f"""
+            SELECT
+                COUNT(*) AS total,
+                COUNT(cr.check_result) AS checked
+            FROM checklist.checklist_master cm
+            LEFT JOIN checklist.checklist_record cr
+                ON cr.master_id = cm.id
+               AND cr.serial_number = %s
+               AND cr.judgment_phase = %s
+               AND cr.qr_doc_id = ''
+            WHERE cm.category = 'ELEC'
+              AND cm.is_active = TRUE
+              AND COALESCE(cm.checker_role, 'WORKER') != 'QI'
+              {jig_condition}
+            """,
+            (serial_number, phase)
+        )
+        row = cur.fetchone()
+        return row['total'], row['checked']
+    finally:
+        put_conn(conn)

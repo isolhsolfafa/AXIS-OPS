@@ -885,7 +885,7 @@ def upsert_elec_check(
         )
         conn.commit()
 
-        is_complete = check_elec_completion(serial_number, judgment_phase)
+        is_complete = check_elec_completion(serial_number)
 
         # Dual-Trigger 경로 2: 체크리스트 완료 + IF_2 이미 완료 → ELEC 닫기
         elec_closed = False
@@ -909,14 +909,16 @@ def upsert_elec_check(
             put_conn(conn)
 
 
-def check_elec_completion(serial_number: str, judgment_phase: int = 1) -> bool:
-    """ELEC 체크리스트 완료 판정 — GST(QI) 항목 제외. 중복 알림 방지 포함."""
+def check_elec_completion(serial_number: str) -> bool:
+    """ELEC 체크리스트 전체 완료 확인 — Phase 1+2 합산 (Sprint 58-BE).
+    Phase 1: JIG 제외 WORKER, Phase 2: 전체 WORKER. QI 항상 제외.
+    judgment_phase 파라미터 폐기 — 항상 Phase 1+2 전체 확인."""
     conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # NULL인 항목 수 (GST 전용 항목 제외, Sprint 57-C: qr_doc_id='' 기본)
+        # === Phase 1 확인 (JIG 그룹 제외) ===
         cur.execute(
             """
             SELECT COUNT(*) AS null_count
@@ -924,20 +926,42 @@ def check_elec_completion(serial_number: str, judgment_phase: int = 1) -> bool:
             LEFT JOIN checklist.checklist_record cr
                 ON cr.master_id      = cm.id
                AND cr.serial_number  = %s
-               AND cr.judgment_phase = %s
+               AND cr.judgment_phase = 1
+               AND cr.qr_doc_id     = ''
+            WHERE cm.category   = 'ELEC'
+              AND cm.is_active  = TRUE
+              AND COALESCE(cm.checker_role, 'WORKER') != 'QI'
+              AND cm.item_group != 'JIG 검사 및 특별관리 POINT'
+              AND cr.check_result IS NULL
+            """,
+            (serial_number,)
+        )
+        phase1_null = cur.fetchone()['null_count']
+        if phase1_null > 0:
+            return False
+
+        # === Phase 2 확인 (JIG 포함, 전체 WORKER) ===
+        cur.execute(
+            """
+            SELECT COUNT(*) AS null_count
+            FROM checklist.checklist_master cm
+            LEFT JOIN checklist.checklist_record cr
+                ON cr.master_id      = cm.id
+               AND cr.serial_number  = %s
+               AND cr.judgment_phase = 2
                AND cr.qr_doc_id     = ''
             WHERE cm.category   = 'ELEC'
               AND cm.is_active  = TRUE
               AND COALESCE(cm.checker_role, 'WORKER') != 'QI'
               AND cr.check_result IS NULL
             """,
-            (serial_number, judgment_phase)
+            (serial_number,)
         )
-        null_count = cur.fetchone()['null_count']
-        if null_count > 0:
+        phase2_null = cur.fetchone()['null_count']
+        if phase2_null > 0:
             return False
 
-        # 전체 항목 수 (GST 제외)
+        # Phase 1+2 전체 WORKER 항목 수 확인 (0건이면 마스터 없음)
         cur.execute(
             """
             SELECT COUNT(*) AS total_count
@@ -951,7 +975,7 @@ def check_elec_completion(serial_number: str, judgment_phase: int = 1) -> bool:
         if total_count == 0:
             return False
 
-        # ISSUE note 알림 (중복 방지: 동일 S/N ELEC CHECKLIST_ISSUE 이미 존재 시 스킵)
+        # ISSUE note 알림 (중복 방지 + Phase 1+2 모두 스캔)
         cur.execute(
             "SELECT setting_value FROM admin_settings WHERE setting_key = 'elec_checklist_issue_alert'"
         )
@@ -982,12 +1006,11 @@ def check_elec_completion(serial_number: str, judgment_phase: int = 1) -> bool:
                     FROM checklist.checklist_record cr
                     JOIN checklist.checklist_master cm ON cm.id = cr.master_id
                     WHERE cr.serial_number  = %s
-                      AND cr.judgment_phase = %s
                       AND cr.note IS NOT NULL AND cr.note != ''
                       AND cm.category = 'ELEC'
                       AND cm.is_active = TRUE
                     """,
-                    (serial_number, judgment_phase)
+                    (serial_number,)
                 )
                 issue_rows = cur.fetchall()
 

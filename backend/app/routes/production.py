@@ -214,7 +214,17 @@ def _is_process_confirmable(
             if cat_data.get('completed', 0) < cat_data.get('total', 0):
                 return False
 
-    return has_data
+    if not has_data:
+        return False
+
+    # Sprint 58-BE: 체크리스트 필수 토글 확인
+    checklist_required = settings.get('confirm_checklist_required', False)
+    if checklist_required:
+        for sn in check_sns:
+            if not _check_sn_checklist_complete(sn, process_type):
+                return False
+
+    return True
 
 
 def _is_sn_process_confirmable(
@@ -232,15 +242,39 @@ def _is_sn_process_confirmable(
     cat_data = sns_progress.get(serial_number, {}).get(process_type, {})
     confirm_task = _CONFIRM_TASK_FILTER.get(process_type)
 
+    progress_ok = False
     if confirm_task:
         task_data = cat_data.get('tasks', {}).get(confirm_task, {})
         if task_data.get('total', 0) == 0:
             return False
-        return task_data.get('completed', 0) >= task_data.get('total', 0)
+        progress_ok = task_data.get('completed', 0) >= task_data.get('total', 0)
     else:
         if cat_data.get('total', 0) == 0:
             return False
-        return cat_data.get('completed', 0) >= cat_data.get('total', 0)
+        progress_ok = cat_data.get('completed', 0) >= cat_data.get('total', 0)
+
+    if not progress_ok:
+        return False
+
+    # Sprint 58-BE: 체크리스트 필수 토글
+    checklist_required = settings.get('confirm_checklist_required', False)
+    if checklist_required:
+        if not _check_sn_checklist_complete(serial_number, process_type):
+            return False
+
+    return True
+
+
+def _check_sn_checklist_complete(serial_number: str, process_type: str) -> bool:
+    """S/N별 공정 체크리스트 완료 확인. 체크리스트 미구현 공정은 True (통과)."""
+    if process_type == 'TMS':
+        from app.services.checklist_service import _check_tm_completion
+        return _check_tm_completion(serial_number)
+    elif process_type == 'ELEC':
+        from app.services.checklist_service import check_elec_completion
+        return check_elec_completion(serial_number)
+    else:
+        return True  # 체크리스트 미구현 공정은 통과
 
 
 def _build_order_item(

@@ -171,38 +171,80 @@ class TestElecCompletion:
         yield
         _cleanup(db_conn, self.sn)
 
-    def test_tc57_09_all_worker_pass(self):
-        """TC-57-09: WORKER 24항목 전체 PASS -> complete"""
+    def test_tc58_01_phase1_and_phase2_complete(self):
+        """TC-58B-01: Phase 1(17) + Phase 2(24) 모두 완료 -> True"""
         wids = _get_elec_master_ids(self.db_conn, 'WORKER')
         assert len(wids) == 24
+        # Phase 1: 전체 WORKER (JIG 포함해도 PUT은 가능, completion은 JIG 제외 17건만 확인)
         for mid in wids:
             self.client.put('/api/app/checklist/elec/check', json={
                 'serial_number': self.sn, 'master_id': mid, 'check_result': 'PASS',
+                'judgment_phase': 1,
+            }, headers={'Authorization': f'Bearer {self.token}'})
+        # Phase 2: 전체 WORKER
+        for mid in wids:
+            self.client.put('/api/app/checklist/elec/check', json={
+                'serial_number': self.sn, 'master_id': mid, 'check_result': 'PASS',
+                'judgment_phase': 2,
             }, headers={'Authorization': f'Bearer {self.token}'})
         from app.services.checklist_service import check_elec_completion
         assert check_elec_completion(self.sn) is True
 
-    def test_tc57_10_one_null_incomplete(self):
-        """TC-57-10: 23/24 PASS -> incomplete"""
+    def test_tc58_02_phase1_done_phase2_incomplete(self):
+        """TC-58B-02: Phase 1 완료 + Phase 2 1건 미완 -> False"""
         wids = _get_elec_master_ids(self.db_conn, 'WORKER')
+        for mid in wids:
+            self.client.put('/api/app/checklist/elec/check', json={
+                'serial_number': self.sn, 'master_id': mid, 'check_result': 'PASS',
+                'judgment_phase': 1,
+            }, headers={'Authorization': f'Bearer {self.token}'})
+        # Phase 2: 23/24만 체크
         for mid in wids[:-1]:
             self.client.put('/api/app/checklist/elec/check', json={
                 'serial_number': self.sn, 'master_id': mid, 'check_result': 'PASS',
+                'judgment_phase': 2,
             }, headers={'Authorization': f'Bearer {self.token}'})
         from app.services.checklist_service import check_elec_completion
         assert check_elec_completion(self.sn) is False
 
-    def test_tc57_11_qi_excluded(self):
-        """TC-57-11: QI 미체크 + WORKER 전체 PASS -> True"""
+    def test_tc58_03_phase1_incomplete_phase2_done(self):
+        """TC-58B-03: Phase 1 1건 미완 + Phase 2 완료 -> False"""
         wids = _get_elec_master_ids(self.db_conn, 'WORKER')
-        qids = _get_elec_master_ids(self.db_conn, 'QI')
-        assert len(qids) == 7
+        # Phase 1: PANEL만 (11개) — 조립 6개 미완
+        panel_ids = [mid for mid in wids[:11]]  # 대략 PANEL 순서
+        for mid in panel_ids:
+            self.client.put('/api/app/checklist/elec/check', json={
+                'serial_number': self.sn, 'master_id': mid, 'check_result': 'PASS',
+                'judgment_phase': 1,
+            }, headers={'Authorization': f'Bearer {self.token}'})
+        # Phase 2: 전체
         for mid in wids:
             self.client.put('/api/app/checklist/elec/check', json={
                 'serial_number': self.sn, 'master_id': mid, 'check_result': 'PASS',
+                'judgment_phase': 2,
             }, headers={'Authorization': f'Bearer {self.token}'})
         from app.services.checklist_service import check_elec_completion
+        assert check_elec_completion(self.sn) is False
+
+    def test_tc58_04_qi_excluded_from_completion(self):
+        """TC-58B-04: QI 미완 + WORKER Phase 1+2 전부 완료 -> True"""
+        wids = _get_elec_master_ids(self.db_conn, 'WORKER')
+        qids = _get_elec_master_ids(self.db_conn, 'QI')
+        assert len(qids) == 7
+        for phase in [1, 2]:
+            for mid in wids:
+                self.client.put('/api/app/checklist/elec/check', json={
+                    'serial_number': self.sn, 'master_id': mid, 'check_result': 'PASS',
+                    'judgment_phase': phase,
+                }, headers={'Authorization': f'Bearer {self.token}'})
+        # QI 항목 미체크
+        from app.services.checklist_service import check_elec_completion
         assert check_elec_completion(self.sn) is True
+
+    def test_tc58_08_no_master_returns_false(self):
+        """TC-58B-08: ELEC 마스터 없는 S/N -> False"""
+        from app.services.checklist_service import check_elec_completion
+        assert check_elec_completion('NONEXISTENT-SN-99999') is False
 
 
 class TestFreerollRegression:
