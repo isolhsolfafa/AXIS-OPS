@@ -1166,3 +1166,4 @@ VALUES ('📱 OPS v2.2.1 업데이트 안내', '본문...', '2.2.1', TRUE, {admi
 | v2.8.0 | 2026-04-09 | Sprint 57 | ELEC 공정 시퀀스 변경 + 체크리스트 — INSPECTION freeroll, IF_2 FINAL, Dual-Trigger 닫기, 31항목 seed, migration 046/046a |
 | v2.8.1 | 2026-04-10 | Sprint 57-C | ELEC seed 교체(실제 양식) + BUG-36 DUAL qr_doc_id + SELECT/INPUT 스키마, migration 047 |
 | v2.9.0 | 2026-04-10 | Sprint 57-D/E/FE + 30-BE | ELEC 체크리스트 FE 연동 + TM DUAL L/R + QI 체크리스트 진입 + 성적서 API Phase/DUAL 분기 |
+| v2.9.1 | 2026-04-13 | Sprint 58-BE | check_elec_completion Phase 1+2 합산 + confirmable 체크리스트 + ELEC status 엔드포인트 |

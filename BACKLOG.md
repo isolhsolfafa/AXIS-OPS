@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-04-10 (Sprint 30-BE v2.9.0)
+> 마지막 업데이트: 2026-04-13 (Sprint 58-BE v2.9.1)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -75,6 +75,7 @@
 | BUG-39 | QI 공정검사 ELEC 2차 체크 | ✅ Sprint 57-E 수정 (2026-04-10) | _isQiBlocked role 검증 + _hasChecklistAccess QI 포함 + initialPhase=2 |
 | BUG-40 | 체크리스트 버튼 시작 시 미활성 | ✅ Sprint 57-E 수정 (2026-04-10) | _hasChecklistAccess TM/ELEC/QI in_progress 확장 |
 | 30-BE | 성적서 API ELEC Phase + TM DUAL | ✅ 완료 (2026-04-10) | get_checklist_report ELEC Phase 1+2 자동분리 + TM DUAL L/R + 진행률 재활용. 33/33 passed |
+| 58-BE | check_elec_completion + confirmable + ELEC status | ✅ 완료 (2026-04-13) | Phase 1+2 합산, confirm_checklist_required 토글, /elec/{sn}/status. 36/36 passed |
 | FEAT-1 | 사용자 행위 트래킹 + 분석 대시보드 | ✅ BE Sprint 32 완료 (2026-03-19) | `app_access_log` 테이블 + analytics API 4개 + 30일 정리 스케줄러. VIEW 분석 대시보드는 별도 Sprint |
 
 ---

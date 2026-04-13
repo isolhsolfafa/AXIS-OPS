@@ -3,7 +3,19 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.9.0 (Sprint 57-D/E + 30-BE ELEC 체크리스트 + TM DUAL + 성적서 API, 2026-04-10)
+> **현재 버전**: v2.9.1 (Sprint 58-BE check_elec_completion + confirmable + ELEC status, 2026-04-13)
+
+---
+
+## Sprint 58-BE: check_elec_completion Phase 1+2 합산 + confirmable 체크리스트 (2026-04-13)
+
+**수정 파일**:
+- `backend/app/services/checklist_service.py` — check_elec_completion Phase 1+2 합산 (judgment_phase 폐기)
+- `backend/app/routes/production.py` — _is_process_confirmable/_is_sn_process_confirmable 체크리스트 연동 + _check_sn_checklist_complete 헬퍼
+- `backend/app/routes/checklist.py` — ELEC status 엔드포인트 신규 (/api/app/checklist/elec/{sn}/status)
+- `tests/backend/test_sprint57_elec_checklist.py` — Phase 1+2 합산 TC 6건 추가
+
+**테스트**: ELEC 16/16 + TM 1/1 + Report 19/19 = **36/36 passed**
 
 ---
 
