@@ -1167,3 +1167,4 @@ VALUES ('📱 OPS v2.2.1 업데이트 안내', '본문...', '2.2.1', TRUE, {admi
 | v2.8.1 | 2026-04-10 | Sprint 57-C | ELEC seed 교체(실제 양식) + BUG-36 DUAL qr_doc_id + SELECT/INPUT 스키마, migration 047 |
 | v2.9.0 | 2026-04-10 | Sprint 57-D/E/FE + 30-BE | ELEC 체크리스트 FE 연동 + TM DUAL L/R + QI 체크리스트 진입 + 성적서 API Phase/DUAL 분기 |
 | v2.9.1 | 2026-04-13 | Sprint 58-BE | check_elec_completion Phase 1+2 합산 + confirmable 체크리스트 + ELEC status 엔드포인트 |
+| v2.9.2 | 2026-04-14 | Sprint 59-BE | TM qr_doc_id 정규화 — SINGLE DOC_{S/N} + DUAL L/R, 성적서 SINGLE 분기 통합, 레거시 데이터 수정 |

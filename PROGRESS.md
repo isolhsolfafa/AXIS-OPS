@@ -3,7 +3,19 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.9.1 (Sprint 58-BE check_elec_completion + confirmable + ELEC status, 2026-04-13)
+> **현재 버전**: v2.9.2 (Sprint 59-BE TM qr_doc_id 정규화, 2026-04-14)
+
+---
+
+## Sprint 59-BE: TM 체크리스트 qr_doc_id 정규화 (2026-04-14)
+
+**수정 파일**:
+- `backend/app/services/checklist_service.py` — `_check_tm_completion` qr_doc_id 리스트 기반 재작성 + `get_checklist_report` TM SINGLE/DUAL 통합
+- `tests/backend/test_sprint52_tm_checklist.py` — PUT body qr_doc_id 추가 + _upsert_checklist_record DOC_{S/N} 기본값
+- `tests/backend/test_sprint54_checklist_report.py` — 동일 qr_doc_id 수정
+
+**DB 변경**: 레거시 GBWS-6905 `qr_doc_id '' → DOC_GBWS-6905` UPDATE 15건
+**테스트**: ELEC 16/16 + Report 19/19 + TM 2/2 = **37/37 passed**
 
 ---
 
