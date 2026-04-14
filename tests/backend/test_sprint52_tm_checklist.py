@@ -198,19 +198,22 @@ def _set_admin_setting(db_conn, key, value):
 
 
 def _upsert_checklist_record(db_conn, serial_number, master_id, check_result, worker_id,
-                              note=None, judgment_phase=1):
+                              note=None, judgment_phase=1, qr_doc_id=None):
+    # Sprint 59-BE: qr_doc_id 기본값 DOC_{S/N} (운영 동일)
+    if qr_doc_id is None:
+        qr_doc_id = f'DOC_{serial_number}'
     cursor = db_conn.cursor()
     cursor.execute("""
         INSERT INTO checklist.checklist_record
             (serial_number, master_id, judgment_phase, check_result, checked_by, checked_at, note, qr_doc_id, updated_at)
-        VALUES (%s, %s, %s, %s, %s, NOW(), %s, '', NOW())
+        VALUES (%s, %s, %s, %s, %s, NOW(), %s, %s, NOW())
         ON CONFLICT (serial_number, master_id, judgment_phase, qr_doc_id) DO UPDATE
             SET check_result = EXCLUDED.check_result,
                 checked_by   = EXCLUDED.checked_by,
                 checked_at   = NOW(),
                 note         = EXCLUDED.note,
                 updated_at   = NOW()
-    """, (serial_number, master_id, judgment_phase, check_result, worker_id, note))
+    """, (serial_number, master_id, judgment_phase, check_result, worker_id, note, qr_doc_id))
     db_conn.commit()
     cursor.close()
 
@@ -424,6 +427,7 @@ class TestTmChecklistApi:
                 'serial_number': self.sn,
                 'master_id': self.master_ids[1],
                 'check_result': 'NA',
+                'qr_doc_id': f'DOC_{self.sn}',
             },
             headers={'Authorization': f'Bearer {manager_token}'}
         )
@@ -477,7 +481,7 @@ class TestTmChecklistApi:
         for mid in self.master_ids:
             resp = client.put(
                 '/api/app/checklist/tm/check',
-                json={'serial_number': self.sn, 'master_id': mid, 'check_result': 'PASS'},
+                json={'serial_number': self.sn, 'master_id': mid, 'check_result': 'PASS', 'qr_doc_id': f'DOC_{self.sn}'},
                 headers={'Authorization': f'Bearer {manager_token}'}
             )
             assert resp.status_code == 200
@@ -491,7 +495,7 @@ class TestTmChecklistApi:
         for mid in self.master_ids[:-1]:  # 마지막 1개 제외
             resp = client.put(
                 '/api/app/checklist/tm/check',
-                json={'serial_number': self.sn, 'master_id': mid, 'check_result': 'PASS'},
+                json={'serial_number': self.sn, 'master_id': mid, 'check_result': 'PASS', 'qr_doc_id': f'DOC_{self.sn}'},
                 headers={'Authorization': f'Bearer {manager_token}'}
             )
             assert resp.status_code == 200

@@ -394,39 +394,29 @@ def get_checklist_report(serial_number: str, judgment_phase: int = 1) -> Dict[st
                     if total > 0:
                         categories.append(p_data)
 
-            elif cat == 'TM' and is_dual:
-                # ── TM DUAL: L/R 탱크별 분리 조회 ──
-                cur.execute(
-                    """
-                    SELECT DISTINCT qr_doc_id
-                    FROM app_task_details
-                    WHERE serial_number = %s
-                      AND task_category = 'TMS'
-                      AND qr_doc_id != ''
-                    ORDER BY qr_doc_id
-                    """,
-                    (serial_number,)
-                )
-                tank_rows = cur.fetchall()
-                for tank_row in tank_rows:
-                    tank_qr = tank_row['qr_doc_id']
-                    if tank_qr.endswith('-L'):
-                        tank_label = 'L Tank'
-                    elif tank_qr.endswith('-R'):
-                        tank_label = 'R Tank'
-                    else:
-                        tank_label = tank_qr
+            elif cat == 'TM':
+                # ── Sprint 59-BE: TM DUAL/SINGLE 통합 — qr_doc_id 문자열 계산 ──
+                if is_dual:
+                    qr_doc_ids = [
+                        (f'DOC_{serial_number}-L', 'L Tank'),
+                        (f'DOC_{serial_number}-R', 'R Tank'),
+                    ]
+                else:
+                    qr_doc_ids = [(f'DOC_{serial_number}', None)]
+
+                for tank_qr, tank_label in qr_doc_ids:
                     t_data = _get_checklist_by_category(
                         cur, serial_number, cat, product_code, scope,
                         judgment_phase, qr_doc_id=tank_qr
                     )
                     t_data['qr_doc_id'] = tank_qr
-                    t_data['phase_label'] = tank_label
+                    if tank_label:
+                        t_data['phase_label'] = tank_label
                     if t_data['summary']['total'] > 0:
                         categories.append(t_data)
 
             else:
-                # ── MECH / TM(SINGLE) 등: 기존 동일 ──
+                # ── MECH 등: 기존 그대로 qr_doc_id='' 사용 ──
                 cat_data = _get_checklist_by_category(
                     cur, serial_number, cat, product_code, scope, judgment_phase
                 )
@@ -545,24 +535,28 @@ def upsert_tm_check(
 
 def _check_tm_completion(serial_number: str, judgment_phase: int = 1) -> bool:
     """
-    TM 체크리스트 전체 완료 여부 판정.
+    TM 체크리스트 전체 완료 여부 판정 (Sprint 59-BE: qr_doc_id 리스트 기반).
 
-    해당 S/N의 TM 체크리스트 항목 중 check_result IS NULL인 항목이 0개이면 완료.
-    완료 시 ISSUE note가 있고 tm_checklist_issue_alert=true이면 CHECKLIST_ISSUE 알림 발송.
-
-    Args:
-        serial_number: 제품 시리얼 번호
-        judgment_phase: 판정 차수 (기본 1)
-
-    Returns:
-        True: 전체 완료, False: 미완료
+    DUAL 모델: qr_doc_id='DOC_{S/N}-L', 'DOC_{S/N}-R' 두 개 모두 완료돼야 True
+    SINGLE 모델: qr_doc_id='DOC_{S/N}' 한 개 완료하면 True
     """
     conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # tm_checklist_scope 확인 (product_code 필터 결정)
+        # product_info 조회 (모델 + 스코프 필터 결정)
+        cur.execute(
+            "SELECT product_code, model FROM plan.product_info WHERE serial_number = %s",
+            (serial_number,)
+        )
+        product_row = cur.fetchone()
+        if not product_row:
+            return False
+        product_code = product_row['product_code']
+        model = product_row['model']
+
+        # tm_checklist_scope 확인
         cur.execute(
             "SELECT setting_value FROM admin_settings WHERE setting_key = 'tm_checklist_scope'"
         )
@@ -572,14 +566,6 @@ def _check_tm_completion(serial_number: str, judgment_phase: int = 1) -> bool:
             sv = scope_row['setting_value']
             scope = sv if isinstance(sv, str) else str(sv)
 
-        # product_code 조회
-        cur.execute(
-            "SELECT product_code FROM plan.product_info WHERE serial_number = %s",
-            (serial_number,)
-        )
-        product_row = cur.fetchone()
-        product_code = product_row['product_code'] if product_row else None
-
         if scope == 'all' or not product_code:
             master_filter = "cm.product_code = 'COMMON' AND cm.category = 'TM'"
             master_params: list = []
@@ -587,40 +573,43 @@ def _check_tm_completion(serial_number: str, judgment_phase: int = 1) -> bool:
             master_filter = "cm.product_code = %s AND cm.category = 'TM'"
             master_params = [product_code]
 
-        # NULL인 항목 수 확인 (Sprint 57-C: qr_doc_id='' 기본 — TM SINGLE/ELEC 호환)
-        null_check_query = f"""
-            SELECT COUNT(*) AS null_count
-            FROM checklist.checklist_master cm
-            LEFT JOIN checklist.checklist_record cr
-                ON cr.master_id      = cm.id
-               AND cr.serial_number  = %s
-               AND cr.judgment_phase = %s
-               AND cr.qr_doc_id     = ''
-            WHERE {master_filter}
-              AND cm.is_active = TRUE
-              AND cr.check_result IS NULL
-        """
-        params: list = [serial_number, judgment_phase] + master_params
-        cur.execute(null_check_query, params)
-        null_count = cur.fetchone()['null_count']
+        # DUAL 판별 → qr_doc_id 리스트 구성
+        is_dual = _is_report_dual_model(model)
+        if is_dual:
+            qr_doc_ids = [f'DOC_{serial_number}-L', f'DOC_{serial_number}-R']
+        else:
+            qr_doc_ids = [f'DOC_{serial_number}']
 
-        if null_count > 0:
-            return False
+        # qr_doc_id별 루프 — 각각 완료돼야 함
+        for qr in qr_doc_ids:
+            null_check_query = f"""
+                SELECT COUNT(*) AS null_count
+                FROM checklist.checklist_master cm
+                LEFT JOIN checklist.checklist_record cr
+                    ON cr.master_id      = cm.id
+                   AND cr.serial_number  = %s
+                   AND cr.judgment_phase = %s
+                   AND cr.qr_doc_id      = %s
+                WHERE {master_filter}
+                  AND cm.is_active = TRUE
+                  AND cr.check_result IS NULL
+            """
+            params = [serial_number, judgment_phase, qr] + master_params
+            cur.execute(null_check_query, params)
+            if cur.fetchone()['null_count'] > 0:
+                return False
 
-        # 전체 항목 수 확인 (0건이면 미완료)
+        # 전체 항목 수 확인 (0건이면 마스터 없음)
         total_query = f"""
             SELECT COUNT(*) AS total_count
             FROM checklist.checklist_master cm
-            WHERE {master_filter}
-              AND cm.is_active = TRUE
+            WHERE {master_filter} AND cm.is_active = TRUE
         """
         cur.execute(total_query, master_params)
-        total_count = cur.fetchone()['total_count']
-
-        if total_count == 0:
+        if cur.fetchone()['total_count'] == 0:
             return False
 
-        # 완료! ISSUE note 존재 여부 확인
+        # 완료! ISSUE note 존재 여부 확인 (qr_doc_id 조건 없이 전체 스캔)
         cur.execute(
             """
             SELECT cr.note, cm.item_name
@@ -637,12 +626,11 @@ def _check_tm_completion(serial_number: str, judgment_phase: int = 1) -> bool:
         issue_rows = cur.fetchall()
 
         if issue_rows:
-            # tm_checklist_issue_alert 설정 확인
             cur.execute(
                 "SELECT setting_value FROM admin_settings WHERE setting_key = 'tm_checklist_issue_alert'"
             )
             alert_row = cur.fetchone()
-            issue_alert = True  # default
+            issue_alert = True
             if alert_row:
                 sv = alert_row['setting_value']
                 if isinstance(sv, bool):

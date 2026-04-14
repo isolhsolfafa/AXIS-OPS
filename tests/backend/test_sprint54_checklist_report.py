@@ -68,19 +68,22 @@ def _insert_tm_master_items(db_conn, product_code='COMMON', count=5):
 
 
 def _upsert_checklist_record(db_conn, serial_number, master_id, check_result, worker_id,
-                               note=None, judgment_phase=1):
+                               note=None, judgment_phase=1, qr_doc_id=None):
+    # Sprint 59-BE: qr_doc_id 기본값 DOC_{S/N} (운영 동일)
+    if qr_doc_id is None:
+        qr_doc_id = f'DOC_{serial_number}'
     cursor = db_conn.cursor()
     cursor.execute("""
         INSERT INTO checklist.checklist_record
             (serial_number, master_id, judgment_phase, check_result, checked_by, checked_at, note, qr_doc_id, updated_at)
-        VALUES (%s, %s, %s, %s, %s, NOW(), %s, '', NOW())
+        VALUES (%s, %s, %s, %s, %s, NOW(), %s, %s, NOW())
         ON CONFLICT (serial_number, master_id, judgment_phase, qr_doc_id) DO UPDATE
             SET check_result = EXCLUDED.check_result,
                 checked_by   = EXCLUDED.checked_by,
                 checked_at   = NOW(),
                 note         = EXCLUDED.note,
                 updated_at   = NOW()
-    """, (serial_number, master_id, judgment_phase, check_result, worker_id, note))
+    """, (serial_number, master_id, judgment_phase, check_result, worker_id, note, qr_doc_id))
     db_conn.commit()
     cursor.close()
 
