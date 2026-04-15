@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-04-14 (Sprint 59-BE v2.9.2)
+> 마지막 업데이트: 2026-04-16 (Sprint 60-BE v2.9.3)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -77,7 +77,10 @@
 | 30-BE | 성적서 API ELEC Phase + TM DUAL | ✅ 완료 (2026-04-10) | get_checklist_report ELEC Phase 1+2 자동분리 + TM DUAL L/R + 진행률 재활용. 33/33 passed |
 | 58-BE | check_elec_completion + confirmable + ELEC status | ✅ 완료 (2026-04-13) | Phase 1+2 합산, confirm_checklist_required 토글, /elec/{sn}/status. 36/36 passed |
 | 59-BE | TM qr_doc_id 정규화 | ✅ 완료 (2026-04-14) | _check_tm_completion SINGLE DOC_{S/N} + DUAL L/R, get_checklist_report 통합, 레거시 UPDATE. 37/37 passed |
+| 60-BE | ELEC 마스터 정규화 | ✅ 완료 (2026-04-15) | phase1_applicable + qi_check_required + remarks 컬럼, 문자열 추론 제거, 마스터 API 확장. migration 048. 42/43 passed |
 | FEAT-1 | 사용자 행위 트래킹 + 분석 대시보드 | ✅ BE Sprint 32 완료 (2026-03-19) | `app_access_log` 테이블 + analytics API 4개 + 30일 정리 스케줄러. VIEW 분석 대시보드는 별도 Sprint |
+| BUG-41 | PWA 업데이트 시 PIN 초기화 + 이메일 재입력 요구 | 🟡 BACKLOG (우선순위 보류) | Chrome PWA 환경에서 업데이트 후 PIN 로그인 화면 대신 초기 이메일 로그인 화면으로 진입, 이메일 전체 재입력 필요. 변경 범위/regression 리스크 대비 우선순위 낮음 — 아래 "BUG-41 상세" 섹션 참조 |
+| BUG-42 | 명판 소형 QR 접사 인식 실패 | 🔴 OPEN | 기본 카메라로는 문자열 정상 읽힘 / OPS 앱 스캐너(html5-qrcode)는 미인식. 명판 QR 이미지 크기가 스티커 대비 작아 매크로 포커스 + 고해상도 + 줌 필요. 아래 "BUG-42 상세" 섹션 참조 |
 
 ---
 
@@ -578,6 +581,233 @@ VIEW: 마스터 CRUD (CHECK/INPUT 항목 관리)
 
 ---
 
+## 🟡 BUG-41 상세: PWA 업데이트 시 PIN 초기화 + 이메일 재입력 요구
+
+> **상태**: BACKLOG (우선순위 보류, 2026-04-15 등록)
+> **환경**: Chrome PWA 전용 (데스크톱/모바일 모두). iOS Safari 미사용
+> **증상**:
+> 1. 앱 업데이트 알림 후 reload → PIN 로그인 화면이 아닌 초기 이메일 로그인 화면으로 진입
+> 2. 이메일을 전체 다시 입력해야 로그인 가능
+> 3. 비밀번호 재입력 + PIN 재등록까지 매 업데이트마다 반복
+
+### 영향 범위
+
+- **사용자 불편**: 매 업데이트(주 1~2회)마다 전 사용자 재로그인 + PIN 재등록
+- **업무 영향**: 현장 작업자가 업데이트 직후 수 분간 작업 불가
+- **보안 이슈 아님**: 데이터 손실/무단 접근 없음, 단순 UX 열화
+
+### 원인 분석 (요약)
+
+**PWA + `flutter_secure_storage_web` 조합의 구조적 문제**
+- `flutter_secure_storage_web` 9.x는 localStorage에 AES 키 + 암호화된 값을 함께 저장
+- 웹에서는 "보안 저장소"라는 이름과 달리 실제 보안 이점 거의 없음 (AES 키 평문 노출)
+- Flutter Web 빌드 해시 변경 시 부트스트랩 시점에 키 동기화 실패 케이스 발생
+- PWA 서비스워커 업데이트 후 첫 로드 시 storage 초기화 타이밍 이슈 가능
+
+**관련 파일 및 라인** (2026-04-15 기준)
+- `frontend/lib/services/auth_service.dart:12` — `FlutterSecureStorage()` 기본 옵션
+- `frontend/lib/services/auth_service.dart:20` — `_pinRegisteredKey` SecureStorage 저장
+- `frontend/lib/services/auth_service.dart:349-360` — `hasPinRegistered()` / `savePinRegistered()`
+- `frontend/lib/services/update_service.dart:14-39` — 버전 감지 (lastSeen 비교)
+- `frontend/lib/main.dart:259-273` — AppStartup PIN 체크 분기
+- `frontend/web/index.html:180-232` — SW 업데이트 토스트 (이미 구현됨)
+
+### 제안 해결안 (Sprint 60-FE 후보)
+
+**Task 1 — `navigator.storage.persist()` 호출**
+- 효과: Chrome evict 방지
+- 리스크: 없음 (순수 추가 API)
+- 변경 범위: `index.html` 또는 `main.dart` 부트스트랩 1곳
+
+**Task 2 — PIN 등록 플래그를 SecureStorage → SharedPreferences 이전**
+- 효과: `flutter_secure_storage_web` 암호화 키 동기화 실패 회피
+- 보안 영향: 없음 (flag는 민감정보 아님, 값 자체는 서버 검증)
+- ⚠️ **리스크: 기존 사용자 1회 강제 PIN 재등록** — 마이그레이션 로직 필수 포함
+  ```dart
+  // auth_service.dart hasPinRegistered() 일회성 마이그레이션
+  if (prefs.containsKey(_pinRegisteredKey)) {
+    return prefs.getBool(_pinRegisteredKey) ?? false;
+  }
+  // 첫 실행 — SecureStorage에서 마이그레이션 시도
+  final legacy = await _secureStorage.read(key: _pinRegisteredKey);
+  final registered = legacy == 'true';
+  await prefs.setBool(_pinRegisteredKey, registered);
+  return registered;
+  ```
+- 변경 범위: `auth_service.dart` (3 메서드), `logout()` 불일치 방지 (SharedPreferences 삭제 추가)
+
+**Task 3 — 이메일 SharedPreferences 저장 + 로그인 화면 자동 채움**
+- 효과: PIN이 날아가도 이메일 자동 채움 → 재입력 부담 대폭 감소
+- 보안 영향: 저위험 (이메일은 민감도 낮음)
+- ⚠️ 리스크: 공용 기기에서 이전 사용자 이메일 노출 → "내 계정 기억 안 함" 토글 필요할 수 있음
+- 변경 범위: `auth_service.dart` + 로그인 화면
+
+**Task 4 — SecureStorage read 예외 graceful handling**
+- 효과: 복호화 실패 시 앱 크래시/무한 로딩 방지
+- ⚠️ 주의: `deleteAll()`은 금지. 단순히 `false` 반환으로 처리 (일시적 IO 에러가 영구 데이터 손실로 악화 방지)
+- 변경 범위: `auth_service.dart` 각 read 메서드
+
+### Sprint 60-FE 규모 예상
+
+- 코드 변경: `auth_service.dart`(주요), `main.dart`(부트스트랩), `login_screen.dart`(자동 채움), `index.html`(persist 호출) — **4~5 파일**
+- 신규 테스트: PWA 업데이트 수동 시나리오(staging v1→v2), 기존 사용자 마이그레이션 시나리오
+- 예상 기간: 2~3일 (구현) + 3~5일 (staging 검증) = **약 1주**
+
+### 왜 지금 보류하나
+
+1. **변경 범위가 인증 플로우 전반** — 마이그레이션 로직 없으면 배포 당일 전사 PIN 초기화 사태 유발
+2. **Regression 테스트 비용 높음** — PWA 업데이트 시나리오는 자동화 어려움, 수동 검증 필수
+3. **완전 해결이 아님** — Task 1+2+3+4 모두 적용해도 refresh_token 손실 시나리오는 여전히 남음 (완화 80%, 근본 해결 아님)
+4. **근본 해결 대안**: refresh_token을 httpOnly 쿠키로 이전 (Flask-JWT + CORS 설정 변경 필요, 별도 Sprint 규모)
+5. **우선순위**: 체크리스트/성적서/실적 확인 기능이 더 중요 (Sprint 58/59 계열 진행 중)
+
+### 재개 조건
+
+다음 중 하나라도 충족 시 Sprint 60-FE로 승격:
+- 사용자 민원이 다른 우선순위 항목보다 심각해짐
+- 업데이트 주기가 짧아져 사용자 고통 누적
+- 다른 Sprint와 함께 묶을 수 있는 기회 발생 (예: 로그인 플로우 대규모 개선 시)
+- refresh_token httpOnly 쿠키 이전 계획 수립 시 통합 Sprint로 진행
+
+### 관련 분석 기록
+
+- 분석일: 2026-04-15 (Twin파파 + Claude Opus 4.6 세션)
+- 초기 진단: 네이티브 Flutter 앱 가정 → SecureStorage Keychain 손실 → 오진
+- 재진단: PWA 환경 확인 → `flutter_secure_storage_web` localStorage 구조 이슈로 확정
+- 배포 환경: Chrome 전용(데스크톱/모바일), iOS Safari 미사용으로 확정
+
+---
+
+## 🔴 BUG-42 상세: 명판 소형 QR 접사 인식 실패
+
+### 환경
+- **대상**: OPS PWA (Chrome 전용, 모바일/태블릿)
+- **QR 소스**: 제품 명판(metal nameplate)에 각인/인쇄된 소형 QR — 스티커 QR 대비 면적 작음
+- **비교 조건**: 동일 명판을 iOS/Android 기본 카메라 앱으로 촬영하면 QR 문자열 정상 읽힘
+- **증상**: OPS 앱 스캐너 화면에서 같은 QR을 접사/근접 촬영해도 인식 안 됨 → timeout 또는 미검출
+
+### 원인 분석
+
+현재 스캐너 구현(`frontend/lib/services/qr_scanner_web.dart`)은 `html5-qrcode@2.3.8` (CDN, `web/index.html` L164)를 사용하며 카메라 제약을 **최소값**만 지정:
+
+| 항목 | 현재 값 | 필요 값 |
+|---|---|---|
+| 라이브러리 | `html5-qrcode@2.3.8` | `@2.3.10` 또는 네이티브 `BarcodeDetector` API 병용 |
+| 디코더 | zxing WASM (기본) | BarcodeDetector (OS 네이티브 / 훨씬 정확) |
+| 해상도 constraint | 미지정 → 기본 640×480~1280×720 | `width: {ideal: 1920}, height: {ideal: 1080}` |
+| 포커스 constraint | 미지정 | `focusMode: 'continuous'` + advanced |
+| 줌 노출 | 없음 | `getCapabilities().zoom` 기반 슬라이더 UI |
+| 손전등(Torch) | 없음 | `applyConstraints({advanced:[{torch:true}]})` |
+| qrbox | 200 (고정 integer) | 컨테이너의 70-80% 동적 계산 |
+| experimentalFeatures | 미사용 | `useBarCodeDetectorIfSupported: true` |
+
+기본 카메라 앱이 잘 읽는 이유:
+- 센서 최대 해상도(4K/12MP) 프레임 공급
+- OS 레벨 Auto Focus + Macro Focus (하드웨어)
+- OS 네이티브 QR 디코더 (iOS Vision / Android ML Kit) — 저해상도·기울어진 코드에 강함
+- 사용자가 핀치 줌으로 확대 가능
+
+현재 OPS 스캐너는 이 네 가지가 모두 빠져 있어 **QR 픽셀 밀도가 낮으면 디코딩 실패**.
+
+### 관련 파일
+- `frontend/lib/services/qr_scanner_web.dart` L305-469 — `startQrScanner()`, 특히 L376-389 `configScript` 주입 블록
+- `frontend/web/index.html` L164 — `html5-qrcode@2.3.8` CDN 링크
+- `frontend/lib/screens/qr/qr_scan_screen.dart` — UI 레이어 (줌/Torch 버튼 추가 위치)
+
+### ⚠️ 제약 조건 — 프레임/레이아웃 절대 불변
+
+**카메라 스캐너 프레임(컨테이너 크기·위치·정사각형 강제·뷰파인더 크기·CSS·`qrbox` 값)은 과거 20회 이상 반복 수정되어 현재 최적값. 본 BUG-42 수정 범위에서 절대 건드리지 않음.**
+
+금지 영역 (수정 시 regression 고위험):
+- `qr_scanner_web.dart` L23-250 — CSS 주입, DOM 생성, `_forceSquareAfterCameraStart()`, MutationObserver
+- `qrbox: 200` 고정값
+- `qr_scan_screen.dart` 의 레이아웃/UI 위젯 배치
+- `web/index.html` 의 스캐너 관련 스타일
+
+### 제안 Sprint 61-FE 태스크 (프레임 무변 범위만)
+
+**Task 1: BarcodeDetector API 활성화 🎯 최우선 (한 줄 추가, 프레임 영향 0)**
+`qr_scanner_web.dart` L376-383 `__qrScanConfig` 에 `experimentalFeatures` 한 줄 추가:
+```js
+window.__qrScanConfig = {
+  fps: 10,
+  qrbox: 200,  // ← 그대로 유지 (프레임 불변)
+  experimentalFeatures: { useBarCodeDetectorIfSupported: true }  // ← 추가
+};
+```
+- Chrome/Edge: OS 네이티브 `BarcodeDetector` 디코더 사용 → 소형 QR 인식률 급상승
+- 미지원 브라우저: 자동 zxing 폴백
+- **프레임/뷰파인더 크기 불변** — 디코더만 교체됨
+
+**Task 2: 카메라 해상도 + 연속 포커스 제약 (프레임 영향 0)**
+L402 / L421 / L443 의 `facingMode` 제약을 객체로 확장:
+```js
+const envConstraints = {
+  facingMode: 'environment',
+  width:  { ideal: 1920 },
+  height: { ideal: 1080 },
+  advanced: [{ focusMode: 'continuous' }]
+};
+```
+- 센서 해상도만 상승. video 요소는 이미 L31-35 / L200-206 에서 `object-fit: cover` + `width/height: 100%` 로 컨테이너에 **crop** 처리되므로 화면 프레임 크기 불변
+- `_forceSquareAfterCameraStart()` + MutationObserver (L189-250) 가 혹시 모를 크기 변경을 즉시 되돌림
+- `focusMode: continuous` 는 OS 카메라 레벨 설정 — UI 영향 없음
+
+**Task 3: 자동 줌 적용 (UI 추가 없음, 프레임 영향 0)**
+카메라 시작 성공 직후(`_forceSquareAfterCameraStart` 이후) 헬퍼 1개 호출:
+```dart
+Future<void> _applyZoomIfSupported() async {
+  // MediaStreamTrack.getCapabilities().zoom 확인
+  // 지원 시 advanced: [{ zoom: min + (max-min) * 0.3 }] 자동 적용
+  // 미지원 시 silent skip
+}
+```
+- 약 30% 기본 줌을 **자동 1회만** 적용 → 명판 작은 QR 디코더 인식률 상승
+- 사용자 슬라이더/UI 추가 **없음** → qr_scan_screen.dart 레이아웃 무변
+- 미지원 기기는 조용히 넘어감
+
+### 제외 (프레임 영향으로 보류)
+
+- ~~qrbox 동적 계산~~ — 뷰파인더 크기 변경. **제외**.
+- ~~줌 슬라이더 UI 추가~~ — 레이아웃 변경. **제외**.
+- ~~Torch 버튼 UI 추가~~ — 레이아웃 변경. **제외**.
+- ~~html5-qrcode 라이브러리 업그레이드~~ — 2.3.8 → 2.3.10 미세 차이 있을 수 있음, 우선순위 낮음. Task 1+2+3 효과 부족 시에만 검토.
+
+### 규모 추정
+- Task 1: **1줄 추가**
+- Task 2: 3곳 × 약 5줄 = 15줄
+- Task 3: 신규 헬퍼 ~15줄 + 호출 3곳
+- **전체: 약 35줄 수정**, UI/CSS/컨테이너/qrbox 전부 불변
+- 작업 시간: 반나절 + 실물 명판 테스트
+
+### 점진적 적용 권장
+1. **Task 1만** 먼저 핫픽스 → 실물 명판 샘플 테스트
+2. 여전히 부족하면 Task 2 추가
+3. 그래도 부족하면 Task 3 추가
+4. 각 단계마다 프레임/뷰파인더 시각적 regression 없는지 확인
+
+### 검증 체크리스트
+- [ ] 스캐너 뷰파인더 정사각형·크기·위치가 수정 전과 픽셀 단위로 동일
+- [ ] 기존 스티커 QR 인식 속도 동등 이상
+- [ ] 명판 소형 QR 인식 성공
+- [ ] Chrome Desktop / Chrome Android 두 환경 확인
+- [ ] `[QrScannerWeb] ★ forceSquare applied` 로그 정상 출력 (프레임 유지 확인)
+
+### 검증
+- 명판 실물 샘플 + 스티커 샘플 모두 인식 성공
+- Chrome Desktop(웹캠), Chrome Android, Chrome iOS(가능 시) 세 환경에서 확인
+- Regression: 기존 스티커 QR / 작업 태그 QR 인식률 동등 이상 유지
+
+### 임시 우회책 (사용자 전달 가능)
+- 명판 QR에 초점이 잡힐 때까지 카메라를 앞뒤로 움직여 포커스 유도
+- 조명 밝은 곳에서 스캔
+- 가능하면 명판 QR을 스티커 복사본으로도 병행 부착 (근본 대책 아님)
+
+### 관련
+- BUG-41 동일하게 PWA 카메라 스택 의존. 해결 우선순위는 **BUG-42 > BUG-41** (작업 차단 영향이 큼).
+
+---
+
 ## 🟢 아이디어 / 메모
 
 - **AXIS-VIEW**: React 기반 관리자 대시보드 (출퇴근, 생산 현황, KPI 등). App과 분리.
@@ -743,3 +973,39 @@ VIEW: 마스터 CRUD (CHECK/INPUT 항목 관리)
 | 체크리스트 BE (스키마 + CRUD) | ELEC 양식 수집 완료 |
 | VIEW Sprint 20 (체크리스트 관리 UI) | 체크리스트 BE 완료 ✅ |
 | QR contract_type / sales_note | 활용성 검토 확정 |
+
+---
+
+## 운영 / 릴리스 루틴
+
+### RULE-01 — Sprint 완료 시 FE 재빌드·재배포 의무화
+
+**배경**
+- 2026-04-15: 사용자 화면에 `v2.8.1` 표시, 코드상 git 버전은 `v2.9.2` (Sprint 59-BE까지 반영됨).
+- 원인: Sprint 58-BE / 59-BE가 **백엔드 전용** 변경이라 판단해 `flutter build web`을 돌리지 않음.
+- 하지만 `frontend/lib/utils/app_version.dart`의 `AppVersion.version` 문자열은 **매 sprint에서 FE 파일로 수정**되므로, FE 재빌드 없이 배포하면 버전 문구가 화면에 반영되지 않음.
+- PWA 특성상 서비스워커는 새 빌드 해시가 감지되어야 `controllerchange` → 업데이트 토스트 → `window.location.reload()` 흐름이 동작 → **빌드·배포 공백 = 업데이트 토스트 미발생**.
+
+**규칙**
+모든 sprint (BE / FE / VIEW 종류 불문) 머지/완료 시 다음 순서 강제:
+
+1. `frontend/lib/utils/app_version.dart`의 `version` / `buildDate` 업데이트 (sprint 담당자 책임)
+2. `cd frontend && flutter build web --release`
+3. Netlify 배포 트리거 (CI auto 또는 수동 업로드)
+4. 배포 후 Chrome PWA에서 업데이트 토스트 수신 → 새로고침 → 버전 문구 확인
+5. 서비스워커 캐시 문제 의심 시: DevTools → Application → Storage → Clear site data
+
+**체크포인트**
+- Sprint 완료 PR 머지 전에 `app_version.dart` diff 반드시 포함
+- CI에 `flutter build web --release` 에러 0건 게이트 유지
+- BE-only sprint라도 위 루틴은 동일하게 적용 — **버전 문구 싱크가 우선**
+
+**현재 필요 조치 (v2.9.2 기준)**
+- [x] `flutter build web --release` 실행 (v2.9.3, 2026-04-16)
+- [x] Netlify 재배포 (v2.9.3)
+- [ ] 사용자 Chrome PWA에서 하드 리프레시 (Cmd/Ctrl + Shift + R) 또는 site data clear
+- [ ] 화면 하단 버전 문구가 `G-AXIS OPS v2.9.3`으로 뜨는지 확인
+
+**관련**
+- BUG-41 (PWA PIN 로그인 유실) — 동일 PWA 업데이트 플로우 의존. 빌드·배포 루틴 정착이 재현 디버깅의 선행 조건.
+- `frontend/web/index.html` L180-232 — `controllerchange` → `showUpdateToast()` → `window.location.reload()` 구현 (이미 존재, 새 빌드 해시 트리거가 없으면 무용지물).
