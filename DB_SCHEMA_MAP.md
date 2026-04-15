@@ -377,23 +377,29 @@ updated_at          TIMESTAMPTZ DEFAULT now()
 
 ## checklist 스키마 (2 테이블)
 
-### checklist.checklist_master (11컬럼) — 체크리스트 마스터
+### checklist.checklist_master (17컬럼) — 체크리스트 마스터
 ```
 id                  SERIAL PK
 product_code        VARCHAR(100) NOT NULL
-category            VARCHAR(20) NOT NULL
+category            VARCHAR(20) NOT NULL      -- TM/ELEC/MECH
 item_name           VARCHAR(255) NOT NULL
 item_order          INTEGER DEFAULT 0
 description         TEXT
 is_active           BOOLEAN DEFAULT true
 created_at          TIMESTAMPTZ DEFAULT now()
 updated_at          TIMESTAMPTZ DEFAULT now()
-item_group          VARCHAR(50)              -- BURNER/REACTOR/EXHAUST/TANK
-item_type           VARCHAR(10) DEFAULT 'CHECK' -- CHECK/INPUT
+item_group          VARCHAR(50)              -- BURNER/REACTOR/EXHAUST/TANK / PANEL 검사/조립 검사/JIG 검사
+item_type           VARCHAR(10) DEFAULT 'CHECK' -- CHECK/SELECT/INPUT
+checker_role        VARCHAR(20) DEFAULT 'WORKER' -- WORKER/QI (Sprint 57: GST 담당자 구분)
+phase1_na           BOOLEAN DEFAULT false    -- Sprint 57-C: 1차 해당없음 (deprecated → phase1_applicable)
+select_options      JSONB DEFAULT NULL       -- Sprint 57-C: SELECT 타입 옵션 목록
+phase1_applicable   BOOLEAN NOT NULL DEFAULT true  -- Sprint 60-BE: 1차 배선 적용 여부
+qi_check_required   BOOLEAN NOT NULL DEFAULT false -- Sprint 60-BE: GST QI 확인 필요 여부
+remarks             TEXT                     -- Sprint 60-BE: 개정일자/사유
 ```
 UNIQUE: (product_code, category, item_group, item_name)
 
-### checklist.checklist_record (11컬럼) — 체크리스트 기록
+### checklist.checklist_record (15컬럼) — 체크리스트 기록
 ```
 id                  SERIAL PK
 serial_number       VARCHAR(100) NOT NULL
@@ -406,7 +412,11 @@ created_at          TIMESTAMPTZ DEFAULT now()
 updated_at          TIMESTAMPTZ DEFAULT now()
 check_result        VARCHAR(10)              -- PASS/NA/NULL
 judgment_phase      INTEGER DEFAULT 1        -- 1차/2차 판정
+qr_doc_id           VARCHAR(100) NOT NULL DEFAULT '' -- Sprint 57-C: DUAL L/R 분리
+selected_value      VARCHAR(255) DEFAULT NULL -- Sprint 57-C: SELECT 타입 선택값
+input_value         TEXT DEFAULT NULL        -- Sprint 57-C: INPUT 타입 입력값
 ```
+UNIQUE: (serial_number, master_id, judgment_phase, qr_doc_id)
 UNIQUE: (serial_number, master_id, judgment_phase)
 
 ---
