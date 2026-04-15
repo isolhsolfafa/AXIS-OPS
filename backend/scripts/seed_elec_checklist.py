@@ -13,7 +13,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from app.models.worker import get_db_connection
 from app.db_pool import put_conn
 
-# (item_group, item_name, description, item_order, checker_role, phase1_na, select_options)
+# (item_group, item_name, description, item_order, checker_role, phase1_applicable, qi_check_required, select_options, remarks)
+# Sprint 60-BE: phase1_na → phase1_applicable (의미 반전), qi_check_required 신규, remarks 신규
 ELEC_CHECKLIST_ITEMS = [
     # Group 1: PANEL 검사 (11항목)
     ('PANEL 검사', '파트 사양확인 (라벨 포함)', 'Part 및 Duct Label 도면상의 사양 일치', 1, 'WORKER', False, None),

@@ -115,7 +115,7 @@ class TestElecBasic:
             headers={'Authorization': f'Bearer {self.token}'}
         )
         assert resp.status_code == 200
-        assert resp.get_json()['summary']['total'] == 17  # PANEL 11 + 조립 6
+        assert resp.get_json()['summary']['total'] == 16  # PANEL 11 + 조립 5 (버너 위 배선 phase1_applicable=FALSE)
 
     def test_tc57_04a_get_elec_checklist_phase2_31_items(self):
         """TC-57-04a: GET checklist/elec/{sn} phase=2 -> 31항목 (전체)"""
@@ -245,6 +245,81 @@ class TestElecCompletion:
         """TC-58B-08: ELEC 마스터 없는 S/N -> False"""
         from app.services.checklist_service import check_elec_completion
         assert check_elec_completion('NONEXISTENT-SN-99999') is False
+
+
+class TestSprint60Normalization:
+    """Sprint 60-BE: phase1_applicable 컬럼 기반 검증"""
+
+    def test_tc60_01_phase1_applicable_column_exists(self, db_conn, seed_test_data):
+        """TC-60B-01: phase1_applicable 컬럼 존재"""
+        cur = db_conn.cursor()
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema='checklist' AND table_name='checklist_master'
+              AND column_name IN ('phase1_applicable','qi_check_required','remarks')
+        """)
+        cols = {row[0] for row in cur.fetchall()}
+        cur.close()
+        assert cols == {'phase1_applicable', 'qi_check_required', 'remarks'}
+
+    def test_tc60_02_jig_phase1_false_qi_true(self, db_conn, seed_test_data):
+        """TC-60B-02: JIG 그룹 phase1_applicable=FALSE, qi_check_required=TRUE"""
+        cur = db_conn.cursor()
+        cur.execute("""
+            SELECT COUNT(*) FROM checklist.checklist_master
+            WHERE category='ELEC' AND item_group='JIG 검사 및 특별관리 POINT'
+              AND phase1_applicable=FALSE AND qi_check_required=TRUE AND is_active=TRUE
+        """)
+        assert cur.fetchone()[0] == 14  # WORKER 7 + QI 7
+        cur.close()
+
+    def test_tc60_03_burner_phase1_false(self, db_conn, seed_test_data):
+        """TC-60B-03: 버너 위 배선상태 phase1_applicable=FALSE"""
+        cur = db_conn.cursor()
+        cur.execute("""
+            SELECT phase1_applicable FROM checklist.checklist_master
+            WHERE category='ELEC' AND item_name='버너 위 배선상태'
+        """)
+        row = cur.fetchone()
+        cur.close()
+        assert row is not None
+        assert row[0] is False
+
+    def test_tc60_04_panel_phase1_true(self, db_conn, seed_test_data):
+        """TC-60B-04: PANEL 항목 기본값 phase1_applicable=TRUE"""
+        cur = db_conn.cursor()
+        cur.execute("""
+            SELECT COUNT(*) FROM checklist.checklist_master
+            WHERE category='ELEC' AND item_group='PANEL 검사'
+              AND phase1_applicable=TRUE AND qi_check_required=FALSE AND is_active=TRUE
+        """)
+        assert cur.fetchone()[0] == 11
+        cur.close()
+
+    def test_tc60_05_total_31_rows(self, db_conn, seed_test_data):
+        """TC-60B-06: 전체 31 row 유지 (물리 삭제 없음)"""
+        cur = db_conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM checklist.checklist_master WHERE category='ELEC' AND is_active=TRUE")
+        assert cur.fetchone()[0] == 31
+        cur.close()
+
+    def test_tc60_06_api_response_has_new_fields(self, db_conn, seed_test_data, create_test_worker, get_auth_token, client):
+        """TC-60B-17: GET 마스터 API에 phase1_applicable, qi_check_required 포함"""
+        admin_id = create_test_worker(
+            email='sp60_admin@test.axisos.com', password='Test1234!',
+            name='SP60 Admin', role='QI', is_admin=True, company='GST'
+        )
+        token = get_auth_token(admin_id, role='QI', is_admin=True)
+        resp = client.get(
+            '/api/admin/checklist/master?category=ELEC',
+            headers={'Authorization': f'Bearer {token}'}
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['total'] > 0
+        item = data['items'][0]
+        assert 'phase1_applicable' in item
+        assert 'qi_check_required' in item
 
 
 class TestFreerollRegression:

@@ -76,6 +76,8 @@ def _get_checklist_by_category(
             cm.description,
             COALESCE(cm.checker_role, 'WORKER') AS checker_role,
             COALESCE(cm.phase1_na, FALSE) AS phase1_na,
+            COALESCE(cm.phase1_applicable, TRUE) AS phase1_applicable,
+            COALESCE(cm.qi_check_required, FALSE) AS qi_check_required,
             cm.select_options,
             cr.check_result,
             cr.checked_by,
@@ -113,9 +115,10 @@ def _get_checklist_by_category(
         check_result = row['check_result']
         # item_type 컬럼이 없는 경우 fallback
         item_type = row['item_type'] if 'item_type' in row.keys() else 'CHECK'
-        # Sprint 57-FE: phase1_na 자동 N.A (1차 배선 — 현장 조립 전 검사 불가 항목)
-        phase1_na = row.get('phase1_na', False)
-        if phase1_na and judgment_phase == 1 and check_result is None:
+        # Sprint 60: phase1_applicable 컬럼 기반 (phase1_na는 FE 하위호환)
+        phase1_applicable = row.get('phase1_applicable', True)
+        phase1_na = not phase1_applicable  # FE 하위호환
+        if not phase1_applicable and judgment_phase == 1 and check_result is None:
             check_result = 'NA'
         # select_options JSON 파싱
         select_options = row.get('select_options')
@@ -133,6 +136,8 @@ def _get_checklist_by_category(
             'description': row['description'],
             'checker_role': row.get('checker_role', 'WORKER'),
             'phase1_na': phase1_na,
+            'phase1_applicable': phase1_applicable,
+            'qi_check_required': row.get('qi_check_required', False),
             'select_options': select_options,
             'check_result': check_result,
             'checked_by_name': row['checked_by_name'],
@@ -375,11 +380,11 @@ def get_checklist_report(serial_number: str, judgment_phase: int = 1) -> Dict[st
                     p_data = _get_checklist_by_category(
                         cur, serial_number, cat, product_code, scope, phase_num
                     )
-                    # Phase 1: JIG 그룹 제외 (get_elec_checklist 동일 로직)
+                    # Phase 1: phase1_applicable=False 항목 제외 (컬럼 기반)
                     if phase_num == 1:
                         p_data['items'] = [
                             i for i in p_data['items']
-                            if i['item_group'] != 'JIG 검사 및 특별관리 POINT'
+                            if i.get('phase1_applicable', True)
                         ]
                     items = p_data['items']
                     total = len(items)
@@ -780,10 +785,10 @@ def get_elec_checklist(serial_number: str, judgment_phase: int = 1, qr_doc_id: s
             cur, serial_number, 'ELEC', product_code, 'all', judgment_phase, qr_doc_id=qr_doc_id
         )
 
-        # Sprint 57-C: Phase 1에서 JIG 그룹 제외 (2차 배선에서만 표시)
+        # Sprint 60: Phase 1에서 phase1_applicable=False 항목 제외 (컬럼 기반)
         items = data['items']
         if judgment_phase == 1:
-            items = [i for i in items if i['item_group'] != 'JIG 검사 및 특별관리 POINT']
+            items = [i for i in items if i.get('phase1_applicable', True)]
 
         from collections import OrderedDict
         groups_dict: OrderedDict = OrderedDict()
@@ -918,8 +923,8 @@ def check_elec_completion(serial_number: str) -> bool:
                AND cr.qr_doc_id     = ''
             WHERE cm.category   = 'ELEC'
               AND cm.is_active  = TRUE
-              AND COALESCE(cm.checker_role, 'WORKER') != 'QI'
-              AND cm.item_group != 'JIG 검사 및 특별관리 POINT'
+              AND COALESCE(cm.checker_role, 'WORKER') = 'WORKER'
+              AND cm.phase1_applicable = TRUE
               AND cr.check_result IS NULL
             """,
             (serial_number,)
@@ -940,7 +945,7 @@ def check_elec_completion(serial_number: str) -> bool:
                AND cr.qr_doc_id     = ''
             WHERE cm.category   = 'ELEC'
               AND cm.is_active  = TRUE
-              AND COALESCE(cm.checker_role, 'WORKER') != 'QI'
+              AND COALESCE(cm.checker_role, 'WORKER') = 'WORKER'
               AND cr.check_result IS NULL
             """,
             (serial_number,)
@@ -956,7 +961,7 @@ def check_elec_completion(serial_number: str) -> bool:
             FROM checklist.checklist_master cm
             WHERE cm.category = 'ELEC'
               AND cm.is_active = TRUE
-              AND COALESCE(cm.checker_role, 'WORKER') != 'QI'
+              AND COALESCE(cm.checker_role, 'WORKER') = 'WORKER'
             """
         )
         total_count = cur.fetchone()['total_count']

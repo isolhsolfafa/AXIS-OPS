@@ -323,7 +323,10 @@ def list_checklist_master() -> Tuple[Dict[str, Any], int]:
                 cm.item_name,
                 cm.item_order,
                 cm.description,
-                cm.is_active
+                cm.is_active,
+                cm.phase1_applicable,
+                cm.qi_check_required,
+                cm.remarks
             FROM checklist.checklist_master cm
             WHERE {where_clause}
             ORDER BY cm.item_order ASC, cm.id ASC
@@ -342,6 +345,9 @@ def list_checklist_master() -> Tuple[Dict[str, Any], int]:
                 'item_order': row['item_order'],
                 'description': row['description'],
                 'is_active': row['is_active'],
+                'phase1_applicable': row.get('phase1_applicable', True),
+                'qi_check_required': row.get('qi_check_required', False),
+                'remarks': row.get('remarks'),
             }
             for row in rows
         ]
@@ -398,6 +404,9 @@ def create_checklist_master() -> Tuple[Dict[str, Any], int]:
     item_group = (data.get('item_group') or '').strip() or None
     item_order = data.get('item_order', 0)
     description = (data.get('description') or '').strip() or None
+    phase1_applicable = data.get('phase1_applicable', True)
+    qi_check_required = data.get('qi_check_required', False)
+    remarks = (data.get('remarks') or '').strip() or None
 
     try:
         item_order = int(item_order)
@@ -412,11 +421,13 @@ def create_checklist_master() -> Tuple[Dict[str, Any], int]:
         cur.execute(
             """
             INSERT INTO checklist.checklist_master
-                (product_code, category, item_group, item_name, item_order, description, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                (product_code, category, item_group, item_name, item_order, description,
+                 phase1_applicable, qi_check_required, remarks, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
             RETURNING id
             """,
-            (product_code, category, item_group, item_name, item_order, description)
+            (product_code, category, item_group, item_name, item_order, description,
+             phase1_applicable, qi_check_required, remarks)
         )
         result = cur.fetchone()
         conn.commit()
@@ -485,6 +496,12 @@ def update_checklist_master(master_id: int) -> Tuple[Dict[str, Any], int]:
             return jsonify({'error': 'INVALID_REQUEST', 'message': 'item_order는 정수여야 합니다.'}), 400
     if 'description' in data:
         updates['description'] = (data['description'] or '').strip() or None
+    if 'phase1_applicable' in data:
+        updates['phase1_applicable'] = bool(data['phase1_applicable'])
+    if 'qi_check_required' in data:
+        updates['qi_check_required'] = bool(data['qi_check_required'])
+    if 'remarks' in data:
+        updates['remarks'] = (data['remarks'] or '').strip() or None
 
     if not updates:
         return jsonify({'error': 'INVALID_REQUEST', 'message': '수정할 필드가 없습니다.'}), 400
@@ -1138,13 +1155,13 @@ def get_elec_checklist_status(serial_number):
 
 
 def _get_elec_phase_counts(serial_number: str, phase: int) -> tuple:
-    """Phase별 (total, checked) 반환. Phase 1은 JIG 제외, QI 항상 제외. 동적 COUNT."""
+    """Phase별 (total, checked) 반환. Phase 1은 phase1_applicable=TRUE만, WORKER role만. 동적 COUNT."""
     from app.models.worker import get_db_connection
     from app.db_pool import put_conn
     conn = get_db_connection()
     try:
         cur = conn.cursor()
-        jig_condition = "AND cm.item_group != 'JIG 검사 및 특별관리 POINT'" if phase == 1 else ""
+        phase_condition = "AND cm.phase1_applicable = TRUE" if phase == 1 else ""
         cur.execute(
             f"""
             SELECT
@@ -1158,8 +1175,8 @@ def _get_elec_phase_counts(serial_number: str, phase: int) -> tuple:
                AND cr.qr_doc_id = ''
             WHERE cm.category = 'ELEC'
               AND cm.is_active = TRUE
-              AND COALESCE(cm.checker_role, 'WORKER') != 'QI'
-              {jig_condition}
+              AND COALESCE(cm.checker_role, 'WORKER') = 'WORKER'
+              {phase_condition}
             """,
             (serial_number, phase)
         )
