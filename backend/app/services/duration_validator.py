@@ -14,6 +14,7 @@ from app.models.worker import get_db_connection
 from app.models.task_detail import get_task_by_id
 from app.models.alert_log import create_alert
 from app.services.process_validator import get_managers_for_role
+from app.services.alert_service import sn_label
 from app.db_pool import put_conn
 
 
@@ -74,7 +75,7 @@ def validate_duration(task_detail_id: int) -> Dict[str, Any]:
         for manager_id in managers:
             alert_id = create_alert(
                 alert_type='REVERSE_COMPLETION',
-                message=f"[{task.serial_number}] {task.task_category} - {task.task_name}: 완료 시간이 시작 시간보다 이릅니다.",
+                message=f"{sn_label(task.serial_number)} {task.task_category} - {task.task_name}: 완료 시간이 시작 시간보다 이릅니다.",
                 serial_number=task.serial_number,
                 qr_doc_id=task.qr_doc_id,
                 triggered_by_worker_id=task.worker_id,
@@ -100,7 +101,7 @@ def validate_duration(task_detail_id: int) -> Dict[str, Any]:
         for manager_id in managers:
             alert_id = create_alert(
                 alert_type='DURATION_EXCEEDED',
-                message=f"[{task.serial_number}] {task.task_category} - {task.task_name}: 작업 시간 {task.duration_minutes}분 (14시간 초과)",
+                message=f"{sn_label(task.serial_number)} {task.task_category} - {task.task_name}: 작업 시간 {task.duration_minutes}분 (14시간 초과)",
                 serial_number=task.serial_number,
                 qr_doc_id=task.qr_doc_id,
                 triggered_by_worker_id=task.worker_id,
@@ -179,7 +180,7 @@ def check_unfinished_tasks() -> List[Dict[str, Any]]:
                 for manager_id in managers:
                     alert_id = create_alert(
                         alert_type='UNFINISHED_AT_CLOSING',
-                        message=f"[{row['serial_number']}] {row['task_category']} - {row['task_name']}: 작업 시작 후 {task_info['duration_hours']}시간 경과, 미완료 상태",
+                        message=f"{sn_label(row['serial_number'])} {row['task_category']} - {row['task_name']}: 작업 시작 후 {task_info['duration_hours']}시간 경과, 미완료 상태",
                         serial_number=row['serial_number'],
                         qr_doc_id=row['qr_doc_id'],
                         triggered_by_worker_id=row['worker_id'],

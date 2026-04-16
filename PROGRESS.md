@@ -3,7 +3,27 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.9.3 (Sprint 60-BE ELEC 마스터 정규화, 2026-04-16)
+> **현재 버전**: v2.9.4 (Sprint 61-BE 알람 강화 + 미종료 작업 API 확장, 2026-04-17)
+
+---
+
+## Sprint 61-BE: 알람 강화 + 미종료 작업 API 확장 (2026-04-17)
+
+**수정 파일 (BE 10파일 + TEST 1파일 + Migration 1파일)**:
+- `backend/app/services/alert_service.py` — sn_label() 공통 함수 + task_detail_id 전달
+- `backend/app/services/task_service.py` — _sn_label 제거→import, L674 인라인 교체, ORPHAN_ON_FINAL 트리거
+- `backend/app/services/duration_validator.py` — 메시지 3곳 sn_label() 교체
+- `backend/app/services/scheduler_service.py` — 메시지 6곳 교체 + 신규함수 2개 + add_job 3개 (8→11 jobs)
+- `backend/app/services/checklist_service.py` — 메시지 2곳 교체
+- `backend/app/services/process_validator.py` — 메시지 2곳 교체
+- `backend/app/routes/admin.py` — SETTING_KEYS +5, COMPANY_CATEGORIES, pending API 확장, force_close NOT_STARTED 보정
+- `backend/app/models/task_detail.py` — get_not_started_tasks() 헬퍼
+- `backend/app/models/alert_log.py` — create_alert() task_detail_id 파라미터
+- `backend/migrations/049_alert_escalation_expansion.sql` — enum 3종 + task_detail_id + dedupe index + admin_settings 4종
+- `tests/backend/test_sprint61_alert_escalation.py` — 29 TC (29 passed)
+
+**DB 변경**: migration 049 (alert_type_enum 3종 추가, task_detail_id 컬럼, 중복 방지 인덱스, admin_settings 4종)
+**테스트**: 29/29 passed
 
 ---
 

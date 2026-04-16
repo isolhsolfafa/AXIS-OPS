@@ -67,9 +67,30 @@ SETTING_KEYS: Dict[str, Dict[str, Any]] = {
     'alert_elec_to_pi_enabled':              {'type': 'bool', 'default': False},
     'alert_mech_pressure_to_qi_enabled':     {'type': 'bool', 'default': False},
     'alert_tm_tank_module_to_elec_enabled':  {'type': 'bool', 'default': False},
+    # bool/int — Sprint 61 미시작·체크리스트·FINAL 알림
+    'alert_task_not_started_enabled':          {'type': 'bool', 'default': True,  'label': '미시작 작업 알람'},
+    'alert_checklist_done_task_open_enabled':   {'type': 'bool', 'default': True,  'label': '체크리스트완료+미종료 알람'},
+    'alert_orphan_on_final_enabled':           {'type': 'bool', 'default': True,  'label': 'FINAL 완료시 미시작 알람'},
+    'task_not_started_threshold_days':         {'type': 'int',  'default': 2,     'label': '미시작 경과 기준일'},
+    'elec_checklist_issue_alert':              {'type': 'bool', 'default': True,  'label': 'ELEC 체크리스트 ISSUE 알람'},
 }
 
 ALLOWED_KEYS = set(SETTING_KEYS.keys())
+
+# ─── Sprint 61: 회사 → task_category 매핑 ──────────────────────────
+COMPANY_CATEGORIES: Dict[str, List[str]] = {
+    'FNI':    ['MECH'],
+    'BAT':    ['MECH'],
+    'TMS(M)': ['MECH', 'TMS'],
+    'TMS(E)': ['ELEC'],
+    'P&S':    ['ELEC'],
+    'C&A':    ['ELEC'],
+}
+
+
+def get_categories_for_company(company: str) -> list[str] | None:
+    """회사명 → 담당 task_category 목록. None이면 전체(GST/Admin)."""
+    return COMPANY_CATEGORIES.get(company)
 
 _TIME_PATTERN = re.compile(r'^([01]\d|2[0-3]):[0-5]\d$')
 
@@ -89,6 +110,14 @@ def _validate_setting(key: str, value: Any) -> str | None:
     elif stype == 'time':
         if not isinstance(value, str) or not _TIME_PATTERN.match(value):
             return f'{key}: HH:MM 형식이어야 합니다. (예: "10:00")'
+
+    elif stype == 'int':
+        if not isinstance(value, int) or isinstance(value, bool):
+            return f'{key}: 정수 타입이어야 합니다.'
+        if 'min' in meta and value < meta['min']:
+            return f'{key}: 최소값은 {meta["min"]}입니다.'
+        if 'max' in meta and value > meta['max']:
+            return f'{key}: 최대값은 {meta["max"]}입니다.'
 
     elif stype == 'number':
         if not isinstance(value, (int, float)):
@@ -1086,10 +1115,12 @@ def force_close_task(task_id: int) -> Tuple[Dict[str, Any], int]:
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # 작업 존재 확인 (worker company 포함)
+        # 작업 존재 확인 (worker company + task_category 포함)
         cur.execute(
             """
-            SELECT t.id, t.started_at, t.completed_at, t.force_closed, w.company AS worker_company
+            SELECT t.id, t.worker_id, t.started_at, t.completed_at,
+                   t.force_closed, t.task_category,
+                   w.company AS worker_company
             FROM app_task_details t
             LEFT JOIN workers w ON t.worker_id = w.id
             WHERE t.id = %s
@@ -1104,12 +1135,23 @@ def force_close_task(task_id: int) -> Tuple[Dict[str, Any], int]:
                 'message': '작업을 찾을 수 없습니다.'
             }), 404
 
-        # 협력사 관리자 company 일치 여부 확인
-        if manager_company and row['worker_company'] != manager_company:
-            return jsonify({
-                'error': 'FORBIDDEN',
-                'message': '본인 소속 협력사의 작업만 강제 종료할 수 있습니다.'
-            }), 403
+        # 협력사 관리자 권한 검증
+        if manager_company:
+            if row['worker_id'] is None:
+                # 미시작 task → task_category 기준 권한 검증
+                allowed_categories = get_categories_for_company(manager_company)
+                if allowed_categories and row['task_category'] not in allowed_categories:
+                    return jsonify({
+                        'error': 'FORBIDDEN',
+                        'message': '해당 공정에 대한 권한이 없습니다.'
+                    }), 403
+            else:
+                # 기존 로직: worker company 일치 여부 확인
+                if row['worker_company'] != manager_company:
+                    return jsonify({
+                        'error': 'FORBIDDEN',
+                        'message': '본인 소속 협력사의 작업만 강제 종료할 수 있습니다.'
+                    }), 403
 
         # 이미 완료된 Task → 거부
         if row['completed_at'] is not None:
@@ -1132,56 +1174,59 @@ def force_close_task(task_id: int) -> Tuple[Dict[str, Any], int]:
 
         # duration / elapsed 계산
         started_at = row['started_at']
-        if started_at:
-            elapsed_minutes = int((completed_at - started_at).total_seconds() / 60)
-        else:
+
+        if started_at is None:
+            # NOT_STARTED task: duration 계산 스킵
+            duration_minutes = 0
             elapsed_minutes = 0
+        else:
+            elapsed_minutes = int((completed_at - started_at).total_seconds() / 60)
 
-        # duration_minutes = man-hour (work_completion_log 합계 + 현재 작업자)
-        cur.execute(
-            """
-            SELECT COALESCE(SUM(duration_minutes), 0) AS duration_sum
-            FROM work_completion_log
-            WHERE task_id = %s
-            """,
-            (task_id,)
-        )
-        existing_duration = int(cur.fetchone()['duration_sum'])
-        # 아직 미완료인 작업자의 duration도 합산 (현재 시각 기준)
-        # BUG-9 Fix: _calculate_working_minutes로 휴게시간 자동 차감
-        cur.execute(
-            """
-            SELECT wsl.worker_id, wsl.started_at
-            FROM work_start_log wsl
-            LEFT JOIN work_completion_log wcl
-                   ON wsl.task_id = wcl.task_id AND wsl.worker_id = wcl.worker_id
-            WHERE wsl.task_id = %s AND wcl.id IS NULL
-            """,
-            (task_id,)
-        )
-        pending_workers = cur.fetchall()
-        pending_duration = 0
-        for pw in pending_workers:
-            if pw['started_at']:
-                pending_duration += _calculate_working_minutes(pw['started_at'], completed_at)
-        duration_minutes = existing_duration + pending_duration
+            # duration_minutes = man-hour (work_completion_log 합계 + 현재 작업자)
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(duration_minutes), 0) AS duration_sum
+                FROM work_completion_log
+                WHERE task_id = %s
+                """,
+                (task_id,)
+            )
+            existing_duration = int(cur.fetchone()['duration_sum'])
+            # 아직 미완료인 작업자의 duration도 합산 (현재 시각 기준)
+            # BUG-9 Fix: _calculate_working_minutes로 휴게시간 자동 차감
+            cur.execute(
+                """
+                SELECT wsl.worker_id, wsl.started_at
+                FROM work_start_log wsl
+                LEFT JOIN work_completion_log wcl
+                       ON wsl.task_id = wcl.task_id AND wsl.worker_id = wcl.worker_id
+                WHERE wsl.task_id = %s AND wcl.id IS NULL
+                """,
+                (task_id,)
+            )
+            pending_workers = cur.fetchall()
+            pending_duration = 0
+            for pw in pending_workers:
+                if pw['started_at']:
+                    pending_duration += _calculate_working_minutes(pw['started_at'], completed_at)
+            duration_minutes = existing_duration + pending_duration
 
-        # BUG-9 Fix: 수동 pause만 차감 (break auto-pause는 _calculate_working_minutes에서 이미 차감)
-        cur.execute(
-            """
-            SELECT COALESCE(SUM(pause_duration_minutes), 0) AS manual_pause
-            FROM work_pause_log
-            WHERE task_detail_id = %s
-              AND pause_type NOT IN ('break_morning', 'lunch', 'break_afternoon', 'dinner')
-              AND resumed_at IS NOT NULL
-            """,
-            (task_id,)
-        )
-        manual_pause_minutes = int(cur.fetchone()['manual_pause'])
-        duration_minutes = max(0, duration_minutes - manual_pause_minutes)
+            # BUG-9 Fix: 수동 pause만 차감 (break auto-pause는 _calculate_working_minutes에서 이미 차감)
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(pause_duration_minutes), 0) AS manual_pause
+                FROM work_pause_log
+                WHERE task_detail_id = %s
+                  AND pause_type NOT IN ('break_morning', 'lunch', 'break_afternoon', 'dinner')
+                  AND resumed_at IS NOT NULL
+                """,
+                (task_id,)
+            )
+            manual_pause_minutes = int(cur.fetchone()['manual_pause'])
+            duration_minutes = max(0, duration_minutes - manual_pause_minutes)
 
-        if duration_minutes == 0 and elapsed_minutes > 0:
-            duration_minutes = elapsed_minutes  # fallback
+            if duration_minutes == 0 and elapsed_minutes > 0:
+                duration_minutes = elapsed_minutes  # fallback
 
         # app_task_details 강제 종료 업데이트
         cur.execute(
@@ -1620,42 +1665,43 @@ def get_pending_tasks() -> Tuple[Dict[str, Any], int]:
     """
     미종료 작업 목록 조회
     (started_at IS NOT NULL AND completed_at IS NULL)
+    + include_not_started=true 시 미시작(started_at IS NULL) 작업도 포함
 
     Query Parameters:
         limit: int (default: 50)
+        company: str (optional)
+        include_not_started: bool (default: false)
+        category: str (optional, e.g. MECH, ELEC, TMS)
 
     Headers:
         Authorization: Bearer {token}
 
     Returns:
         200: {
-            "tasks": [{
-                "id": int,
-                "worker_id": int,
-                "worker_name": str,
-                "serial_number": str,
-                "qr_doc_id": str,
-                "task_category": str,
-                "task_name": str,
-                "started_at": str,
-                "elapsed_minutes": int
-            }],
-            "total": int
+            "tasks": [...],
+            "total": int,
+            "counts": {"in_progress": int, "not_started": int}
         }
     """
     limit = request.args.get('limit', 50, type=int)
     company = request.args.get('company', None, type=str)
+    include_not_started = request.args.get('include_not_started', 'false').lower() in ('true', '1', 'yes')
+    category = request.args.get('category', None, type=str)
 
     # 협력사 관리자는 본인 company로 강제 제한 (admin은 모든 company 조회 가능)
     current_worker = get_worker_by_id(g.worker_id)
     if current_worker and current_worker.is_manager and not current_worker.is_admin:
         company = current_worker.company
 
+    # company → task_category 필터 (협력사 관리자용)
+    allowed_categories = get_categories_for_company(company) if company else None
+
     conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor()
 
+        # ── 1) 진행 중 (started_at IS NOT NULL, completed_at IS NULL) ──
         cur.execute(
             """
             SELECT
@@ -1665,23 +1711,78 @@ def get_pending_tasks() -> Tuple[Dict[str, Any], int]:
                 t.serial_number,
                 t.qr_doc_id,
                 t.task_category,
+                t.task_id,
                 t.task_name,
                 t.started_at,
-                EXTRACT(EPOCH FROM (NOW() - t.started_at)) / 60 AS elapsed_minutes
+                EXTRACT(EPOCH FROM (NOW() - t.started_at)) / 60 AS elapsed_minutes,
+                pi.sales_order,
+                'in_progress' AS status
             FROM app_task_details t
             JOIN workers w ON t.worker_id = w.id
+            LEFT JOIN plan.product_info pi ON pi.serial_number = t.serial_number
             WHERE t.started_at IS NOT NULL
               AND t.completed_at IS NULL
               AND t.is_applicable = TRUE
-            
+              AND t.force_closed = FALSE
               AND (w.company = %s OR %s IS NULL)
             ORDER BY t.started_at ASC
-            LIMIT %s
             """,
-            (company, company, limit)
+            (company, company)
         )
+        in_progress_rows = cur.fetchall()
 
-        rows = cur.fetchall()
+        # ── 2) 미시작 (include_not_started=true 일 때만) ──
+        not_started_rows = []
+        if include_not_started:
+            cur.execute(
+                """
+                SELECT
+                    t.id,
+                    t.worker_id,
+                    NULL AS worker_name,
+                    t.serial_number,
+                    t.qr_doc_id,
+                    t.task_category,
+                    t.task_id,
+                    t.task_name,
+                    NULL::timestamptz AS started_at,
+                    0 AS elapsed_minutes,
+                    pi.sales_order,
+                    'not_started' AS status
+                FROM app_task_details t
+                LEFT JOIN plan.product_info pi ON pi.serial_number = t.serial_number
+                WHERE t.started_at IS NULL
+                  AND t.completed_at IS NULL
+                  AND t.is_applicable = TRUE
+                  AND t.force_closed = FALSE
+                  AND EXISTS (
+                    SELECT 1 FROM app_task_details t2
+                    WHERE t2.serial_number = t.serial_number
+                      AND t2.started_at IS NOT NULL
+                  )
+                ORDER BY t.serial_number, t.task_category, t.task_id
+                """
+            )
+            not_started_rows = cur.fetchall()
+
+        # ── Python 레벨 필터링 ──
+        all_rows = list(in_progress_rows) + list(not_started_rows)
+
+        # category 파라미터 필터
+        if category:
+            all_rows = [r for r in all_rows if r['task_category'] == category]
+
+        # company → COMPANY_CATEGORIES 기반 task_category 필터 (미시작 row에는 worker 없음)
+        if allowed_categories:
+            all_rows = [r for r in all_rows if r['task_category'] in allowed_categories]
+
+        # counts 집계 (필터 후)
+        count_in_progress = sum(1 for r in all_rows if r['status'] == 'in_progress')
+        count_not_started = sum(1 for r in all_rows if r['status'] == 'not_started')
+
+        # limit 적용
+        all_rows = all_rows[:limit]
+
         tasks = [
             {
                 'id': row['id'],
@@ -1690,14 +1791,24 @@ def get_pending_tasks() -> Tuple[Dict[str, Any], int]:
                 'serial_number': row['serial_number'],
                 'qr_doc_id': row['qr_doc_id'],
                 'task_category': row['task_category'],
+                'task_id': row['task_id'],
                 'task_name': row['task_name'],
                 'started_at': row['started_at'].isoformat() if row['started_at'] else None,
                 'elapsed_minutes': int(row['elapsed_minutes']) if row['elapsed_minutes'] else 0,
+                'sales_order': row['sales_order'],
+                'status': row['status'],
             }
-            for row in rows
+            for row in all_rows
         ]
 
-        return jsonify({'tasks': tasks, 'total': len(tasks)}), 200
+        return jsonify({
+            'tasks': tasks,
+            'total': count_in_progress + count_not_started,
+            'counts': {
+                'in_progress': count_in_progress,
+                'not_started': count_not_started,
+            }
+        }), 200
 
     except PsycopgError as e:
         logger.error(f"Failed to get pending tasks: {e}")

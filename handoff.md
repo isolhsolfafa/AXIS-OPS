@@ -1,28 +1,29 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-04-16
+> 마지막 업데이트: 2026-04-17
 
 ---
 
 ## 현재 버전
 
-- **OPS BE**: v2.9.3
-- **OPS FE (Flutter PWA)**: v2.9.3
-- **최근 Sprint**: 60-BE (ELEC 마스터 정규화 phase1_applicable + qi_check_required) — ✅ 완료
-- **최근 완료 Sprint**: 60-BE, 59-BE (TM qr_doc_id), 58-BE (Phase 1+2 합산), 57-FE (ELEC 체크리스트 FE)
-- **최근 Migration**: 048 (elec_master_normalization)
+- **OPS BE**: v2.9.4
+- **OPS FE (Flutter PWA)**: v2.9.4
+- **최근 Sprint**: 61-BE (알람 O/N 통일 + 에스컬레이션 3종 + pending API 확장) — ✅ 완료
+- **최근 완료 Sprint**: 61-BE, 60-BE (ELEC 마스터 정규화), 59-BE (TM qr_doc_id), 58-BE (Phase 1+2 합산)
+- **최근 Migration**: 049 (alert_escalation_expansion)
 - **체크리스트 현황**: TM 완료 (SINGLE/DUAL qr_doc_id 정규화) / ELEC 완료 (Phase 1+2, 마스터 정규화) / MECH 미구현
 - **RULE-01**: Sprint 완료 시 FE flutter build web + Netlify 배포 필수
 
 ---
 
-## 직전 세션 작업 내용 (2026-04-16)
+## 직전 세션 작업 내용 (2026-04-17)
 
-1. **Sprint 59-BE**: TM qr_doc_id 정규화 — _check_tm_completion SINGLE DOC_{S/N} + DUAL L/R
-2. **Sprint 60-BE**: ELEC 마스터 정규화 — phase1_applicable + qi_check_required + remarks (migration 048)
-3. **v2.9.3 릴리스**: RULE-01 준수 — FE flutter clean + build + Netlify 배포
-4. **DB_SCHEMA_MAP.md 업데이트**: checklist_master 17컬럼, checklist_record 15컬럼 반영
+1. **Sprint 61-BE**: 알람 메시지 O/N 통일 — sn_label() 공통 함수 도입, 6파일 메시지 교체
+2. **Sprint 61-BE**: 에스컬레이션 알람 3종 (TASK_NOT_STARTED, CHECKLIST_DONE_TASK_OPEN, ORPHAN_ON_FINAL)
+3. **Sprint 61-BE**: GET /admin/tasks/pending 확장 (include_not_started, COMPANY_CATEGORIES, COUNT 분리)
+4. **Sprint 61-BE**: force_close NOT_STARTED 대응, SETTING_KEYS 5개 추가
+5. **Claude x Codex 교차 리뷰** — 합의 9건 반영 후 구현
 
 ---
 

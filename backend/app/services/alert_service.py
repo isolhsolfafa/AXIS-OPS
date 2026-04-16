@@ -15,10 +15,18 @@ from app.models.alert_log import (
 )
 from psycopg2 import Error as PsycopgError
 from app.models.worker import get_db_connection
+from app.models.product_info import get_product_by_serial_number
 from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
+
+
+def sn_label(serial_number: str) -> str:
+    """[S/N | O/N: xxx] 포맷 생성 — 전체 알람 메시지 공통"""
+    product = get_product_by_serial_number(serial_number)
+    on = product.sales_order if product and product.sales_order else None
+    return f"[{serial_number} | O/N: {on}]" if on else f"[{serial_number}]"
 
 
 def create_and_broadcast_alert(alert_data: Dict[str, Any]) -> Optional[int]:
@@ -46,7 +54,8 @@ def create_and_broadcast_alert(alert_data: Dict[str, Any]) -> Optional[int]:
         qr_doc_id=alert_data.get('qr_doc_id'),
         triggered_by_worker_id=alert_data.get('triggered_by_worker_id'),
         target_worker_id=alert_data.get('target_worker_id'),
-        target_role=alert_data.get('target_role')
+        target_role=alert_data.get('target_role'),
+        task_detail_id=alert_data.get('task_detail_id')
     )
 
     if alert_id:

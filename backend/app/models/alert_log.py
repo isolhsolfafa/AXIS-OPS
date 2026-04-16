@@ -86,7 +86,8 @@ def create_alert(
     qr_doc_id: Optional[str] = None,
     triggered_by_worker_id: Optional[int] = None,
     target_worker_id: Optional[int] = None,
-    target_role: Optional[str] = None
+    target_role: Optional[str] = None,
+    task_detail_id: Optional[int] = None
 ) -> Optional[int]:
     """
     새 알림 생성
@@ -99,6 +100,7 @@ def create_alert(
         triggered_by_worker_id: 알림 발생시킨 작업자 ID
         target_worker_id: 알림 대상 작업자 ID (지정된 경우)
         target_role: 알림 대상 역할 (target_worker_id가 없을 때 역할 기반 알림)
+        task_detail_id: 관련 작업 상세 ID (중복 방지용, Sprint 61)
 
     Returns:
         생성된 알림 ID, 실패 시 None
@@ -112,13 +114,15 @@ def create_alert(
             """
             INSERT INTO app_alert_logs (
                 alert_type, serial_number, qr_doc_id,
-                triggered_by_worker_id, target_worker_id, target_role, message
+                triggered_by_worker_id, target_worker_id, target_role, message,
+                task_detail_id
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (alert_type, serial_number, qr_doc_id,
-             triggered_by_worker_id, target_worker_id, target_role, message)
+             triggered_by_worker_id, target_worker_id, target_role, message,
+             task_detail_id)
         )
 
         alert_id = cur.fetchone()['id']

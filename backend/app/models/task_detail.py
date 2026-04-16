@@ -805,3 +805,26 @@ def set_paused(
     finally:
         if conn:
             put_conn(conn)
+
+
+def get_not_started_tasks(serial_number: str, task_category: str) -> list:
+    """미시작 task 목록 (started_at IS NULL, completed_at IS NULL, applicable, not force_closed)"""
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, task_id, task_name
+            FROM app_task_details
+            WHERE serial_number = %s
+              AND task_category = %s
+              AND started_at IS NULL
+              AND completed_at IS NULL
+              AND is_applicable = TRUE
+              AND force_closed = FALSE
+            """,
+            (serial_number, task_category)
+        )
+        return cur.fetchall()
+    finally:
+        put_conn(conn)

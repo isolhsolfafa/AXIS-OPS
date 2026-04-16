@@ -388,6 +388,33 @@ class TaskService:
                     f"category={task.task_category}, closed={auto_closed_count}/{len(orphans)}"
                 )
 
+            # Sprint 61-BE: ORPHAN_ON_FINAL — 미시작 task 잔존 알림
+            from app.models.admin_settings import get_setting as _get_setting_61
+            if _get_setting_61('alert_orphan_on_final_enabled', True):
+                from app.models.task_detail import get_not_started_tasks
+                not_started = get_not_started_tasks(task.serial_number, task.task_category)
+                if not_started:
+                    from app.services.alert_service import sn_label as _sn_label_61
+                    from app.services.alert_service import create_and_broadcast_alert as _create_alert_61
+                    label = _sn_label_61(task.serial_number)
+                    task_names = ', '.join([t['task_name'] for t in not_started])
+                    msg = (
+                        f"{label} {task.task_category} {task.task_name} 완료 — "
+                        f"미시작 작업 {len(not_started)}건 존재: {task_names}"
+                    )
+                    _create_alert_61({
+                        'alert_type': 'ORPHAN_ON_FINAL',
+                        'message': msg,
+                        'serial_number': task.serial_number,
+                        'qr_doc_id': task.qr_doc_id,
+                        'triggered_by_worker_id': worker_id,
+                        'target_role': task.task_category,
+                    })
+                    logger.info(
+                        f"ORPHAN_ON_FINAL: sn={task.serial_number}, "
+                        f"not_started={len(not_started)}"
+                    )
+
         # 카테고리 전체 완료 확인 (같은 serial_number + task_category)
         # BUG-36: TMS DUAL은 qr_doc_id 기준으로 탱크별 독립 완료 판정
         _qr_filter = task.qr_doc_id if task.task_category == 'TMS' else None
@@ -486,12 +513,7 @@ class TaskService:
         from app.services.process_validator import get_managers_by_partner, get_managers_for_role
         from app.models.admin_settings import get_setting
         from app.models.product_info import get_product_by_serial_number
-
-        def _sn_label(sn: str) -> str:
-            """[S/N | O/N: xxx] 포맷 생성"""
-            product = get_product_by_serial_number(sn)
-            on = product.sales_order if product and product.sales_order else None
-            return f"[{sn} | O/N: {on}]" if on else f"[{sn}]"
+        from app.services.alert_service import sn_label
 
         trigger = None  # (alert_type, partner_field_or_role, action_label, settings_key)
 
@@ -553,7 +575,7 @@ class TaskService:
                 managers = get_managers_for_role(target_source)
                 target_role_label = target_source
 
-            label = _sn_label(task.serial_number)
+            label = sn_label(task.serial_number)
             for manager_id in managers:
                 alert_id = create_alert(
                     alert_type=alert_type,
@@ -668,10 +690,8 @@ class TaskService:
                 from app.services.process_validator import get_managers_by_partner
                 tms_managers = get_managers_by_partner(task.serial_number, 'module_outsourcing')
                 from app.models.alert_log import create_alert
-                from app.models.product_info import get_product_by_serial_number as _get_product
-                product = _get_product(task.serial_number)
-                on = product.sales_order if product and product.sales_order else None
-                label = f"[{task.serial_number} | O/N: {on}]" if on else f"[{task.serial_number}]"
+                from app.services.alert_service import sn_label as _sn_label
+                label = _sn_label(task.serial_number)
                 for manager_id in tms_managers:
                     alert_id = create_alert(
                         alert_type='CHECKLIST_TM_READY',

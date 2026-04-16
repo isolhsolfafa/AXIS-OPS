@@ -15,6 +15,7 @@ from app.models.completion_status import get_or_create_completion_status
 from app.models.product_info import get_product_by_qr_doc_id
 from app.models.alert_log import create_alert
 from app.models.admin_settings import get_setting
+from app.services.alert_service import sn_label
 from app.db_pool import put_conn
 
 
@@ -93,7 +94,7 @@ def validate_process_start(
         for manager_id in mech_managers:
             alert_id = create_alert(
                 alert_type='PROCESS_READY',
-                message=f"[{serial_number}] {process_type} 공정 대기 중 - MECH 공정 미완료",
+                message=f"{sn_label(serial_number)} {process_type} 공정 대기 중 - MECH 공정 미완료",
                 serial_number=serial_number,
                 qr_doc_id=qr_doc_id,
                 triggered_by_worker_id=triggered_by_worker_id,
@@ -113,7 +114,7 @@ def validate_process_start(
         for manager_id in elec_managers:
             alert_id = create_alert(
                 alert_type='PROCESS_READY',
-                message=f"[{serial_number}] {process_type} 공정 대기 중 - ELEC 공정 미완료",
+                message=f"{sn_label(serial_number)} {process_type} 공정 대기 중 - ELEC 공정 미완료",
                 serial_number=serial_number,
                 qr_doc_id=qr_doc_id,
                 triggered_by_worker_id=triggered_by_worker_id,

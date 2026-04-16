@@ -18,6 +18,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from app.config import Config
 from app.services.duration_validator import check_unfinished_tasks
+from app.services.alert_service import sn_label
 from app.db_pool import put_conn
 
 
@@ -119,7 +120,34 @@ def init_scheduler() -> BackgroundScheduler:
         replace_existing=True
     )
 
-    logger.info("Scheduler initialized with 8 jobs")
+    # ── Sprint 61-BE: 미시작 task 에스컬레이션 — 매일 09:00 KST ──
+    _scheduler.add_job(
+        func=_check_not_started_tasks,
+        trigger=CronTrigger(hour=9, minute=0),
+        id='check_not_started_tasks',
+        name='미시작 Task 에스컬레이션 (09:00 KST)',
+        replace_existing=True
+    )
+
+    # ── Sprint 61-BE: 체크리스트 완료 + task 미종료 감지 — 매일 09:00 KST ──
+    _scheduler.add_job(
+        func=_check_checklist_done_task_open,
+        trigger=CronTrigger(hour=9, minute=0),
+        id='check_checklist_done_task_open_09',
+        name='체크리스트 완료 task 미종료 감지 (09:00 KST)',
+        replace_existing=True
+    )
+
+    # ── Sprint 61-BE: 체크리스트 완료 + task 미종료 감지 — 매일 15:00 KST ──
+    _scheduler.add_job(
+        func=_check_checklist_done_task_open,
+        trigger=CronTrigger(hour=15, minute=0),
+        id='check_checklist_done_task_open_15',
+        name='체크리스트 완료 task 미종료 감지 (15:00 KST)',
+        replace_existing=True
+    )
+
+    logger.info("Scheduler initialized with 11 jobs")
     return _scheduler
 
 
@@ -198,7 +226,7 @@ def task_reminder_job() -> None:
             create_and_broadcast_alert({
                 'alert_type': 'TASK_REMINDER',
                 'message': (
-                    f"[{t['serial_number']}] {t['task_category']} - "
+                    f"{sn_label(t['serial_number'])} {t['task_category']} - "
                     f"{t['task_name']}: 작업 시작 후 {duration_hours}시간 경과, "
                     f"아직 완료 전입니다."
                 ),
@@ -236,7 +264,7 @@ def shift_end_reminder_job() -> None:
                 'alert_type': 'SHIFT_END_REMINDER',
                 'message': (
                     f"퇴근 전 미완료 작업이 있습니다. "
-                    f"[{t['serial_number']}] {t['task_category']} - {t['task_name']}. "
+                    f"{sn_label(t['serial_number'])} {t['task_category']} - {t['task_name']}. "
                     f"작업을 완료하거나 관리자에게 보고해주세요."
                 ),
                 'serial_number': t['serial_number'],
@@ -277,7 +305,7 @@ def task_escalation_job() -> None:
                 create_and_broadcast_alert({
                     'alert_type': 'TASK_ESCALATION',
                     'message': (
-                        f"[에스컬레이션] [{t['serial_number']}] "
+                        f"[에스컬레이션] {sn_label(t['serial_number'])} "
                         f"{t['task_category']} - {t['task_name']}: "
                         f"전일({t['started_date']}) 시작 후 미완료. "
                         f"작업자: {t['worker_name']} ({t['worker_company'] or '-'})"
@@ -665,7 +693,7 @@ def force_pause_all_active_tasks(pause_type: str, message: str) -> None:
                 try:
                     create_and_broadcast_alert({
                         'alert_type': 'BREAK_TIME_PAUSE',
-                        'message': f"[{task_row['serial_number']}] {task_row['task_name']}: {message}",
+                        'message': f"{sn_label(task_row['serial_number'])} {task_row['task_name']}: {message}",
                         'serial_number': task_row['serial_number'],
                         'qr_doc_id': task_row['qr_doc_id'],
                         'triggered_by_worker_id': None,
@@ -775,7 +803,7 @@ def send_break_end_notifications(pause_type: str, message: str) -> None:
             try:
                 create_and_broadcast_alert({
                     'alert_type': 'BREAK_TIME_END',
-                    'message': f"[{row['serial_number']}] {row['task_name']}: {message}",
+                    'message': f"{sn_label(row['serial_number'])} {row['task_name']}: {message}",
                     'serial_number': row['serial_number'],
                     'qr_doc_id': row['qr_doc_id'],
                     'triggered_by_worker_id': None,
@@ -846,7 +874,7 @@ def check_orphan_relay_tasks_job() -> None:
             create_and_broadcast_alert({
                 'alert_type': 'RELAY_ORPHAN',
                 'message': (
-                    f"[릴레이 미완료] {orphan['serial_number']} "
+                    f"[릴레이 미완료] {sn_label(orphan['serial_number'])} "
                     f"{orphan['task_name']} — "
                     f"작업자 {orphan['worker_count']}명 참여 후 "
                     f"4시간 이상 미완료 상태입니다."
@@ -869,6 +897,162 @@ def check_orphan_relay_tasks_job() -> None:
     finally:
         if conn:
             put_conn(conn)
+
+
+def _check_not_started_tasks():
+    """
+    Sprint 61-BE: 미시작 task 에스컬레이션 — 매일 09:00 KST
+
+    조건: 같은 S/N에 시작된 task가 하나라도 있는데, 본 task는 미시작 + 생성 후 N일 경과
+    중복방지: 같은 task_detail_id로 7일 이내 발송 이력 있으면 스킵
+    """
+    try:
+        from app.models.admin_settings import get_setting
+
+        if not get_setting('alert_task_not_started_enabled', True):
+            return
+
+        threshold_days = int(get_setting('task_not_started_threshold_days', 2))
+
+        from app.models.worker import get_db_connection as _get_db
+        conn = _get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT td.id, td.serial_number, td.task_category, td.task_name, td.created_at
+                FROM app_task_details td
+                WHERE td.started_at IS NULL
+                  AND td.completed_at IS NULL
+                  AND td.is_applicable = TRUE
+                  AND td.force_closed = FALSE
+                  AND td.created_at < NOW() - (%s * INTERVAL '1 day')
+                  AND EXISTS (
+                    SELECT 1 FROM app_task_details td2
+                    WHERE td2.serial_number = td.serial_number
+                      AND td2.started_at IS NOT NULL
+                  )
+            """, (threshold_days,))
+            tasks = cur.fetchall()
+
+            from app.services.alert_service import create_and_broadcast_alert
+
+            alert_count = 0
+            for task_row in tasks:
+                sn = task_row['serial_number']
+                td_id = task_row['id']
+
+                # 중복방지: 7일 이내 같은 task_detail_id로 발송 이력 있으면 스킵
+                cur.execute("""
+                    SELECT 1 FROM app_alert_logs
+                    WHERE alert_type = 'TASK_NOT_STARTED'
+                      AND serial_number = %s
+                      AND task_detail_id = %s
+                      AND created_at > NOW() - INTERVAL '7 days'
+                    LIMIT 1
+                """, (sn, td_id))
+                if cur.fetchone():
+                    continue
+
+                days_elapsed = (datetime.now(Config.KST) - task_row['created_at']).days
+                label = sn_label(sn)
+                message = (
+                    f"{label} {task_row['task_category']} - {task_row['task_name']}: "
+                    f"생성 후 {days_elapsed}일 경과, 아직 시작되지 않았습니다."
+                )
+
+                create_and_broadcast_alert({
+                    'alert_type': 'TASK_NOT_STARTED',
+                    'message': message,
+                    'serial_number': sn,
+                    'target_role': task_row['task_category'],
+                    'task_detail_id': td_id,
+                })
+                alert_count += 1
+                logger.info(f"TASK_NOT_STARTED alert: sn={sn}, task={task_row['task_name']}, days={days_elapsed}")
+
+            logger.info(f"_check_not_started_tasks: {alert_count} alerts sent (candidates={len(tasks)})")
+        finally:
+            put_conn(conn)
+
+    except Exception as e:
+        logger.error(f"Failed to check not-started tasks: {e}", exc_info=True)
+
+
+def _check_checklist_done_task_open():
+    """
+    Sprint 61-BE: 체크리스트 완료 + task 미종료 감지 — 매일 09:00/15:00 KST
+
+    ELEC 체크리스트 완료(IF_2 완료) S/N 중 ELEC task가 아직 미완료인 건 감지.
+    중복방지: 같은 serial_number로 3일 이내 발송 이력 있으면 스킵
+    """
+    try:
+        from app.models.admin_settings import get_setting
+
+        if not get_setting('alert_checklist_done_task_open_enabled', True):
+            return
+
+        from app.models.worker import get_db_connection as _get_db
+        conn = _get_db()
+        try:
+            cur = conn.cursor()
+            # ELEC IF_2 완료 S/N 중 ELEC task 미완료 존재
+            cur.execute("""
+                SELECT td.id, td.serial_number, td.task_category, td.task_name
+                FROM app_task_details td
+                WHERE td.task_category = 'ELEC'
+                  AND td.completed_at IS NULL
+                  AND td.is_applicable = TRUE
+                  AND td.force_closed = FALSE
+                  AND td.serial_number IN (
+                    SELECT DISTINCT td2.serial_number
+                    FROM app_task_details td2
+                    WHERE td2.task_category = 'ELEC'
+                      AND td2.task_id = 'IF_2'
+                      AND td2.completed_at IS NOT NULL
+                  )
+            """)
+            tasks = cur.fetchall()
+
+            from app.services.alert_service import create_and_broadcast_alert
+
+            alert_count = 0
+            for task_row in tasks:
+                sn = task_row['serial_number']
+                td_id = task_row['id']
+
+                # 중복방지: 3일 이내 같은 serial_number로 발송 이력
+                cur.execute("""
+                    SELECT 1 FROM app_alert_logs
+                    WHERE alert_type = 'CHECKLIST_DONE_TASK_OPEN'
+                      AND serial_number = %s
+                      AND created_at > NOW() - INTERVAL '3 days'
+                    LIMIT 1
+                """, (sn,))
+                if cur.fetchone():
+                    continue
+
+                label = sn_label(sn)
+                message = (
+                    f"{label} ELEC 체크리스트 완료 — "
+                    f"{task_row['task_name']} 미종료 상태입니다. 완료 처리가 필요합니다."
+                )
+
+                create_and_broadcast_alert({
+                    'alert_type': 'CHECKLIST_DONE_TASK_OPEN',
+                    'message': message,
+                    'serial_number': sn,
+                    'target_role': 'ELEC',
+                    'task_detail_id': td_id,
+                })
+                alert_count += 1
+                logger.info(f"CHECKLIST_DONE_TASK_OPEN alert: sn={sn}, task={task_row['task_name']}")
+
+            logger.info(f"_check_checklist_done_task_open: {alert_count} alerts sent (candidates={len(tasks)})")
+        finally:
+            put_conn(conn)
+
+    except Exception as e:
+        logger.error(f"Failed to check checklist-done-task-open: {e}", exc_info=True)
 
 
 def _cleanup_access_logs():

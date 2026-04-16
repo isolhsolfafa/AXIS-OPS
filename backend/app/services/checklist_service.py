@@ -646,12 +646,12 @@ def _check_tm_completion(serial_number: str, judgment_phase: int = 1) -> bool:
                     issue_alert = bool(sv)
 
             if issue_alert:
-                from app.services.alert_service import create_and_broadcast_alert
+                from app.services.alert_service import create_and_broadcast_alert, sn_label
                 for issue_row in issue_rows:
                     try:
                         create_and_broadcast_alert({
                             'alert_type': 'CHECKLIST_ISSUE',
-                            'message': f'[{serial_number}] TM 체크리스트 ISSUE: {issue_row["item_name"]} - {issue_row["note"]}',
+                            'message': f'{sn_label(serial_number)} TM 체크리스트 ISSUE: {issue_row["item_name"]} - {issue_row["note"]}',
                             'serial_number': serial_number,
                             'target_role': 'MECH',
                         })
@@ -1008,12 +1008,12 @@ def check_elec_completion(serial_number: str) -> bool:
                 issue_rows = cur.fetchall()
 
                 if issue_rows:
-                    from app.services.alert_service import create_and_broadcast_alert
+                    from app.services.alert_service import create_and_broadcast_alert, sn_label
                     for issue_row in issue_rows:
                         try:
                             create_and_broadcast_alert({
                                 'alert_type': 'CHECKLIST_ISSUE',
-                                'message': f'[{serial_number}] ELEC 체크리스트 ISSUE: {issue_row["item_name"]} - {issue_row["note"]}',
+                                'message': f'{sn_label(serial_number)} ELEC 체크리스트 ISSUE: {issue_row["item_name"]} - {issue_row["note"]}',
                                 'serial_number': serial_number,
                                 'target_role': 'ELEC',
                             })
