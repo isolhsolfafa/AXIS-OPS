@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 analytics_bp = Blueprint("analytics", __name__, url_prefix="/api/admin/analytics")
 
-# 엔드포인트 → 한글 라벨 매핑 (v2.2.0 전수 등록)
+# 엔드포인트 → 한글 라벨 매핑 (v2.9.3 전수 재등록 — 24개 추가, 총 135키 / 유니크 라우트 108개)
 _ENDPOINT_LABELS = {
     # ── product ──
     'product.get_product_by_qr': 'QR 제품 조회',
@@ -25,6 +25,8 @@ _ENDPOINT_LABELS = {
     'product.get_product_tasks': '제품 작업 목록',
     'product.get_sn_progress': 'S/N 진행률',
     'product.check_prerequisites': '선행 공정 확인',
+    'product.get_completion_status': '공정 완료 상태',
+    'product.update_location': '제품 위치 업데이트',
     # ── work ──
     'work.get_tasks_by_serial': '작업 목록',
     'work.get_app_settings': '앱 설정',
@@ -44,6 +46,9 @@ _ENDPOINT_LABELS = {
     'work.force_complete_task': '작업 강제 완료',
     'work.toggle_task_applicable': 'Task 적용 토글',
     'work.request_deactivation': '비활성화 요청',
+    'work.validate_process': '공정 누락 검증',
+    'work.reactivate_task_route': '작업 재활성화',
+    'work.update_location_compat': '위치 QR 업데이트',
     # ── auth ──
     'auth.register': '회원가입',
     'auth.login': '로그인',
@@ -57,6 +62,7 @@ _ENDPOINT_LABELS = {
     'auth.set_pin': 'PIN 등록',
     'auth.change_pin': 'PIN 변경',
     'auth.update_active_role_endpoint': '담당공정 변경',
+    'auth.approve': '작업자 승인 (Auth)',
     'auth.forgot_password': '비밀번호 찾기',
     'auth.reset_password': '비밀번호 재설정',
     # ── alert ──
@@ -92,6 +98,11 @@ _ENDPOINT_LABELS = {
     'admin.get_inactive_workers_api': '비활성 사용자 목록',
     'admin.get_deactivated_workers_api': '비활성화된 사용자',
     'admin.update_worker_status': '사용자 상태 변경',
+    'admin.force_complete_task': '작업 강제 완료',
+    'admin.get_active_tasks': '진행중 작업 (Admin)',
+    'admin.get_alerts_summary': '알림 요약 (Admin)',
+    'admin.get_pending_tasks': '미종료 작업 (Admin)',
+    'admin.get_task_corrections': '작업 보정 이력 (Admin)',
     # ── notices ──
     'notices.get_notices': '공지사항',
     'notices.get_notice_detail': '공지 상세',
@@ -111,6 +122,20 @@ _ENDPOINT_LABELS = {
     # ── checklist ──
     'checklist.get_checklist': '체크리스트 조회',
     'checklist.upsert_checklist_record': '체크리스트 기록',
+    # ── checklist (Sprint 52+: TM/ELEC/마스터/성적서) ──
+    'checklist.get_tm_checklist': 'TM 체크리스트 조회',
+    'checklist.upsert_tm_checklist_record': 'TM 체크리스트 기록',
+    'checklist.get_tm_checklist_status': 'TM 체크리스트 상태',
+    'checklist.get_elec_checklist_api': 'ELEC 체크리스트 조회',
+    'checklist.upsert_elec_check_api': 'ELEC 체크리스트 기록',
+    'checklist.get_elec_checklist_status': 'ELEC 체크리스트 상태',
+    'checklist.list_checklist_master': '체크리스트 마스터 목록',
+    'checklist.create_checklist_master': '체크리스트 마스터 생성',
+    'checklist.update_checklist_master': '체크리스트 마스터 수정',
+    'checklist.toggle_checklist_master': '체크리스트 마스터 토글',
+    'checklist.import_checklist_master': '체크리스트 마스터 가져오기',
+    'checklist.get_checklist_report_orders': '성적서 O/N 목록',
+    'checklist.get_checklist_report_detail': '성적서 상세',
     # ── sync ──
     'sync.sync_offline_batch': '오프라인 동기화',
     'sync.get_sync_status': '동기화 상태',

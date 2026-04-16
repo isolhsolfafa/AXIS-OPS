@@ -1,3 +1,4 @@
+
 # Agent Teams 실행 가이드 (Sprint 5~11)
 
 ## 사전 조건
@@ -21158,3 +21159,6561 @@ TC-53-15: total_orders, total_sns 기존과 동일
 - TM completed 판정: `task_id='TANK_MODULE'`만 (Sprint 37-A `_CONFIRM_TASK_FILTER` 기준)
 - 금요일 기준 매핑은 공휴일 무관 (달력상 금요일 고정)
 - TC-53-01~15 통과 후 커밋
+
+---
+
+## Sprint 54: 체크리스트 성적서 API — O/N 검색 + S/N 성적서 조회
+
+> **목적**: 고객사 오딧(Audit) 시 S/N별 체크리스트 결과를 성적서 형태로 조회 + PDF export 지원
+> **범위**: BE `checklist.py` 엔드포인트 2건 + `checklist_service.py` 함수 일반화
+> **의존성**: Sprint 52 (TM 체크리스트 스키마), Sprint 52-A (COMMON seed)
+> **API 요청 문서**: OPS_API_REQUESTS.md #54
+
+### 설계 원칙: 기존 로직 최대한 재활용
+
+`checklist_service.get_tm_checklist()` (L18~183)의 핵심 로직을 일반화:
+- `product_info` 조회 → scope 판정 → master+record LEFT JOIN → item_group 그룹핑 → summary
+- 이 흐름은 TM 전용이 아니라 모든 카테고리에 동일하게 적용 가능
+- `category='TM'` 하드코딩 부분만 파라미터로 변경하면 MECH/ELEC 확장 대비 완료
+
+**변경 최소화**: 기존 `get_tm_checklist()` 시그니처를 확장하지 않고, 내부 공통 로직을 `_get_checklist_by_category()` private 함수로 추출. 기존 `get_tm_checklist()`는 wrapper로 유지하여 기존 호출부 변경 없음.
+
+### Task 1: `checklist_service.py` — `_get_checklist_by_category()` 추출
+
+```python
+def _get_checklist_by_category(
+    cur, serial_number: str, category: str,
+    product_code: str | None, scope: str,
+    judgment_phase: int = 1,
+) -> Dict[str, Any]:
+    """카테고리별 체크리스트 조회 — 공통 로직
+
+    get_tm_checklist() 내부 로직을 추출. master+record LEFT JOIN + 그룹핑 + summary.
+    TM/MECH/ELEC 모두 동일 패턴.
+
+    Args:
+        cur: DB cursor (외부에서 connection 관리)
+        serial_number: S/N
+        category: 'TM', 'MECH', 'ELEC' 등
+        product_code: 제품 코드 (scope='product_code' 시 사용)
+        scope: 'all' | 'product_code'
+        judgment_phase: 판정 차수
+
+    Returns:
+        {
+            "category": str,
+            "items": [
+                {
+                    "item_group": str,
+                    "item_name": str,
+                    "item_type": str,
+                    "description": str|null,
+                    "check_result": "PASS"|"NA"|null,
+                    "checked_by_name": str|null,
+                    "checked_at": str|null,
+                    "note": str|null
+                }, ...
+            ],
+            "summary": { "total": int, "checked": int, "percent": float }
+        }
+    """
+    # master 필터 조건 (기존 get_tm_checklist L91~96 패턴)
+    if scope == 'all' or not product_code:
+        master_filter_sql = "cm.product_code = 'COMMON' AND cm.category = %s"
+        master_params = [category]
+    else:
+        master_filter_sql = "cm.product_code = %s AND cm.category = %s"
+        master_params = [product_code, category]
+
+    query = f"""
+        SELECT
+            cm.id          AS master_id,
+            cm.item_group,
+            cm.item_name,
+            cm.item_type,
+            cm.item_order,
+            cm.description,
+            cr.check_result,
+            cr.checked_by,
+            w.name         AS checked_by_name,
+            cr.checked_at,
+            cr.note
+        FROM checklist.checklist_master cm
+        LEFT JOIN checklist.checklist_record cr
+            ON cr.master_id      = cm.id
+           AND cr.serial_number  = %s
+           AND cr.judgment_phase = %s
+        LEFT JOIN workers w ON w.id = cr.checked_by
+        WHERE {master_filter_sql}
+          AND cm.is_active = TRUE
+        ORDER BY cm.item_group ASC NULLS LAST, cm.item_order ASC, cm.id ASC
+    """
+    params = [serial_number, judgment_phase] + master_params
+    cur.execute(query, params)
+    rows = cur.fetchall()
+
+    items = []
+    total = 0
+    checked = 0
+
+    for row in rows:
+        check_result = row['check_result']
+        items.append({
+            'item_group': row['item_group'] or '기타',
+            'item_name': row['item_name'],
+            'item_type': row.get('item_type', 'CHECK'),
+            'description': row['description'],
+            'check_result': check_result,
+            'checked_by_name': row['checked_by_name'],
+            'checked_at': row['checked_at'].isoformat() if row['checked_at'] else None,
+            'note': row['note'],
+        })
+        total += 1
+        if check_result in ('PASS', 'NA'):
+            checked += 1
+
+    percent = round(checked / total * 100, 1) if total > 0 else 0.0
+
+    return {
+        'category': category,
+        'items': items,
+        'summary': {
+            'total': total,
+            'checked': checked,
+            'percent': percent,
+        },
+    }
+```
+
+### Task 2: `get_tm_checklist()` — wrapper로 변환
+
+기존 호출부(`checklist.py` L770, `task_service.py` 등) 변경 없음.
+
+```python
+def get_tm_checklist(serial_number: str, judgment_phase: int = 1) -> Dict[str, Any]:
+    """TM 체크리스트 조회 (기존 API 호환 유지)"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # product_info 조회
+        cur.execute("""
+            SELECT product_code, sales_order, model
+            FROM plan.product_info WHERE serial_number = %s
+        """, (serial_number,))
+        product_row = cur.fetchone()
+        product_code = product_row['product_code'] if product_row else None
+        sales_order = product_row['sales_order'] if product_row else None
+        model = product_row['model'] if product_row else None
+
+        # scope 조회
+        cur.execute("SELECT setting_value FROM admin_settings WHERE setting_key = 'tm_checklist_scope'")
+        scope_row = cur.fetchone()
+        scope = scope_row['setting_value'] if scope_row else 'product_code'
+        if not isinstance(scope, str):
+            scope = str(scope)
+
+        # 공통 함수 호출
+        cat_data = _get_checklist_by_category(cur, serial_number, 'TM', product_code, scope, judgment_phase)
+
+        # 기존 응답 형태 유지: groups 배열 (item_group별 그룹핑)
+        groups_dict: Dict[str, list] = {}
+        for item in cat_data['items']:
+            gname = item['item_group']
+            if gname not in groups_dict:
+                groups_dict[gname] = []
+            groups_dict[gname].append(item)
+
+        groups = [{'group_name': gn, 'items': items} for gn, items in groups_dict.items()]
+
+        return {
+            'serial_number': serial_number,
+            'sales_order': sales_order,
+            'model': model,
+            'groups': groups,
+            'summary': {
+                'total': cat_data['summary']['total'],
+                'checked': cat_data['summary']['checked'],
+                'remaining': cat_data['summary']['total'] - cat_data['summary']['checked'],
+                'is_complete': cat_data['summary']['total'] > 0 and cat_data['summary']['checked'] == cat_data['summary']['total'],
+            },
+        }
+    except PsycopgError as e:
+        logger.error(f"get_tm_checklist failed: serial={serial_number}, error={e}")
+        return {
+            'serial_number': serial_number, 'sales_order': None, 'model': None,
+            'groups': [], 'summary': {'total': 0, 'checked': 0, 'remaining': 0, 'is_complete': False},
+        }
+    finally:
+        if conn:
+            put_conn(conn)
+```
+
+### Task 3: `get_checklist_report()` 서비스 함수 (신규)
+
+```python
+def get_checklist_report(serial_number: str, judgment_phase: int = 1) -> Dict[str, Any]:
+    """S/N 전체 체크리스트 성적서 조회 (#54-B)
+
+    모든 활성 카테고리를 순회하여 성적서 데이터 반환.
+    현재 TM만 master 데이터 존재. MECH/ELEC 마스터 확정 시 자동 포함.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # product_info 조회
+        cur.execute("""
+            SELECT product_code, sales_order, model, customer
+            FROM plan.product_info WHERE serial_number = %s
+        """, (serial_number,))
+        product_row = cur.fetchone()
+        if not product_row:
+            return {'error': 'PRODUCT_NOT_FOUND', 'message': f'S/N {serial_number} 없음'}
+
+        product_code = product_row['product_code']
+        sales_order = product_row['sales_order']
+        model = product_row['model']
+        customer = product_row['customer']
+
+        # scope 조회
+        cur.execute("SELECT setting_value FROM admin_settings WHERE setting_key = 'tm_checklist_scope'")
+        scope_row = cur.fetchone()
+        scope = scope_row['setting_value'] if scope_row else 'product_code'
+        if not isinstance(scope, str):
+            scope = str(scope)
+
+        # 활성 카테고리 목록 조회 (master에 존재하는 것만)
+        if scope == 'all' or not product_code:
+            cur.execute("""
+                SELECT DISTINCT category FROM checklist.checklist_master
+                WHERE product_code = 'COMMON' AND is_active = TRUE
+                ORDER BY category
+            """)
+        else:
+            cur.execute("""
+                SELECT DISTINCT category FROM checklist.checklist_master
+                WHERE product_code = %s AND is_active = TRUE
+                ORDER BY category
+            """, (product_code,))
+        cat_rows = cur.fetchall()
+
+        categories = []
+        for cat_row in cat_rows:
+            cat = cat_row['category']
+            cat_data = _get_checklist_by_category(
+                cur, serial_number, cat, product_code, scope, judgment_phase
+            )
+            if cat_data['summary']['total'] > 0:
+                categories.append(cat_data)
+
+        from datetime import datetime, timezone, timedelta
+        kst = timezone(timedelta(hours=9))
+
+        return {
+            'serial_number': serial_number,
+            'model': model,
+            'sales_order': sales_order,
+            'customer': customer,
+            'categories': categories,
+            'generated_at': datetime.now(kst).isoformat(),
+        }
+
+    except PsycopgError as e:
+        logger.error(f"get_checklist_report failed: serial={serial_number}, error={e}")
+        return {'error': 'INTERNAL_ERROR', 'message': '데이터 조회 실패'}
+    finally:
+        if conn:
+            put_conn(conn)
+```
+
+### Task 4: `checklist.py` — 엔드포인트 2건 추가
+
+```python
+# ── #54-A: O/N 기준 S/N 목록 조회 ──
+@checklist_bp.route("/api/admin/checklist/report/orders", methods=["GET"])
+@jwt_required
+@view_access_required
+def get_checklist_report_orders() -> Tuple[Dict[str, Any], int]:
+    """
+    체크리스트 성적서 — O/N 기준 S/N 목록 + 진행률
+
+    Query: sales_order={on} 또는 serial_number={sn} (부분 일치, OR)
+    """
+    sales_order = request.args.get('sales_order', '').strip()
+    serial_number = request.args.get('serial_number', '').strip()
+
+    if not sales_order and not serial_number:
+        return jsonify({'error': 'INVALID_REQUEST', 'message': 'sales_order 또는 serial_number 필수'}), 400
+
+    conn = None
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+
+        # product_info 검색
+        conditions = []
+        params = []
+        if sales_order:
+            conditions.append("p.sales_order = %s")
+            params.append(sales_order)
+        if serial_number:
+            conditions.append("p.serial_number ILIKE %s")
+            params.append(f"%{serial_number}%")
+
+        where_clause = " OR ".join(conditions)
+
+        cur.execute(f"""
+            SELECT p.serial_number, p.model, p.sales_order
+            FROM plan.product_info p
+            WHERE {where_clause}
+            ORDER BY p.serial_number
+        """, params)
+        products = cur.fetchall()
+
+        if not products:
+            return jsonify({'sales_order': sales_order, 'products': []}), 200
+
+        # 체크리스트 진행률 — 배치 쿼리 (N+1 방지)
+        sns = [p['serial_number'] for p in products]
+
+        # scope 조회
+        cur.execute("SELECT setting_value FROM admin_settings WHERE setting_key = 'tm_checklist_scope'")
+        scope_row = cur.fetchone()
+        scope = scope_row['setting_value'] if scope_row else 'product_code'
+        if not isinstance(scope, str):
+            scope = str(scope)
+
+        # 배치: master 항목 수 (S/N 무관, scope별 1회)
+        if scope == 'all':
+            cur.execute("""
+                SELECT COUNT(*) AS total
+                FROM checklist.checklist_master
+                WHERE product_code = 'COMMON' AND is_active = TRUE
+            """)
+            master_total = cur.fetchone()['total']
+
+            # 배치: S/N별 checked 카운트 (ANY 1회)
+            cur.execute("""
+                SELECT cr.serial_number,
+                       COUNT(cr.id) FILTER (WHERE cr.check_result IN ('PASS','NA')) AS checked
+                FROM checklist.checklist_record cr
+                JOIN checklist.checklist_master cm ON cm.id = cr.master_id
+                WHERE cr.serial_number = ANY(%s)
+                  AND cr.judgment_phase = 1
+                  AND cm.product_code = 'COMMON'
+                  AND cm.is_active = TRUE
+                GROUP BY cr.serial_number
+            """, (sns,))
+            checked_map = {row['serial_number']: row['checked'] for row in cur.fetchall()}
+
+            result_products = []
+            for p in products:
+                sn = p['serial_number']
+                checked = checked_map.get(sn, 0)
+                percent = round(checked / master_total * 100, 1) if master_total > 0 else 0.0
+                result_products.append({
+                    'serial_number': sn,
+                    'model': p['model'],
+                    'overall_percent': percent,
+                })
+        else:
+            # product_code별 scope — CROSS JOIN으로 S/N별 master+record 배치 집계
+            cur.execute("""
+                SELECT p.serial_number,
+                       COUNT(cm.id) AS total,
+                       COUNT(cr.id) FILTER (WHERE cr.check_result IN ('PASS','NA')) AS checked
+                FROM plan.product_info p
+                JOIN checklist.checklist_master cm
+                    ON cm.product_code = COALESCE(p.product_code, 'COMMON')
+                   AND cm.is_active = TRUE
+                LEFT JOIN checklist.checklist_record cr
+                    ON cr.master_id = cm.id
+                   AND cr.serial_number = p.serial_number
+                   AND cr.judgment_phase = 1
+                WHERE p.serial_number = ANY(%s)
+                GROUP BY p.serial_number
+            """, (sns,))
+            stats_map = {row['serial_number']: row for row in cur.fetchall()}
+
+            result_products = []
+            for p in products:
+                sn = p['serial_number']
+                stat = stats_map.get(sn, {'total': 0, 'checked': 0})
+                total = stat['total']
+                checked = stat['checked']
+                percent = round(checked / total * 100, 1) if total > 0 else 0.0
+                result_products.append({
+                    'serial_number': sn,
+                    'model': p['model'],
+                    'overall_percent': percent,
+                })
+
+        return jsonify({
+            'sales_order': sales_order or (products[0]['sales_order'] if products else None),
+            'products': result_products,
+        }), 200
+
+    except PsycopgError as e:
+        logger.error(f"checklist report orders error: {e}")
+        return jsonify({'error': 'INTERNAL_ERROR', 'message': '데이터 조회 실패'}), 500
+    finally:
+        if conn:
+            put_conn(conn)
+
+
+# ── #54-B: S/N 전체 체크리스트 성적서 ──
+@checklist_bp.route("/api/admin/checklist/report/<string:serial_number>", methods=["GET"])
+@jwt_required
+@view_access_required
+def get_checklist_report_detail(serial_number: str) -> Tuple[Dict[str, Any], int]:
+    """
+    체크리스트 성적서 — S/N 전체 카테고리 조회
+
+    Query: phase=1 (기본)
+    """
+    try:
+        phase = int(request.args.get('phase', 1))
+    except (ValueError, TypeError):
+        phase = 1
+
+    result = checklist_service.get_checklist_report(serial_number, judgment_phase=phase)
+
+    if 'error' in result:
+        status_code = 404 if result['error'] == 'PRODUCT_NOT_FOUND' else 500
+        return jsonify(result), status_code
+
+    return jsonify(result), 200
+```
+
+### Task 5: `view_access_required` import 확인
+
+`checklist.py`에 `view_access_required` 데코레이터가 없으면 추가 필요.
+현재 `/api/admin/checklist/master` 엔드포인트에서 `@admin_required` 사용 중.
+성적서 API는 VIEW 접근 권한(`@view_access_required`)을 사용 — `production.py`와 동일 패턴.
+
+```python
+# checklist.py 상단 import에 추가 (없는 경우)
+from app.middleware.jwt_auth import jwt_required, admin_required, view_access_required
+```
+
+### 변경 파일 요약
+
+| 파일 | 변경 | 설명 |
+|------|------|------|
+| `backend/app/services/checklist_service.py` | 수정 | `_get_checklist_by_category()` 추출, `get_tm_checklist()` wrapper 변환, `get_checklist_report()` 추가 |
+| `backend/app/routes/checklist.py` | 수정 | 엔드포인트 2건 추가 (`report/orders`, `report/<sn>`), `view_access_required` import |
+
+FE 변경 없음 — VIEW Sprint 28 (ChecklistReportPage.tsx)에서 소비.
+
+### 테스트 케이스
+
+```
+[#54-A: O/N 검색]
+TC-54A-01: GET /report/orders?sales_order=6656 → products 배열에 해당 O/N의 S/N 목록 반환
+TC-54A-02: GET /report/orders?serial_number=GBWS → ILIKE 부분 일치, 매칭 S/N 반환
+TC-54A-03: 두 파라미터 동시 → OR 조건 (합집합)
+TC-54A-04: 매칭 없음 → products: [] (200)
+TC-54A-05: 파라미터 없음 → 400 에러
+TC-54A-06: overall_percent = 체크리스트 check_result IS NOT NULL / total × 100
+
+[#54-B: S/N 성적서]
+TC-54B-01: GET /report/GBWS-6920 → categories 배열에 TM 포함
+TC-54B-02: TM items에 item_group, item_name, item_type, check_result, checked_by_name 포함
+TC-54B-03: check_result 필드: PASS, NA, null 정상 반환
+TC-54B-04: checked_by_name = workers.name JOIN 결과
+TC-54B-05: summary.total = active master 항목 수, summary.checked = check_result IS NOT NULL 수
+TC-54B-06: summary.percent = checked / total × 100 (소수점 1자리)
+TC-54B-07: MECH/ELEC master 없으면 → categories에 TM만 (빈 카테고리 자동 제외)
+TC-54B-08: 존재하지 않는 S/N → 404 PRODUCT_NOT_FOUND
+TC-54B-09: generated_at = KST 현재 시각 ISO 형식
+TC-54B-10: customer 필드 = product_info.customer 값
+
+[기존 API 호환]
+TC-54C-01: GET /api/app/checklist/tm/{sn} → 기존 응답 형태 동일 (groups 배열 유지)
+TC-54C-02: PUT /api/app/checklist/tm/check → 기존 동작 동일
+TC-54C-03: GET /api/app/checklist/tm/{sn}/status → 기존 동작 동일
+```
+
+### 규칙
+- 기존 `get_tm_checklist()` 외부 인터페이스 변경 없음 (wrapper로 유지)
+- `_get_checklist_by_category()`는 private 함수 — 외부 호출 금지, 내부 재활용 전용
+- MECH/ELEC master 미확정 상태에서는 해당 카테고리 자동 제외 (total=0이면 categories에 미포함)
+- `input_value` 필드는 MECH 마스터 확정 시 별도 Sprint으로 추가 (현재 미구현)
+- `view_access_required` 사용 — VIEW 접근 권한만 필요 (admin_required 아님)
+- TC-54A-01~06, TC-54B-01~10, TC-54C-01~03 통과 후 커밋
+
+---
+
+## BACKLOG: 개인정보 동의 관리 — 동의 팝업 + 설정 토글
+
+- 등록일: 2026-04-06
+- 우선순위: High (법적 요구사항)
+- 관련 문서: `G-AXIS_앱_이용동의_화면명세.docx`
+- 관련 파일: `AXIS-OPS/frontend/lib/screens/settings/profile_screen.dart`
+- 법적 근거: 개인정보보호법 §15(수집·이용), §17(제3자 제공), §21(파기)
+
+### 배경
+
+G-AXIS 앱 사용자(협력사 포함)에 대해 개인정보 수집·이용 동의를 받아야 함.
+파견법 리스크 대응을 위해 "시스템 알림 ≠ 업무 명령" 문구를 동의 화면에 포함해야 함.
+
+### 핵심 요구사항
+
+#### 1. 두 가지 화면이 필요 (별개 구현)
+
+| 구분 | 최초 동의 팝업 | 설정 내 토글 |
+|------|-------------|------------|
+| 시점 | 가입 직후 / `terms_agreed_at IS NULL` / 버전 불일치 | 언제든 설정 진입 시 |
+| 성격 | **Blocking** — 동의 안 하면 앱 사용 불가 | **Non-blocking** — 조회/철회용 |
+| UI | Full-screen dialog, 약관 본문 스크롤, 체크박스 | profile_screen 내 섹션, Switch 토글 + 동의일자 |
+| 파견법 문구 | 본문에 **반드시 노출** | "자세히 보기" 링크 또는 간략 요약 |
+
+#### 2. DB 마이그레이션
+
+```sql
+-- workers 테이블 컬럼 추가
+ALTER TABLE workers ADD COLUMN terms_agreed_at TIMESTAMP;
+ALTER TABLE workers ADD COLUMN terms_version VARCHAR(10);
+ALTER TABLE workers ADD COLUMN privacy_agreed_at TIMESTAMP;
+-- 선택: 제3자 제공 동의가 필요한 경우
+ALTER TABLE workers ADD COLUMN third_party_agreed_at TIMESTAMP;
+```
+
+- `terms_agreed_at`: 이용약관 동의 일시
+- `terms_version`: 동의한 약관 버전 (예: "1.0")
+- `privacy_agreed_at`: 개인정보 수집·이용 동의 일시
+- `third_party_agreed_at`: 제3자 제공 동의 일시 (GST↔협력사 데이터 공유 해당 시)
+
+#### 3. 동의 트리거 (3가지)
+
+1. **신규 가입**: 이메일 인증 완료 후 → 동의 팝업
+2. **기존 사용자**: 로그인 시 `terms_agreed_at IS NULL` → 동의 팝업
+3. **버전 불일치**: 로그인 시 `terms_version != CURRENT_VERSION` → 재동의 팝업
+
+#### 4. 동의 항목 구분
+
+| 항목 | 필수/선택 | 철회 가능 | 설정 토글 |
+|------|----------|----------|----------|
+| 이용약관 | 필수 | 불가 (탈퇴로만 가능) | 텍스트+날짜만 표시 |
+| 개인정보 수집·이용 | 필수 | 불가 (탈퇴로만 가능) | 텍스트+날짜만 표시 |
+| 개인정보 제3자 제공 | 선택 | **가능** | Switch 토글 |
+
+> 필수 동의는 서비스 이용에 반드시 필요하므로 토글로 철회 불가.
+> 철회 = 회원탈퇴 안내로 연결.
+
+#### 5. 설정 화면 UI 설계 (profile_screen.dart)
+
+기존 알림 설정 섹션의 Switch 패턴을 재활용:
+
+```
+[서비스 동의]  ← _buildSectionHeader('서비스 동의')
+┌──────────────────────────────────────────┐
+│ 이용약관 동의              2026/04/06 동의 │  ← 텍스트만 (필수)
+│ 개인정보 수집·이용 동의     2026/04/06 동의 │  ← 텍스트만 (필수)
+│ 개인정보 제3자 제공 동의    [토글] ────── │  ← Switch (선택)
+│                          2026/04/06 동의 │
+│                                          │
+│ [동의 내용 자세히 보기]                     │  ← 약관 전문 연결
+└──────────────────────────────────────────┘
+```
+
+#### 6. BE API 설계
+
+```
+GET  /api/worker/consent          → 현재 동의 상태 조회
+POST /api/worker/consent          → 최초 동의 기록 (팝업에서 호출)
+PATCH /api/worker/consent         → 선택 동의 철회/재동의 (설정 토글에서 호출)
+GET  /api/worker/consent/terms    → 약관 본문 조회 (버전별)
+```
+
+#### 7. 파견법 리스크 대응 문구 (동의 팝업 본문 포함)
+
+> "본 시스템은 공정 현황 공유를 위한 도구이며, 모든 업무 지시는 소속 회사를 통해 이루어집니다. 시스템 알림은 업무 명령이 아닌 현장 상태 정보 공유입니다."
+
+#### 8. 수집 항목 및 보유 기간
+
+- 수집 항목: 이름, 이메일 (로그인/인증, 리드타임 분석, 알림 발송 목적)
+- 보유 기간: 서비스 이용 기간 중
+- 자동 삭제: 30일 미접속 시 개인정보 파기 (개인정보보호법 §21)
+
+### 명세서 보완 필요 사항
+
+1. **필수/선택 동의 분리**: 현재 명세서는 하나의 동의로 묶여 있음 → 분리 필요
+2. **제3자 제공 여부 검토**: GST↔협력사 데이터 공유가 제3자 제공에 해당하는지 법적 검토
+3. **동의 철회 API 정의**: 설정 토글에서 선택 동의 철회 시 BE 처리 로직
+4. **동의 이력 테이블**: `consent_history` 별도 테이블로 동의/철회 이력 관리 (감사 대응)
+5. **`third_party_agreed_at` 컬럼**: 제3자 제공 해당 시 추가
+
+### Phase 구분 (Sprint 전환 시 참고)
+
+**Phase 1 — DB + 최초 동의 팝업 (필수, 먼저)**
+- DB 마이그레이션
+- BE: 동의 상태 조회 + 기록 API
+- FE: 로그인 후 동의 체크 → 팝업 → 동의 처리
+- 파견법 문구 포함
+- 테스트: 3가지 트리거 시나리오
+
+**Phase 2 — 설정 내 토글**
+- FE: profile_screen에 "서비스 동의" 섹션 추가
+- 필수 동의: 텍스트+날짜 (토글 없음)
+- 선택 동의: Switch 토글 + 동의일자
+- 철회 시 확인 다이얼로그
+- BE: 선택 동의 철회 API
+
+**Phase 3 — 동의 이력 관리 (선택)**
+- `consent_history` 테이블 생성
+- 동의/철회 이벤트 자동 기록
+- 관리자 감사 조회 기능
+
+### 착수 조건
+
+- [ ] 명세서 보완 사항 확정 (필수/선택 분리, 제3자 제공 여부)
+- [ ] 약관 본문 텍스트 확정
+- [ ] 파견법 문구 법무 검토 완료
+
+---
+
+## BACKLOG: CT(Cycle Time) 분석 모듈 — 공수/리드타임 자동 산출
+
+- 등록일: 2026-04-07
+- 우선순위: Medium (데이터 축적 후 점진 구현)
+- 관련 스키마: `analytics` (WH 역할, `ct_` prefix)
+- 관련 파일: `sql/elec_realtime_analysis.sql` (프로토타입 쿼리)
+- 의사결정: ADR-013 (memory.md)
+
+### 배경
+
+GBWS-6905 ELEC 공정 분석으로 프로토타입 완료.
+`app_task_details`의 started_at/completed_at에서 비작업 구간(휴식/식사/퇴근 후)을 제외하면
+순수 작업시간 산출 가능. 출퇴근(`hr.partner_attendance`) clamp로 정확도 향상.
+
+### 핵심 계산 로직
+
+```
+순수작업(분) = (completed_at - started_at)
+             - 일시정지(total_pause_minutes)
+             - 오전휴식(10:00~10:20)  ← 겹치는 구간만
+             - 점심(11:20~12:20)      ← 겹치는 구간만
+             - 오후휴식(15:00~15:20)  ← 겹치는 구간만
+             - 저녁(17:00~18:00)      ← 연장근로 시만
+             - 출근 전/퇴근 후         ← attendance clamp
+
+공수(man-day) = 순수작업(분) × 인원 ÷ 기준분
+  기준 A: 행정 8시간 = 480분
+  기준 B: 실가용 7시간20분 = 440분
+  (선택 가능 — admin_settings에서 설정)
+```
+
+### 구현 범위
+
+#### 1. DB — analytics 스키마에 VIEW 추가
+
+```sql
+-- analytics.ct_task_realtime (VIEW)
+-- 원본: public.app_task_details + hr.partner_attendance
+-- 비작업 구간 자동 제외, 순수작업시간 산출
+CREATE VIEW analytics.ct_task_realtime AS ...
+```
+
+#### 2. 설정값 — admin_settings 활용 (별도 테이블 X)
+
+```
+key: 'ct_work_schedule'
+value: {
+  "breaks": [
+    {"name":"morning", "start":"10:00", "end":"10:20"},
+    {"name":"lunch",   "start":"11:20", "end":"12:20"},
+    {"name":"afternoon","start":"15:00","end":"15:20"},
+    {"name":"dinner",  "start":"17:00", "end":"18:00", "overtime_only":true}
+  ],
+  "work_hours": {"start":"08:00", "normal_end":"17:00", "overtime_end":"20:00"},
+  "overtime_threshold": "17:30"
+}
+
+key: 'ct_manday_basis'
+value: {"standard_minutes":480, "actual_minutes":440}
+```
+
+#### 3. BE 모듈 — 분리 구조
+
+```
+backend/app/
+  services/analytics_prod_service.py  ← CT 분석 로직
+    - get_task_realtime(serial_number, category, basis)
+    - get_cycle_summary(serial_number)
+    - get_category_benchmark(category, model)
+
+  routes/analytics_prod.py            ← API 엔드포인트
+    GET /api/analytics/ct/realtime?sn=GBWS-6905&category=ELEC
+    GET /api/analytics/ct/summary?sn=GBWS-6905
+    GET /api/analytics/ct/benchmark?category=ELEC&model=GAIA-I
+```
+
+#### 4. 향후 — 모델별 표준공수 기준표
+
+```sql
+-- analytics.ct_cycle_baseline
+-- 데이터 축적 후 모델 × 카테고리 × 공정별 평균/중앙값
+CREATE TABLE analytics.ct_cycle_baseline (
+  model VARCHAR(50),
+  task_category VARCHAR(50),
+  task_code VARCHAR(100),
+  avg_minutes NUMERIC,
+  median_minutes NUMERIC,
+  p90_minutes NUMERIC,
+  sample_count INTEGER,
+  updated_at TIMESTAMPTZ
+);
+```
+
+→ APS Lite의 기초 데이터
+
+### Phase 구분
+
+**Phase 1 — VIEW + admin_settings (즉시 가능)**
+- `analytics.ct_task_realtime` VIEW 생성 (migration)
+- `admin_settings`에 `ct_work_schedule`, `ct_manday_basis` 키 추가
+- 프로토타입 쿼리(`sql/elec_realtime_analysis.sql`) 기반
+
+**Phase 2 — BE 모듈 + API**
+- `analytics_prod_service.py` + `analytics_prod.py` 신규
+- VIEW 대시보드에서 호출 가능한 REST API
+- 공수 기준 선택 파라미터
+
+**Phase 3 — 표준공수 기준표 (데이터 축적 후)**
+- `analytics.ct_cycle_baseline` 테이블
+- 모델별 × 공정별 통계 자동 갱신
+- APS Lite 연동 기반
+
+### 착수 조건
+
+- [x] 프로토타입 쿼리 검증 완료 (GBWS-6905 ELEC)
+- [ ] 스키마 맵 DB 대조 검증 (터미널 `\dt schema.*`)
+- [ ] admin_settings key 구조 확정
+- [ ] 충분한 완료 데이터 축적 (최소 S/N 5개 이상)
+
+---
+
+## Sprint 55: Worker별 Pause/Resume + Auto-Finalize — 다중작업자 개인별 작업시간 추적
+
+> **목적**: 다중작업자 task에서 개인별 pause/resume 독립 관리 + 전원 릴레이 종료 시 auto-finalize로 APS용 정확한 man-minute 데이터 확보
+> **범위**: BE 5파일 수정 + FE 2파일 수정. DB 스키마 변경 없음 (work_pause_log에 이미 worker_id 존재)
+> **의존성**: Sprint 9 (pause/resume), Sprint 15 (다중작업자 Join), Sprint 41 (릴레이), BUG-6 (coworker resume — 배포 완료)
+> **DB 참조**: `DB_SCHEMA_MAP.md` — 영향 테이블: `work_pause_log`, `app_task_details`, `work_start_log`, `work_completion_log`
+
+### 배경 — 현재 구조의 문제
+
+현재 pause/resume는 **task 단위** 1개 플래그(`app_task_details.is_paused`)로 관리됨.
+- A가 pause → **task 전체 멈춤** → B도 paused 표시
+- B가 resume → **A의 pause 종료** → A의 실제 쉬는 시간 추적 불가
+- 5명 task에서 1명 pause → CT 분석 시 5명분 차감 → **공수 오차 최대 (N-1)/N = 80%**
+
+실제 데이터 (GBWS-6920):
+- task 82 (Util LINE 1): 5명 참여 — 서정원 1명 pause → 5명 전체 paused 표시
+
+추가로 발견된 문제:
+- **전원 릴레이 종료 시 task 미완료**: 모든 작업자가 finalize=false → `task.completed_at = NULL` → progress 0%
+- **FINAL task(자주검사) 릴레이 종료**: 자주검사가 미완료 → 자동 마감 트리거 미발동 → working hours 산출 불가
+
+### 설계 원칙: Worker별 독립 Pause + Auto-Finalize
+
+1. **pause/resume는 본인만**: A pause → A만 paused. B는 영향 없음
+2. **task.is_paused = 전원 paused일 때만 true**: 하위호환 유지 (FE 미업데이트 시 기존 동작)
+3. **동료 resume 불가, admin resume 유지**: BUG-6의 coworker resume 조건 제거, admin/manager override 유지
+4. **auto-finalize**: 전원 completion_log 도달 시 즉시 task 완료 (스케줄러 지연 없이 실시간 progress)
+5. **FINAL task 릴레이 불가**: 자주검사/가압검사 등 FINAL_TASK_IDS는 finalize=true 강제
+
+### Task 1: `backend/app/routes/work.py` — pause/resume 로직 변경
+
+#### 1-A: `pause_work()` (L890~) — 개인별 pause
+
+현재: `set_paused(task_detail_id, is_paused=True)` → task 전체 paused
+
+변경:
+```python
+# 기존 코드 (L975-976)
+# set_paused(task_detail_id, is_paused=True)
+
+# 변경: worker별 pause 기록만, task.is_paused는 전원 paused일 때만 true
+pause_log = create_pause(task_detail_id, worker_id, pause_type='manual')
+if not pause_log:
+    return jsonify({'error': 'PAUSE_FAILED', ...}), 500
+
+# 전원 paused 판정: start_log에 있는 active worker 전원이 pause 중인지 확인
+all_paused = _all_active_workers_paused(task_detail_id)
+set_paused(task_detail_id, is_paused=all_paused)
+```
+
+#### 1-B: `resume_work()` (L991~) — 본인 pause만 resume
+
+현재: `get_active_pause(task_detail_id)` → task의 최신 pause 1건 (누구 것이든)
+
+변경:
+```python
+# 기존 코드 (L1038)
+# active_pause = get_active_pause(task_detail_id)
+
+# 변경: 본인의 active pause만 조회
+active_pause = get_active_pause_by_worker(task_detail_id, worker_id)
+if not active_pause:
+    return jsonify({
+        'error': 'PAUSE_NOT_FOUND',
+        'message': '본인의 활성 일시정지를 찾을 수 없습니다.'
+    }), 404
+
+# 권한 체크 변경: 본인 또는 admin/manager만 (coworker resume 제거)
+if active_pause.worker_id != worker_id and not is_admin:
+    return jsonify({'error': 'FORBIDDEN', ...}), 403
+
+# resume 후 task.is_paused 재판정
+resumed = resume_pause(active_pause.id, resumed_at)
+# ... pause_duration 누적 ...
+
+# 전원 paused 재판정
+all_paused = _all_active_workers_paused(task_detail_id)
+set_paused(task_detail_id, is_paused=all_paused)
+```
+
+#### 1-C: 응답에 `my_pause_status` 추가
+
+`_task_to_dict()` 또는 pause/resume 응답에 추가:
+```python
+# pause/resume 응답에 개인 상태 포함
+result = _task_to_dict(updated_task)
+result['my_pause_status'] = 'paused' if _is_worker_paused(task_detail_id, worker_id) else 'working'
+```
+
+### Task 2: `backend/app/models/work_pause_log.py` — 신규 함수 추가
+
+```python
+def get_active_pause_by_worker(task_detail_id: int, worker_id: int) -> Optional[WorkPauseLog]:
+    """
+    특정 작업자의 활성 일시정지 조회 (resumed_at IS NULL)
+
+    Args:
+        task_detail_id: 작업 ID
+        worker_id: 작업자 ID
+
+    Returns:
+        해당 작업자의 활성 WorkPauseLog, 없으면 None
+    """
+    # SELECT * FROM work_pause_log
+    # WHERE task_detail_id = %s AND worker_id = %s AND resumed_at IS NULL
+    # ORDER BY paused_at DESC LIMIT 1
+
+
+def get_active_pauses_for_task(task_detail_id: int) -> List[WorkPauseLog]:
+    """
+    해당 task의 모든 활성 일시정지 조회 (worker별)
+
+    Returns:
+        활성 WorkPauseLog 리스트
+    """
+    # SELECT * FROM work_pause_log
+    # WHERE task_detail_id = %s AND resumed_at IS NULL
+    # ORDER BY paused_at DESC
+```
+
+### Task 3: `backend/app/services/task_service.py` — 헬퍼 함수 + auto-finalize
+
+#### 3-A: 전원 paused 판정 헬퍼
+
+```python
+def _all_active_workers_paused(task_detail_id: int) -> bool:
+    """
+    현재 active worker 전원이 paused 상태인지 확인.
+
+    ⚠️ active worker 판정:
+    - 단순 "completion_log 없는 worker"가 아님
+    - 릴레이 재시작 시 worker가 complete → restart 하면 completion_log 존재하지만 active
+    - 판정 기준: MAX(start_log.started_at) > MAX(completion_log.completed_at)
+      또는 completion_log가 아예 없는 worker
+    - _worker_restarted_after_completion() 패턴 재활용
+
+    단독작업자(1인): 본인 pause = task pause (기존 동작 유지)
+
+    Returns:
+        전원 paused이면 True
+    """
+    # SQL:
+    # WITH worker_status AS (
+    #     SELECT wsl.worker_id,
+    #            MAX(wsl.started_at) AS last_start,
+    #            MAX(wcl.completed_at) AS last_complete
+    #     FROM work_start_log wsl
+    #     LEFT JOIN work_completion_log wcl
+    #         ON wsl.task_id = wcl.task_id AND wsl.worker_id = wcl.worker_id
+    #     WHERE wsl.task_id = %s
+    #     GROUP BY wsl.worker_id
+    # ),
+    # active_workers AS (
+    #     -- completion 없거나, 마지막 start > 마지막 completion (릴레이 재시작)
+    #     SELECT worker_id
+    #     FROM worker_status
+    #     WHERE last_complete IS NULL
+    #        OR last_start > last_complete
+    # ),
+    # paused_workers AS (
+    #     SELECT DISTINCT worker_id
+    #     FROM work_pause_log
+    #     WHERE task_detail_id = %s AND resumed_at IS NULL
+    # )
+    # SELECT COUNT(*) = 0 AS all_paused
+    # FROM active_workers aw
+    # LEFT JOIN paused_workers pw ON aw.worker_id = pw.worker_id
+    # WHERE pw.worker_id IS NULL
+
+
+def _is_worker_paused(task_detail_id: int, worker_id: int) -> bool:
+    """
+    특정 작업자가 현재 paused 상태인지 확인.
+
+    Returns:
+        해당 worker의 활성 pause가 있으면 True
+    """
+    # SELECT 1 FROM work_pause_log
+    # WHERE task_detail_id = %s AND worker_id = %s AND resumed_at IS NULL
+    # LIMIT 1
+```
+
+#### 3-A-2: `_all_workers_completed()` 릴레이 재시작 안전 수정 (L997-1044)
+
+현재 코드 문제:
+```python
+# 현재 (L1015-1037):
+# started_count = COUNT(DISTINCT worker_id) FROM work_start_log
+# completed_count = COUNT(*) FROM work_completion_log  ← 전체 행수!
+# return completed_count >= started_count
+#
+# ⚠️ 릴레이 재시작 시 1명이 completion_log 2건 생성 → completed_count 부풀림
+#    예: A(2건)+B(1건)=3건 >= started 3명 → C 미완료인데 TRUE 오판
+```
+
+변경: `_all_active_workers_paused`와 동일한 MAX 타임스탬프 패턴 사용
+```python
+def _all_workers_completed(task_id: int) -> bool:
+    """
+    전원 최종 완료 여부 확인 (릴레이 재시작 안전).
+
+    판정 기준: 각 worker의 MAX(completed_at) >= MAX(started_at)
+    - completion 없음 → 미완료
+    - start > completion → 재시작함 → 미완료
+    - completion >= start → 최종 완료
+    """
+    # SQL:
+    # WITH worker_final_status AS (
+    #     SELECT wsl.worker_id,
+    #            MAX(wsl.started_at) AS last_start,
+    #            MAX(wcl.completed_at) AS last_complete
+    #     FROM work_start_log wsl
+    #     LEFT JOIN work_completion_log wcl
+    #         ON wsl.task_id = wcl.task_id AND wsl.worker_id = wcl.worker_id
+    #     WHERE wsl.task_id = %s
+    #     GROUP BY wsl.worker_id
+    # )
+    # SELECT
+    #     COUNT(*) AS total_workers,
+    #     COUNT(CASE
+    #         WHEN last_complete IS NOT NULL
+    #          AND last_complete >= last_start
+    #         THEN 1
+    #     END) AS completed_workers
+    # FROM worker_final_status
+    #
+    # 판정: total_workers > 0 AND total_workers = completed_workers
+```
+
+#### 3-B: `complete_work()` auto-finalize (task_service.py L287-300 수정)
+
+현재: `finalize=false` → 무조건 return (task 열린 상태 유지)
+변경: 전원 completion_log 도달 시 자동 finalize
+
+```python
+# 현재 코드 (L286-300)
+# if not finalize:
+#     return {..., 'task_finished': False, 'relay_mode': True}, 200
+
+# 변경:
+auto_finalized = False
+if not finalize:
+    all_workers_done = _all_workers_completed(task.id)
+    if all_workers_done:
+        # 전원 completion_log 있음 → auto-finalize
+        auto_finalized = True
+        logger.info(
+            f"Auto-finalize triggered: all workers completed via relay, "
+            f"task_id={task_detail_id}, last_worker={worker_id}"
+        )
+        # fall-through to finalize logic below (return 하지 않음)
+        # ⚠️ all_workers_done 변수 재활용 — 아래 finalize 로직에서 재호출 금지
+    else:
+        return {
+            'message': '내 작업이 종료되었습니다.',
+            'task_id': task_detail_id,
+            'completed_at': completed_at.isoformat(),
+            'duration_minutes': this_worker_duration,
+            'category_completed': False,
+            'task_finished': False,
+            'relay_mode': True,
+        }, 200
+
+# 아래 기존 finalize 로직 실행 (L302~)
+# ⚠️ 구현 시 주의: auto_finalized=True이면 all_workers_done 이미 True
+#    → 기존 L302~ 의 _all_workers_completed(task.id) 재호출 스킵
+#    → all_workers_done 변수 그대로 재활용할 것
+```
+
+#### 3-C: FINAL task 릴레이 불가
+
+```python
+# complete_work() 초반부에 추가 (L203 이후)
+# FINAL_TASK_IDS는 finalize=true 강제 (릴레이 불가)
+if task.task_id in FINAL_TASK_IDS and not finalize:
+    logger.info(
+        f"FINAL task forced finalize: task_id={task_detail_id}, "
+        f"task_name={task.task_id}"
+    )
+    finalize = True
+```
+
+#### 3-D: `complete_work()` — 개인 pause 자동 resume
+
+현재 L258-276에서 `task.is_paused` 기준으로 auto-resume.
+변경: 해당 worker의 개인 pause만 resume.
+
+```python
+# 현재 (L258-276): task.is_paused 기준
+# if task.is_paused:
+#     active_pause = get_active_pause(task_detail_id)
+
+# 변경: 본인의 pause만 resume
+from app.models.work_pause_log import get_active_pause_by_worker
+my_pause = get_active_pause_by_worker(task_detail_id, worker_id)
+if my_pause:
+    updated_pause = resume_pause(my_pause.id, completed_at)
+    if updated_pause:
+        pause_duration = updated_pause.pause_duration_minutes or 0
+        # ⚠️ task.total_pause_minutes 누적 갱신 필수 (기존 코드 L268 패턴 유지)
+        new_total_pause_minutes = task.total_pause_minutes + pause_duration
+    else:
+        new_total_pause_minutes = task.total_pause_minutes
+    # task.is_paused 재판정 + total_pause_minutes 갱신
+    all_paused = _all_active_workers_paused(task_detail_id)
+    set_paused(task_detail_id, is_paused=all_paused,
+               total_pause_minutes=new_total_pause_minutes)
+    task = get_task_by_id(task_detail_id)
+```
+
+### Task 4: `backend/app/services/scheduler_service.py` — 자동 pause 개인별 확인
+
+현재 `force_pause_all_active_tasks()`는 이미 **worker별로 pause 기록** 생성:
+```python
+# 현재 코드 (L635~): active worker 각각 create_pause() — 이미 구현됨
+for worker_row in active_workers:
+    worker_id = worker_row['worker_id']
+    pause_log = create_pause(task_id, worker_id, pause_type=pause_type)
+```
+
+변경 필요:
+```python
+# task.is_paused 설정 부분 수정
+# 현재: set_paused(task_id, is_paused=True)  ← 무조건 True
+# 변경: 전원 paused 판정 후 설정
+all_paused = _all_active_workers_paused(task_id)
+set_paused(task_id, is_paused=all_paused)
+```
+
+`send_break_end_notifications()`도 동일:
+```python
+# resume 후 task.is_paused 재판정
+all_paused = _all_active_workers_paused(task_detail_id)
+set_paused(task_detail_id, is_paused=all_paused)
+```
+
+### Task 5: FE 변경 — `task_detail_screen.dart` + `task_item.dart`
+
+#### 5-A: `task_item.dart` — `myPauseStatus` 필드 추가
+
+```dart
+class TaskItem {
+  // ... 기존 필드 ...
+  final String myPauseStatus;  // 'paused' | 'working'
+
+  factory TaskItem.fromJson(Map<String, dynamic> json) {
+    return TaskItem(
+      // ... 기존 ...
+      myPauseStatus: json['my_pause_status'] as String? ?? 'working',
+    );
+  }
+}
+```
+
+#### 5-B: `task_detail_screen.dart` — pause/resume 버튼 기준 변경
+
+현재: `task.isPaused` (task 전체 기준)
+변경: `task.myPauseStatus` (본인 기준)
+
+```dart
+// 현재 (L73-98):
+// if (task.isPaused) { statusText = '일시정지'; }
+
+// 변경:
+if (task.myPauseStatus == 'paused') {
+  statusText = '일시정지';
+  statusIcon = Icons.pause_circle;
+}
+```
+
+#### 5-C: `task_detail_screen.dart` — FINAL task 완료 다이얼로그
+
+현재: 모든 task에서 "내 작업만 종료" / "작업 완료" 선택
+변경: FINAL task는 릴레이 팝업 미표시, 바로 finalize=true
+
+```dart
+// _showCompleteDialog() 수정:
+// FINAL task 판정 (task_id 기반)
+final isFinalTask = [
+  'SELF_INSPECTION', 'INSPECTION', 'PRESSURE_TEST',
+  'PI_CHAMBER', 'QI_INSPECTION', 'SI_SHIPMENT'
+].contains(task.taskId);
+
+if (isFinalTask) {
+  // 릴레이 선택 없이 바로 완료
+  _handleCompleteTask(finalize: true);
+  return;
+}
+// 기존 다이얼로그 표시 ...
+```
+
+### 변경 파일 요약
+
+| 파일 | 변경 내용 | 신규/수정 |
+|------|----------|-----------|
+| `backend/app/routes/work.py` | pause/resume 개인별 로직, my_pause_status 응답 | 수정 |
+| `backend/app/models/work_pause_log.py` | `get_active_pause_by_worker`, `get_active_pauses_for_task` | 수정 (함수 추가) |
+| `backend/app/services/task_service.py` | `_all_active_workers_paused`, `_is_worker_paused`, auto-finalize, FINAL 강제 | 수정 |
+| `backend/app/services/scheduler_service.py` | is_paused 재판정 로직 | 수정 |
+| `frontend/lib/models/task_item.dart` | `myPauseStatus` 필드 | 수정 |
+| `frontend/lib/screens/task/task_detail_screen.dart` | pause 기준 변경, FINAL task 릴레이 불가 | 수정 |
+
+### DB 변경: 없음
+
+- `work_pause_log`: 이미 `worker_id` 컬럼 존재, 스키마 변경 불필요
+- `app_task_details.is_paused`: 의미 변경 (개인→전원), 컬럼 자체 변경 없음
+- `work_start_log`, `work_completion_log`: 읽기만 (JOIN 조건), 변경 없음
+
+### 하위호환
+
+| 항목 | 영향 |
+|------|------|
+| 단독작업자 (1인) | 기존과 동일 — 본인 pause = task pause |
+| FE 미업데이트 | `task.is_paused` 기준으로 동작 (전원 pause 시만 표시) — 기능 저하 있으나 오류 없음 |
+| 기존 work_pause_log 데이터 | 그대로 유지 (worker_id 이미 존재) |
+| scheduler 자동 pause | 이미 worker별 기록 중 — is_paused 재판정 로직만 추가 |
+| BUG-6 coworker resume | 이 Sprint에서 제거됨 (본인 + admin만 resume) |
+| Sprint 41 릴레이 | auto-finalize 추가됨 — 기존 finalize=true 동작 변경 없음 |
+
+### 테스트 케이스
+
+```
+[Worker별 Pause 기본 — TC-WP-01 ~ TC-WP-05]
+
+TC-WP-01: 다중작업자 — A pause → A만 paused, B는 working 표시
+  Setup: FNI worker_a, worker_b 생성, task에 둘 다 start_log
+  Flow: worker_a pause → GET task detail
+  Assert:
+    - pause API: 200
+    - response.my_pause_status == 'paused' (A 기준)
+    - DB: work_pause_log에 worker_a 레코드 (resumed_at IS NULL)
+    - task.is_paused == false (B가 아직 working)
+    - worker_b로 GET task detail → my_pause_status == 'working'
+
+TC-WP-02: 다중작업자 — A pause → A resume → A working
+  Setup: 동일
+  Flow: worker_a pause → worker_a resume
+  Assert:
+    - resume API: 200
+    - response.my_pause_status == 'working'
+    - DB: work_pause_log.resumed_at IS NOT NULL, pause_duration_minutes >= 0
+    - task.is_paused == false
+
+TC-WP-03: 다중작업자 — A pause → B resume 시도 → 404 (본인 pause 없음)
+  Setup: 동일
+  Flow: worker_a pause → worker_b resume 시도
+  Assert:
+    - resume API: 404 PAUSE_NOT_FOUND
+    - message: '본인의 활성 일시정지를 찾을 수 없습니다.'
+    - DB: worker_a의 pause 여전히 active
+
+TC-WP-03a: 다중작업자 — A pause → Admin resume A의 pause → 200
+  Setup: worker_a + admin
+  Flow: worker_a pause → admin이 worker_a의 task resume
+  Assert:
+    - resume API: 200 (admin override)
+    - DB: worker_a의 pause resolved
+
+TC-WP-04: 다중작업자 — A pause + B pause → task.is_paused = true (전원 paused)
+  Setup: worker_a, worker_b 둘 다 start_log
+  Flow: worker_a pause → worker_b pause
+  Assert:
+    - 첫 pause 후: task.is_paused == false (B working)
+    - 둘 다 pause 후: task.is_paused == true (전원 paused)
+
+TC-WP-05: 전원 paused → A resume → task.is_paused = false (A working 복귀)
+  Setup: TC-WP-04 이후 (A, B 전원 paused 상태)
+  Flow: worker_a resume
+  Assert:
+    - task.is_paused == false
+    - 이유: active_workers = {A(working), B(paused)} → 전원 paused 아님 → false
+    - worker_a의 my_pause_status == 'working'
+    - worker_b의 my_pause_status == 'paused'
+
+[단독 작업자 하위호환 — TC-WP-06 ~ TC-WP-07]
+
+TC-WP-06: 단독작업자 — pause → task.is_paused = true (기존 동작 유지)
+  Setup: 1인 task
+  Flow: pause
+  Assert:
+    - task.is_paused == true (1인이므로 전원 = 본인)
+    - 기존 TC-PR-01과 동일 결과
+
+TC-WP-07: 단독작업자 — pause → resume → task.is_paused = false
+  Assert: 기존 TC-PR-02와 동일 결과
+
+[Auto-Finalize — TC-AF-01 ~ TC-AF-05]
+
+TC-AF-01: 전원 릴레이 종료 → auto-finalize 트리거
+  Setup: worker_a, worker_b 2명 task
+  Flow:
+    worker_a complete(finalize=false) → 200, task_finished=false
+    worker_b complete(finalize=false) → 200, task_finished=true (auto-finalize)
+  Assert:
+    - worker_b 응답: task_finished == true
+    - DB: task.completed_at IS NOT NULL
+    - DB: task.duration_minutes, elapsed_minutes, worker_count 집계됨
+    - work_completion_log: 2건 (worker_a, worker_b 각각)
+
+TC-AF-02: 3명 task — 2명 릴레이 후 마지막 1명 finalize=false → auto-finalize
+  Setup: 3명 task
+  Flow: A relay → B relay → C relay
+  Assert: C의 응답에서 task_finished=true (전원 completion_log 도달)
+
+TC-AF-03: 일부만 릴레이, 나머지 미완료 → auto-finalize 미발동
+  Setup: 3명 task
+  Flow: A relay → B relay (C 미완료)
+  Assert:
+    - B 응답: task_finished=false
+    - DB: task.completed_at IS NULL
+
+TC-AF-04: auto-finalize 후 completion_status + progress 정상 반영
+  Setup: serial_number의 ELEC task 1건, 2명 task
+  Flow: A relay → B relay (auto-finalize)
+  Assert:
+    - completion_status: elec_completed 반영
+    - progress API 호출 시 해당 S/N 진행률 반영
+
+TC-AF-05: auto-finalize 후 FINAL task(자주검사)가 별도 완료 → orphan 자동 마감
+  Setup: 같은 S/N에 일반 task(2명) + 자주검사 task
+  Flow:
+    일반 task: A relay → B relay → auto-finalize ✅
+    자주검사: 관리자 finalize=true → orphan 없음 (이미 완료)
+  Assert: category_completed == true
+
+TC-AF-06: 릴레이 재시작 worker 존재 시 조기 auto-finalize 방지
+  Setup: 3명 task (A, B, C)
+  Flow:
+    A complete(relay) → A restart → A complete(relay) 다시 → B complete(relay)
+    (C는 아직 작업 중)
+  Assert:
+    - B 응답: task_finished=false (C 미완료)
+    - DB: task.completed_at IS NULL
+    - _all_workers_completed: A(last_complete > last_start ✅), B(✅), C(last_complete NULL ❌) → false
+    - completion_log 행수 = 4건 (A 2건 + B 1건 + relay로 인한 중복)이지만 DISTINCT 판정이므로 무관
+
+TC-AF-07: 릴레이 재시작 worker가 최종 완료 → 비로소 auto-finalize
+  Setup: TC-AF-06 이후
+  Flow: C complete(relay)
+  Assert:
+    - C 응답: task_finished=true (전원 최종 완료)
+    - DB: task.completed_at IS NOT NULL
+    - work_completion_log: A, B, C 각각 duration_minutes 정확
+    - task.duration_minutes = A_net + B_net + C_net (개인별 합산)
+
+[FINAL Task 릴레이 불가 — TC-FT-01 ~ TC-FT-03]
+
+TC-FT-01: SELF_INSPECTION(자주검사) finalize=false 요청 → 강제 finalize=true
+  Setup: task_id = 'SELF_INSPECTION'
+  Flow: complete(finalize=false)
+  Assert:
+    - 200 성공 (relay가 아닌 완료 처리)
+    - DB: task.completed_at IS NOT NULL
+    - response: task_finished == true, relay_mode 없음
+
+TC-FT-02: INSPECTION(ELEC 자주검사) 동일 동작
+  Setup: task_id = 'INSPECTION'
+  Assert: TC-FT-01과 동일
+
+TC-FT-03: PRESSURE_TEST(가압검사) 동일 동작
+  Setup: task_id = 'PRESSURE_TEST'
+  Assert: TC-FT-01과 동일
+
+[Working Hours 연동 — TC-WH-01 ~ TC-WH-02]
+
+TC-WH-01: 자주검사 완료 → 카테고리 전체 완료 → working hours 산출
+  Setup: MECH task 3건 (일반2 + SELF_INSPECTION), 일반 task 전부 완료 상태
+  Flow: 자주검사 finalize=true
+  Assert:
+    - category_completed == true
+    - completion_status.mech_completed == true
+    - duration_minutes, elapsed_minutes 산출됨
+
+TC-WH-02: 자주검사 완료 → orphan relay task 자동 마감 → working hours 산출
+  Setup: ELEC task 3건 (일반2 auto-finalize 완료 + INSPECTION 미완료)
+  Flow: INSPECTION finalize=true
+  Assert:
+    - 모든 task completed_at IS NOT NULL
+    - category_completed == true
+
+[개인별 작업시간 정확도 — TC-CT-01 ~ TC-CT-03]
+
+TC-CT-01: A 30분 pause, B pause 없음 → 개인별 net_minutes 정확
+  Setup: 2명 task, 09:00 시작
+  Flow: A pause 30분 → A resume → A complete → B complete
+  Assert:
+    - work_pause_log: A에 30분 기록, B에 기록 없음
+    - work_completion_log: A duration < B duration (30분 차이)
+    - task.duration_minutes = A_duration + B_duration (개인별 합산)
+
+TC-CT-02: 5명 중 1명 pause → 1명분만 차감
+  Setup: 5명 task
+  Flow: worker_1 pause 20분, 나머지 4명 작업 지속, 전원 완료
+  Assert:
+    - task.duration_minutes에서 20분만 차감 (4명 × 0분 + 1명 × 20분)
+    - 기존 대비: 100분(5명×20분) 과다 차감 방지
+
+TC-CT-03: CT 분석 SQL로 개인별 순수작업시간 조회 가능
+  Assert: 아래 쿼리 실행 시 worker별 정확한 net_minutes 반환
+  ```sql
+  SELECT wsl.worker_id,
+         EXTRACT(EPOCH FROM (wcl.completed_at - wsl.started_at)) / 60
+         - COALESCE(SUM(wpl.pause_duration_minutes), 0) AS net_minutes
+  FROM work_start_log wsl
+  JOIN work_completion_log wcl
+      ON wsl.task_id = wcl.task_id AND wsl.worker_id = wcl.worker_id
+  LEFT JOIN work_pause_log wpl
+      ON wpl.task_detail_id = wsl.task_id
+      AND wpl.worker_id = wsl.worker_id
+      AND wpl.resumed_at IS NOT NULL
+  WHERE wsl.task_id = %s
+  GROUP BY wsl.worker_id, wsl.started_at, wcl.completed_at
+  ```
+
+[Scheduler 자동 Pause 호환 — TC-SP-01 ~ TC-SP-02]
+
+TC-SP-01: 휴게시간 → 전원 각각 pause 기록 + task.is_paused = true
+  Setup: 3명 task, 전원 active
+  Flow: force_pause_all_active_tasks('break_morning', '오전 휴식')
+  Assert:
+    - work_pause_log: 3건 (각 worker별 1건)
+    - task.is_paused == true (전원 paused)
+
+TC-SP-02: 휴게시간 종료 → 전원 resume + task.is_paused = false
+  Flow: send_break_end_notifications('break_morning', '오전 휴식 종료')
+  Assert:
+    - work_pause_log: 3건 모두 resumed_at IS NOT NULL
+    - task.is_paused == false
+
+[릴레이 재시작 + Pause 판정 — TC-WP-08 ~ TC-WP-09]
+
+TC-WP-08: 릴레이 재시작 worker가 pause → active worker 판정에 포함
+  Setup: 2명 task, A가 complete(relay) 후 restart, B는 계속 작업 중
+  Flow:
+    A complete(finalize=false) → A restart → A pause
+  Assert:
+    - A는 active (MAX(start) > MAX(completion))
+    - B도 active (completion 없음)
+    - task.is_paused == false (B working)
+    - _all_active_workers_paused returns false
+
+TC-WP-09: 릴레이 재시작 worker 포함 전원 paused → task.is_paused = true
+  Setup: TC-WP-08 이후
+  Flow: B pause
+  Assert:
+    - A paused + B paused → 전원 paused
+    - task.is_paused == true
+    - _all_active_workers_paused returns true
+```
+
+### 규칙
+
+1. **DB 스키마 변경 금지** — migration 없음. work_pause_log, app_task_details 구조 유지
+2. **단독작업자 하위호환 필수** — TC-WP-06, 07 PASS 확인 후 다중작업자 TC 진행
+3. **task.is_paused 의미 변경** — "개인 paused" → "전원 paused". FE 미업데이트 시 기능 저하(전원 pause 시만 표시)만 발생, 오류 없음
+4. **FINAL_TASK_IDS 참조** — `task_service.py` L48 FINAL_TASK_IDS dict 사용. 별도 상수 생성 금지
+5. **pause_type 구분 유지** — manual pause만 duration_minutes 차감. break auto-pause는 `_calculate_working_minutes`에서 이미 처리 (BUG-8 Fix)
+6. **auto-finalize 응답** — finalize=false 요청이었지만 auto-finalize된 경우, 응답에 `auto_finalized: true` 플래그 추가 (FE가 구분 가능)
+7. **BUG-6 coworker resume 제거** — `_worker_has_started_task` 조건 제거. admin/manager override만 유지
+8. **test prefix** — TC-WP (Worker Pause 01~09 + 03a), TC-AF (Auto Finalize 01~07), TC-FT (Final Task 01~03), TC-WH (Working Hours 01~02), TC-CT (Cycle Time 01~03), TC-SP (Scheduler Pause 01~02) — 총 28건
+9. **테스트 파일** — `tests/backend/test_sprint55_worker_pause.py` (신규), 기존 `test_pause_resume.py` TC-PR-19 수정
+
+### Regression 가이드라인
+
+Sprint 55 구현 후 기존 테스트가 fail할 수 있다. **테스트 코드를 바꿔서 통과시키는 것이 아니라, Sprint 55에서 결정한 기대값이 나오도록 코드를 수정해야 한다.**
+
+#### 원칙
+
+1. **기대값은 Sprint이 정한다** — TC의 Assert가 정답. 코드가 다른 결과를 내면 코드가 틀린 것
+2. **기존 TC-PR과 충돌 시**: Sprint 55 TC가 우선. 기존 TC는 Sprint 55 기준으로 업데이트
+3. **단순 코드 에러 수정 ≠ 로직 변경**: import 오류, 오타, 타입 에러 → 단순 수정 OK. 하지만 결과값이 Sprint과 다르게 나오는 수정은 금지
+
+#### 예상 regression (기존 TC-PR)
+
+| 기존 TC | 현재 기대 | Sprint 55 후 정답 | 조치 |
+|---------|----------|------------------|------|
+| TC-PR-08 | 다른 작업자 resume → 403 | → **404** (PAUSE_NOT_FOUND, 본인 pause 없음) | expected 404로 수정 |
+| TC-PR-15 | A pause → is_paused=True | → **is_paused=False** (B가 working이면) | 다중작업자 start_log 있으면 false |
+| TC-PR-19 | coworker resume → 200 | → **404** (본인 pause 없음) | Sprint 55 TC-WP-03으로 대체 |
+
+#### 핵심 기대값 (변경 불가)
+
+이 값들은 Sprint 55의 존재 이유. regression으로 인해 이 값들이 변경되면 Sprint 55 자체를 재검토해야 함:
+
+- A pause → B는 영향 없음 (my_pause_status='working')
+- A pause + B pause → task.is_paused=true (전원 paused일 때만)
+- A resume → A만 resume, B 여전히 paused
+- 전원 relay 종료 → auto-finalize → 각 worker별 duration_minutes 정확
+- FINAL task → finalize=true 강제 (릴레이 불가)
+- completion_log: 릴레이 재시작 worker도 정확히 판정 (MAX 타임스탬프)
+
+---
+
+## Sprint 55-B (Hotfix): Task 목록 API에 `my_pause_status` 누락 — 화면 재진입 시 일시정지 상태 소실
+
+> **목적**: 화면 전환 후 재진입 시 일시정지 상태가 "진행 중"으로 표시되는 버그 수정
+> **범위**: `backend/app/routes/work.py` — `get_tasks_by_serial()` 함수 1곳 수정
+> **의존성**: Sprint 55 (work_pause_log 테이블 + worker별 pause 구현 완료 후)
+> **긴급도**: 높음 — 현장 작업자가 일시정지 후 화면 전환하면 상태가 사라짐
+
+### 증상
+
+1. 작업자가 task를 일시정지 → "일시정지" 뱃지 + "재개" 버튼 정상 표시
+2. 화면 전환 (뒤로가기, 다른 메뉴, QR 재스캔)
+3. 작업관리 화면 재진입 → **"진행 중"으로 표시**, 재개 버튼 없음
+
+### 원인
+
+`GET /api/app/tasks/{serial_number}` 응답에 `my_pause_status` 필드가 없음.
+
+**pause/resume API는 정상:**
+- `POST /api/app/work/pause` → `my_pause_status: 'paused'` 반환 ✅
+- `POST /api/app/work/resume` → `my_pause_status: 'working'` 반환 ✅
+
+**task 목록 API가 문제:**
+- `GET /api/app/tasks/{serial_number}` → `my_pause_status` 필드 자체가 없음 ❌
+- FE는 `my_pause_status`가 없으면 기본값 `'working'`으로 파싱 → 일시정지 상태 소실
+
+### 수정: `work.py` `get_tasks_by_serial()` L636-674
+
+#### 현재 코드 (L636-650) — `my_status`만 조회
+
+```python
+cur2.execute(
+    """
+    SELECT t.id AS task_id,
+           CASE
+               WHEN wcl.id IS NOT NULL THEN 'completed'
+               WHEN wsl.id IS NOT NULL THEN 'in_progress'
+               ELSE 'not_started'
+           END AS my_status
+    FROM app_task_details t
+    LEFT JOIN work_start_log wsl ON wsl.task_id = t.id AND wsl.worker_id = %s
+    LEFT JOIN work_completion_log wcl ON wcl.task_id = t.id AND wcl.worker_id = %s
+    WHERE t.id = ANY(%s)
+    """,
+    (worker_id, worker_id, task_db_ids)
+)
+for row in cur2.fetchall():
+    my_status_map[row['task_id']] = row['my_status']
+```
+
+#### 변경: `work_pause_log` JOIN 추가 + `my_pause_status` 응답 포함
+
+```python
+cur2.execute(
+    """
+    SELECT t.id AS task_id,
+           CASE
+               WHEN wcl.id IS NOT NULL THEN 'completed'
+               WHEN wsl.id IS NOT NULL THEN 'in_progress'
+               ELSE 'not_started'
+           END AS my_status,
+           CASE
+               WHEN wpl.id IS NOT NULL THEN 'paused'
+               ELSE 'working'
+           END AS my_pause_status
+    FROM app_task_details t
+    LEFT JOIN work_start_log wsl ON wsl.task_id = t.id AND wsl.worker_id = %s
+    LEFT JOIN work_completion_log wcl ON wcl.task_id = t.id AND wcl.worker_id = %s
+    LEFT JOIN work_pause_log wpl ON wpl.task_id = t.id AND wpl.worker_id = %s
+                                    AND wpl.resumed_at IS NULL
+    WHERE t.id = ANY(%s)
+    """,
+    (worker_id, worker_id, worker_id, task_db_ids)
+)
+my_pause_map = {}
+for row in cur2.fetchall():
+    my_status_map[row['task_id']] = row['my_status']
+    my_pause_map[row['task_id']] = row['my_pause_status']
+```
+
+그리고 L674 아래에 `my_pause_status` 추가:
+
+```python
+# 기존 (L674):
+item['my_status'] = my_status_map.get(tid, 'not_started') if tid else 'not_started'
+
+# 변경 — 아래 1줄 추가:
+item['my_status'] = my_status_map.get(tid, 'not_started') if tid else 'not_started'
+item['my_pause_status'] = my_pause_map.get(tid, 'working') if tid else 'working'
+```
+
+### FE 수정: 없음
+
+Flutter `TaskItem.fromJson()`은 이미 `my_pause_status`를 파싱하고 있음 (L121):
+```dart
+myPauseStatus: json['my_pause_status'] as String? ?? 'working',
+```
+
+BE가 필드를 반환하기만 하면 FE는 자동으로 정상 동작.
+
+### 테스트
+
+```
+TC-55B-01: task 일시정지 → 화면 전환 → 재진입 → "일시정지" 뱃지 + "재개" 버튼 표시
+TC-55B-02: task 일시정지 → QR 재스캔 → "일시정지" 상태 유지
+TC-55B-03: task A 일시정지 + task B 진행 중 → 재진입 시 A만 일시정지, B는 진행 중
+TC-55B-04: task 일시정지 안 한 상태 → 재진입 → my_pause_status='working' (기본값)
+TC-55B-05: 일시정지 → 재개 → 화면 전환 → 재진입 → "진행 중" 정상 표시
+```
+
+### 주의사항
+
+- `work_pause_log` JOIN은 `resumed_at IS NULL` 조건 필수 — 과거 pause 이력은 무시
+- `wpl.id IS NOT NULL` 은 현재 활성 pause만 감지
+- `my_pause_map` 초기화를 `my_status_map` 옆에 선언 (L630 부근에 `my_pause_map = {}`)
+- 기존 `my_status` 로직 변경 없음 — 추가만
+
+---
+
+## Sprint 56: QR 목록 API `elec_start` 필드 + 필터 추가 — 전장시작 날짜 기준 조회
+
+> **목적**: QR Registry 페이지에서 전장시작(`elec_start`) 기준 날짜 필터링 지원
+> **범위**: `backend/app/routes/qr.py` 수정 (1개 파일, 3곳)
+> **의존성**: 없음 — `plan.product_info.elec_start` 컬럼은 migration 002에서 이미 존재
+> **DB 참조**: `plan.product_info.elec_start DATE` (기존 컬럼, ETL에서 이미 업데이트 중)
+> **FE 연동**: VIEW Sprint 29 (DESIGN_FIX_SPRINT.md) — BE 배포 후 FE 수정
+
+### 배경
+
+현재 `GET /api/admin/qr/list`는 `mech_start`(기구시작), `module_start`(모듈시작) 두 가지 날짜 기준만 필터링 가능. 현장에서 전장공정 시작일 기준으로도 일정을 확인해야 하므로 `elec_start` 추가 필요.
+
+DB 컬럼(`plan.product_info.elec_start`)과 모델(`ProductInfo.elec_start`)은 이미 존재하지만, QR 목록 API의 SELECT절·필터 화이트리스트·응답 객체에 누락된 상태.
+
+### 수정 대상
+
+```
+backend/app/routes/qr.py  (3곳 수정)
+```
+
+### Task 1: `qr.py` — `allowed_date_fields`에 `elec_start` 추가
+
+#### 1-A: 날짜 필터 화이트리스트 확장 (L83)
+
+```python
+# 기존 코드 (L83):
+allowed_date_fields = {"mech_start": "p.mech_start", "module_start": "p.module_start"}
+
+# 변경:
+allowed_date_fields = {
+    "mech_start": "p.mech_start",
+    "module_start": "p.module_start",
+    "elec_start": "p.elec_start",
+}
+```
+
+이후 L84-91의 기존 로직(`if date_field in allowed_date_fields`)이 자동으로 `elec_start` 필터도 처리.
+
+### Task 1-B: `qr.py` — `allowed_sorts`에 `elec_start` 추가 (L52-59)
+
+```python
+# 기존 코드 (L52-59):
+        allowed_sorts = {
+            "qr.created_at": "qr.created_at",
+            "serial_number": "p.serial_number",
+            "model": "p.model",
+            "mech_start": "p.mech_start",
+            "module_start": "p.module_start",
+            "sales_order": "p.sales_order",
+        }
+
+# 변경:
+        allowed_sorts = {
+            "qr.created_at": "qr.created_at",
+            "serial_number": "p.serial_number",
+            "model": "p.model",
+            "mech_start": "p.mech_start",
+            "elec_start": "p.elec_start",
+            "module_start": "p.module_start",
+            "sales_order": "p.sales_order",
+        }
+```
+
+FE에서 테이블 컬럼 헤더 클릭 정렬(`sort_by=elec_start`) 시 동작 필요.
+
+### Task 2: `qr.py` — SELECT절에 `p.elec_start` 추가
+
+#### 2-A: 데이터 쿼리 SELECT 확장 (L107-124)
+
+```python
+# 기존 코드 (L120-121):
+                p.mech_start,
+                p.module_start,
+
+# 변경:
+                p.mech_start,
+                p.elec_start,
+                p.module_start,
+```
+
+`p.mech_start`과 `p.module_start` 사이에 `p.elec_start` 삽입.
+
+### Task 3: `qr.py` — 응답 객체에 `elec_start` 포함
+
+#### 3-A: items 빌드 로직 (L160-178)
+
+```python
+# 기존 코드 (L173-174):
+                "mech_start": row['mech_start'].isoformat() if row['mech_start'] else None,
+                "module_start": row['module_start'].isoformat() if row['module_start'] else None,
+
+# 변경:
+                "mech_start": row['mech_start'].isoformat() if row['mech_start'] else None,
+                "elec_start": row['elec_start'].isoformat() if row['elec_start'] else None,
+                "module_start": row['module_start'].isoformat() if row['module_start'] else None,
+```
+
+### 테스트 체크리스트
+
+```
+TC-56-01: GET /api/admin/qr/list → 응답 items에 elec_start 필드 존재 확인
+TC-56-02: GET /api/admin/qr/list?date_field=elec_start&date_from=2026-04-01 → 필터 정상 동작
+TC-56-03: GET /api/admin/qr/list?date_field=elec_start&date_from=2026-04-01&date_to=2026-04-14 → 범위 필터
+TC-56-04: GET /api/admin/qr/list?date_field=mech_start → 기존 필터 regression 없음
+TC-56-05: GET /api/admin/qr/list?date_field=module_start → 기존 필터 regression 없음
+TC-56-06: GET /api/admin/qr/list (date_field 미지정) → 전체 목록 정상 반환, elec_start 포함
+TC-56-07: elec_start가 NULL인 제품 → elec_start: null 정상 반환 (에러 없음)
+```
+
+### 주의사항
+
+- **수정 범위 최소화**: `qr.py` 1개 파일, 3곳만 수정. 다른 라우트/서비스/모델 변경 없음.
+- **기존 필터 보존**: `mech_start`, `module_start` 필터 로직 변경 없음 — 화이트리스트에 추가만.
+
+---
+
+## Sprint 57: ELEC 공정 시퀀스 변경 + 체크리스트 구현
+
+> **목적**: ELEC 자주검사(INSPECTION) freeroll 전환 + 체크리스트 팝업 + 새 닫기 조건(IF_2 완료 + 체크리스트 완료)
+> **범위**: BE 4개 파일 수정, 1개 migration 추가, 1개 seed 스크립트
+> **의존성**: Sprint 52(TM 체크리스트), Sprint 54(_get_checklist_by_category), migration 043
+> **FE 연동**: ELEC 체크리스트 화면 + 대시보드 성적서 페이지 (별도 FE Sprint)
+
+### 배경
+
+현재 ELEC 공정은 INSPECTION(자주검사)이 FINAL_TASK_IDS에 포함되어 있어, INSPECTION 완료 시 미완료 릴레이 task를 자동 마감한다. 이를 다음과 같이 변경:
+
+1. **INSPECTION → freeroll**: FINAL_TASK_IDS에서 제거. 시작할 때마다 체크리스트 팝업 표시
+2. **IF_2 → FINAL**: FINAL_TASK_IDS에 추가. IF_2 완료가 ELEC 닫기 트리거
+3. **ELEC 닫기 조건**: 체크리스트 완료(GST 항목 제외) + IF_2 완료
+4. **체크리스트**: 3개 그룹 24항목, 1차/2차 phase, Group 3 GST 담당자 컬럼은 QI 별도 플로우
+
+### 체크리스트 구조 (업로드 양식 기준)
+
+```
+Group 1: PANEL 검사 (11항목) — 검사방법: 측수검사/육안검사
+  1. SUS Fitting 조임 상태 (GAP GAUGE)
+  2. Gas Nozzle Cover 힘 여부 (Jig 활용 Center 확인)
+  3. 클램프 체결 (조립 유동 여부)
+  4. Packing 조립 확인 (적용 여부)
+  5. Packing Guide 고정 확인 (유동 여부)
+  6. SUS Fitting 조임 상태 (GAP GAUGE)
+  7. BCW Nozzle Spray 방향 (아래 방향)
+  8. Fitting 조임 상태 (조립 유동 여부)
+  9. Tube 조임 상태 (조립 유동 여부)
+  10. 클램프 체결 (조립 유동 여부)
+  11. Cir Line Tubing (조립 유동 여부)
+
+Group 2: 조립 검사 (6항목) — 일부 1차 N.A
+  12. Cir Pump Spec 확인 (조립 도면과 현물 1:1 확인)
+  13. Flow Sensor Swirl Orifice (Swirl Orifice 적용 조립)
+  14. Tank 내부 이물질 확인 (Tank 투시창 이용 확인)
+  15. 열교환기 Spec 확인 (조립 도면과 현물 1:1 확인)
+  16. 버너 위 배선 상태 (1차 N.A — 현장 조립 후 확인)
+  17. 전장 BOX 내부 배선 상태
+
+Group 3: JIG 검사 및 특별관리 POINT (7항목) — 2차배선 담당자 + GST 담당자
+  18. Jig 검사 항목 1
+  19. Jig 검사 항목 2
+  20. Jig 검사 항목 3
+  21. Jig 검사 항목 4
+  22. Jig 검사 항목 5
+  23. Jig 검사 항목 6
+  24. Jig 검사 항목 7
+```
+
+### Phase / 검사주체 정리
+
+| Phase | 검사 범위 | 검사 주체 | 트리거 |
+|-------|----------|----------|--------|
+| 1차 (판넬 배선) | Group 1~3 전체 (일부 N.A) | ELEC 외주 검수 전담인원 (2~3명) | INSPECTION 시작 |
+| 2차 (현장 설치) | Group 1~3 전체 | ELEC 외주 검수 전담인원 (동일) | INSPECTION 시작 |
+| GST 검증 | Group 3 GST 담당자 컬럼만 | QI 인원 | QI_INSPECTION 시작 시 토스트 |
+
+**핵심**: ELEC 완료 판정 시 GST 담당자 항목은 제외. GST 컬럼은 비어있어도 실적처리 가능. 추후 QI가 체크하면 대시보드에 갱신.
+
+### 수정 대상
+
+```
+backend/app/services/task_service.py        (3곳 수정)
+backend/app/services/checklist_service.py   (1곳 수정 + 4개 함수 추가)
+backend/app/services/task_seed.py           (1곳 수정)
+backend/app/routes/checklist.py             (2개 엔드포인트 추가)
+backend/app/routes/work.py                  (1곳 수정 — start_work 응답)
+backend/migrations/057_elec_checklist.sql   (신규)
+backend/scripts/seed_elec_checklist.py      (신규)
+```
+
+---
+
+### Task 1: FINAL_TASK_IDS 변경 — `task_service.py`
+
+#### 1-A: INSPECTION 제거 + IF_2 추가 (L47-55)
+
+```python
+# 기존 코드 (L47-55):
+FINAL_TASK_IDS = {
+    'SELF_INSPECTION',  # MECH 자주검사
+    'INSPECTION',       # ELEC 자주검사 (검수)
+    'PRESSURE_TEST',    # TMS 가압검사
+    'PI_CHAMBER',       # PI CHAMBER 가압검사
+    'QI_INSPECTION',    # QI 공정검사
+    'SI_SHIPMENT',      # SI 출하완료
+}
+
+# 변경:
+FINAL_TASK_IDS = {
+    'SELF_INSPECTION',  # MECH 자주검사
+    'IF_2',             # ELEC I.F 2 (Sprint 57: INSPECTION→IF_2)
+    'PRESSURE_TEST',    # TMS 가압검사
+    'PI_CHAMBER',       # PI CHAMBER 가압검사
+    'QI_INSPECTION',    # QI 공정검사
+    'SI_SHIPMENT',      # SI 출하완료
+}
+```
+
+> ⚠️ **INSPECTION은 더 이상 FINAL이 아님** — freeroll로 전환. finalize 강제(L258-264) 적용 안 됨.
+> ⚠️ **IF_2가 FINAL** — IF_2 완료 시 릴레이 미완료 task 자동 마감 + ELEC 닫기 판정 트리거.
+
+---
+
+### Task 2: ELEC 체크리스트 트리거 — `task_service.py`
+
+#### 2-A: INSPECTION 시작 시 체크리스트 응답 추가 — `start_work()` 응답 확장
+
+`start_work()` 함수에서 ELEC INSPECTION 시작 시 `checklist_ready` 플래그를 응답에 포함.
+TM과 달리 **시작(start)** 시점에 트리거, 그리고 **manager/일반 작업자 구분 없이** 모두 체크리스트 접근 가능.
+
+```python
+# start_work() 함수 내부 — 기존 response 빌드 아래에 추가:
+
+# Sprint 57: ELEC INSPECTION 시작 → 체크리스트 팝업
+checklist_ready = False
+checklist_category = None
+if task.task_category == 'ELEC' and task.task_id == 'INSPECTION':
+    checklist_ready = True
+    checklist_category = 'ELEC'
+
+response = {
+    'message': '작업을 시작합니다.',
+    'task_id': task_detail_id,
+    'started_at': started_at.isoformat(),
+    # ... 기존 필드 ...
+}
+
+# Sprint 57: checklist 필드 추가
+if checklist_ready:
+    response['checklist_ready'] = True
+    response['checklist_category'] = checklist_category
+```
+
+> **TM과 공통 패턴**: `checklist_ready: true` + `checklist_category: 'ELEC'`
+> **TM 차이점**: TM은 `complete_work()`에서 트리거, ELEC은 `start_work()`에서 트리거
+
+#### 2-B: IF_2 완료 시 ELEC 닫기 판정 — `complete_work()` 확장 (경로 1)
+
+> **Dual-Trigger 설계**: 체크리스트와 IF_2 중 어느 쪽이 먼저 완료될지 모름.
+> - **경로 1** (여기): IF_2 완료 시점 → 체크리스트 확인 → 둘 다 완료면 ELEC 닫기
+> - **경로 2** (Task 3-B): 체크리스트 완료 시점 → IF_2 확인 → 둘 다 완료면 ELEC 닫기
+
+기존 TM 체크리스트 트리거(L410-413) 아래에 ELEC 닫기 판정 추가:
+
+```python
+# 기존 코드 (L410-413):
+# Sprint 52: TM TANK_MODULE 완료 → 체크리스트 준비 알림
+checklist_ready = False
+if task.task_category == 'TMS' and task.task_id == 'TANK_MODULE':
+    checklist_ready = self._trigger_tm_checklist_alert(task, worker_id)
+
+# 추가 (아래에):
+# Sprint 57: ELEC IF_2 완료 → ELEC 닫기 판정 (Dual-Trigger 경로 1)
+elec_close_blocked = False
+if task.task_category == 'ELEC' and task.task_id == 'IF_2':
+    from app.services.checklist_service import check_elec_completion
+    elec_checklist_complete = check_elec_completion(task.serial_number)
+    if elec_checklist_complete:
+        # 경로 1: IF_2 완료 + 체크리스트 이미 완료 → ELEC 닫기 진행
+        logger.info(
+            f"ELEC close triggered (path 1: IF_2 last): "
+            f"serial={task.serial_number}, task_id={task_detail_id}"
+        )
+        # finalize=True는 FINAL_TASK_IDS에 의해 이미 강제됨 (L258-264)
+    else:
+        # IF_2는 완료 처리, 체크리스트 미완료 → 닫기 보류
+        elec_close_blocked = True
+        logger.info(
+            f"ELEC IF_2 completed but checklist incomplete (waiting path 2): "
+            f"serial={task.serial_number}, task_id={task_detail_id}"
+        )
+```
+
+#### 2-C: IF_2 완료 응답에 체크리스트 상태 포함
+
+```python
+# response 빌드 후:
+if task.task_category == 'ELEC' and task.task_id == 'IF_2':
+    response['elec_close_blocked'] = elec_close_blocked
+    if elec_close_blocked:
+        response['message'] = 'I.F 2 완료 — 체크리스트 미완료 항목이 있습니다.'
+        response['checklist_ready'] = True
+        response['checklist_category'] = 'ELEC'
+```
+
+> **FE 동작**: `elec_close_blocked=true`이면 체크리스트 화면으로 이동하여 남은 항목 안내
+> **task 완료 자체는 정상 처리** — IF_2 작업 완료는 차단하지 않음. ELEC 닫기(finalize)만 보류.
+
+---
+
+### Task 3: ELEC 체크리스트 서비스 함수 — `checklist_service.py`
+
+#### 3-0: `_get_checklist_by_category()` SELECT 확장 (이슈 #1 대응)
+
+기존 `_get_checklist_by_category()` (L67-91)의 SELECT에 `cm.checker_role` 추가:
+
+```python
+# 기존 (L69):
+            cm.item_order,
+            cm.description,
+
+# 변경:
+            cm.item_order,
+            cm.description,
+            cm.checker_role,    -- Sprint 57: ELEC GST 항목 구분용
+```
+
+items 빌드(L102-112)에도 추가:
+
+```python
+        items.append({
+            'master_id': row['master_id'],
+            'item_group': row['item_group'] or '기타',
+            'item_name': row['item_name'],
+            'item_type': item_type,
+            'description': row['description'],
+            'checker_role': row.get('checker_role', 'WORKER'),  # Sprint 57
+            'check_result': check_result,
+            # ... 나머지 동일
+        })
+```
+
+> TM/MECH는 checker_role이 전부 'WORKER'(기본값)이므로 기존 동작 영향 없음.
+> ELEC 대시보드 성적서에서 GST 담당자 컬럼을 별도 표시하려면 이 필드 필요.
+
+#### 3-A: `get_elec_checklist()` 추가
+
+TM의 `get_tm_checklist()` 패턴을 따르되, ELEC 전용 scope 처리:
+
+```python
+def get_elec_checklist(serial_number: str, judgment_phase: int = 1) -> Dict[str, Any]:
+    """
+    ELEC 체크리스트 조회 (Sprint 57)
+    TM과 동일 패턴: _get_checklist_by_category() wrapper + groups 그룹핑
+
+    Args:
+        serial_number: 제품 시리얼 번호
+        judgment_phase: 판정 차수 (1=1차배선, 2=2차배선)
+
+    Returns:
+        get_tm_checklist()와 동일 구조 (groups + summary)
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            "SELECT pi.product_code, pi.sales_order, pi.model "
+            "FROM plan.product_info pi WHERE pi.serial_number = %s",
+            (serial_number,)
+        )
+        product_row = cur.fetchone()
+        product_code = product_row['product_code'] if product_row else None
+        sales_order = product_row['sales_order'] if product_row else None
+        model = product_row['model'] if product_row else None
+
+        # ELEC scope: 현재 COMMON 고정 (추후 product_code별 확장 가능)
+        data = _get_checklist_by_category(
+            cur, serial_number, 'ELEC', product_code, 'all', judgment_phase
+        )
+
+        # item_group별 그룹핑 (TM과 동일 패턴)
+        from collections import OrderedDict
+        groups_dict = OrderedDict()
+        for item in data['items']:
+            g = item['item_group']
+            if g not in groups_dict:
+                groups_dict[g] = []
+            groups_dict[g].append(item)
+
+        groups = [{'group_name': k, 'items': v} for k, v in groups_dict.items()]
+
+        summary = data['summary']
+        summary['remaining'] = summary['total'] - summary['checked']
+        summary['is_complete'] = (summary['remaining'] == 0 and summary['total'] > 0)
+
+        return {
+            'serial_number': serial_number,
+            'sales_order': sales_order,
+            'model': model,
+            'judgment_phase': judgment_phase,
+            'groups': groups,
+            'summary': summary,
+        }
+
+    except PsycopgError as e:
+        logger.error(f"get_elec_checklist failed: serial={serial_number}, error={e}")
+        raise
+    finally:
+        if conn:
+            put_conn(conn)
+```
+
+#### 3-B: `upsert_elec_check()` 추가
+
+`upsert_tm_check()`와 동일 패턴. 완료 판정 시 `check_elec_completion()` 호출:
+
+```python
+def upsert_elec_check(
+    serial_number: str,
+    master_id: int,
+    check_result: str,
+    note: Optional[str],
+    worker_id: int,
+    judgment_phase: int = 1,
+) -> Dict[str, Any]:
+    """
+    ELEC 체크리스트 항목 체크 (UPSERT) — Sprint 57
+    upsert_tm_check()와 동일 패턴. manager 제한 없음 (일반 작업자도 체크 가능).
+    """
+    if check_result not in ('PASS', 'NA'):
+        raise ValueError(f"INVALID_CHECK_RESULT: '{check_result}'")
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            "SELECT id FROM checklist.checklist_master WHERE id = %s AND category = 'ELEC'",
+            (master_id,)
+        )
+        if not cur.fetchone():
+            raise ValueError(f"MASTER_NOT_FOUND: master_id={master_id} (ELEC)")
+
+        cur.execute(
+            """
+            INSERT INTO checklist.checklist_record
+                (serial_number, master_id, judgment_phase, check_result,
+                 checked_by, checked_at, note, updated_at)
+            VALUES (%s, %s, %s, %s, %s, NOW(), %s, NOW())
+            ON CONFLICT (serial_number, master_id, judgment_phase) DO UPDATE
+            SET check_result = EXCLUDED.check_result,
+                checked_by   = EXCLUDED.checked_by,
+                checked_at   = EXCLUDED.checked_at,
+                note         = EXCLUDED.note,
+                updated_at   = NOW()
+            RETURNING id
+            """,
+            (serial_number, master_id, judgment_phase, check_result, worker_id, note)
+        )
+        conn.commit()
+
+        # 완료 판정 (GST 항목 제외)
+        is_complete = check_elec_completion(serial_number, judgment_phase)
+
+        # Dual-Trigger 경로 2: 체크리스트 완료 + IF_2 이미 완료 → ELEC 닫기
+        elec_closed = False
+        if is_complete:
+            elec_closed = _try_elec_close(serial_number)
+
+        return {
+            'master_id': master_id,
+            'check_result': check_result,
+            'is_complete': is_complete,
+            'elec_closed': elec_closed,
+        }
+
+    except PsycopgError as e:
+        if conn:
+            conn.rollback()
+        logger.error(f"upsert_elec_check failed: serial={serial_number}, error={e}")
+        raise
+    finally:
+        if conn:
+            put_conn(conn)
+```
+
+#### 3-D: `_try_elec_close()` — Dual-Trigger 경로 2 (체크리스트 → IF_2 확인)
+
+```python
+def _try_elec_close(serial_number: str) -> bool:
+    """
+    Dual-Trigger 경로 2: 체크리스트 완료 시점에서 IF_2 완료 여부 확인.
+    IF_2가 이미 완료되어 있으면 ELEC 닫기 실행 (completion_status 갱신).
+
+    Returns:
+        True: ELEC 닫기 실행됨, False: IF_2 미완료 (대기)
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # IF_2 완료 여부 확인 (work_completion_log 존재)
+        cur.execute(
+            """
+            SELECT td.id
+            FROM app_task_details td
+            JOIN work_completion_log wcl ON wcl.task_id = td.id
+            WHERE td.serial_number = %s
+              AND td.task_id = 'IF_2'
+              AND td.task_category = 'ELEC'
+            LIMIT 1
+            """,
+            (serial_number,)
+        )
+        if_2_completed = cur.fetchone() is not None
+
+        if not if_2_completed:
+            logger.info(
+                f"ELEC checklist complete but IF_2 not yet done (waiting path 1): "
+                f"serial={serial_number}"
+            )
+            return False
+
+        # 양쪽 다 완료 → ELEC 닫기
+        cur.execute(
+            """
+            UPDATE completion_status
+            SET elec_completed = TRUE,
+                elec_completed_at = NOW(),
+                updated_at = NOW()
+            WHERE serial_number = %s
+              AND elec_completed = FALSE
+            """,
+            (serial_number,)
+        )
+        conn.commit()
+
+        logger.info(
+            f"ELEC close triggered (path 2: checklist last): serial={serial_number}"
+        )
+        return True
+
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        logger.error(f"_try_elec_close failed (non-blocking): serial={serial_number}, error={e}")
+        return False
+    finally:
+        if conn:
+            put_conn(conn)
+```
+
+> **Dual-Trigger 정리**:
+> | 상황 | 트리거 위치 | 동작 |
+> |------|-----------|------|
+> | IF_2 완료 → 체크리스트 이미 완료 | complete_work() 경로 1 | finalize 즉시 실행 |
+> | IF_2 완료 → 체크리스트 미완료 | complete_work() 경로 1 | task 완료만, ELEC 닫기 보류 |
+> | 체크리스트 완료 → IF_2 이미 완료 | upsert_elec_check() 경로 2 | _try_elec_close()로 닫기 |
+> | 체크리스트 완료 → IF_2 미완료 | upsert_elec_check() 경로 2 | 대기 (IF_2 완료 시 경로 1) |
+
+#### 3-C: `check_elec_completion()` — GST 항목 제외 완료 판정
+
+```python
+def check_elec_completion(serial_number: str, judgment_phase: int = 1) -> bool:
+    """
+    ELEC 체크리스트 완료 여부 판정 (Sprint 57)
+    GST 담당자 전용 항목(checker_role='QI')은 완료 조건에서 제외.
+    나머지 항목 중 check_result IS NULL이 0개이면 완료.
+
+    완료 시 ISSUE note 존재 → CHECKLIST_ISSUE 알림 (TM과 동일)
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # NULL인 항목 수 확인 (GST 전용 항목 제외)
+        cur.execute(
+            """
+            SELECT COUNT(*) AS null_count
+            FROM checklist.checklist_master cm
+            LEFT JOIN checklist.checklist_record cr
+                ON cr.master_id      = cm.id
+               AND cr.serial_number  = %s
+               AND cr.judgment_phase = %s
+            WHERE cm.category   = 'ELEC'
+              AND cm.is_active  = TRUE
+              AND cm.checker_role != 'QI'
+              AND cr.check_result IS NULL
+            """,
+            (serial_number, judgment_phase)
+        )
+        null_count = cur.fetchone()['null_count']
+
+        if null_count > 0:
+            return False
+
+        # 전체 항목 수 (GST 제외)
+        cur.execute(
+            """
+            SELECT COUNT(*) AS total_count
+            FROM checklist.checklist_master cm
+            WHERE cm.category = 'ELEC'
+              AND cm.is_active = TRUE
+              AND cm.checker_role != 'QI'
+            """
+        )
+        total_count = cur.fetchone()['total_count']
+
+        if total_count == 0:
+            return False
+
+        # ISSUE note 알림 (이슈 #3 대응: 중복 알림 방지)
+        # completion_alerted 플래그로 이미 발송된 S/N+phase는 스킵
+        cur.execute(
+            """
+            SELECT setting_value FROM admin_settings
+            WHERE setting_key = 'elec_checklist_issue_alert'
+            """
+        )
+        alert_setting = cur.fetchone()
+        issue_alert_enabled = True  # default
+        if alert_setting:
+            sv = alert_setting['setting_value']
+            if isinstance(sv, str):
+                issue_alert_enabled = sv.lower() in ('true', '1')
+
+        if issue_alert_enabled:
+            # 이미 이 S/N+phase에 대해 CHECKLIST_ISSUE를 발송했는지 확인
+            cur.execute(
+                """
+                SELECT id FROM app_alert_logs
+                WHERE alert_type = 'CHECKLIST_ISSUE'
+                  AND serial_number = %s
+                  AND message LIKE 'ELEC%%'
+                LIMIT 1
+                """,
+                (serial_number,)
+            )
+            already_alerted = cur.fetchone() is not None
+
+            if not already_alerted:
+                cur.execute(
+                    """
+                    SELECT cr.note, cm.item_name
+                    FROM checklist.checklist_record cr
+                    JOIN checklist.checklist_master cm ON cm.id = cr.master_id
+                    WHERE cr.serial_number  = %s
+                      AND cr.judgment_phase = %s
+                      AND cr.note IS NOT NULL AND cr.note != ''
+                      AND cm.category = 'ELEC'
+                      AND cm.is_active = TRUE
+                    """,
+                    (serial_number, judgment_phase)
+                )
+                issue_rows = cur.fetchall()
+
+                if issue_rows:
+                    from app.services.alert_service import create_and_broadcast_alert
+                    for issue_row in issue_rows:
+                        try:
+                            create_and_broadcast_alert({
+                                'alert_type': 'CHECKLIST_ISSUE',
+                                'message': f'[{serial_number}] ELEC 체크리스트 ISSUE: {issue_row["item_name"]} - {issue_row["note"]}',
+                                'serial_number': serial_number,
+                                'target_role': 'ELEC',
+                            })
+                        except Exception as ae:
+                            logger.error(f"check_elec_completion: CHECKLIST_ISSUE alert failed: {ae}")
+
+        return True
+
+    except PsycopgError as e:
+        logger.error(f"check_elec_completion failed: serial={serial_number}, error={e}")
+        return False
+    finally:
+        if conn:
+            put_conn(conn)
+```
+
+---
+
+### Task 4: ELEC 체크리스트 API 라우트 — `checklist.py`
+
+#### 4-A: ELEC 전용 조회 엔드포인트
+
+기존 `/api/app/checklist/<serial_number>/TM` 패턴이 이미 카테고리 기반이면 별도 추가 불필요.
+그렇지 않으면 아래 추가:
+
+```python
+@checklist_bp.route('/api/app/checklist/elec/<serial_number>', methods=['GET'])
+@jwt_required()
+def get_elec_checklist_api(serial_number):
+    """ELEC 체크리스트 조회 (Sprint 57)"""
+    judgment_phase = request.args.get('phase', 1, type=int)
+    from app.services.checklist_service import get_elec_checklist
+    result = get_elec_checklist(serial_number, judgment_phase)
+    return jsonify(result), 200
+```
+
+#### 4-B: ELEC 체크 UPSERT 엔드포인트
+
+```python
+@checklist_bp.route('/api/app/checklist/elec/check', methods=['PUT'])
+@jwt_required()
+def upsert_elec_check_api():
+    """ELEC 체크리스트 항목 체크 (Sprint 57) — manager 제한 없음"""
+    data = request.get_json()
+    worker_id = get_jwt_identity()
+
+    from app.services.checklist_service import upsert_elec_check
+    result = upsert_elec_check(
+        serial_number=data['serial_number'],
+        master_id=data['master_id'],
+        check_result=data['check_result'],
+        note=data.get('note'),
+        worker_id=worker_id,
+        judgment_phase=data.get('judgment_phase', 1),
+    )
+    return jsonify(result), 200
+```
+
+> **TM과 차이**: TM은 `@manager_required` 데코레이터, ELEC은 `@jwt_required()` — 일반 작업자도 체크 가능
+
+---
+
+### Task 5: start_work 응답 확장 — `work.py`
+
+#### 5-A: `start_work()` 응답에 checklist 플래그 추가
+
+```python
+# work.py — start_work() 함수 내부, response 빌드 직전:
+
+# Sprint 57: ELEC INSPECTION 시작 → 체크리스트 팝업
+checklist_ready = False
+if task_detail.task_category == 'ELEC' and task_detail.task_id == 'INSPECTION':
+    checklist_ready = True
+
+# 기존 response에 추가:
+if checklist_ready:
+    response['checklist_ready'] = True
+    response['checklist_category'] = 'ELEC'
+```
+
+---
+
+### Task 6: Migration — `057_elec_checklist.sql`
+
+```sql
+-- Sprint 57: ELEC 체크리스트 스키마 확장
+-- checklist_master에 checker_role 컬럼 추가 (GST/QI 항목 구분)
+
+-- 1. checker_role 컬럼 추가
+ALTER TABLE checklist.checklist_master
+    ADD COLUMN IF NOT EXISTS checker_role VARCHAR(20) DEFAULT 'WORKER';
+
+COMMENT ON COLUMN checklist.checklist_master.checker_role IS
+    'WORKER: 외주 작업자 체크, QI: GST QI인원 체크 (ELEC Group 3 GST 담당자)';
+
+-- 2. ELEC_COMPLETE 알림 타입 (이미 존재하면 무시)
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_enum
+        WHERE enumlabel = 'ELEC_COMPLETE'
+        AND enumtypid = (SELECT oid FROM pg_type WHERE typname = 'alert_type_enum')
+    ) THEN
+        ALTER TYPE alert_type_enum ADD VALUE 'ELEC_COMPLETE';
+    END IF;
+END
+$$;
+
+-- 3. phase별 N.A 기본값 관리 (1차에서 N.A인 항목 표시)
+ALTER TABLE checklist.checklist_master
+    ADD COLUMN IF NOT EXISTS phase1_na BOOLEAN DEFAULT FALSE;
+
+COMMENT ON COLUMN checklist.checklist_master.phase1_na IS
+    'TRUE이면 1차(judgment_phase=1)에서 자동 N.A 처리 (예: 버너 위 배선상태)';
+```
+
+---
+
+### Task 7: Seed 스크립트 — `seed_elec_checklist.py`
+
+```python
+"""
+ELEC 체크리스트 마스터 데이터 시드 (Sprint 57)
+3개 그룹, 24항목 — 전장외주검사성적서 양식 기준
+
+실행: python -m backend.scripts.seed_elec_checklist
+"""
+
+ELEC_CHECKLIST_ITEMS = [
+    # Group 1: PANEL 검사 (11항목)
+    # (item_group, item_name, description, inspection_method, checker_role, phase1_na)
+    ('PANEL 검사', 'SUS Fitting 조임 상태', 'GAP GAUGE', '측수 검사', 'WORKER', False),
+    ('PANEL 검사', 'Gas Nozzle Cover 힘 여부', 'Jig 활용 Center 확인', '육안 검사', 'WORKER', False),
+    ('PANEL 검사', '클램프 체결', '조립 유동 여부', '측수 검사', 'WORKER', False),
+    ('PANEL 검사', 'Packing 조립 확인', '적용 여부', '육안 검사', 'WORKER', False),
+    ('PANEL 검사', 'Packing Guide 고정 확인', '유동 여부', '육안 검사', 'WORKER', False),
+    ('PANEL 검사', 'SUS Fitting 조임 상태 (EXHAUST)', 'GAP GAUGE', '측수 검사', 'WORKER', False),
+    ('PANEL 검사', 'BCW Nozzle Spray 방향', '아래 방향', '육안 검사', 'WORKER', False),
+    ('PANEL 검사', 'Fitting 조임 상태', '조립 유동 여부', '측수 검사', 'WORKER', False),
+    ('PANEL 검사', 'Tube 조임 상태', '조립 유동 여부', '측수 검사', 'WORKER', False),
+    ('PANEL 검사', '클램프 체결 (REACTOR)', '조립 유동 여부', '측수 검사', 'WORKER', False),
+    ('PANEL 검사', 'Cir Line Tubing', '조립 유동 여부', '측수 검사', 'WORKER', False),
+
+    # Group 2: 조립 검사 (6항목)
+    ('조립 검사', 'Cir Pump Spec 확인', '조립 도면과 현물 1:1 확인', '육안 검사', 'WORKER', False),
+    ('조립 검사', 'Flow Sensor Swirl Orifice', 'Swirl Orifice 적용 조립', '육안 검사', 'WORKER', False),
+    ('조립 검사', 'Tank 내부 이물질 확인', 'Tank 투시창 이용 확인', '육안 검사', 'WORKER', False),
+    ('조립 검사', '열교환기 Spec 확인', '조립 도면과 현물 1:1 확인', '육안 검사', 'WORKER', False),
+    ('조립 검사', '버너 위 배선 상태', '현장 조립 후 확인', '육안 검사', 'WORKER', True),
+    ('조립 검사', '전장 BOX 내부 배선 상태', '배선 정리 상태', '육안 검사', 'WORKER', False),
+
+    # Group 3: JIG 검사 및 특별관리 POINT (7항목) — WORKER + QI
+    ('JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 1', '특별관리', '육안 검사', 'WORKER', False),
+    ('JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 2', '특별관리', '육안 검사', 'WORKER', False),
+    ('JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 3', '특별관리', '육안 검사', 'WORKER', False),
+    ('JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 4', '특별관리', '육안 검사', 'WORKER', False),
+    ('JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 5', '특별관리', '육안 검사', 'WORKER', False),
+    ('JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 6', '특별관리', '육안 검사', 'WORKER', False),
+    ('JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 7', '특별관리', '육안 검사', 'WORKER', False),
+
+    # Group 3: GST 담당자 전용 (QI) — 동일 7항목, checker_role='QI'
+    ('JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 1 (GST)', '특별관리 — GST 검증', '육안 검사', 'QI', False),
+    ('JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 2 (GST)', '특별관리 — GST 검증', '육안 검사', 'QI', False),
+    ('JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 3 (GST)', '특별관리 — GST 검증', '육안 검사', 'QI', False),
+    ('JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 4 (GST)', '특별관리 — GST 검증', '육안 검사', 'QI', False),
+    ('JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 5 (GST)', '특별관리 — GST 검증', '육안 검사', 'QI', False),
+    ('JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 6 (GST)', '특별관리 — GST 검증', '육안 검사', 'QI', False),
+    ('JIG 검사 및 특별관리 POINT', 'Jig 검사 항목 7 (GST)', '특별관리 — GST 검증', '육안 검사', 'QI', False),
+]
+```
+
+> **주의**: Group 3 GST 담당자 항목은 별도 master row (`checker_role='QI'`). WORKER 항목과 분리되어 완료 판정에서 제외됨.
+> **Seed 실행 후**: `checklist_master`에 31개 row (24 WORKER + 7 QI)
+
+---
+
+### Task 8: task_seed.py — INSPECTION phase 변경
+
+#### 8-A: INSPECTION을 FINAL → POST_DOCKING으로 변경 (L79)
+
+```python
+# 기존 코드 (L79):
+    TaskTemplate('INSPECTION',   '자주검사 (검수)',    'FINAL',        False),
+
+# 변경:
+    TaskTemplate('INSPECTION',   '자주검사 (검수)',    'POST_DOCKING', False),
+```
+
+> INSPECTION은 더 이상 FINAL phase가 아님. POST_DOCKING에서 자유롭게 시작/완료 가능.
+> 기존 운영 데이터의 INSPECTION task는 이미 생성되어 있으므로, phase 변경은 신규 생성 task에만 영향.
+
+---
+
+### 테스트 체크리스트
+
+```
+--- 기본 동작 ---
+TC-57-01: FINAL_TASK_IDS에 'IF_2' 포함, 'INSPECTION' 미포함 확인
+TC-57-02: ELEC INSPECTION start_work → 응답에 checklist_ready=true, checklist_category='ELEC' 확인
+TC-57-03: ELEC INSPECTION start_work (2회차) → 기존 체크 항목 유지, 팝업 재표시
+TC-57-04: GET /api/app/checklist/elec/{sn} → 3개 그룹 + 31항목 반환 (WORKER 24 + QI 7), checker_role 포함
+TC-57-05: GET /api/app/checklist/elec/{sn}?phase=1 → 1차 배선 항목 (버너 위 배선 N.A 포함)
+TC-57-06: GET /api/app/checklist/elec/{sn}?phase=2 → 2차 배선 항목 (전체 체크 가능)
+TC-57-07: PUT /api/app/checklist/elec/check → PASS 설정 후 is_complete 반환
+TC-57-08: PUT /api/app/checklist/elec/check (일반 작업자) → 성공 (manager 제한 없음)
+
+--- 완료 판정 ---
+TC-57-09: ELEC 체크리스트 24 WORKER 항목 전체 PASS → check_elec_completion() = True
+TC-57-10: ELEC 체크리스트 23/24 PASS, 1개 NULL → check_elec_completion() = False
+TC-57-11: GST(QI) 항목 미체크 + WORKER 24개 전체 PASS → check_elec_completion() = True (GST 제외)
+
+--- Dual-Trigger (핵심) ---
+TC-57-12: 경로 1 — IF_2 완료 + 체크리스트 이미 완료 → finalize 즉시 실행, elec_close_blocked=false
+TC-57-13: 경로 1 — IF_2 완료 + 체크리스트 미완료 → task 완료 정상, elec_close_blocked=true
+TC-57-14: 경로 2 — 체크리스트 마지막 항목 PASS + IF_2 이미 완료 → _try_elec_close() 실행, elec_closed=true
+TC-57-15: 경로 2 — 체크리스트 마지막 항목 PASS + IF_2 미완료 → elec_closed=false (대기)
+TC-57-16: 경로 1→2 시나리오 — IF_2 먼저 완료(blocked) → 체크리스트 완료 → ELEC 닫기 정상
+TC-57-17: 경로 2→1 시나리오 — 체크리스트 먼저 완료(대기) → IF_2 완료 → ELEC 닫기 정상
+
+--- freeroll / regression ---
+TC-57-18: INSPECTION 완료 → finalize 강제 적용 안 됨 (freeroll 확인)
+TC-57-19: 기존 MECH SELF_INSPECTION FINAL 동작 regression 없음
+TC-57-20: 기존 TM TANK_MODULE → CHECKLIST_TM_READY 알림 regression 없음
+
+--- 알림 / 인프라 ---
+TC-57-21: ISSUE note 입력 후 전체 완료 → CHECKLIST_ISSUE 알림 생성 확인
+TC-57-22: 동일 S/N 체크리스트 재완료 → CHECKLIST_ISSUE 중복 알림 미발송 (이슈 #3)
+TC-57-23: migration 057 실행 → checker_role, phase1_na 컬럼 추가 확인
+TC-57-24: seed 스크립트 실행 → 31개 master row 생성 확인 (24 WORKER + 7 QI)
+TC-57-25: _get_checklist_by_category() 응답에 checker_role 필드 포함 (TM 조회 시 'WORKER' 반환)
+TC-57-26: 대시보드 체크리스트 성적서 — ELEC 카테고리 표시 + GST 컬럼 비어있음
+```
+
+### 주의사항
+
+- **FINAL_TASK_IDS 변경 영향**: INSPECTION이 제거되므로, 기존 INSPECTION 완료 시 릴레이 자동 마감이 작동하지 않음. IF_2가 대신 담당.
+- **기존 운영 데이터**: 이미 완료된 ELEC 작업은 영향 없음. 진행 중인 작업에서 INSPECTION이 FINAL로 완료된 건은 소급 변경 없음.
+- **Dual-Trigger 주의**: `_try_elec_close()`는 `completion_status.elec_completed` 갱신. `complete_work()`의 finalize는 릴레이 미완료 task 자동 마감. 두 경로가 모두 동작해야 ELEC이 정상 닫힘.
+- **checker_role='QI'**: 새 컬럼 추가. 기존 TM/MECH master row는 기본값 'WORKER'로 설정되어 호환성 유지.
+- **TM 체크리스트 regression**: `_check_tm_completion()`은 category='TM' 필터 사용. checker_role 컬럼 추가와 무관. `_get_checklist_by_category()` SELECT 확장은 기존 응답에 `checker_role: 'WORKER'` 추가뿐 — breaking change 아님.
+- **중복 알림 방지**: `check_elec_completion()`에서 `alert_logs`에 동일 S/N ELEC CHECKLIST_ISSUE 존재 시 스킵. TM도 추후 동일 패턴 적용 고려.
+- **manager 제한 없음**: TM은 `@manager_required`, ELEC은 `@jwt_required()`. ELEC 외주 검수 전담인원이 2~3명이고 관리자가 아닐 수 있음.
+- **ELEC_COMPLETE enum**: migration 044에서 이미 추가됨. 057의 DO블록이 존재 확인 후 스킵하므로 안전 (이슈 #2).
+
+---
+
+## Sprint 57-FE: ELEC 체크리스트 FE 연동 + phase1_na 자동 적용
+
+> **목적**: Sprint 57 BE 완료 후 OPS FE 연계 — _kFinalTaskIds 동기화 + ELEC 체크리스트 화면 + start/complete 트리거 + phase1_na 자동 N.A
+> **범위**: FE 5개 파일 수정 + 1개 파일 신규 + BE 1곳 보완 (총 Task 7개, TC 33개)
+> **의존성**: Sprint 57 BE 완료 (v2.8.0)
+> **BE 추가 수정**: `_get_checklist_by_category()` phase1_na 자동 적용 (1곳)
+
+### 배경
+
+Sprint 57에서 BE는 완료:
+- `GET /api/app/checklist/elec/{sn}` — 31항목 (WORKER 24 + QI 7)
+- `PUT /api/app/checklist/elec/check` — 항목 체크 (manager 제한 없음)
+- `start_work` 응답에 `checklist_ready: true, checklist_category: 'ELEC'`
+- `complete_work` IF_2 응답에 `elec_close_blocked: true, checklist_category: 'ELEC'`
+
+FE에서 이 응답을 받아 체크리스트 화면으로 이동하는 코드가 필요.
+
+### 수정 대상
+
+```
+frontend/lib/services/task_service.dart              (2곳 수정)
+frontend/lib/providers/task_provider.dart             (2곳 수정)
+frontend/lib/screens/task/task_detail_screen.dart     (3곳 수정 — _kFinalTaskIds + start + complete)
+frontend/lib/screens/task/task_management_screen.dart (4곳 수정 — _kFinalTaskIds + start + complete ×2)
+frontend/lib/screens/checklist/elec_checklist_screen.dart (신규)
+backend/app/services/checklist_service.py             (1곳 보완 — phase1_na)
+```
+
+---
+
+### Task 0: `_kFinalTaskIds` FE 동기화 (BE Sprint 57 연동)
+
+Sprint 57 BE에서 FINAL_TASK_IDS 변경: INSPECTION 제거 + IF_2 추가.
+FE 두 파일에도 동일하게 반영 필요 — **INSPECTION은 freeroll이므로 FINAL에서 제거**.
+
+#### 0-A: `task_detail_screen.dart` `_kFinalTaskIds` 변경 (L746-749)
+
+```dart
+// 기존:
+static const _kFinalTaskIds = {
+  'SELF_INSPECTION',
+  'INSPECTION',       // ← 제거
+  'PRESSURE_TEST',
+  'PI_CHAMBER',
+  'QI_INSPECTION',
+  'SI_SHIPMENT',
+};
+
+// 변경:
+static const _kFinalTaskIds = {
+  'SELF_INSPECTION',
+  // INSPECTION 제거 — Sprint 57: freeroll (체크리스트 트리거 전용)
+  'IF_2',             // ← 추가: ELEC 새 FINAL task
+  'PRESSURE_TEST',
+  'PI_CHAMBER',
+  'QI_INSPECTION',
+  'SI_SHIPMENT',
+};
+```
+
+#### 0-B: `task_management_screen.dart` `_kFinalTaskIds` 동일 변경 (L738-745)
+
+```dart
+// task_detail_screen.dart와 동일 변경:
+// INSPECTION 제거, IF_2 추가
+static const _kFinalTaskIds = {
+  'SELF_INSPECTION',
+  'IF_2',
+  'PRESSURE_TEST',
+  'PI_CHAMBER',
+  'QI_INSPECTION',
+  'SI_SHIPMENT',
+};
+```
+
+> **영향**: INSPECTION 완료 시 릴레이 팝업이 표시됨 (기존: finalize=true 자동). 그러나 INSPECTION은 freeroll이므로 complete_work 호출 자체가 없음 — 체크리스트 완료가 INSPECTION 종료 방식. IF_2가 새 FINAL이므로 finalize=true 자동 처리.
+
+---
+
+### Task 1: `task_service.dart` — startTask/completeTask 반환 확장
+
+#### 1-A: `startTask()` 반환 타입 변경 (L128-144)
+
+```dart
+// 기존:
+Future<TaskItem> startTask({...}) async {
+  final response = await _apiService.post('/app/work/start', data: {...});
+  return TaskItem.fromJson(response);
+}
+
+// 변경:
+Future<({TaskItem task, bool checklistReady, String? checklistCategory})> startTask({
+  required int taskId,
+  required int workerId,
+}) async {
+  try {
+    final response = await _apiService.post('/app/work/start', data: {
+      'task_id': taskId,
+      'worker_id': workerId,
+    });
+    final task = TaskItem.fromJson(response);
+    final checklistReady = response['checklist_ready'] == true;
+    final checklistCategory = response['checklist_category'] as String?;
+    return (task: task, checklistReady: checklistReady, checklistCategory: checklistCategory);
+  } catch (e) {
+    rethrow;
+  }
+}
+```
+
+#### 1-B: `completeTask()` 반환에 `checklistCategory` 추가 (L158-174)
+
+```dart
+// 기존:
+Future<({TaskItem task, bool checklistReady})> completeTask({...})
+
+// 변경:
+Future<({TaskItem task, bool checklistReady, String? checklistCategory})> completeTask({
+  required int taskId,
+  required int workerId,
+  bool finalize = true,
+}) async {
+  try {
+    final response = await _apiService.post('/app/work/complete', data: {
+      'task_id': taskId,
+      'worker_id': workerId,
+      'finalize': finalize,
+    });
+    final task = TaskItem.fromJson(response);
+    final checklistReady = response['checklist_ready'] == true;
+    final checklistCategory = response['checklist_category'] as String?;
+    return (task: task, checklistReady: checklistReady, checklistCategory: checklistCategory);
+  } catch (e) {
+    rethrow;
+  }
+}
+```
+
+---
+
+### Task 2: `task_provider.dart` — startTask/completeTask 확장
+
+#### 2-A: `startTask()` 반환 확장 (L202-231)
+
+```dart
+// 기존 (반환 bool — 성공/실패):
+Future<bool> startTask({
+  required int taskId,
+  required int workerId,
+}) async {
+  state = state.copyWith(isLoading: true, clearError: true);
+  try {
+    final updatedTask = await _taskService.startTask(taskId: taskId, workerId: workerId);
+    final updatedTasks = state.tasks.map((task) {
+      return task.id == taskId ? updatedTask : task;
+    }).toList();
+    state = state.copyWith(isLoading: false, tasks: updatedTasks, selectedTask: updatedTask);
+    return true;
+  } catch (e) {
+    state = state.copyWith(isLoading: false, errorMessage: _extractErrorMessage(e));
+    return false;
+  }
+}
+
+// 변경:
+Future<({bool success, bool checklistReady, String? checklistCategory})> startTask({
+  required int taskId,
+  required int workerId,
+}) async {
+  state = state.copyWith(isLoading: true, clearError: true);
+  try {
+    final result = await _taskService.startTask(taskId: taskId, workerId: workerId);
+    final updatedTasks = state.tasks.map((task) {
+      return task.id == taskId ? result.task : task;
+    }).toList();
+    state = state.copyWith(isLoading: false, tasks: updatedTasks, selectedTask: result.task);
+    return (success: true, checklistReady: result.checklistReady, checklistCategory: result.checklistCategory);
+  } catch (e) {
+    state = state.copyWith(isLoading: false, errorMessage: _extractErrorMessage(e));
+    return (success: false, checklistReady: false, checklistCategory: null);
+  }
+}
+```
+
+> **주의**: 기존 `Future<bool>` → Record 타입 변경. `startTask()` 호출부 전부 `.success`로 변경 필요.
+
+#### 2-B: `completeTask()` 반환에 `checklistCategory` 추가
+
+```dart
+// 기존:
+Future<({bool success, bool checklistReady})> completeTask({...})
+
+// 변경:
+Future<({bool success, bool checklistReady, String? checklistCategory})> completeTask({
+  required int taskId,
+  required int workerId,
+  bool finalize = true,
+}) async {
+  try {
+    final result = await _taskService.completeTask(...);
+    // ... 기존 로직 ...
+    return (success: true, checklistReady: result.checklistReady, checklistCategory: result.checklistCategory);
+  } catch (e) {
+    return (success: false, checklistReady: false, checklistCategory: null);
+  }
+}
+```
+
+---
+
+### Task 3: `task_detail_screen.dart` — 체크리스트 화면 분기
+
+#### 3-A: `_handleStartTask()` 변경 (L681-696)
+
+```dart
+// 기존:
+Future<void> _handleStartTask(int taskId, int workerId) async {
+  setState(() => _isActionLoading = true);
+  final taskNotifier = ref.read(taskProvider.notifier);
+  final success = await taskNotifier.startTask(taskId: taskId, workerId: workerId);
+  if (mounted) {
+    setState(() => _isActionLoading = false);
+    if (!success) {
+      final errorMessage = ref.read(taskProvider).errorMessage ?? '';
+      if (errorMessage.contains('LOCATION_QR_REQUIRED')) {
+        _showLocationQrRequiredDialog();
+        return;
+      }
+    }
+    _showSnack(success, '작업을 시작했습니다.', '작업 시작에 실패했습니다.');
+  }
+}
+
+// 변경:
+Future<void> _handleStartTask(int taskId, int workerId) async {
+  setState(() => _isActionLoading = true);
+  final taskNotifier = ref.read(taskProvider.notifier);
+  final startResult = await taskNotifier.startTask(taskId: taskId, workerId: workerId);
+  if (mounted) {
+    setState(() => _isActionLoading = false);
+    if (!startResult.success) {
+      final errorMessage = ref.read(taskProvider).errorMessage ?? '';
+      if (errorMessage.contains('LOCATION_QR_REQUIRED')) {
+        _showLocationQrRequiredDialog();
+        return;
+      }
+    }
+    // Sprint 57-FE: ELEC INSPECTION start → 체크리스트 자동 이동
+    if (startResult.success && startResult.checklistReady && startResult.checklistCategory != null) {
+      final sn = ref.read(taskProvider).currentSerialNumber;
+      if (sn != null) {
+        _navigateToChecklist(startResult.checklistCategory!, sn);
+        return;
+      }
+    }
+    _showSnack(startResult.success, '작업을 시작했습니다.', '작업 시작에 실패했습니다.');
+  }
+}
+```
+
+> **변경점**: `success` bool → `startResult` Record. `startResult.success`로 기존 에러 분기 유지 + 체크리스트 분기 추가.
+
+#### 3-B: completeTask 후 체크리스트 분기 (기존 TM→TM/ELEC)
+
+```dart
+// 기존 (L820-832):
+if (result.checklistReady) {
+  final serialNumber = taskState.currentSerialNumber;
+  if (serialNumber != null) {
+    Navigator.pop(context, finalize ? 'finalize' : 'relay');
+    Navigator.push(context, MaterialPageRoute(
+      builder: (_) => TmChecklistScreen(serialNumber: serialNumber),
+    ));
+    return;
+  }
+}
+
+// 변경:
+if (result.checklistReady) {
+  final serialNumber = taskState.currentSerialNumber;
+  if (serialNumber != null) {
+    Navigator.pop(context, finalize ? 'finalize' : 'relay');
+    _navigateToChecklist(result.checklistCategory ?? 'TM', serialNumber);
+    return;
+  }
+}
+```
+
+#### 3-C: `_navigateToChecklist` 헬퍼 메서드 추가
+
+```dart
+void _navigateToChecklist(String category, String serialNumber) {
+  Widget screen;
+  if (category == 'ELEC') {
+    screen = ElecChecklistScreen(serialNumber: serialNumber);
+  } else {
+    screen = TmChecklistScreen(serialNumber: serialNumber);
+  }
+  Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
+}
+```
+
+#### 3-D: `_buildCompletedBadge()` — 체크리스트 검수 버튼 ELEC 확장 (L616-674)
+
+기존에 TANK_MODULE 완료 후 "체크리스트 검수" 버튼이 표시됨. ELEC도 동일 패턴 적용:
+
+```dart
+// 기존 (L617):
+final bool showChecklist = task.taskId == 'TANK_MODULE' && task.taskCategory == 'TMS';
+
+// 변경:
+final bool showChecklist = (task.taskId == 'TANK_MODULE' && task.taskCategory == 'TMS')
+    || task.taskCategory == 'ELEC';  // ELEC 전체 task에서 체크리스트 진입 가능
+```
+
+> **TM**: TANK_MODULE 완료 뱃지에만 버튼 표시 (manager가 체크리스트 재진입용)
+> **ELEC**: 모든 ELEC task 완료 뱃지에 버튼 표시 (자주검사 — 진행 중 언제든 재진입 가능)
+
+```dart
+// 기존 (L655-658) — TmChecklistScreen 하드코딩:
+Navigator.push(
+  context,
+  MaterialPageRoute(
+    builder: (_) => TmChecklistScreen(serialNumber: serialNumber),
+  ),
+);
+
+// 변경 — category 분기:
+_navigateToChecklist(
+  task.taskCategory == 'ELEC' ? 'ELEC' : 'TM',
+  serialNumber,
+);
+```
+
+> **ELEC 체크리스트 접근 시나리오 정리**:
+> 1. INSPECTION start → 자동 화면 전환 (Task 3-A)
+> 2. IF_2 complete + 미완료 → 자동 화면 전환 (Task 3-B)
+> 3. 완료된 ELEC task 상세 → "체크리스트 검수" 버튼 (Task 3-D) ← **신규**
+
+---
+
+### Task 4: `task_management_screen.dart` — startTask + completeTask 분기 처리
+
+#### 4-A: `_handleStartTask()` 변경 (L650-679) — ELEC INSPECTION start 트리거
+
+```dart
+// 기존:
+Future<void> _handleStartTask(int taskId, int workerId) async {
+  final taskNotifier = ref.read(taskProvider.notifier);
+  final success = await taskNotifier.startTask(taskId: taskId, workerId: workerId);
+  if (mounted) {
+    if (success) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: const Text('작업을 시작했습니다.'), ...),
+      );
+    } else {
+      // ... error snackbar ...
+    }
+  }
+}
+
+// 변경:
+Future<void> _handleStartTask(int taskId, int workerId) async {
+  final taskNotifier = ref.read(taskProvider.notifier);
+  final startResult = await taskNotifier.startTask(taskId: taskId, workerId: workerId);
+  if (mounted) {
+    // Sprint 57-FE: ELEC INSPECTION start → 체크리스트 자동 이동
+    if (startResult.success && startResult.checklistReady && startResult.checklistCategory != null) {
+      final sn = ref.read(taskProvider).currentSerialNumber;
+      if (sn != null) {
+        _navigateToChecklist(startResult.checklistCategory!, sn);
+        return;
+      }
+    }
+    if (startResult.success) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: const Text('작업을 시작했습니다.'), ...),
+      );
+    } else {
+      final errorMessage = ref.read(taskProvider).errorMessage;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(errorMessage ?? '작업 시작에 실패했습니다.'), ...),
+      );
+    }
+  }
+}
+```
+
+> **핵심**: `success` bool → `startResult` Record. 체크리스트 분기 추가. task_detail_screen의 Task 3-A와 동일 패턴.
+
+#### 4-B: `_handleCompleteTask()` — completeTask category 분기
+
+Task 3-B와 동일 패턴 적용:
+- L758 `completeResult.checklistReady` 후 `TmChecklistScreen` → `_navigateToChecklist(category, sn)` 분기
+- L846 동일
+
+#### 4-C: `_navigateToChecklist` 헬퍼 메서드 추가
+
+Task 3-C와 동일:
+```dart
+void _navigateToChecklist(String category, String serialNumber) {
+  Widget screen;
+  if (category == 'ELEC') {
+    screen = ElecChecklistScreen(serialNumber: serialNumber);
+  } else {
+    screen = TmChecklistScreen(serialNumber: serialNumber);
+  }
+  Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
+}
+```
+
+---
+
+### Task 5: `elec_checklist_screen.dart` — 신규 생성
+
+`TmChecklistScreen`을 복제 후 아래만 변경:
+
+| 항목 | TM | ELEC |
+|------|-----|------|
+| API 경로 | `/app/checklist/tm/{sn}` | `/app/checklist/elec/{sn}` |
+| 체크 API | `/app/checklist/tm/check` | `/app/checklist/elec/check` |
+| 화면 타이틀 | 'TM 체크리스트' | 'ELEC 체크리스트' |
+| 그룹명 | BURNER, REACTOR, EXHAUST, TANK | PANEL 검사, 조립 검사, JIG 검사 및 특별관리 POINT |
+| 체크 권한 (BE) | PUT에 is_manager 체크 (BE L838-845) | PUT에 제한 없음 (@jwt_required만) |
+| 체크 권한 (FE) | FE 제한 없음 — BE가 403 반환 시 에러 표시 | FE 제한 없음 — 누구나 체크 가능 |
+| 트리거 시점 | complete_work (TANK_MODULE 완료 시) | start_work (INSPECTION 시작 시) |
+| 트리거 대상 | manager만 (worker→알림→manager) | 해당 작업자 본인 (자주검사) |
+| checker_role 표시 | 없음 (전체 WORKER) | QI 항목은 뱃지 `GST` 표시 + 비활성 (ELEC 작업자가 체크 불가) |
+| phase 선택 | 없음 | 1차/2차 탭 또는 드롭다운 (judgment_phase=1/2) |
+| phase1_na | 없음 | phase=1일 때 `phase1_na=true` 항목은 N.A 고정 표시 (터치 불가) |
+
+**TM vs ELEC 핵심 분기 요약**:
+
+```
+[TM 플로우]
+  작업자 TANK_MODULE 완료
+    → BE: checklist_ready=False (작업자 화면에 체크리스트 안 뜸)
+    → BE: CHECKLIST_TM_READY 알림 → manager에게 전송
+    → manager 알림 탭 → TmChecklistScreen 진입
+    → manager만 체크 가능 (BE is_manager 검증)
+  
+  OR: manager가 직접 TANK_MODULE 완료
+    → BE: checklist_ready=True (manager 화면에서 바로 체크리스트)
+    → TmChecklistScreen 자동 이동
+
+[ELEC 플로우]
+  협력사 작업자 INSPECTION 시작 (start_work)
+    → BE: checklist_ready=True, checklist_category='ELEC'
+    → ElecChecklistScreen 자동 이동 (자주검사)
+    → 누구나 체크 가능 (role 무관) — 단, QI 항목은 GST QI 인원만
+  
+  IF_2 완료 시 + 체크리스트 미완료
+    → BE: checklist_ready=True, checklist_category='ELEC'
+    → ElecChecklistScreen 재이동 (미완료 항목 체크 유도)
+  
+  ELEC 종료 = IF_2 완료 AND 체크리스트 완료(GST QI 제외) — Dual-Trigger
+```
+
+**핵심 차이점**:
+1. **접근 권한**: TM = BE에서 is_manager 체크 (FE 제한 없음, 403 에러 핸들링). ELEC = 제한 없음 (자주검사 — 협력사 2~3명이 직접 체크)
+2. **QI 항목 비활성**: `checker_role='QI'` 항목은 ELEC 작업자 화면에서 회색 처리 + "GST 담당" 라벨. 터치 시 "GST QI 인원만 체크 가능합니다" 토스트. QI 항목은 별도 QI_INSPECTION 시작 시 GST QI 인원이 체크.
+3. **Phase 전환**: 상단에 `1차 (판넬)` / `2차 (현장)` 탭. `?phase=1` / `?phase=2` 파라미터
+4. **phase1_na 자동 N.A**: phase=1일 때 `phase1_na=true` 항목은 "N.A (1차 해당없음)" 고정 + 회색 배경
+5. **완료 기준**: TM = 전체 항목 완료. ELEC = WORKER 항목만 완료 (GST QI 항목 제외)
+
+---
+
+### Task 6: BE 보완 — `checklist_service.py` phase1_na 자동 적용
+
+`_get_checklist_by_category()` 함수는 이미 `judgment_phase: int = 1` 파라미터를 받고 있음 (L21-29 확인 완료).
+`get_elec_checklist()`도 `judgment_phase`를 전달함 (L693). **파라미터 추가 불필요** — items 빌드 로직만 보완.
+
+```python
+# _get_checklist_by_category() items 빌드 부분 (L96-119):
+for row in rows:
+    check_result = row['check_result']
+    # Sprint 57-FE: phase1_na 자동 N.A (ELEC 1차 배선 — 현장 조립 전 검사 불가 항목)
+    phase1_na = row.get('phase1_na', False)
+    if phase1_na and judgment_phase == 1 and check_result is None:
+        check_result = 'NA'
+
+    items.append({
+        ...
+        'check_result': check_result,
+        'phase1_na': phase1_na,  # FE에서 비활성 처리용
+        ...
+    })
+```
+
+> **FE 동작**: `phase1_na=true` + `phase=1` → 항목 터치 불가 + "N.A (1차 해당없음)" 표시
+> **phase=2에서는**: `phase1_na` 무시 → 정상 체크 가능
+> **TM 영향 없음**: TM master 데이터에는 `phase1_na=FALSE` (기본값). 조건 `phase1_na and ...`가 항상 false → 기존 TM 동작 무변경.
+
+---
+
+### 테스트 체크리스트
+
+```
+--- _kFinalTaskIds FE 동기화 (Task 0) ---
+TC-57FE-01: ELEC IF_2 완료 버튼 → 릴레이 팝업 없이 finalize=true 자동 처리 (FINAL task)
+TC-57FE-02: ELEC INSPECTION 완료 버튼 → _kFinalTaskIds에 미포함, 릴레이 팝업 표시 (freeroll)
+TC-57FE-03: 기존 FINAL task (SELF_INSPECTION, PRESSURE_TEST, PI_CHAMBER, QI_INSPECTION, SI_SHIPMENT) → finalize=true 유지 (regression)
+
+--- FE 트리거 — task_detail_screen (Task 3) ---
+TC-57FE-04: task_detail에서 ELEC INSPECTION 시작 → 체크리스트 화면 자동 이동 (startResult.checklistReady)
+TC-57FE-05: task_detail에서 ELEC IF_2 완료 + 체크리스트 미완료 → ElecChecklistScreen 이동
+TC-57FE-06: task_detail에서 ELEC INSPECTION 시작 에러 → LOCATION_QR_REQUIRED 분기 정상 유지
+
+--- FE 트리거 — task_management_screen (Task 4) ---
+TC-57FE-07: task_mgmt에서 ELEC INSPECTION 시작 → 체크리스트 화면 자동 이동 (startResult.checklistReady)
+TC-57FE-08: task_mgmt에서 ELEC IF_2 완료 (FINAL) → ElecChecklistScreen 이동 (L758 경로)
+TC-57FE-09: task_mgmt에서 ELEC IF_2 완료 (relay) → ElecChecklistScreen 이동 (L846 경로)
+
+--- FE 트리거 — TM regression ---
+TC-57FE-10: TM TANK_MODULE manager 완료 → TmChecklistScreen 이동 (checklistReady=true, category='TM')
+TC-57FE-11: TM TANK_MODULE worker 완료 → 체크리스트 미이동 (checklistReady=false, 알림만 전송)
+TC-57FE-12: TM 완료 + checklistReady=true + checklistCategory=null → 기본값 'TM' 적용 (하위 호환)
+TC-57FE-13: MECH task 시작 → checklistReady=false, 체크리스트 미이동 (regression)
+TC-57FE-14: MECH task 완료 → checklistReady=false, 체크리스트 미이동 (regression)
+
+--- ELEC 체크리스트 화면 (Task 5) ---
+TC-57FE-15: 3개 그룹 ExpansionTile 표시 (PANEL 검사, 조립 검사, JIG 검사)
+TC-57FE-16: WORKER 항목 PASS/NA 토글 정상 동작
+TC-57FE-17: QI 항목 비활성 + "GST 담당" 라벨 표시
+TC-57FE-18: QI 항목 터치 → "GST QI 인원만 체크 가능합니다" 토스트
+TC-57FE-19: 1차/2차 탭 전환 → phase 파라미터 변경 + 데이터 리로드
+TC-57FE-20: 비 manager 작업자가 ELEC 체크 PUT → 성공 (BE 제한 없음)
+
+--- phase1_na (Task 6) ---
+TC-57FE-21: phase=1 + phase1_na=true 항목 → "N.A (1차 해당없음)" 고정 표시, 터치 불가
+TC-57FE-22: phase=2 + phase1_na=true 항목 → 정상 체크 가능
+TC-57FE-23: phase=1 + phase1_na=false 항목 → 정상 체크 가능
+TC-57FE-24: TM 체크리스트 조회 시 phase1_na 항목 없음 → 기존 동작 무변경 (BE regression)
+
+--- 완료 표시 ---
+TC-57FE-25: 24/24 WORKER 항목 완료 → summary is_complete=true 표시
+TC-57FE-26: QI 미체크 + WORKER 전체 완료 → is_complete=true (GST 제외)
+TC-57FE-27: 코멘트 입력 + 전체 완료 → ISSUE 알림 수신 확인
+
+--- 체크리스트 검수 버튼 (Task 3-D) ---
+TC-57FE-28: ELEC task 완료 뱃지에 "체크리스트 검수" 버튼 표시 → ElecChecklistScreen 이동
+TC-57FE-29: TM TANK_MODULE 완료 뱃지에 "체크리스트 검수" 버튼 표시 → TmChecklistScreen 이동 (regression)
+TC-57FE-30: MECH task 완료 뱃지 → "체크리스트 검수" 버튼 미표시 (regression)
+
+--- TM regression 종합 ---
+TC-57FE-31: TM 체크리스트 화면 진입 → 기존 그룹/항목 정상 표시 (BURNER, REACTOR, EXHAUST, TANK)
+TC-57FE-32: TM 항목 PASS/NA 토글 → 기존 동작 유지 (2-state toggle)
+TC-57FE-33: 비 manager 작업자가 TM 체크 PUT → BE 403 반환 (is_manager 검증 regression)
+```
+
+### 주의사항
+
+- **`_kFinalTaskIds` FE 동기화 필수**: BE Sprint 57에서 `FINAL_TASK_IDS`에서 INSPECTION 제거 + IF_2 추가. FE `task_detail_screen.dart`(L746)와 `task_management_screen.dart`(L738) 두 곳 모두 반영해야 함. 미반영 시 INSPECTION 완료가 finalize=true로 처리되어 릴레이 미완료 task가 자동 마감됨 (INSPECTION은 freeroll이므로 complete_work 자체 호출 안 하지만, 안전장치 차원).
+- **startTask 반환 타입 변경**: 기존 `Future<bool>` → `Future<({bool success, bool checklistReady, String? checklistCategory})>`. provider + screen 호출부 전부 `.success` 분기로 변경. `task_service.dart`는 `Future<TaskItem>` → Record (service 레벨)이고, `task_provider.dart`는 `Future<bool>` → Record (provider 레벨).
+- **TM regression**: `_navigateToChecklist(category, sn)` 분기에서 기본값 `'TM'`으로 기존 동작 보존. `checklistCategory`가 null이면 TM으로 fallback — Sprint 52 이전 BE 버전과의 호환성 유지.
+- **QI 항목 FE 표시**: checker_role은 BE 응답에 이미 포함 (Sprint 57 `_get_checklist_by_category` 확장). FE에서 `item['checker_role'] == 'QI'`로 분기.
+- **phase1_na BE 보완 필수**: FE만으로는 자동 N.A 처리 불가 — BE에서 check_result='NA' 반환 + FE에서 비활성 표시 이중 처리. `_get_checklist_by_category()` 함수에 이미 `judgment_phase` 파라미터 존재 (L28) — 추가 시그니처 변경 불필요.
+- **TM 체크리스트 무영향**: TM master row는 `phase1_na=FALSE` 기본값. Task 6의 `if phase1_na and ...` 조건이 항상 false → TM 동작 무변경. `checker_role` 기본값 `'WORKER'`도 동일.
+
+---
+
+## Sprint 57-B (Hotfix): 알림 메시지 O/N(수주번호) 누락 수정
+
+> **목적**: 모든 제품 관련 알림에 O/N(수주번호) 포함. 공용 유틸 함수 추출 + 12개 호출부 + RELAY_ORPHAN 포맷 개별 수정.
+> **범위**: 5개 파일 수정, 1개 유틸 신규
+> **의존성**: 없음
+> **FE 변경**: 없음 — message 문자열만 변경
+
+### 배경
+
+Sprint 6에서 `_sn_label()` 헬퍼(`task_service.py` L488-492)를 만들어 `[S/N | O/N: xxx]` 포맷을 사용하도록 했지만, 이 헬퍼는 `task_service.py` 내부 로컬 함수로만 존재. 다른 파일(scheduler_service, process_validator, duration_validator, checklist_service)에서는 직접 `f"[{serial_number}]"` 형태로 메시지를 생성하여 O/N이 누락됨.
+
+**현황 (18개 알림 생성)**:
+
+| 상태 | 알림 타입 | 파일 |
+|------|----------|------|
+| ✅ O/N 포함 | CHECKLIST_TM_READY, 협력사 완료 알림 | task_service.py |
+| ❌ S/N만 | TASK_REMINDER, SHIFT_END_REMINDER, TASK_ESCALATION | scheduler_service.py |
+| ❌ S/N만 | BREAK_TIME_PAUSE, BREAK_TIME_END | scheduler_service.py |
+| ❌ S/N 없이 | RELAY_ORPHAN | scheduler_service.py |
+| ❌ S/N만 | PROCESS_READY ×2 | process_validator.py |
+| ❌ S/N만 | REVERSE_COMPLETION, DURATION_EXCEEDED, UNFINISHED_AT_CLOSING | duration_validator.py |
+| ❌ S/N만 | CHECKLIST_ISSUE | checklist_service.py |
+| — 제품무관 | WORKER_APPROVED, WORKER_REJECTED, WORKER_DEACTIVATION_REQUEST | 변경 불필요 |
+
+### 수정 대상
+
+```
+backend/app/utils/alert_label.py           (신규 — 공용 유틸)
+backend/app/services/scheduler_service.py   (6곳 수정)
+backend/app/services/process_validator.py   (2곳 수정)
+backend/app/services/duration_validator.py  (3곳 수정)
+backend/app/services/checklist_service.py   (1곳 수정)
+backend/app/services/task_service.py        (1곳 수정 — _sn_label → 공용 유틸 전환)
+```
+
+---
+
+### Task 1: 공용 유틸 함수 — `alert_label.py` (신규)
+
+`task_service.py` 내부의 `_sn_label()`을 공용 모듈로 추출:
+
+```python
+# backend/app/utils/alert_label.py
+"""
+알림 메시지용 S/N + O/N 라벨 생성 유틸 (Sprint 57-B)
+모든 알림 메시지에서 일관된 포맷 사용:
+  - O/N 있음: "[S/N | O/N: xxx]"
+  - O/N 없음: "[S/N]"
+"""
+
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def build_sn_label(serial_number: str) -> str:
+    """
+    [S/N | O/N: xxx] 또는 [S/N] 포맷 라벨 생성.
+
+    Args:
+        serial_number: 제품 시리얼 번호
+
+    Returns:
+        "[S/N | O/N: xxx]" 또는 "[S/N]"
+    """
+    try:
+        from app.models.product_info import get_product_by_serial_number
+        product = get_product_by_serial_number(serial_number)
+        on = product.sales_order if product and product.sales_order else None
+        if on:
+            return f"[{serial_number} | O/N: {on}]"
+    except Exception as e:
+        logger.debug(f"build_sn_label: O/N 조회 실패 (fallback to S/N only): sn={serial_number}, error={e}")
+
+    return f"[{serial_number}]"
+```
+
+---
+
+### Task 2: `task_service.py` — 로컬 `_sn_label` → 공용 유틸 전환
+
+#### 2-A: `_sn_label()` 로컬 함수 제거 + import 교체 (L488-492)
+
+```python
+# 기존 (L486-492):
+        from app.models.admin_settings import get_setting
+        from app.models.product_info import get_product_by_serial_number
+
+        def _sn_label(sn: str) -> str:
+            """[S/N | O/N: xxx] 포맷 생성"""
+            product = get_product_by_serial_number(sn)
+            on = product.sales_order if product and product.sales_order else None
+            return f"[{sn} | O/N: {on}]" if on else f"[{sn}]"
+
+# 변경:
+        from app.models.admin_settings import get_setting
+        from app.utils.alert_label import build_sn_label as _sn_label
+```
+
+> 나머지 코드(`_sn_label(task.serial_number)` 호출)는 변경 없음 — alias import로 호환.
+
+---
+
+### Task 3: `scheduler_service.py` — 6곳 수정
+
+각 알림 생성 호출의 message에서 `f"[{sn}]"` → `build_sn_label(sn)` 교체.
+
+#### 3-A: 파일 상단 import 추가
+
+```python
+from app.utils.alert_label import build_sn_label
+```
+
+#### 3-B: TASK_REMINDER (L198)
+
+```python
+# 기존:
+'message': (
+    f"[{t['serial_number']}] {t['task_category']} - "
+    f"{t['task_name']}: 작업 시작 후 {duration_hours}시간 경과, "
+    f"아직 완료 전입니다."
+),
+
+# 변경:
+'message': (
+    f"{build_sn_label(t['serial_number'])} {t['task_category']} - "
+    f"{t['task_name']}: 작업 시작 후 {duration_hours}시간 경과, "
+    f"아직 완료 전입니다."
+),
+```
+
+#### 3-C: SHIFT_END_REMINDER (L235)
+
+```python
+# 기존:
+'message': (
+    f"퇴근 전 미완료 작업이 있습니다. "
+    f"[{t['serial_number']}] {t['task_category']} - {t['task_name']}. "
+    f"작업을 완료하거나 관리자에게 보고해주세요."
+),
+
+# 변경:
+'message': (
+    f"퇴근 전 미완료 작업이 있습니다. "
+    f"{build_sn_label(t['serial_number'])} {t['task_category']} - {t['task_name']}. "
+    f"작업을 완료하거나 관리자에게 보고해주세요."
+),
+```
+
+#### 3-D: TASK_ESCALATION (L277)
+
+```python
+# 기존:
+'message': (
+    f"[에스컬레이션] [{t['serial_number']}] "
+    f"{t['task_category']} - {t['task_name']}: "
+    ...
+),
+
+# 변경:
+'message': (
+    f"[에스컬레이션] {build_sn_label(t['serial_number'])} "
+    f"{t['task_category']} - {t['task_name']}: "
+    f"전일({t['started_date']}) 시작 후 미완료. "
+    f"작업자: {t['worker_name']} ({t['worker_company'] or '-'})"
+),
+```
+
+#### 3-E: BREAK_TIME_PAUSE (L666)
+
+```python
+# 기존:
+'message': f"[{task_row['serial_number']}] {task_row['task_name']}: {message}",
+
+# 변경:
+'message': f"{build_sn_label(task_row['serial_number'])} {task_row['task_name']}: {message}",
+```
+
+#### 3-F: BREAK_TIME_END (L776)
+
+```python
+# 기존:
+'message': f"[{row['serial_number']}] {row['task_name']}: {message}",
+
+# 변경:
+'message': f"{build_sn_label(row['serial_number'])} {row['task_name']}: {message}",
+```
+
+#### 3-G: RELAY_ORPHAN (L846) — 포맷 변경
+
+```python
+# 기존:
+'message': (
+    f"[릴레이 미완료] {orphan['serial_number']} "
+    f"{orphan['task_name']} — "
+    f"작업자 {orphan['worker_count']}명 참여 후 "
+    f"4시간 이상 미완료 상태입니다."
+),
+
+# 변경:
+'message': (
+    f"{build_sn_label(orphan['serial_number'])} "
+    f"[릴레이 미완료] {orphan['task_name']} — "
+    f"작업자 {orphan['worker_count']}명 참여 후 "
+    f"4시간 이상 미완료 상태입니다."
+),
+```
+
+> **RELAY_ORPHAN 포맷 변경**: `[릴레이 미완료] SN` → `[SN | O/N: xxx] [릴레이 미완료]` — S/N+O/N 라벨이 앞으로 이동.
+
+---
+
+### Task 4: `process_validator.py` — 2곳 수정
+
+#### 4-A: import 추가
+
+```python
+from app.utils.alert_label import build_sn_label
+```
+
+#### 4-B: PROCESS_READY — MECH (L94)
+
+```python
+# 기존:
+message=f"[{serial_number}] {process_type} 공정 대기 중 - MECH 공정 미완료",
+
+# 변경:
+message=f"{build_sn_label(serial_number)} {process_type} 공정 대기 중 - MECH 공정 미완료",
+```
+
+#### 4-C: PROCESS_READY — ELEC (L114)
+
+```python
+# 기존:
+message=f"[{serial_number}] {process_type} 공정 대기 중 - ELEC 공정 미완료",
+
+# 변경:
+message=f"{build_sn_label(serial_number)} {process_type} 공정 대기 중 - ELEC 공정 미완료",
+```
+
+---
+
+### Task 5: `duration_validator.py` — 3곳 수정
+
+#### 5-A: import 추가
+
+```python
+from app.utils.alert_label import build_sn_label
+```
+
+#### 5-B: REVERSE_COMPLETION (L75)
+
+```python
+# 기존:
+message=f"[{task.serial_number}] {task.task_category} - {task.task_name}: 완료 시간이 시작 시간보다 이릅니다.",
+
+# 변경:
+message=f"{build_sn_label(task.serial_number)} {task.task_category} - {task.task_name}: 완료 시간이 시작 시간보다 이릅니다.",
+```
+
+#### 5-C: DURATION_EXCEEDED (L101)
+
+```python
+# 기존:
+message=f"[{task.serial_number}] {task.task_category} - {task.task_name}: 작업 시간 {task.duration_minutes}분 (14시간 초과)",
+
+# 변경:
+message=f"{build_sn_label(task.serial_number)} {task.task_category} - {task.task_name}: 작업 시간 {task.duration_minutes}분 (14시간 초과)",
+```
+
+#### 5-D: UNFINISHED_AT_CLOSING (L180)
+
+```python
+# 기존:
+message=f"[{row['serial_number']}] {row['task_category']} - {row['task_name']}: 작업 시작 후 {task_info['duration_hours']}시간 경과, 미완료 상태",
+
+# 변경:
+message=f"{build_sn_label(row['serial_number'])} {row['task_category']} - {row['task_name']}: 작업 시작 후 {task_info['duration_hours']}시간 경과, 미완료 상태",
+```
+
+---
+
+### Task 6: `checklist_service.py` — 1곳 수정
+
+#### 6-A: CHECKLIST_ISSUE (L560)
+
+```python
+# 기존:
+'message': f'[{serial_number}] TM 체크리스트 ISSUE: {issue_row["item_name"]} - {issue_row["note"]}',
+
+# 변경:
+from app.utils.alert_label import build_sn_label
+...
+'message': f'{build_sn_label(serial_number)} TM 체크리스트 ISSUE: {issue_row["item_name"]} - {issue_row["note"]}',
+```
+
+---
+
+### 테스트 체크리스트
+
+```
+--- build_sn_label 유틸 ---
+TC-57B-01: build_sn_label('TEST-001') → O/N 있으면 "[TEST-001 | O/N: 1111]" 반환
+TC-57B-02: build_sn_label('TEST-002') → sales_order=NULL이면 "[TEST-002]" 반환
+TC-57B-03: build_sn_label('NONEXIST') → product_info 없으면 "[NONEXIST]" 반환 (에러 없음)
+
+--- 알림 타입별 O/N 포함 확인 (핵심) ---
+TC-57B-04: TASK_REMINDER 알림 message에 O/N 포함
+TC-57B-05: SHIFT_END_REMINDER 알림 message에 O/N 포함
+TC-57B-06: TASK_ESCALATION 알림 message에 O/N 포함
+TC-57B-07: BREAK_TIME_PAUSE 알림 message에 O/N 포함
+TC-57B-08: BREAK_TIME_END 알림 message에 O/N 포함
+TC-57B-09: RELAY_ORPHAN 알림 message에 O/N 포함 (포맷 변경 확인)
+TC-57B-10: PROCESS_READY (MECH) 알림 message에 O/N 포함
+TC-57B-11: PROCESS_READY (ELEC) 알림 message에 O/N 포함
+TC-57B-12: REVERSE_COMPLETION 알림 message에 O/N 포함
+TC-57B-13: DURATION_EXCEEDED 알림 message에 O/N 포함
+TC-57B-14: UNFINISHED_AT_CLOSING 알림 message에 O/N 포함
+TC-57B-15: CHECKLIST_ISSUE 알림 message에 O/N 포함
+
+--- regression ---
+TC-57B-16: CHECKLIST_TM_READY 알림 — 기존 O/N 포함 유지 (task_service.py _sn_label alias)
+TC-57B-17: TMS_TANK_COMPLETE 알림 — 기존 O/N 포함 유지
+TC-57B-18: WORKER_APPROVED 알림 — 제품 무관, message 변경 없음
+TC-57B-19: O/N 없는 제품 알림 — "[S/N]" 포맷 유지 (O/N 누락 시 fallback)
+TC-57B-20: build_sn_label DB 에러 시 — "[S/N]" fallback + 알림 정상 생성
+```
+
+### 주의사항
+
+- **`_sn_label` alias 유지**: `task_service.py`에서 `from app.utils.alert_label import build_sn_label as _sn_label` — 기존 내부 호출 코드 변경 최소화.
+- **import 위치**: `scheduler_service.py`는 함수 내부에서 `create_and_broadcast_alert`을 lazy import. `build_sn_label`도 동일하게 상단 import 또는 함수 내 import 선택 가능.
+- **`create_alert()` 직접 호출**: `process_validator.py`, `duration_validator.py`는 `create_alert()`을 직접 호출 — `build_sn_label`로 message를 미리 구성하면 됨.
+- **성능**: `build_sn_label()`은 매 호출마다 `get_product_by_serial_number()` DB 조회 1회. 알림은 대량 생성 아니므로 성능 무시 가능. 단, `scheduler_service`의 for 루프에서 같은 S/N 반복 조회 가능 → 필요 시 루프 외부에서 `build_sn_label` 결과를 캐싱.
+- **rollback**: `alert_label.py` 삭제 + 12곳 원복 + `_sn_label` 로컬 함수 복원.
+
+---
+
+## Sprint 57-C (Hotfix): ELEC 체크리스트 Seed 데이터 수정 + BUG-36 Dual TANK_MODULE 일괄 처리
+
+> **목적**: (1) ELEC 체크리스트 seed가 실제 전장외주검사성적서 양식과 불일치 — 전 항목 교체. (2) BUG-36: Dual 제품(L/R) TANK_MODULE 완료 시 양쪽 일괄 처리 버그 수정.
+> **범위**: migration 1개 + seed 스크립트 1개 수정 + BE 3개 파일 수정 (총 Task 6개, TC 60개)
+> **의존성**: Sprint 57 BE 완료
+> **FE 변경**: 없음
+
+### 배경 A: ELEC Seed 불일치
+
+Sprint 57에서 ELEC 체크리스트 31항목을 seed했으나, 실제 `전장외주검사성적서.xlsx` 양식과 대조 결과 **거의 전 항목의 item_name과 description이 불일치**.
+
+| 그룹 | 현재 seed (잘못됨) | 실제 양식 |
+|------|-------------------|----------|
+| PANEL 검사 #1 | SUS Fitting 조임 상태 | **파트 사양확인 (라벨 포함)** |
+| PANEL 검사 #2 | Gas Nozzle Cover 힘 여부 | **파트 고정위치** |
+| PANEL 검사 #5 | Packing Guide 고정 확인 | **LOADLOCK 와셔** |
+| 조립 검사 #1 | Cir Pump Spec 확인 | **Surge Protector 장착 상태** |
+| 조립 검사 #3 | Tank 내부 이물질 확인 | **버너 위 배선상태** |
+| JIG #1~7 | Jig 검사 항목 1~7 (placeholder) | **PUMP 배선 상태 CHECK, MFC 배선 상태 CHECK 등 실제 항목** |
+
+구조(3그룹, 24 WORKER + 7 QI)는 맞으나, 항목명/설명/phase1_na 전부 교체 필요.
+
+### 배경 B: BUG-36 Dual TANK_MODULE
+
+**근본 원인**: `task_seed.py` L274-279에서 DUAL L/R 모두 동일 `serial_number` 저장 (qr_doc_id만 다름). `complete_work()` L392 → `get_incomplete_tasks(serial_number, category)` → `task_detail.py` L534-544 WHERE에 `qr_doc_id` 없음 → L/R 합산 조회.
+
+```
+app_task_details 예시:
+  id=1: serial_number="TEST-2222", qr_doc_id="QR-TEST-2222-L", task_id="TANK_MODULE"
+  id=2: serial_number="TEST-2222", qr_doc_id="QR-TEST-2222-R", task_id="TANK_MODULE"
+  
+  → get_incomplete_tasks("TEST-2222", "TMS") → 두 row 모두 반환
+```
+
+**예외(정상)**: `_is_dual_pressure_all_done()` L577-606은 의도적으로 L+R 모두 완료 확인 — PRESSURE_TEST 알림은 양쪽 완료 후 발송.
+
+### 수정 대상
+
+```
+backend/migrations/047_elec_checklist_seed_fix.sql     (신규 — DELETE + RE-INSERT)
+backend/scripts/seed_elec_checklist.py                 (수정 — 전 항목 교체)
+backend/app/models/task_detail.py                      (수정 — get_incomplete_tasks qr_doc_id 옵션)
+backend/app/services/task_service.py                   (수정 — complete_work에서 qr_doc_id 전달)
+backend/app/services/checklist_service.py              (수정 — PUT에서 selected_value/input_value 처리)
+```
+
+---
+
+### Task 1: Migration — `047_elec_checklist_seed_fix.sql`
+
+기존 ELEC seed 삭제 + 올바른 데이터 재삽입. 운영 DB에 이미 체크 데이터가 있을 수 있으므로 **checklist_records 외래키 CASCADE 아닌 master_id 매핑 방식** 사용.
+
+```sql
+-- Sprint 57-C: ELEC 체크리스트 seed 전체 교체 (전장외주검사성적서 양식 기준)
+-- 주의: checklist_records에 기존 체크 데이터 있으면 master_id 참조 깨짐
+-- → 운영에서는 체크 데이터 없는 상태에서만 실행 (Sprint 57 배포 직후)
+
+BEGIN;
+
+-- 0. 스키마 확장 (SELECT/INPUT 지원 + TM DUAL L/R 분리)
+ALTER TABLE checklist.checklist_master
+    ADD COLUMN IF NOT EXISTS select_options JSONB DEFAULT NULL;
+
+ALTER TABLE checklist.checklist_record
+    ADD COLUMN IF NOT EXISTS selected_value VARCHAR(255) DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS input_value    TEXT         DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS qr_doc_id      VARCHAR(100) NOT NULL DEFAULT '';
+
+-- 0-1. UNIQUE 제약 변경: (sn, master_id, phase) → (sn, master_id, phase, qr_doc_id)
+--      TM DUAL L/R 각각 독립 record 보장. SINGLE TM/ELEC은 qr_doc_id='' → 기존 동작 유지.
+ALTER TABLE checklist.checklist_record
+    DROP CONSTRAINT IF EXISTS checklist_record_serial_number_master_id_judgment_pha_key;
+ALTER TABLE checklist.checklist_record
+    ADD CONSTRAINT checklist_record_sn_master_phase_qr_unique
+    UNIQUE (serial_number, master_id, judgment_phase, qr_doc_id);
+
+-- 1. 기존 ELEC master 삭제 (checklist_records FK CASCADE)
+DELETE FROM checklist.checklist_master
+WHERE category = 'ELEC' AND product_code = 'COMMON';
+
+-- 2. 올바른 31항목 재삽입
+INSERT INTO checklist.checklist_master
+    (product_code, category, item_group, item_name, item_order, description, is_active, checker_role, phase1_na)
+VALUES
+    -- Group 1: PANEL 검사 (11 WORKER)
+    ('COMMON', 'ELEC', 'PANEL 검사', '파트 사양확인 (라벨 포함)', 1, 'Part 및 Duct Label 도면상의 사양 일치', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'PANEL 검사', '파트 고정위치', 2, '도면상의 위치 일치', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'PANEL 검사', '파트 고정상태', 3, '유동 없을것', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'PANEL 검사', 'NUMBERING 상태', 4, '표기오류 및 누락 없을것', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'PANEL 검사', 'LOADLOCK 와셔', 5, 'ELCB, NFB, N/F-비스프링, M/C, T/B등 AC Line', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'PANEL 검사', 'TUBE 종류 / 색상 (R, S, T, PE)', 6, 'TUBE 색상 조합 선택 후 판정', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'PANEL 검사', 'Connector (JST / MOLEX 외), Penhole 작업 상태 검사', 7, 'LUG 압착부 끝단 1±1mm 노출', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'PANEL 검사', 'MFC CONNECTOR확인', 8, '아날로그 모듈부 넘버링 확인 (D-SUB 쪽은 제외)', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'PANEL 검사', 'FLOW SENSOR확인', 9, 'PIN번호, 색상, 넘버링 작업 후 즉시 1차 육안 확인', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'PANEL 검사', 'I-Marking 상태 확인', 10, 'I-Marking 기준에 따른 작업 확인', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'PANEL 검사', 'CLEANING 상태', 11, '제품 內 이물질 없을것', TRUE, 'WORKER', FALSE),
+
+    -- Group 2: 조립 검사 (6 WORKER)
+    ('COMMON', 'ELEC', '조립 검사', 'Surge Protector 장착 상태', 1, '지정 위치 정상 장착', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', '조립 검사', 'BOLT 체결상태', 2, '풀림 및 유동 없을것', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', '조립 검사', '버너 위 배선상태', 3, '탄화방지 작업 확인', TRUE, 'WORKER', TRUE),
+    ('COMMON', 'ELEC', '조립 검사', '3M CONECTOR 압착상태', 4, '압착이 덜 되어 있거나 PIN이 빠지지 않을 것', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', '조립 검사', 'E CONECTOR 체결상태', 5, '케이블 두께 기준 체결 정상 확인 및 도면 확인', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', '조립 검사', '당김 검사', 6, '커넥터, WIRE 빠짐 없을것', TRUE, 'WORKER', FALSE),
+
+    -- Group 3: JIG 검사 및 특별관리 POINT — WORKER (7항목)
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'PUMP 배선 상태 CHECK', 1, 'PUMP 배선 체결 순서 및 상태 1차 작업 시 육안 확인', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'MFC 배선 상태 CHECK', 2, '아날로그모듈로 들어가는 배선만 체결 순서 및 상태 확인', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'IGNITION 및 M/T스크래퍼 CONECTOR 배선 CHECK', 3, 'CONECTOR 배선만 순서 확인', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'AC LINE SHORT 검사', 4, 'AC LINE SHORT 확인', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'DC LINE SHORT 검사', 5, 'DC LINE SHORT 및 체결 상태 확인', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'MUX (ANALOG MODULE) ↔ PLC 배선 CHECK', 6, 'PIN번호 육안 확인', TRUE, 'WORKER', FALSE),
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'DC SOL VALVE 다이오드 체결 상태 확인', 7, '체결 방법 및 CABLE 간섭 유/무 확인', TRUE, 'WORKER', FALSE),
+
+    -- Group 3: GST 담당자 전용 (QI) — 동일 7항목
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'PUMP 배선 상태 CHECK (GST)', 8, 'PUMP 배선 체결 순서 및 상태 — GST 검증', TRUE, 'QI', FALSE),
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'MFC 배선 상태 CHECK (GST)', 9, '아날로그모듈 배선 체결 — GST 검증', TRUE, 'QI', FALSE),
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'IGNITION 및 M/T스크래퍼 CONECTOR (GST)', 10, 'CONECTOR 배선 순서 — GST 검증', TRUE, 'QI', FALSE),
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'AC LINE SHORT 검사 (GST)', 11, 'AC LINE SHORT — GST 검증', TRUE, 'QI', FALSE),
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'DC LINE SHORT 검사 (GST)', 12, 'DC LINE SHORT — GST 검증', TRUE, 'QI', FALSE),
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'MUX (ANALOG MODULE) ↔ PLC (GST)', 13, 'PIN번호 — GST 검증', TRUE, 'QI', FALSE),
+    ('COMMON', 'ELEC', 'JIG 검사 및 특별관리 POINT', 'DC SOL VALVE 다이오드 (GST)', 14, '체결 방법 및 CABLE 간섭 — GST 검증', TRUE, 'QI', FALSE);
+
+-- 3. TUBE 색상 항목 SELECT 타입 + 옵션 설정
+UPDATE checklist.checklist_master
+SET item_type = 'SELECT',
+    select_options = '["비가역 EYE CAP(갈, 검, 회, 녹)", "비가역 EYE CAP(적, 황, 청, 녹)", "비가역 EYE CAP(황, 녹, 적, 흑)"]'::jsonb
+WHERE category = 'ELEC' AND product_code = 'COMMON'
+  AND item_name = 'TUBE 종류 / 색상 (R, S, T, PE)';
+
+COMMIT;
+```
+
+> **phase1_na=TRUE**: 조립 검사 #3 "버너 위 배선상태"만. Excel에서 1차 배선란이 "N.A" 고정 (OK/NG 선택지 없음).
+
+---
+
+### Task 2: `seed_elec_checklist.py` — 전 항목 교체
+
+`ELEC_CHECKLIST_ITEMS` 리스트를 migration과 동일한 내용으로 교체. 코드 구조는 유지하고 데이터만 변경.
+**select_options 추가**: 튜플에 7번째 필드 추가 — `(group, name, desc, order, role, phase1_na, select_options)`. 대부분 None, TUBE만 리스트.
+
+```python
+ELEC_CHECKLIST_ITEMS = [
+    # (item_group, item_name, description, item_order, checker_role, phase1_na, select_options)
+    # Group 1: PANEL 검사 (11항목)
+    ('PANEL 검사', '파트 사양확인 (라벨 포함)', 'Part 및 Duct Label 도면상의 사양 일치', 1, 'WORKER', False, None),
+    ('PANEL 검사', '파트 고정위치', '도면상의 위치 일치', 2, 'WORKER', False, None),
+    ('PANEL 검사', '파트 고정상태', '유동 없을것', 3, 'WORKER', False, None),
+    ('PANEL 검사', 'NUMBERING 상태', '표기오류 및 누락 없을것', 4, 'WORKER', False, None),
+    ('PANEL 검사', 'LOADLOCK 와셔', 'ELCB, NFB, N/F-비스프링, M/C, T/B등 AC Line', 5, 'WORKER', False, None),
+    ('PANEL 검사', 'TUBE 종류 / 색상 (R, S, T, PE)', 'TUBE 색상 조합 선택 후 판정', 6, 'WORKER', False,
+     ["비가역 EYE CAP(갈, 검, 회, 녹)", "비가역 EYE CAP(적, 황, 청, 녹)", "비가역 EYE CAP(황, 녹, 적, 흑)"]),
+    ('PANEL 검사', 'Connector (JST / MOLEX 외), Penhole 작업 상태 검사', 'LUG 압착부 끝단 1±1mm 노출', 7, 'WORKER', False, None),
+    ('PANEL 검사', 'MFC CONNECTOR확인', '아날로그 모듈부 넘버링 확인 (D-SUB 쪽은 제외)', 8, 'WORKER', False, None),
+    ('PANEL 검사', 'FLOW SENSOR확인', 'PIN번호, 색상, 넘버링 작업 후 즉시 1차 육안 확인', 9, 'WORKER', False, None),
+    ('PANEL 검사', 'I-Marking 상태 확인', 'I-Marking 기준에 따른 작업 확인', 10, 'WORKER', False, None),
+    ('PANEL 검사', 'CLEANING 상태', '제품 內 이물질 없을것', 11, 'WORKER', False, None),
+
+    # Group 2: 조립 검사 (6항목)
+    ('조립 검사', 'Surge Protector 장착 상태', '지정 위치 정상 장착', 1, 'WORKER', False, None),
+    ('조립 검사', 'BOLT 체결상태', '풀림 및 유동 없을것', 2, 'WORKER', False, None),
+    ('조립 검사', '버너 위 배선상태', '탄화방지 작업 확인', 3, 'WORKER', True, None),  # 1차 N.A
+    ('조립 검사', '3M CONECTOR 압착상태', '압착이 덜 되어 있거나 PIN이 빠지지 않을 것', 4, 'WORKER', False, None),
+    ('조립 검사', 'E CONECTOR 체결상태', '케이블 두께 기준 체결 정상 확인 및 도면 확인', 5, 'WORKER', False, None),
+    ('조립 검사', '당김 검사', '커넥터, WIRE 빠짐 없을것', 6, 'WORKER', False, None),
+
+    # Group 3: JIG 검사 및 특별관리 POINT — WORKER (7항목)
+    ('JIG 검사 및 특별관리 POINT', 'PUMP 배선 상태 CHECK', 'PUMP 배선 체결 순서 및 상태 1차 작업 시 육안 확인', 1, 'WORKER', False, None),
+    ('JIG 검사 및 특별관리 POINT', 'MFC 배선 상태 CHECK', '아날로그모듈로 들어가는 배선만 체결 순서 및 상태 확인', 2, 'WORKER', False, None),
+    ('JIG 검사 및 특별관리 POINT', 'IGNITION 및 M/T스크래퍼 CONECTOR 배선 CHECK', 'CONECTOR 배선만 순서 확인', 3, 'WORKER', False, None),
+    ('JIG 검사 및 특별관리 POINT', 'AC LINE SHORT 검사', 'AC LINE SHORT 확인', 4, 'WORKER', False, None),
+    ('JIG 검사 및 특별관리 POINT', 'DC LINE SHORT 검사', 'DC LINE SHORT 및 체결 상태 확인', 5, 'WORKER', False, None),
+    ('JIG 검사 및 특별관리 POINT', 'MUX (ANALOG MODULE) ↔ PLC 배선 CHECK', 'PIN번호 육안 확인', 6, 'WORKER', False, None),
+    ('JIG 검사 및 특별관리 POINT', 'DC SOL VALVE 다이오드 체결 상태 확인', '체결 방법 및 CABLE 간섭 유/무 확인', 7, 'WORKER', False, None),
+
+    # Group 3: GST 담당자 전용 (QI) — 동일 7항목
+    ('JIG 검사 및 특별관리 POINT', 'PUMP 배선 상태 CHECK (GST)', 'PUMP 배선 체결 순서 및 상태 — GST 검증', 8, 'QI', False, None),
+    ('JIG 검사 및 특별관리 POINT', 'MFC 배선 상태 CHECK (GST)', '아날로그모듈 배선 체결 — GST 검증', 9, 'QI', False, None),
+    ('JIG 검사 및 특별관리 POINT', 'IGNITION 및 M/T스크래퍼 CONECTOR (GST)', 'CONECTOR 배선 순서 — GST 검증', 10, 'QI', False, None),
+    ('JIG 검사 및 특별관리 POINT', 'AC LINE SHORT 검사 (GST)', 'AC LINE SHORT — GST 검증', 11, 'QI', False, None),
+    ('JIG 검사 및 특별관리 POINT', 'DC LINE SHORT 검사 (GST)', 'DC LINE SHORT — GST 검증', 12, 'QI', False, None),
+    ('JIG 검사 및 특별관리 POINT', 'MUX (ANALOG MODULE) ↔ PLC (GST)', 'PIN번호 — GST 검증', 13, 'QI', False, None),
+    ('JIG 검사 및 특별관리 POINT', 'DC SOL VALVE 다이오드 (GST)', '체결 방법 및 CABLE 간섭 — GST 검증', 14, 'QI', False, None),
+]
+
+# INSERT 시 select_options 처리:
+# for item in ELEC_CHECKLIST_ITEMS:
+#     group, name, desc, order, role, na, opts = item
+#     item_type = 'SELECT' if opts else 'CHECK'
+#     cur.execute("""
+#         INSERT INTO checklist.checklist_master (..., item_type, select_options)
+#         VALUES (..., %s, %s)
+#     """, (..., item_type, json.dumps(opts) if opts else None))
+```
+```
+
+---
+
+### Task 3: `task_detail.py` — `get_incomplete_tasks()` qr_doc_id 옵션 추가 (BUG-36)
+
+#### 3-A: 함수 시그니처 + WHERE 확장 (L525-544)
+
+```python
+# 기존 (L525-544):
+def get_incomplete_tasks(serial_number: str, task_category: str) -> list:
+    ...
+    cur.execute("""
+        SELECT * FROM app_task_details
+        WHERE serial_number = %s
+          AND task_category = %s
+          AND completed_at IS NULL
+          AND is_applicable = TRUE
+        ORDER BY id
+    """, (serial_number, task_category))
+
+# 변경:
+def get_incomplete_tasks(serial_number: str, task_category: str, qr_doc_id: str = None) -> list:
+    """
+    미완료 task 조회. qr_doc_id 지정 시 해당 QR 범위만 조회 (DUAL L/R 분리).
+    """
+    ...
+    if qr_doc_id:
+        cur.execute("""
+            SELECT * FROM app_task_details
+            WHERE serial_number = %s
+              AND task_category = %s
+              AND qr_doc_id = %s
+              AND completed_at IS NULL
+              AND is_applicable = TRUE
+            ORDER BY id
+        """, (serial_number, task_category, qr_doc_id))
+    else:
+        cur.execute("""
+            SELECT * FROM app_task_details
+            WHERE serial_number = %s
+              AND task_category = %s
+              AND completed_at IS NULL
+              AND is_applicable = TRUE
+            ORDER BY id
+        """, (serial_number, task_category))
+```
+
+> **하위 호환**: qr_doc_id 미지정 시 기존 동작(serial_number 전체). MECH/ELEC/PI 등 DUAL 아닌 공정은 변경 없음.
+
+---
+
+### Task 4: `task_service.py` — `complete_work()`에서 TMS qr_doc_id 전달 (BUG-36)
+
+#### 4-A: 카테고리 완료 판정에 qr_doc_id 전달 (L391-393)
+
+```python
+# 기존 (L391-393):
+incomplete_tasks = get_incomplete_tasks(task.serial_number, task.task_category)
+category_completed = len(incomplete_tasks) == 0
+
+# 변경:
+# BUG-36: TMS DUAL은 qr_doc_id 기준으로 탱크별 독립 완료 판정
+_qr_filter = task.qr_doc_id if task.task_category == 'TMS' else None
+incomplete_tasks = get_incomplete_tasks(task.serial_number, task.task_category, qr_doc_id=_qr_filter)
+category_completed = len(incomplete_tasks) == 0
+```
+
+> **TMS만 적용**: MECH/ELEC/PI는 qr_doc_id=None → 기존 serial_number 전체 조회 유지.
+> **SINGLE TMS도 안전**: SINGLE은 qr_doc_id가 1개뿐이므로 필터링 결과 동일.
+
+#### 4-B: `_trigger_completion_alerts()` ELEC 완료 판정 (L516)
+
+```python
+# 기존 (L516):
+incomplete_elec = get_incomplete_tasks(task.serial_number, 'ELEC')
+
+# 변경 없음 — ELEC은 DUAL 해당 없음. 기존 serial_number 전체 조회 유지.
+```
+
+#### 4-C: TM 체크리스트 DUAL L/R 분리 — qr_doc_id별 독립 팝업
+
+TM 체크리스트는 DUAL 제품에서 L/R **각각 별도 팝업** → 각각 독립 record 생성.
+**실적 완료는 L+R 모두 TM 체크리스트 완료 시에만** 처리 + MECH 협력사 관리자 알림 발송.
+
+```
+DUAL "TEST-2222" TM 체크리스트 흐름:
+
+[TANK_MODULE-L 완료 + manager] → TM 체크리스트 L 팝업 (qr_doc_id="QR-TEST-2222-L")
+                                  → record (sn, master_id, phase, qr="QR-...-L")
+
+[TANK_MODULE-R 완료 + manager] → TM 체크리스트 R 팝업 (qr_doc_id="QR-TEST-2222-R")
+                                  → record (sn, master_id, phase, qr="QR-...-R")
+
+[L 체크리스트 완료 + R 미완료] → TM 실적 미완료
+[L 체크리스트 완료 + R 완료]   → TM 실적 완료 → MECH 협력사 관리자 알림 발송
+```
+
+```python
+# TM 체크리스트 저장 API — qr_doc_id 전달:
+# DUAL L:
+PUT /app/checklist/tm/check
+{
+    "serial_number": "TEST-2222",
+    "qr_doc_id": "QR-TEST-2222-L",   # ← L tank TM 체크리스트
+    "items": [...]
+}
+
+# DUAL R:
+PUT /app/checklist/tm/check
+{
+    "serial_number": "TEST-2222",
+    "qr_doc_id": "QR-TEST-2222-R",   # ← R tank TM 체크리스트
+    "items": [...]
+}
+
+# SINGLE:
+PUT /app/checklist/tm/check
+{
+    "serial_number": "TEST-1111",
+    "qr_doc_id": "",                  # 또는 미전송 → DEFAULT ''
+    "items": [...]
+}
+```
+
+> **TM 실적 완료 = L+R 합산 판정**: `_trigger_tm_checklist_alert()` 에서 TM 체크리스트 완료 확인 시 serial_number 전체 record 조회 → L/R 모두 complete 시에만 MECH 알림. `_is_dual_pressure_all_done()` 패턴과 동일.
+> **ELEC은 DUAL 해당 없음**: ELEC 체크리스트는 qr_doc_id='' 고정, serial_number 기준 동작.
+
+---
+
+### Task 5: `checklist_service.py` — PUT/GET에서 qr_doc_id + selected_value / input_value 처리
+
+체크리스트 저장 API가 새 컬럼(qr_doc_id, selected_value, input_value)을 받아서 record에 저장하도록 수정.
+**qr_doc_id**: TM DUAL L/R 분리용. ELEC은 qr_doc_id='' 고정.
+
+#### 5-A: PUT 요청 body 확장
+
+```python
+# 기존 PUT body:
+{
+    "serial_number": "...",
+    "items": [
+        {"master_id": 1, "check_result": "PASS", "note": "..."}
+    ]
+}
+
+# 변경 — qr_doc_id (DUAL L/R 분리) + selected_value, input_value 추가:
+{
+    "serial_number": "...",
+    "qr_doc_id": "QR-TEST-2222-L",   # ← 신규: DUAL일 때 L/R 구분. SINGLE이면 "" 또는 미전송
+    "items": [
+        {"master_id": 1, "check_result": "PASS", "note": "..."},
+        {"master_id": 6, "check_result": "PASS", "selected_value": "비가역 EYE CAP(갈, 검, 회, 녹)"},
+        {"master_id": 15, "check_result": "PASS", "input_value": "코멘트 내용"}  # 향후 MECH INPUT용
+    ]
+}
+```
+
+#### 5-B: record 저장 로직 수정
+
+```python
+# checklist_service.py — save_checklist_items() 내부
+# 기존:
+cur.execute("""
+    INSERT INTO checklist.checklist_record (serial_number, master_id, check_result, judgment_phase, checked_by, checked_at, note)
+    VALUES (%s, %s, %s, %s, %s, NOW(), %s)
+    ON CONFLICT (serial_number, master_id, judgment_phase)
+    DO UPDATE SET check_result = EXCLUDED.check_result, ...
+""", (sn, item['master_id'], item['check_result'], phase, worker_id, item.get('note')))
+
+# 변경:
+qr = body.get('qr_doc_id', '')  # DUAL이면 'QR-xxx-L'/'QR-xxx-R', SINGLE/TM이면 ''
+cur.execute("""
+    INSERT INTO checklist.checklist_record
+        (serial_number, master_id, check_result, judgment_phase, checked_by, checked_at,
+         note, selected_value, input_value, qr_doc_id)
+    VALUES (%s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s)
+    ON CONFLICT (serial_number, master_id, judgment_phase, qr_doc_id)
+    DO UPDATE SET check_result = EXCLUDED.check_result,
+                  checked_by = EXCLUDED.checked_by,
+                  checked_at = EXCLUDED.checked_at,
+                  note = EXCLUDED.note,
+                  selected_value = EXCLUDED.selected_value,
+                  input_value = EXCLUDED.input_value,
+                  updated_at = NOW()
+""", (sn, item['master_id'], item['check_result'], phase, worker_id,
+      item.get('note'), item.get('selected_value'), item.get('input_value'), qr))
+```
+
+#### 5-C: GET 응답에 select_options + 저장값 + qr_doc_id 포함
+
+```python
+# _get_checklist_by_category() — qr_doc_id 파라미터 추가
+# TM DUAL: GET /app/checklist/tm/{sn}?qr_doc_id=QR-TEST-2222-L
+# ELEC: GET /app/checklist/elec/{sn}?phase=1&role=WORKER  (qr_doc_id 불필요)
+
+# 응답 item:
+{
+    "master_id": 6,
+    "item_name": "TUBE 종류 / 색상 (R, S, T, PE)",
+    "item_type": "SELECT",          # ← 추가
+    "select_options": ["비가역 EYE CAP(갈, 검, 회, 녹)", ...],  # ← 추가 (master)
+    "check_result": "PASS",
+    "selected_value": "비가역 EYE CAP(갈, 검, 회, 녹)",  # ← 추가 (record)
+    "input_value": null,             # ← 추가 (record)
+    "qr_doc_id": "QR-TEST-2222-L"   # ← TM DUAL일 때만. ELEC은 '' 고정
+}
+```
+
+```python
+# GET 쿼리 — qr_doc_id 필터 추가:
+def _get_checklist_by_category(sn, category, phase=1, role='WORKER', qr_doc_id=''):
+    cur.execute("""
+        SELECT m.*, r.check_result, r.selected_value, r.input_value, r.note
+        FROM checklist.checklist_master m
+        LEFT JOIN checklist.checklist_record r
+            ON r.master_id = m.id
+            AND r.serial_number = %s
+            AND r.judgment_phase = %s
+            AND r.qr_doc_id = %s          -- ← DUAL L/R 분리
+        WHERE m.category = %s AND m.checker_role = %s AND m.is_active = TRUE
+        ORDER BY m.item_group, m.item_order
+    """, (sn, phase, qr_doc_id, category, role))
+```
+
+> **하위 호환**: SINGLE TM은 qr_doc_id='' → 기존 record 매칭. ELEC은 항상 qr_doc_id='' (DUAL 해당 없음).
+
+---
+
+### Task 6: (Sprint 57-FE 연계) FE item_type별 렌더링 분기
+
+> 이 Task는 Sprint 57-FE에서 구현. 57-C에서는 BE + 스키마만 준비.
+
+```
+FE 렌더링 로직 (체크리스트 화면):
+
+item_type 분기:
+  ├─ CHECK (기본) → [PASS] [NA] 토글 버튼
+  ├─ SELECT       → 라디오버튼 (select_options 목록) + [PASS] [NA] 토글
+  │                  └ selected_value → PUT body에 포함
+  └─ INPUT        → 텍스트 입력 필드 + [PASS] [NA] 토글
+                     └ input_value → PUT body에 포함
+
+유효성: SELECT 타입은 selected_value 미선택 시 PASS 불가 (FE 검증)
+        INPUT 타입은 input_value 빈값 시 PASS 불가 (FE 검증)
+```
+
+---
+
+### ELEC 체크리스트 Phase 구조 (전장외주검사성적서 기준)
+
+> **핵심**: ELEC 체크리스트는 **모든 항목이 1차/2차 배선체크** 구조. JIG 그룹만 2차에서 GST 담당자가 별도 체크.
+> **DUAL 해당 없음**: ELEC은 DUAL L/R 분리 대상 아님. DUAL L/R 체크리스트 분리는 **TM(TANK_MODULE)만 해당** (Task 4-C 참조).
+
+#### Phase × Role 매트릭스
+
+```
+                          │  1차 배선 (Phase 1)  │  2차 배선 (Phase 2)  │
+──────────────────────────┼─────────────────────┼─────────────────────┤
+PANEL 검사 (11항목)       │  WORKER ✓           │  WORKER ✓           │
+조립 검사 (6항목)         │  WORKER ✓           │  WORKER ✓           │
+  └ 버너 위 배선 (#3)     │  N.A (자동)          │  WORKER ✓           │
+JIG 검사 WORKER (7항목)   │  — (미해당)          │  WORKER ✓           │
+JIG 검사 QI (7항목)       │  — (미해당)          │  QI (GST) ✓         │
+──────────────────────────┼─────────────────────┼─────────────────────┤
+Phase별 항목 수           │  17 WORKER          │  24 WORKER + 7 QI   │
+```
+
+#### Phase별 API 조회 동작
+
+```python
+# Phase 1 조회 — PANEL + 조립 WORKER 항목만 (JIG 제외)
+GET /app/checklist/elec/{sn}?phase=1&role=WORKER&qr_doc_id=QR-TEST-2222-L
+→ 17항목 (버너 위 배선 = auto-NA) — L탱크 record만
+
+# Phase 2 조회 — 전체 WORKER 항목 (JIG 포함)
+GET /app/checklist/elec/{sn}?phase=2&role=WORKER&qr_doc_id=QR-TEST-2222-L
+→ 24항목 (버너 위 배선 = 정상 CHECK) — L탱크 record만
+
+# Phase 2 QI 조회 — JIG QI 항목만 (GST 담당자)
+GET /app/checklist/elec/{sn}?phase=2&role=QI&qr_doc_id=QR-TEST-2222-L
+→ 7항목 — L탱크 QI record만
+
+# SINGLE 제품 — qr_doc_id 생략 (DEFAULT '')
+GET /app/checklist/elec/{sn}?phase=1&role=WORKER
+→ 17항목 — 기존 동작 유지
+```
+
+#### Phase 해당 여부 판정 로직
+
+```python
+# _get_checklist_by_category() 내부 — Phase 1에서 JIG 제외
+def _get_elec_items_for_phase(phase: int, role: str):
+    query = """
+        SELECT * FROM checklist.checklist_master
+        WHERE category = 'ELEC' AND product_code = 'COMMON'
+          AND is_active = TRUE AND checker_role = %s
+    """
+    if phase == 1:
+        # JIG 그룹은 Phase 1에 미해당
+        query += " AND item_group != 'JIG 검사 및 특별관리 POINT'"
+    return execute(query, (role,))
+```
+
+> **phase1_na vs JIG 미해당 차이**:
+> - `phase1_na=TRUE` (버너 위 배선): Phase 1에 **표시되지만 auto-NA** → record 생성됨 (check_result='NA')
+> - JIG 그룹 Phase 1: **아예 표시 안 됨** → record 자체 없음
+
+#### ELEC 완료 판정 (실적 기준)
+
+```
+ELEC 실적 완료 = Phase 1 WORKER 전항목 완료 + Phase 2 WORKER 전항목 완료
+                 (QI 체크는 별도 — ELEC 실적에 미포함)
+
+Phase 1 완료 = PANEL 11항목 + 조립 6항목 = 17항목 전부 check_result != NULL
+               (버너 위 배선은 auto-NA로 자동 충족)
+
+Phase 2 완료 = PANEL 11항목 + 조립 6항목 + JIG WORKER 7항목 = 24항목 전부 check_result != NULL
+```
+
+> **ELEC 체크리스트는 serial_number 기준 단일**: qr_doc_id='' 고정. DUAL L/R 구분 없음.
+
+---
+
+### 테스트 체크리스트
+
+```
+=== A. Seed 수정 (Task 1-2) ===
+
+TC-57C-01: migration 047 실행 → 기존 ELEC master 31건 삭제 + 신규 31건 삽입 확인
+TC-57C-02: 신규 master item_name이 전장외주검사성적서 양식과 1:1 매칭
+            PANEL #1 = "파트 사양확인 (라벨 포함)"
+            PANEL #7 = "Connector (JST / MOLEX 외), Penhole 작업 상태 검사"
+            PANEL #8 = "MFC CONNECTOR확인" (공백 없음)
+            PANEL #9 = "FLOW SENSOR확인" (공백 없음)
+TC-57C-03: "버너 위 배선상태" phase1_na=TRUE 확인 (조립 검사 #3)
+TC-57C-04: WORKER 24개 + QI 7개 = 31개 카운트 확인
+TC-57C-05: TM master 영향 없음 (category='TM' row 변경 0건)
+TC-57C-06: seed 스크립트 실행 → migration과 동일 결과 (ON CONFLICT DO NOTHING)
+
+=== B. 스키마 확장 — qr_doc_id + SELECT/INPUT (Task 1, 5) ===
+
+TC-57C-07: ALTER TABLE → checklist_master.select_options JSONB DEFAULT NULL 확인
+TC-57C-08: ALTER TABLE → checklist_record.selected_value + input_value + qr_doc_id 컬럼 존재
+TC-57C-09: qr_doc_id VARCHAR(100) NOT NULL DEFAULT '' 확인
+TC-57C-10: UNIQUE 제약 변경 확인 → (serial_number, master_id, judgment_phase, qr_doc_id)
+TC-57C-11: 기존 checklist_record 데이터 → qr_doc_id='' 자동 할당, UNIQUE 위반 없음
+TC-57C-12: TUBE 색상 항목 item_type='SELECT', select_options 3개 옵션 JSON 확인
+
+=== C. BUG-36 Dual TMS 수정 (Task 3-4) ===
+
+TC-57C-13: DUAL SN L TANK_MODULE 완료 → L만 완료 처리, R 미완료 유지
+TC-57C-14: DUAL SN R TANK_MODULE 완료 → R만 완료 처리, TMS 카테고리 전체 완료 판정
+TC-57C-15: SINGLE SN TANK_MODULE 완료 → 기존과 동일 동작 (regression)
+TC-57C-16: DUAL PRESSURE_TEST L 완료 → _is_dual_pressure_all_done() 정상 (R 미완료 → 알림 미발송)
+TC-57C-17: DUAL PRESSURE_TEST L+R 모두 완료 → 알림 정상 발송 (기존 정상 동작 유지)
+
+=== D. DUAL TM 체크리스트 L/R 분리 (Task 4-C, 5) ===
+
+TC-57C-18: DUAL L TANK_MODULE 완료 (manager) → TM 체크리스트 L 팝업 (qr_doc_id="QR-...-L")
+TC-57C-19: DUAL R TANK_MODULE 완료 (manager) → TM 체크리스트 R 팝업 (qr_doc_id="QR-...-R") — L과 독립
+TC-57C-20: DUAL L PUT (qr_doc_id="QR-...-L") → record.qr_doc_id = "QR-...-L" 저장
+TC-57C-21: DUAL R PUT (qr_doc_id="QR-...-R") → record.qr_doc_id = "QR-...-R" 저장
+TC-57C-22: 동일 master_id에 L과 R 각각 record 존재 (UNIQUE 충돌 없음)
+TC-57C-23: DUAL L GET (qr_doc_id="QR-...-L") → L record만 반환, R 미포함
+TC-57C-24: DUAL R GET (qr_doc_id="QR-...-R") → R record만 반환, L 미포함
+TC-57C-25: SINGLE TM GET (qr_doc_id 미전송) → qr_doc_id='' record 반환 (기존 동작)
+
+=== E. DUAL TM 실적 완료 + MECH 알림 ===
+
+TC-57C-26: DUAL L TM 체크리스트 완료 + R 미완료 → TM 실적 미완료, MECH 알림 미발송
+TC-57C-27: DUAL L + R TM 체크리스트 모두 완료 → TM 실적 완료 + MECH 협력사 관리자 알림 발송
+TC-57C-28: SINGLE TM 체크리스트 완료 → 기존 동작, 실적 완료 + MECH 알림 (regression)
+TC-57C-29: ELEC 체크리스트 → qr_doc_id='' 고정, DUAL L/R 분리 없음 확인
+
+=== F. Phase 1 — 1차 배선체크 ===
+
+TC-57C-30: Phase 1 WORKER 조회 → PANEL 11 + 조립 6 = 17항목 반환 (JIG 미포함)
+TC-57C-31: Phase 1 조회에 JIG 검사 항목 0건 확인 (item_group 필터 동작)
+TC-57C-32: Phase 1 "버너 위 배선상태" → auto-NA (check_result='NA' 자동 설정, 편집 불가)
+TC-57C-33: Phase 1 PANEL #6 TUBE 색상 → SELECT 타입, 3개 라디오 옵션 표시
+TC-57C-34: Phase 1 전 17항목 PASS (버너=NA 포함) → Phase 1 완료 상태 확인
+TC-57C-35: Phase 1 16/17항목만 PASS → Phase 1 미완료 (부분 완료 상태)
+
+=== G. Phase 2 — 2차 배선체크 (WORKER) ===
+
+TC-57C-36: Phase 2 WORKER 조회 → PANEL 11 + 조립 6 + JIG 7 = 24항목 반환
+TC-57C-37: Phase 2 "버너 위 배선상태" → 정상 CHECK 타입 (auto-NA 아님, OK/NG 선택 가능)
+TC-57C-38: Phase 2 JIG "PUMP 배선 상태 CHECK" 등 7항목 표시 확인
+TC-57C-39: Phase 2 PANEL #6 TUBE 색상 → Phase 1과 동일 SELECT 타입, Phase 1 선택값 독립
+TC-57C-40: Phase 2 전 24항목 PASS → Phase 2 WORKER 완료 상태 확인
+TC-57C-41: Phase 2 JIG 1항목 미완료 → Phase 2 미완료 (JIG 포함 판정)
+
+=== H. Phase 2 — QI 체크 (GST 담당자) ===
+
+TC-57C-42: Phase 2 QI 조회 → JIG QI 7항목만 반환 (PANEL/조립 미포함)
+TC-57C-43: QI 체크 — WORKER 계정으로 QI 항목 PUT 시도 → 권한 정상 동작 확인
+            (ELEC은 role 제한 없음 vs TM manager 전용 — Sprint 57-FE Task 5 참조)
+TC-57C-44: QI 7항목 전부 PASS → QI 체크 완료
+TC-57C-45: QI 미완료 상태에서 ELEC 실적 완료 여부 → ELEC 실적은 WORKER만 기준 (QI 무관)
+
+=== I. ELEC 완료 판정 — Phase 통합 ===
+
+TC-57C-46: Phase 1 + Phase 2 WORKER 완료 → ELEC 실적 완료
+TC-57C-47: Phase 1 완료, Phase 2 미완료 → ELEC 실적 미완료
+TC-57C-48: Phase 1 미완료, Phase 2 완료 → ELEC 실적 미완료
+TC-57C-49: P1+P2 WORKER 완료, QI 미완료 → ELEC 실적 완료 (QI 별도)
+TC-57C-50: ELEC 실적 완료 후 record 수 확인:
+            Phase 1 (17) + Phase 2 (24) + QI (7) = 48 records (qr_doc_id='' 고정)
+
+=== J. SELECT 타입 Edge Cases ===
+
+TC-57C-51: TUBE 색상 옵션1 선택 + PASS → selected_value="비가역 EYE CAP(갈, 검, 회, 녹)" 저장
+TC-57C-52: TUBE 색상 옵션 변경 (옵션1→옵션2) + 재저장 → selected_value 업데이트 확인
+TC-57C-53: TUBE 색상 미선택 + PASS 시도 → FE 검증 차단 (BE는 NULL 허용)
+TC-57C-54: Phase 1 TUBE 옵션1 선택, Phase 2 옵션2 선택 → 각 Phase별 독립 record
+TC-57C-55: PUT selected_value + GET 재조회 → 저장값 일치 확인
+
+=== K. Regression (기존 기능 영향 없음) ===
+
+TC-57C-56: TM SINGLE 체크리스트 GET/PUT → qr_doc_id='' 기본값, 정상 동작
+TC-57C-57: TM phase1_na 항목 → 기존 auto-NA 동작 유지
+TC-57C-58: UNIQUE 제약 변경 후 기존 record → qr_doc_id='' 자동 할당, 충돌 없음
+TC-57C-59: MECH task 완료 → qr_doc_id=None, serial_number 전체 판정 (BUG-36 regression)
+TC-57C-60: ELEC 체크리스트 → qr_doc_id='' 고정, DUAL 분리 동작 없음 확인
+```
+
+### 주의사항
+
+- **운영 체크 데이터**: migration 047의 DELETE CASCADE가 `checklist_records`의 기존 체크 데이터를 삭제함. Sprint 57 배포 직후 (아직 체크 데이터 없을 때) 즉시 실행 필요. 이미 체크 데이터가 있으면 migration 전 백업 필요.
+- **BUG-36 TMS qr_doc_id 필터**: `_qr_filter`는 `task_category == 'TMS'`일 때만 활성. MECH/PI는 기존 동작 유지.
+- **`_is_dual_pressure_all_done()` 미수정**: 이 함수는 의도적으로 L+R 합산 확인 (양쪽 가압 완료 후 알림). qr_doc_id 필터 적용하면 안 됨.
+- **ELEC은 DUAL 해당 없음**: ELEC 체크리스트는 qr_doc_id='' 고정. DUAL L/R 분리는 TM(TANK_MODULE)만 해당.
+- **TM DUAL 체크리스트 L/R 분리**: TM 체크리스트는 DUAL 제품에서 L/R 각각 별도 팝업 → record는 qr_doc_id로 구분. 실적 완료는 L+R 모두 체크리스트 완료 시에만 처리 + MECH 알림. `_is_dual_pressure_all_done()` 패턴과 동일.
+- **스키마 확장 순서**: ALTER TABLE (select_options, selected_value, input_value) → DELETE seed → INSERT seed → UPDATE SELECT 타입. 단일 트랜잭션 내에서 순서 보장.
+- **SELECT 유효성**: BE에서 `item_type='SELECT'`인 항목의 PASS 저장 시 `selected_value` 필수 검증은 FE에서 처리 (BE는 NULL 허용 — 저장 중간 상태 가능).
+- **Phase 구조**: ELEC은 1차/2차 배선체크 구조. Phase 1에서 JIG 그룹은 미해당(아예 표시 안 됨), Phase 2에서만 JIG WORKER + QI 표시. `phase1_na`는 Phase 1에서 auto-NA(record 생성)이고, JIG 미해당은 record 자체 없음 — 혼동 주의.
+- **ELEC 실적 = WORKER만**: QI(GST) 체크 완료 여부는 ELEC 실적 완료 판정에 미포함. QI 체크는 별도 관리 (향후 QI 대시보드 등).
+- **Phase별 독립 record**: 동일 master_id에 대해 Phase 1 record와 Phase 2 record가 별도 존재 (UNIQUE: serial_number, master_id, judgment_phase). Phase 1 TUBE 색상 선택과 Phase 2 선택은 독립.
+- **046a migration과 충돌**: 047이 DELETE 후 재삽입하므로 046a의 ON CONFLICT DO NOTHING과 무관. 047 실행 후 046a 재실행해도 안전 (DO NOTHING).
+
+---
+
+## Sprint 57-D (Hotfix): BUG-37 TM DUAL L/R 체크리스트 분리 + BUG-38 QA 검증
+
+> **목적**: (1) BUG-37: TM 체크리스트 PUT에 qr_doc_id 연동 → DUAL L/R 독립 record 저장. (2) BUG-38: ELEC SELECT TUBE 색상 드롭다운 실기기 QA.
+> **범위**: BE 2개 파일 수정 (총 Task 3개, TC 20개)
+> **의존성**: Sprint 57-C 완료 (qr_doc_id 컬럼 + UNIQUE 제약 이미 적용)
+> **FE 변경**: 없음 (FE qrDocId 전달 이미 구현 완료)
+
+### 배경: BUG-37 근본 원인
+
+```
+TM PUT 흐름 (현재 — 버그):
+
+FE: PUT /app/checklist/tm/check { serial_number, master_id, check_result, qr_doc_id: "QR-...-L" }
+                                                                          ↑ FE는 전달함
+  → BE route (L848-854): data.get('serial_number'), data.get('master_id'), ...
+                          qr_doc_id 추출 안 함 ← ✗ 여기서 누락
+  → upsert_tm_check(sn, master_id, result, note, worker_id, phase)
+                     qr_doc_id 파라미터 없음 ← ✗ 시그니처 누락
+  → INSERT ... qr_doc_id = '' ← ✗ 하드코딩
+  → ON CONFLICT (sn, master_id, phase, qr_doc_id='')
+  → DUAL L 체크 → record (sn, master_id, phase, '')
+  → DUAL R 체크 → ON CONFLICT → L record 덮어씀 ← ✗ BUG
+```
+
+**비교**: ELEC PUT (L1156-1182)은 `data.get('qr_doc_id', '')` 정상 추출 + 서비스 전달 완료.
+
+**TM GET** (L771)도 이미 `qr_doc_id` query param을 수신하고 있어 조회는 정상.
+
+### 수정 대상
+
+```
+backend/app/routes/checklist.py         (수정 — TM PUT에서 qr_doc_id 추출)
+backend/app/services/checklist_service.py (수정 — upsert_tm_check 시그니처 + SQL)
+```
+
+---
+
+### Task 1: `checklist.py` — TM PUT endpoint에 qr_doc_id 추출 추가
+
+#### 1-A: request body에서 qr_doc_id 추출 (L848-854)
+
+```python
+# 기존 (L848-854):
+serial_number = data.get('serial_number')
+master_id = data.get('master_id')
+check_result = data.get('check_result')
+note = data.get('note')
+phase = data.get('phase', 1)
+
+# 변경:
+serial_number = data.get('serial_number')
+master_id = data.get('master_id')
+check_result = data.get('check_result')
+note = data.get('note')
+phase = data.get('phase', 1)
+qr_doc_id = data.get('qr_doc_id', '')  # ← 추가: DUAL L/R 분리
+```
+
+#### 1-B: upsert_tm_check 호출에 qr_doc_id 전달 (L857-864)
+
+```python
+# 기존 (L857-864):
+result = upsert_tm_check(
+    serial_number=serial_number,
+    master_id=master_id,
+    check_result=check_result,
+    note=note,
+    worker_id=current_user['id'],
+    judgment_phase=phase
+)
+
+# 변경:
+result = upsert_tm_check(
+    serial_number=serial_number,
+    master_id=master_id,
+    check_result=check_result,
+    note=note,
+    worker_id=current_user['id'],
+    judgment_phase=phase,
+    qr_doc_id=qr_doc_id         # ← 추가
+)
+```
+
+---
+
+### Task 2: `checklist_service.py` — `upsert_tm_check()` qr_doc_id 연동
+
+#### 2-A: 함수 시그니처 변경 (L386)
+
+```python
+# 기존:
+def upsert_tm_check(
+    serial_number: str,
+    master_id: int,
+    check_result: str,
+    note: Optional[str],
+    worker_id: int,
+    judgment_phase: int = 1,
+) -> Dict[str, Any]:
+
+# 변경:
+def upsert_tm_check(
+    serial_number: str,
+    master_id: int,
+    check_result: str,
+    note: Optional[str],
+    worker_id: int,
+    judgment_phase: int = 1,
+    qr_doc_id: str = '',         # ← 추가: DUAL L/R 분리
+) -> Dict[str, Any]:
+```
+
+#### 2-B: INSERT SQL — 하드코딩 '' → 파라미터 (L435-449)
+
+```python
+# 기존 (L435-449):
+cur.execute("""
+    INSERT INTO checklist.checklist_record
+        (serial_number, master_id, judgment_phase, check_result, checked_by, checked_at, note, qr_doc_id, updated_at)
+    VALUES (%s, %s, %s, %s, %s, NOW(), %s, '', NOW())
+    ON CONFLICT (serial_number, master_id, judgment_phase, qr_doc_id) DO UPDATE
+    SET check_result = EXCLUDED.check_result, ...
+""", (serial_number, master_id, judgment_phase, check_result, worker_id, note))
+
+# 변경:
+cur.execute("""
+    INSERT INTO checklist.checklist_record
+        (serial_number, master_id, judgment_phase, check_result, checked_by, checked_at, note, qr_doc_id, updated_at)
+    VALUES (%s, %s, %s, %s, %s, NOW(), %s, %s, NOW())
+    ON CONFLICT (serial_number, master_id, judgment_phase, qr_doc_id) DO UPDATE
+    SET check_result = EXCLUDED.check_result,
+        checked_by   = EXCLUDED.checked_by,
+        checked_at   = EXCLUDED.checked_at,
+        note         = EXCLUDED.note,
+        updated_at   = NOW()
+    RETURNING id
+""", (serial_number, master_id, judgment_phase, check_result, worker_id, note, qr_doc_id))
+#                                                                              ↑ 파라미터 전달
+```
+
+> **하위 호환**: SINGLE 제품은 FE에서 qr_doc_id='' 전송 (또는 미전송 → DEFAULT ''). 기존 record와 동일 키 → 정상 동작.
+
+---
+
+### Task 3: TM 실적 완료 — DUAL L+R 합산 판정
+
+TM 실적 완료 시 L+R 체크리스트 모두 완료되었는지 확인. 기존 `_trigger_tm_checklist_alert()`에서 체크리스트 완료 판정에 qr_doc_id별 분리 확인 로직 추가.
+
+#### 3-A: TM 체크리스트 완료 확인 로직 (기존 흐름 확인)
+
+```python
+# _trigger_tm_checklist_alert() 내부에서 TM 체크리스트 완료 여부 확인 시:
+# 현재: serial_number 기준 전체 record 조회
+# → DUAL이면 L/R 각각의 record가 있어야 완료
+#
+# 확인 필요: 현재 완료 판정이 "master 항목 수 == record 수"인지,
+#           아니면 "모든 master_id에 대해 record 존재"인지에 따라 동작 다름
+#
+# qr_doc_id 분리 후:
+#   SINGLE: master 항목수 == record(qr='') 수 → 기존 동작
+#   DUAL: master 항목수 × 2 == record(qr='QR-L' + qr='QR-R') 수
+#         또는 각 qr별로 master 항목수 == record 수 확인
+```
+
+> **주의**: 현재 TM 완료 판정 로직의 정확한 구현을 확인 후 DUAL 분기 추가 필요. `_trigger_tm_checklist_alert()` L630-696 참조.
+> MECH 협력사 관리자 알림은 L+R **모두** TM 체크리스트 완료 후에만 발송.
+
+---
+
+### BUG-38 QA 체크리스트
+
+BUG-38은 코드 수정 불필요 — 실기기 QA만 필요.
+
+```
+BE 구현 확인:
+  ✅ select_options JSONB 컬럼 (migration 047)
+  ✅ TUBE item_type='SELECT' + 3개 옵션 (migration 047)
+  ✅ ELEC PUT: selected_value 수신 + upsert (L1174, L800)
+  ✅ ELEC GET: select_options + selected_value 반환 (L79, L85, L136, L141)
+
+FE 구현 확인:
+  ✅ DropdownButton SELECT 타입 렌더링 (elec_checklist_screen.dart L904-955)
+  ✅ selectOptions → DropdownMenuItem 변환 (L938-942)
+  ✅ onChanged → selected_value 상태 업데이트 (L951)
+  ✅ PUT body에 selected_value 포함 (L196-197)
+```
+
+---
+
+### 테스트 체크리스트
+
+```
+=== A. BUG-37 — TM PUT qr_doc_id 연동 (Task 1-2) ===
+
+TC-57D-01: TM PUT body에 qr_doc_id="QR-TEST-2222-L" 전송 → record.qr_doc_id = "QR-...-L" 저장
+TC-57D-02: TM PUT body에 qr_doc_id="QR-TEST-2222-R" 전송 → record.qr_doc_id = "QR-...-R" 저장
+TC-57D-03: 동일 master_id에 L과 R 각각 독립 record 존재 (UNIQUE 충돌 없음)
+TC-57D-04: DUAL L GET (qr_doc_id="QR-...-L") → L record만 반환
+TC-57D-05: DUAL R GET (qr_doc_id="QR-...-R") → R record만 반환
+TC-57D-06: SINGLE TM PUT (qr_doc_id 미전송) → qr_doc_id='' 기본값 저장
+TC-57D-07: SINGLE TM GET (qr_doc_id 미전송) → qr_doc_id='' record 반환 (regression)
+
+=== B. BUG-37 — DUAL TM 실적 완료 + MECH 알림 (Task 3) ===
+
+TC-57D-08: DUAL L TM 전항목 체크 완료, R 미완료 → TM 실적 미완료, MECH 알림 미발송
+TC-57D-09: DUAL L + R TM 전항목 체크 완료 → TM 실적 완료 + MECH 협력사 관리자 알림 발송
+TC-57D-10: SINGLE TM 전항목 체크 완료 → 기존 동작, TM 실적 완료 + MECH 알림 (regression)
+TC-57D-11: DUAL L 체크 후 R 체크 → L record 변경 없음 (덮어쓰기 버그 해소 확인)
+
+=== C. BUG-37 — Edge Cases ===
+
+TC-57D-12: DUAL L 부분 체크 (3/10 항목) → L record 3건, R record 0건
+TC-57D-13: DUAL L 부분 체크 후 R 전체 체크 → L record 3건 유지, R record 10건 (독립)
+TC-57D-14: DUAL L 체크 결과 수정 (PASS→NA) → L record만 UPDATE, R 미영향
+TC-57D-15: TM DUAL + phase=1 체크 후 phase=2 체크 → (sn, master_id, phase=1, qr-L) + (sn, master_id, phase=2, qr-L) 독립
+
+=== D. BUG-38 — ELEC SELECT TUBE 색상 QA ===
+
+TC-57D-16: ELEC 체크리스트 화면 → TUBE 항목에 DropdownButton 표시 (3개 옵션)
+TC-57D-17: 옵션1 "비가역 EYE CAP(갈, 검, 회, 녹)" 선택 + PASS → 저장 성공
+TC-57D-18: 화면 재진입 → selected_value 복원 (옵션1 선택 상태 유지)
+TC-57D-19: 옵션 변경 (옵션1→옵션2) + 재저장 → selected_value 업데이트 확인
+TC-57D-20: 다른 CHECK 타입 항목 → DropdownButton 미표시 (PASS/NA 토글만)
+```
+
+### 주의사항
+
+- **FE 변경 없음**: FE는 이미 qr_doc_id를 TM PUT body에 포함해서 전송 중. BE만 수신/전달 누락된 상태.
+- **SINGLE 하위 호환**: qr_doc_id 미전송 시 DEFAULT '' → 기존 record와 동일 키. 신규/수정 record 모두 정상.
+- **TM GET 이미 정상**: TM GET endpoint(L771)은 qr_doc_id query param을 이미 수신/전달. PUT만 누락.
+- **BUG-38 코드 수정 없음**: BE/FE 전부 구현 완료. 실기기 QA만 진행 → PASS 시 BACKLOG 상태 변경.
+
+---
+
+## Sprint 57-E: BUG-39 + BUG-40 Hotfix — QI 체크리스트 진입 + 검수 버튼 시점
+
+> **목적**: (1) QI 공정검사 시 ELEC 2차 체크 미동작 수정(BUG-39), (2) 체크리스트 검수 버튼 활성화 시점을 완료→시작으로 변경(BUG-40)
+> **변경 범위**: FE + BE (task_detail_screen.dart, elec_checklist_screen.dart, task_management_screen.dart, work.py)
+> **예상 작업량**: 5 Tasks, 30 TCs
+
+### 근본 원인 분석
+
+#### BUG-39: QI 공정검사 ELEC 2차 체크 미동작
+
+**2개의 독립적 문제:**
+
+**Problem A — FE 역할 검증 완전 누락** (`elec_checklist_screen.dart` L154):
+- `_isQiOnly(item)` → `item['checker_role'] == 'QI'` 이면 **무조건** 차단
+- 현재 접속 사용자의 role 확인 로직이 없음
+- QI 역할 사용자가 접속해도 QI 항목 체크 불가 (항상 "GST QI 인원만 체크 가능합니다" 토스트)
+
+**Problem B — QI 태스크에서 ELEC 체크리스트 진입 경로 없음** (`task_detail_screen.dart`):
+- `QI_INSPECTION` taskCategory = `'QI'` (ELEC 아님)
+- L340: `task.taskCategory == 'ELEC'` → QI 태스크에서 체크리스트 버튼 미표시
+- L624: `(task.taskId == 'TANK_MODULE' && task.taskCategory == 'TMS') || task.taskCategory == 'ELEC'` → QI 미포함
+- **결론**: QI 검사원이 ELEC 2차 체크리스트에 도달할 수 있는 UI 경로 자체가 없음
+
+#### BUG-40: 체크리스트 검수 버튼 시작 시 미활성
+
+**현재 동작:**
+- `_buildCompletedBadge(task)` L623: `task.status == 'completed'` 일 때만 호출
+- 내부 showChecklist 조건: TM 또는 ELEC만 (QI 제외)
+- ELEC in_progress: `_buildChecklistButton` L340 → ELEC만 가능 (TM, QI 제외)
+
+**요구사항:** 시작(in_progress) 상태에서도 체크리스트 재진입 버튼 표시 — TM, QI 모두 포함
+
+### Task 1: BUG-39-A — QI 역할 검증 로직 추가 (FE)
+
+**파일**: `frontend/lib/screens/checklist/elec_checklist_screen.dart`
+
+**변경 1**: 클래스에 현재 사용자 역할 참조 추가
+
+```dart
+// L10 부근 — import 추가 (없으면)
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+// authProvider import (이미 있을 수 있음)
+```
+
+**변경 2**: `_isQiOnly()` → `_isQiBlocked()` 로직 변경 (L139-141)
+
+현재:
+```dart
+bool _isQiOnly(Map<String, dynamic> item) {
+  return item['checker_role'] == 'QI';
+}
+```
+
+변경 후:
+```dart
+/// QI 전용 항목이고, 현재 사용자가 QI 역할이 아닌 경우 true (차단 대상)
+bool _isQiBlocked(Map<String, dynamic> item) {
+  if (item['checker_role'] != 'QI') return false; // QI 전용 아니면 통과
+  // 현재 사용자 역할 확인
+  final authState = ref.read(authProvider);
+  final role = authState.currentRole;        // 'QI', 'MECH', 'ELEC' 등
+  final activeRole = authState.currentWorker?.activeRole; // GST 사용자의 활성 역할
+  // QI 역할이거나 activeRole이 QI이면 허용
+  return role != 'QI' && activeRole != 'QI';
+}
+```
+
+**변경 3**: `_toggleResult()` 내 호출 변경 (L154)
+
+현재:
+```dart
+if (_isQiOnly(item)) {
+```
+
+변경 후:
+```dart
+if (_isQiBlocked(item)) {
+```
+
+**변경 4**: QI 항목 UI 표시 변경 — QI 사용자에게는 터치 가능, 비-QI 사용자에게는 회색+잠금 아이콘
+
+현재 item_card 빌더에서 `_isQiOnly()` 사용하는 곳 모두 `_isQiBlocked()` 로 변경.
+
+### Task 2: BUG-39-B — QI 태스크에서 ELEC 체크리스트 진입 경로 (FE)
+
+**파일**: `frontend/lib/screens/task/task_detail_screen.dart`
+
+**변경 1**: L340 조건 확장 — in_progress 체크리스트 재진입
+
+현재:
+```dart
+if (task.taskCategory == 'ELEC' && task.status == 'in_progress')
+```
+
+변경 후:
+```dart
+if (_hasChecklistAccess(task) && task.status == 'in_progress')
+```
+
+**변경 2**: 헬퍼 메서드 추가
+
+```dart
+/// 체크리스트 접근 가능 task인지 판정
+bool _hasChecklistAccess(TaskItem task) {
+  // ELEC 카테고리 전체
+  if (task.taskCategory == 'ELEC') return true;
+  // TM (TANK_MODULE)
+  if (task.taskId == 'TANK_MODULE' && task.taskCategory == 'TMS') return true;
+  // QI 공정검사 — ELEC 2차 체크리스트 진입
+  if (task.taskId == 'QI_INSPECTION' && task.taskCategory == 'QI') return true;
+  return false;
+}
+```
+
+**변경 3**: L624 `_buildCompletedBadge` 내 showChecklist 조건 변경
+
+현재:
+```dart
+final bool showChecklist = (task.taskId == 'TANK_MODULE' && task.taskCategory == 'TMS')
+    || task.taskCategory == 'ELEC';
+```
+
+변경 후:
+```dart
+final bool showChecklist = _hasChecklistAccess(task);
+```
+
+**변경 4**: `_buildChecklistButton` 내 `_navigateToChecklist` 호출 시 QI 분기
+
+QI 태스크에서 체크리스트 진입 시 ELEC 체크리스트 Phase 2로 바로 이동:
+
+```dart
+onTap: () {
+  final sn = ref.read(taskProvider).currentSerialNumber;
+  if (sn != null) {
+    if (task.taskCategory == 'QI') {
+      // QI 공정검사 → ELEC 체크리스트 Phase 2 직접 진입
+      _navigateToChecklist('ELEC', sn, initialPhase: 2);
+    } else {
+      _navigateToChecklist(
+        task.taskCategory == 'ELEC' ? 'ELEC' : 'TM',
+        sn,
+        qrDocId: task.qrDocId,
+      );
+    }
+  }
+},
+```
+
+**변경 5**: `_navigateToChecklist` 시그니처 확장
+
+```dart
+void _navigateToChecklist(String category, String serialNumber, {String? qrDocId, int? initialPhase}) {
+  Widget screen;
+  if (category == 'ELEC') {
+    screen = ElecChecklistScreen(serialNumber: serialNumber, initialPhase: initialPhase);
+  } else {
+    screen = TmChecklistScreen(serialNumber: serialNumber, qrDocId: qrDocId);
+  }
+  Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
+}
+```
+
+**변경 6**: `ElecChecklistScreen` — initialPhase 파라미터 추가
+
+```dart
+class ElecChecklistScreen extends ConsumerStatefulWidget {
+  final String serialNumber;
+  final int? initialPhase;  // NEW: QI 진입 시 phase=2 직접 설정
+  
+  const ElecChecklistScreen({
+    super.key,
+    required this.serialNumber,
+    this.initialPhase,
+  });
+}
+
+// State 클래스 initState:
+@override
+void initState() {
+  super.initState();
+  _currentPhase = widget.initialPhase ?? 1;  // QI 진입 시 2차 배선 직행
+  _fetchChecklist();
+}
+```
+
+### Task 3: BUG-40 — 체크리스트 검수 버튼 시작 시 활성화 (FE)
+
+**파일**: `frontend/lib/screens/task/task_detail_screen.dart`
+
+Task 2에서 이미 해결됨:
+- `_hasChecklistAccess(task) && task.status == 'in_progress'` 조건으로 TM/ELEC/QI 모두 in_progress 시 체크리스트 버튼 표시
+- `_buildCompletedBadge` 내 `showChecklist = _hasChecklistAccess(task)` 로 completed 시에도 동일 조건 적용
+
+**추가 확인 사항**: TM(TANK_MODULE) in_progress 시 `_buildChecklistButton` 에서 `_navigateToChecklist('TM', sn, qrDocId: task.qrDocId)` 정상 호출되는지 검증.
+
+### Task 4: BE — QI_INSPECTION 시작 시 checklist_ready 반환
+
+**파일**: `backend/app/routes/work.py`
+
+**현재 코드 (L172-175)**:
+```python
+# Sprint 57: ELEC INSPECTION 시작 → 체크리스트 팝업
+if updated_task.task_category == 'ELEC' and updated_task.task_id == 'INSPECTION':
+    result['checklist_ready'] = True
+    result['checklist_category'] = 'ELEC'
+```
+
+**문제**: QI_INSPECTION 시작 시 `checklist_ready` 미반환 → FE 자동 이동 불가
+
+**변경 후 (L172-179)**:
+```python
+# Sprint 57: ELEC INSPECTION 시작 → 체크리스트 팝업
+if updated_task.task_category == 'ELEC' and updated_task.task_id == 'INSPECTION':
+    result['checklist_ready'] = True
+    result['checklist_category'] = 'ELEC'
+# Sprint 57-E: QI 공정검사 시작 → ELEC 체크리스트 Phase 2 팝업
+if updated_task.task_category == 'QI' and updated_task.task_id == 'QI_INSPECTION':
+    result['checklist_ready'] = True
+    result['checklist_category'] = 'ELEC'
+```
+
+> **참고**: checklist_category='ELEC' — QI 공정검사는 ELEC 체크리스트의 Phase 2 (QI 항목)를 검수.
+> FE에서 `checklistCategory == 'ELEC'` + QI 태스크 → initialPhase=2 로 분기.
+
+**확인 완료된 BE 항목** (변경 불필요):
+- `upsert_elec_check` (L769): `judgment_phase` 파라미터 ✅ 정상 수신
+- `get_elec_checklist` (L704): `judgment_phase` query param ✅ 정상 필터
+- ELEC PUT route (L1173): `judgment_phase=data.get('judgment_phase', 1)` ✅ 정상 전달
+
+### Task 5: FE — task_management_screen.dart QI 체크리스트 분기
+
+**파일**: `frontend/lib/screens/task/task_management_screen.dart`
+
+**문제 1**: `_navigateToChecklist` (L691) — `initialPhase` 파라미터 없음
+
+현재:
+```dart
+void _navigateToChecklist(String category, String serialNumber) {
+  Widget screen;
+  if (category == 'ELEC') {
+    screen = ElecChecklistScreen(serialNumber: serialNumber);
+  } else {
+    screen = TmChecklistScreen(serialNumber: serialNumber);
+  }
+  Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
+}
+```
+
+변경 후:
+```dart
+void _navigateToChecklist(String category, String serialNumber, {int? initialPhase}) {
+  Widget screen;
+  if (category == 'ELEC') {
+    screen = ElecChecklistScreen(serialNumber: serialNumber, initialPhase: initialPhase);
+  } else {
+    screen = TmChecklistScreen(serialNumber: serialNumber);
+  }
+  Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
+}
+```
+
+**문제 2**: `_handleStartTask` (L660) — QI 시작 시 Phase 2 직행 분기 없음
+
+현재:
+```dart
+if (startResult.success && startResult.checklistReady && startResult.checklistCategory != null) {
+  final sn = ref.read(taskProvider).currentSerialNumber;
+  if (sn != null) {
+    _navigateToChecklist(startResult.checklistCategory!, sn);
+```
+
+변경 후:
+```dart
+if (startResult.success && startResult.checklistReady && startResult.checklistCategory != null) {
+  final sn = ref.read(taskProvider).currentSerialNumber;
+  if (sn != null) {
+    // QI 공정검사 → ELEC Phase 2 직행
+    final task = ref.read(taskProvider).selectedTask;
+    final phase = (task?.taskCategory == 'QI') ? 2 : null;
+    _navigateToChecklist(startResult.checklistCategory!, sn, initialPhase: phase);
+```
+
+**문제 3**: `_handleCompleteTask` 내 complete 시 QI 분기 (L778, L861)
+
+completeResult.checklistReady 후 navigateToChecklist 호출 시에도 동일한 QI → Phase 2 분기 적용.
+
+### 테스트 체크리스트
+
+```
+=== A. BUG-39-A — QI 역할 검증 (Task 1) ===
+
+TC-57E-01: WORKER 역할 로그인 → ELEC 체크리스트 Phase 2 → QI 항목 터치 → "GST QI 인원만 체크 가능합니다" 토스트 (기존 동작 유지)
+TC-57E-02: QI 역할 로그인 → ELEC 체크리스트 Phase 2 → QI 항목 터치 → PASS 토글 성공
+TC-57E-03: QI 역할 → QI 항목 PASS 후 재터치 → NA 토글 성공
+TC-57E-04: QI 역할 → QI 항목 체크 → 화면 재진입 → check_result 복원 확인
+TC-57E-05: GST activeRole=QI 로그인 → QI 항목 체크 가능 (activeRole 분기 확인)
+TC-57E-06: GST activeRole=PI 로그인 → QI 항목 차단 (PI는 QI 아님)
+TC-57E-07: WORKER 역할 → QI 항목 UI에 잠금 아이콘/회색 표시
+TC-57E-08: QI 역할 → WORKER 항목 PASS/NA 토글 가능 (QI도 WORKER 항목 체크 가능)
+
+=== B. BUG-39-B — QI 태스크 체크리스트 진입 (Task 2) ===
+
+TC-57E-09: QI_INSPECTION 태스크 시작(in_progress) → 체크리스트 버튼 표시
+TC-57E-10: QI_INSPECTION 체크리스트 버튼 클릭 → ELEC 체크리스트 Phase 2 화면 이동
+TC-57E-11: QI_INSPECTION 완료(completed) → 체크리스트 검수 버튼 표시
+TC-57E-12: QI_INSPECTION 완료 후 체크리스트 검수 클릭 → ELEC 체크리스트 Phase 2 진입
+TC-57E-13: QI 체크리스트 진입 → Phase 1/2 탭 전환 가능 (2차 기본이지만 1차도 조회 가능)
+TC-57E-14: QI 체크리스트 진입 → Phase 2 JIG 그룹 표시 (Phase 1에서는 제외)
+
+=== C. BUG-40 — 체크리스트 검수 버튼 시작 시 활성화 (Task 3) ===
+
+TC-57E-15: ELEC INSPECTION 시작(in_progress) → 체크리스트 버튼 표시 (기존 동작, regression 확인)
+TC-57E-16: TANK_MODULE(TMS) 시작(in_progress) → 체크리스트 버튼 신규 표시
+TC-57E-17: TM 체크리스트 버튼 클릭 → TM 체크리스트 화면 이동 (qrDocId 전달)
+TC-57E-18: TANK_MODULE 완료(completed) → 체크리스트 검수 버튼 표시 (기존 동작 유지)
+TC-57E-19: QI_INSPECTION 시작(in_progress) → 체크리스트 버튼 표시
+TC-57E-20: MECH 카테고리 태스크 시작 → 체크리스트 버튼 미표시 (해당 없음)
+
+=== D. Edge Cases ===
+
+TC-57E-21: ELEC Phase 2 → QI 항목 전체 PASS → summary 100% (QI 항목 포함)
+TC-57E-22: WORKER가 Phase 2 WORKER 항목 전체 완료 + QI 항목 미완료 → check_elec_completion = TRUE (QI 제외 완료 판정)
+TC-57E-23: QI가 Phase 2 QI 항목 전체 완료 → QI별 완료 토스트 또는 별도 완료 표시
+TC-57E-24: DUAL TM 시작(in_progress) → 체크리스트 버튼 표시 → L/R 분기 정상
+TC-57E-25: QI_INSPECTION 태스크 pending 상태 → 체크리스트 버튼 미표시 (시작 전)
+
+=== E. BE — QI_INSPECTION 시작 시 checklist_ready (Task 4) ===
+
+TC-57E-26: QI_INSPECTION start_work API → 응답에 checklist_ready=true, checklist_category='ELEC' 확인
+TC-57E-27: ELEC INSPECTION start_work API → 기존 동작 유지 (checklist_ready=true, category='ELEC')
+TC-57E-28: MECH task start_work API → checklist_ready 없음 (regression)
+
+=== F. FE — task_management_screen QI 분기 (Task 5) ===
+
+TC-57E-29: task_management에서 QI_INSPECTION 시작 → ELEC Phase 2 자동 이동
+TC-57E-30: task_management에서 ELEC INSPECTION 시작 → ELEC Phase 1 자동 이동 (기존)
+```
+
+### 주의사항
+
+- **ELEC in_progress 체크리스트 버튼**: 이미 Sprint 57-FE에서 구현됨 (L340). regression 주의.
+- **QI 역할 → WORKER 항목**: QI 인원도 WORKER 항목 체크 가능해야 함 (현장에서 전체 검사 진행).
+- **`_hasChecklistAccess()` 헬퍼**: 3곳에서 동일 조건 사용 → DRY 원칙. 향후 카테고리 추가 시 한곳만 수정.
+- **initialPhase 파라미터**: ElecChecklistScreen 생성자 변경 → 기존 ELEC 진입(initialPhase=null)은 Phase 1 기본값 유지.
+- **BE `work.py` L173**: QI_INSPECTION 조건 추가. 기존 ELEC INSPECTION과 별도 if문 (elif 아님 — 동시 해당 불가하지만 명확성 위해).
+- **task_management_screen.dart `_navigateToChecklist`**: `initialPhase` + `qrDocId` 파라미터 추가. task_detail_screen.dart와 동일 패턴.
+- **2개 화면 동시 수정**: task_detail_screen.dart + task_management_screen.dart 모두 체크리스트 진입 분기가 있음. 한쪽만 수정하면 다른 쪽에서 QI → Phase 1 기본 진입하거나 TM DUAL qrDocId 누락.
+- **TM DUAL qrDocId 전달 필수** (Sprint 57-E 코드 수정 완료):
+  - `_buildCompletedBadge` onTap → `qrDocId: task.qrDocId` 추가됨
+  - `_handleStartTask` auto-navigate → `qrDocId: task?.qrDocId` 추가됨
+  - `task_management_screen` 3곳 (start/FINAL complete/relay complete) → `qrDocId: selTask?.qrDocId` 추가됨
+  - qrDocId 미전달 시 DUAL L/R 구분 불가 → 항상 '' 빈 키로 조회 → 잘못된 record 반환
+- **테스트 DB**: py test는 외부 DB 접속이 필요 (centerbeam.proxy.rlwy.net). VM 환경에서는 DNS 미해석으로 실패 — 네트워크 접속 가능한 환경에서 실행 필요.
+- **ELEC은 DUAL 해당 없음**: 혼동 주의. qr_doc_id 분리는 TM만 해당.
+
+---
+---
+
+# Sprint 30-BE: 성적서 API ELEC Phase 분리 + TM DUAL L/R 분기
+
+## 목적
+VIEW 성적서(`/api/admin/checklist/report/<sn>`)에서:
+1. ELEC **2차 배선 테이블 누락** — Phase 1만 조회, Phase 2 미조회
+2. TM DUAL 모델 **L/R 체크 결과 0건** — `qr_doc_id=''`로 조회해서 `-L`/`-R` record 미매칭
+3. 진행률 API도 동일 문제 (Phase 1만 + DUAL 미반영)
+
+## 변경 대상
+
+| 파일 | 함수 | 변경 |
+|---|---|---|
+| `app/services/checklist_service.py` | (신규) `_is_report_dual_model()` | DUAL 감지 헬퍼 3줄 |
+| `app/services/checklist_service.py` | `get_checklist_report()` L358-365 | 카테고리 순회 로직 교체 |
+| `app/routes/checklist.py` | `get_checklist_report_detail()` L1128-1133 | phase 파라미터 제거 |
+| `app/routes/checklist.py` | `get_checklist_report_orders()` L997-1068 | 진행률 → get_checklist_report 재활용 |
+
+> **수정 금지**: `_get_checklist_by_category()` — 이미 `qr_doc_id` 파라미터 지원 완벽, 수정 불필요
+
+---
+
+## Task 1: `_is_report_dual_model()` 헬퍼 추가
+
+**파일**: `app/services/checklist_service.py`
+**위치**: `get_checklist_report()` 함수 바로 위 (L276 부근)
+
+```python
+def _is_report_dual_model(model: Optional[str]) -> bool:
+    """성적서용 DUAL 모델 감지 — model명에 'DUAL' 포함 여부"""
+    if not model:
+        return False
+    return 'DUAL' in model.upper().split()
+```
+
+---
+
+## Task 2: `get_checklist_report()` 카테고리 순회 로직 변경
+
+**파일**: `app/services/checklist_service.py`
+**위치**: L358-365
+
+현재 코드:
+```python
+        categories = []
+        for cat_row in cat_rows:
+            cat = cat_row['category']
+            cat_data = _get_checklist_by_category(
+                cur, serial_number, cat, product_code, scope, judgment_phase
+            )
+            if cat_data['summary']['total'] > 0:
+                categories.append(cat_data)
+```
+
+변경 후:
+```python
+        # Sprint 30-BE: DUAL 모델 감지 (TM L/R 분기용)
+        is_dual = _is_report_dual_model(model)
+
+        categories = []
+        for cat_row in cat_rows:
+            cat = cat_row['category']
+
+            if cat == 'ELEC':
+                # ── ELEC: Phase 1(1차 배선) + Phase 2(2차 배선) 각각 조회 ──
+                for phase_num, phase_label in [(1, '1차 배선'), (2, '2차 배선')]:
+                    p_data = _get_checklist_by_category(
+                        cur, serial_number, cat, product_code, scope, phase_num
+                    )
+                    # Phase 1: JIG 그룹 제외 (get_elec_checklist 동일 로직)
+                    if phase_num == 1:
+                        p_data['items'] = [
+                            i for i in p_data['items']
+                            if i['item_group'] != 'JIG 검사 및 특별관리 POINT'
+                        ]
+                    # summary 재계산 (JIG 제외 반영)
+                    items = p_data['items']
+                    total = len(items)
+                    checked = sum(1 for i in items if i.get('check_result') in ('PASS', 'NA'))
+                    p_data['summary'] = {
+                        'total': total,
+                        'checked': checked,
+                        'percent': round(checked / total * 100, 1) if total > 0 else 0.0,
+                    }
+                    p_data['phase'] = phase_num
+                    p_data['phase_label'] = phase_label
+                    if total > 0:
+                        categories.append(p_data)
+
+            elif cat == 'TM' and is_dual:
+                # ── TM DUAL: L/R 탱크별 분리 조회 ──
+                cur.execute(
+                    """
+                    SELECT DISTINCT qr_doc_id
+                    FROM app_task_details
+                    WHERE serial_number = %s
+                      AND task_category = 'TMS'
+                      AND qr_doc_id != ''
+                    ORDER BY qr_doc_id
+                    """,
+                    (serial_number,)
+                )
+                tank_rows = cur.fetchall()
+                for tank_row in tank_rows:
+                    tank_qr = tank_row['qr_doc_id']
+                    if tank_qr.endswith('-L'):
+                        tank_label = 'L Tank'
+                    elif tank_qr.endswith('-R'):
+                        tank_label = 'R Tank'
+                    else:
+                        tank_label = tank_qr
+                    t_data = _get_checklist_by_category(
+                        cur, serial_number, cat, product_code, scope,
+                        judgment_phase, qr_doc_id=tank_qr
+                    )
+                    t_data['qr_doc_id'] = tank_qr
+                    t_data['phase_label'] = tank_label
+                    if t_data['summary']['total'] > 0:
+                        categories.append(t_data)
+
+            else:
+                # ── MECH / TM(SINGLE) 등: 기존 동일 ──
+                cat_data = _get_checklist_by_category(
+                    cur, serial_number, cat, product_code, scope, judgment_phase
+                )
+                if cat_data['summary']['total'] > 0:
+                    categories.append(cat_data)
+```
+
+---
+
+## Task 3: `get_checklist_report_detail()` 라우트 — phase 파라미터 제거
+
+**파일**: `app/routes/checklist.py` L1128-1133
+
+현재:
+```python
+    try:
+        phase = int(request.args.get('phase', 1))
+    except (ValueError, TypeError):
+        phase = 1
+
+    result = checklist_service.get_checklist_report(serial_number, judgment_phase=phase)
+```
+
+변경 후:
+```python
+    # Sprint 30-BE: ELEC Phase 1+2 자동 분리, TM DUAL 자동 분기
+    result = checklist_service.get_checklist_report(serial_number, judgment_phase=1)
+```
+
+> BE가 ELEC은 자동으로 Phase 1+2 반환하므로 FE에서 phase 전송 불필요.
+
+---
+
+## Task 4: `get_checklist_report_orders()` 진행률 — get_checklist_report 재활용
+
+**파일**: `app/routes/checklist.py` L997-1068
+
+기존 배치 SQL (scope 분기 + judgment_phase=1 하드코딩 약 70줄)을 `get_checklist_report()` 재활용으로 교체.
+
+현재 L987-1068 (scope 조회 ~ result_products 생성까지) 삭제 후:
+```python
+        # Sprint 30-BE: get_checklist_report 재활용 (ELEC Phase 1+2 + TM DUAL 자동 반영)
+        result_products = []
+        for p in products:
+            sn = p['serial_number']
+            report = checklist_service.get_checklist_report(sn, judgment_phase=1)
+            if 'error' in report:
+                result_products.append({
+                    'serial_number': sn,
+                    'model': p['model'],
+                    'overall_percent': 0.0,
+                })
+                continue
+            cats = report.get('categories', [])
+            total = sum(c['summary']['total'] for c in cats)
+            checked = sum(c['summary']['checked'] for c in cats)
+            percent = round(checked / total * 100, 1) if total > 0 else 0.0
+            result_products.append({
+                'serial_number': sn,
+                'model': p['model'],
+                'overall_percent': percent,
+            })
+```
+
+장점: ELEC Phase 1+2 + JIG 필터 + TM DUAL L/R 모두 자동 반영.
+단점: S/N별 DB 조회 (N+1). O/N당 S/N 1~10개 수준이면 문제없음.
+
+---
+
+## 테스트 체크리스트
+
+```
+=== Task 1: _is_report_dual_model ===
+
+TC-30B-01: _is_report_dual_model('GAIA-I DUAL') → True
+TC-30B-02: _is_report_dual_model('GAIA-I') → False
+TC-30B-03: _is_report_dual_model(None) → False
+TC-30B-04: _is_report_dual_model('DRAGON LE DUAL') → True
+
+=== Task 2: get_checklist_report — ELEC Phase 분리 ===
+
+TC-30B-05: ELEC 성적서 → categories에 ELEC 2개 (phase=1 + phase=2)
+TC-30B-06: Phase 1 → items에 JIG 그룹 없음, 17 items
+TC-30B-07: Phase 2 → items에 JIG 그룹 포함, 31 items
+TC-30B-08: Phase 1 → phase_label='1차 배선'
+TC-30B-09: Phase 2 → phase_label='2차 배선'
+TC-30B-10: Phase 1 summary → total=17, checked 정상 집계
+TC-30B-11: Phase 2 summary → total=31, QI 항목 포함 집계
+TC-30B-12: ELEC master 없는 S/N → ELEC 카테고리 미반환
+
+=== Task 2: get_checklist_report — TM DUAL ===
+
+TC-30B-13: DUAL 모델 S/N → TM 카테고리 2개 (L Tank + R Tank)
+TC-30B-14: L Tank → qr_doc_id='DOC_xxx-L', phase_label='L Tank'
+TC-30B-15: R Tank → qr_doc_id='DOC_xxx-R', phase_label='R Tank'
+TC-30B-16: L Tank items → L record만 매칭 (R 혼입 없음)
+TC-30B-17: R Tank items → R record만 매칭 (L 혼입 없음)
+TC-30B-18: L/R 각각 summary 독립 집계
+TC-30B-19: SINGLE 모델 S/N → TM 카테고리 1개 (기존 동작, regression 없음)
+TC-30B-20: DUAL이지만 TMS 태스크 없는 S/N → TM 미표시
+
+=== Task 3: 라우트 phase 제거 ===
+
+TC-30B-21: FE에서 phase 미전송 → ELEC Phase 1+2 자동 반환 (기존 호환)
+TC-30B-22: MECH 카테고리 → 기존 동작 유지
+
+=== Task 4: 진행률 API ===
+
+TC-30B-23: O/N 검색 → SINGLE S/N overall_percent에 ELEC Phase 1+2 합산 반영
+TC-30B-24: O/N 검색 → DUAL S/N overall_percent에 TM L+R 합산 반영
+TC-30B-25: S/N 검색 → 동일하게 정상 동작
+TC-30B-26: master 없는 S/N → overall_percent=0.0
+```
+
+### 주의사항
+
+- **`_get_checklist_by_category()` 절대 수정 금지** — 이미 `qr_doc_id` 파라미터 지원 (L28). 수정 시 TM/ELEC 전체에 영향
+- **ELEC Phase 1 JIG 제외 조건**: `item_group != 'JIG 검사 및 특별관리 POINT'` — 문자열 정확히 일치
+- **TM DUAL qr_doc_id 조회**: `app_task_details` 테이블에서 `task_category='TMS'` 조건 필수 (ELEC/MECH는 qr_doc_id에 `-L`/`-R` 없음)
+- **진행률 방법 A**: S/N 수 10개 이하면 성능 문제 없음. 100개+ 대량 조회 시 배치 SQL 재도입 검토
+- **`get_checklist_report()` 의 `judgment_phase` 파라미터**: ELEC은 함수 내부에서 Phase 1+2 자동 분리하므로 파라미터값 무시. TM/MECH는 파라미터값 사용 (현재 항상 1)
+- **서버 재시작 필수**: Flask dev server 자동 reload가 service 파일 변경 감지 안 할 수 있음
+- **ELEC은 DUAL 해당 없음**: qr_doc_id 분리는 TM만 해당. ELEC은 항상 qr_doc_id='' 고정
+
+---
+
+## Sprint 58-BE — check_elec_completion Phase 1+2 합산 수정 + confirmable 체크리스트 연동
+
+> **참조**: `AXIS-VIEW/OPS_API_REQUESTS.md` #56
+> **선행**: Sprint 30-BE ✅, Sprint 57-E ✅ 완료
+> **배경**: 코드 검토(2026-04-11)에서 확인된 2가지 문제 수정
+>
+> 1. `check_elec_completion()` — 단일 phase만 확인 → Phase 1(17) + Phase 2(24) = 41건 합산 필요
+> 2. `_is_process_confirmable()` / `_is_sn_process_confirmable()` — 체크리스트 완료 미참조 (dead toggle)
+>
+> ~~`_CONFIRM_TASK_FILTER` ELEC 등록~~ — 불필요 (else 분기에서 카테고리 전체 체크로 이미 처리됨)
+
+### Task 1: `check_elec_completion()` Phase 1+2 합산 — `checklist_service.py`
+
+**파일**: `backend/app/services/checklist_service.py` L912-1014
+
+**현재 동작**:
+- `check_elec_completion(serial_number, judgment_phase=1)` — 단일 phase만 확인
+- null_count: `judgment_phase=%s`로 해당 phase 레코드만 LEFT JOIN
+- total_count: phase 조건 없이 마스터 WORKER 전체 = 24건 (동적 COUNT)
+- Phase 1 호출 시 JIG 7건은 Phase 1 레코드 없음 → LEFT JOIN에서 NULL → 영원히 미완료
+
+**호출부 (2곳)**:
+- `checklist_service.py` L888: `check_elec_completion(serial_number, judgment_phase)` — phase 전달
+- `task_service.py` L421: `check_elec_completion(task.serial_number)` — 기본값 phase=1
+
+> ※ `_try_elec_close()` (L1017)는 check_elec_completion을 호출하지 않음 — IF_2 완료 여부만 확인
+
+**수정 내용**:
+```python
+def check_elec_completion(serial_number: str) -> bool:
+    """
+    ELEC 체크리스트 전체 완료 확인 — Phase 1 + Phase 2 합산.
+    - Phase 1: JIG 그룹 제외한 WORKER 항목 (마스터 동적 COUNT)
+    - Phase 2: 전체 WORKER 항목 (마스터 동적 COUNT)
+    - QI 항목(checker_role='QI') 항상 제외
+    - judgment_phase 파라미터 폐기 — 항상 Phase 1+2 전체 확인
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # === Phase 1 확인 (JIG 그룹 제외) ===
+        cur.execute(
+            """
+            SELECT COUNT(*) AS null_count
+            FROM checklist.checklist_master cm
+            LEFT JOIN checklist.checklist_record cr
+                ON cr.master_id      = cm.id
+               AND cr.serial_number  = %s
+               AND cr.judgment_phase = 1
+               AND cr.qr_doc_id     = ''
+            WHERE cm.category   = 'ELEC'
+              AND cm.is_active  = TRUE
+              AND COALESCE(cm.checker_role, 'WORKER') != 'QI'
+              AND cm.item_group != 'JIG 검사 및 특별관리 POINT'
+              AND cr.check_result IS NULL
+            """,
+            (serial_number,)
+        )
+        phase1_null = cur.fetchone()['null_count']
+        if phase1_null > 0:
+            return False
+
+        # === Phase 2 확인 (JIG 포함, 전체 WORKER) ===
+        cur.execute(
+            """
+            SELECT COUNT(*) AS null_count
+            FROM checklist.checklist_master cm
+            LEFT JOIN checklist.checklist_record cr
+                ON cr.master_id      = cm.id
+               AND cr.serial_number  = %s
+               AND cr.judgment_phase = 2
+               AND cr.qr_doc_id     = ''
+            WHERE cm.category   = 'ELEC'
+              AND cm.is_active  = TRUE
+              AND COALESCE(cm.checker_role, 'WORKER') != 'QI'
+              AND cr.check_result IS NULL
+            """,
+            (serial_number,)
+        )
+        phase2_null = cur.fetchone()['null_count']
+        if phase2_null > 0:
+            return False
+
+        # Phase 1 + Phase 2 전체 WORKER 항목 수 확인 (0건이면 마스터 없음)
+        cur.execute(
+            """
+            SELECT COUNT(*) AS total_count
+            FROM checklist.checklist_master cm
+            WHERE cm.category = 'ELEC'
+              AND cm.is_active = TRUE
+              AND COALESCE(cm.checker_role, 'WORKER') != 'QI'
+            """
+        )
+        total_count = cur.fetchone()['total_count']
+        if total_count == 0:
+            return False
+
+        # ISSUE note 알림 (기존 로직 유지, phase 1+2 모두 스캔)
+        # ... (기존 ISSUE alert 로직 — judgment_phase 조건 제거하여 1+2 모두 스캔)
+
+        return True
+    except PsycopgError as e:
+        logger.error(f"check_elec_completion failed: serial={serial_number}, error={e}")
+        return False
+    finally:
+        if conn:
+            put_conn(conn)
+```
+
+**핵심 변경**:
+- Phase 1 null_count 쿼리: `AND cm.item_group != 'JIG 검사 및 특별관리 POINT'` 추가 → JIG 제외
+- Phase 2 null_count 쿼리: JIG 포함 전체 WORKER
+- total_count: 기존 동적 COUNT 유지 (마스터 항목 추가/삭제 시 자동 반영)
+- `judgment_phase` 파라미터 제거
+
+**호출부 수정 (2곳)**:
+- `checklist_service.py` L888: `check_elec_completion(serial_number, judgment_phase)` → `check_elec_completion(serial_number)`
+- `task_service.py` L421: `check_elec_completion(task.serial_number)` — 이미 phase 미전달, 시그니처 변경으로 자동 해소
+
+### Task 2: confirmable 체크리스트 조건 추가 — `production.py`
+
+**파일**: `backend/app/routes/production.py`
+- `_is_process_confirmable()` L169-217
+- `_is_sn_process_confirmable()` L220-243
+
+**현재 동작**:
+```python
+def _is_process_confirmable(sns_progress, process_type, settings, proc_key=None, serial_numbers=None):
+    # confirm_{proc_key}_enabled 체크 → S/N 루프 → progress 100% 확인
+    # 체크리스트 완료 여부는 미참조 (dead toggle)
+```
+
+**수정 내용**: 기존 progress 100% 확인 후, `confirm_checklist_required=true`이면 S/N별 체크리스트 완료 추가 확인
+
+```python
+def _is_process_confirmable(sns_progress, process_type, settings, proc_key=None, serial_numbers=None):
+    key = f'confirm_{(proc_key or process_type).lower()}_enabled'
+    if not settings.get(key, False):
+        return False
+
+    check_sns = serial_numbers or list(sns_progress.keys())
+    confirm_task = _CONFIRM_TASK_FILTER.get(process_type)
+
+    has_data = False
+    for sn in check_sns:
+        cat_data = sns_progress.get(sn, {}).get(process_type, {})
+
+        if confirm_task:
+            task_data = cat_data.get('tasks', {}).get(confirm_task, {})
+            if task_data.get('total', 0) == 0:
+                continue
+            has_data = True
+            if task_data.get('completed', 0) < task_data.get('total', 0):
+                return False
+        else:
+            if cat_data.get('total', 0) == 0:
+                continue
+            has_data = True
+            if cat_data.get('completed', 0) < cat_data.get('total', 0):
+                return False
+
+    if not has_data:
+        return False
+
+    # ── 체크리스트 필수 토글 확인 (신규 추가) ──
+    checklist_required = settings.get('confirm_checklist_required', False)
+    if checklist_required:
+        for sn in check_sns:
+            if not _check_sn_checklist_complete(sn, process_type):
+                return False
+
+    return True
+
+
+def _check_sn_checklist_complete(serial_number: str, process_type: str) -> bool:
+    """S/N별 공정 체크리스트 완료 확인. 체크리스트 미구현 공정은 True (통과)."""
+    if process_type == 'TMS':
+        from app.services.checklist_service import _check_tm_completion
+        return _check_tm_completion(serial_number)
+    elif process_type == 'ELEC':
+        from app.services.checklist_service import check_elec_completion
+        return check_elec_completion(serial_number)
+    # MECH: 체크리스트 BE 구현 후 여기에 추가
+    # elif process_type == 'MECH':
+    #     from app.services.checklist_service import check_mech_completion
+    #     return check_mech_completion(serial_number)
+    else:
+        return True  # 체크리스트 미구현 공정은 통과
+```
+
+**`_is_sn_process_confirmable()` (L220-243)에도 동일하게 체크리스트 확인 추가**.
+
+**주의: `settings` dict에 `confirm_checklist_required` 포함 필요**
+- `settings`를 구성하는 상위 함수에서 `admin_settings` 테이블의 `confirm_checklist_required` 값을 읽어서 dict에 추가해야 함
+- 상위 함수 확인 후 settings 구성부에 키 추가
+
+**TM 함수명 주의**: `_check_tm_completion()` (private, 언더스코어 prefix). import 시 `_check_tm_completion` 사용.
+
+### Task 3: ELEC status 엔드포인트 신규 생성 — `checklist.py` (선택)
+
+**파일**: `backend/app/routes/checklist.py`
+
+**현재**: ELEC 상세 조회(`/api/app/checklist/elec/<sn>`)만 존재, status 엔드포인트 없음
+
+**신규 추가**:
+```python
+@checklist_bp.route('/api/app/checklist/elec/<serial_number>/status', methods=['GET'])
+def get_elec_checklist_status(serial_number):
+    """ELEC 체크리스트 상태 조회 (Phase별 동적 COUNT)"""
+    phase = request.args.get('phase', type=int)  # 1 or 2, None=전체
+
+    if phase:
+        total, checked = _get_elec_phase_counts(serial_number, phase)
+    else:
+        # Phase 1 + Phase 2 합산
+        t1, c1 = _get_elec_phase_counts(serial_number, 1)
+        t2, c2 = _get_elec_phase_counts(serial_number, 2)
+        total, checked = t1 + t2, c1 + c2
+
+    return jsonify({
+        'total_count': total,
+        'checked_count': checked
+    })
+
+
+def _get_elec_phase_counts(serial_number: str, phase: int) -> tuple:
+    """Phase별 (total, checked) 반환. Phase 1은 JIG 제외, QI 항상 제외. 동적 COUNT."""
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        jig_condition = "AND cm.item_group != 'JIG 검사 및 특별관리 POINT'" if phase == 1 else ""
+        cur.execute(
+            f"""
+            SELECT
+                COUNT(*) AS total,
+                COUNT(cr.check_result) AS checked
+            FROM checklist.checklist_master cm
+            LEFT JOIN checklist.checklist_record cr
+                ON cr.master_id = cm.id
+               AND cr.serial_number = %s
+               AND cr.judgment_phase = %s
+               AND cr.qr_doc_id = ''
+            WHERE cm.category = 'ELEC'
+              AND cm.is_active = TRUE
+              AND COALESCE(cm.checker_role, 'WORKER') != 'QI'
+              {jig_condition}
+            """,
+            (serial_number, phase)
+        )
+        row = cur.fetchone()
+        return row['total'], row['checked']
+    finally:
+        put_conn(conn)
+```
+
+> VIEW FE `getChecklistStatus()`에서 ELEC beCat 매핑 추가 시 이 엔드포인트 사용.
+> 선택적 — 기존 상세 조회에서 FE가 count 파생해도 무방하지만, TM과 패턴 통일이 바람직.
+
+```
+=== Sprint 58-BE 테스트 케이스 ===
+
+--- Task 1: check_elec_completion Phase 1+2 합산 ---
+
+TC-58B-01: Phase 1(JIG 제외) + Phase 2(전체) 모두 완료 → True 반환
+TC-58B-02: Phase 1 완료 + Phase 2 1건 미완 → False 반환
+TC-58B-03: Phase 1 1건 미완 + Phase 2 완료 → False 반환
+TC-58B-04: QI 항목만 미완료 (WORKER 전부 완료) → True 반환 (QI 제외)
+TC-58B-05: Phase 1에서 JIG 항목은 무시 → PANEL+조립만 확인
+TC-58B-06: 마스터 항목 추가 후 → 동적 COUNT 반영 확인
+TC-58B-07: 마스터 항목 비활성화 후 → total_count에서 제외 확인
+TC-58B-08: S/N에 ELEC 마스터 항목 없음 (total=0) → False 반환
+TC-58B-09: upsert 후 check_elec_completion 호출 — phase 파라미터 없이 정상 동작
+TC-58B-10: task_service Dual-Trigger Path 1 — 시그니처 변경 후 정상 호출
+
+--- Task 2: confirmable 체크리스트 연동 ---
+
+TC-58B-11: confirm_checklist_required=true, TMS S/N, 체크리스트 완료 + progress 100% → confirmable=true
+TC-58B-12: confirm_checklist_required=true, TMS S/N, 체크리스트 미완 + progress 100% → confirmable=false
+TC-58B-13: confirm_checklist_required=true, ELEC S/N, 41건 완료 + progress 100% → confirmable=true
+TC-58B-14: confirm_checklist_required=true, ELEC S/N, 40건 완료 + progress 100% → confirmable=false
+TC-58B-15: confirm_checklist_required=false → 체크리스트 무관, 기존 progress만 확인
+TC-58B-16: confirm_checklist_required 키 미존재 → false 취급 (기존 동작 유지)
+TC-58B-17: _is_sn_process_confirmable도 동일 조건 적용 확인
+TC-58B-18: MECH S/N, confirm_checklist_required=true → 체크리스트 미구현이므로 통과 (progress만)
+
+--- Task 3: ELEC status 엔드포인트 (선택) ---
+
+TC-58B-19: GET /api/app/checklist/elec/{sn}/status → total_count + checked_count 반환
+TC-58B-20: GET /api/app/checklist/elec/{sn}/status?phase=1 → Phase 1 (JIG 제외 동적 COUNT)
+TC-58B-21: GET /api/app/checklist/elec/{sn}/status?phase=2 → Phase 2 (전체 WORKER 동적 COUNT)
+TC-58B-22: phase 미지정 → Phase 1+2 합산
+```
+
+### 주의사항
+
+- **`_get_checklist_by_category()` 절대 수정 금지** — Sprint 30-BE와 동일 원칙
+- **check_elec_completion 호출부 2곳**: checklist_service.py L888 (upsert 후), task_service.py L421 (Dual-Trigger Path 1). `_try_elec_close()`는 check_elec_completion 미호출
+- **동적 COUNT 유지**: 마스터 테이블 `is_active=TRUE AND checker_role!='QI'` 기준. VIEW 대시보드에서 항목 추가/삭제 시 자동 반영
+- **TM 함수명**: `_check_tm_completion()` (private, 언더스코어 prefix). Sprint 52에서 구현. 시그니처: `(serial_number, judgment_phase=1) -> bool`. 현재는 그대로 import해서 사용. **추후 MECH 추가 시 TM/ELEC/MECH completion 함수를 공개(public) 인터페이스로 일괄 정리** (지금 wrapper 만들면 수정 대상만 늘어남)
+- **settings dict 확인**: `_is_process_confirmable()`에 전달되는 `settings` dict에 `confirm_checklist_required` 키가 포함되는지 상위 함수 확인 필요
+- **MECH placeholder**: `_check_sn_checklist_complete()`에서 MECH 분기를 주석으로 명시. 추후 MECH 체크리스트 구현 시 여기에 추가
+- **ISSUE alert**: check_elec_completion 내 ISSUE note 알림은 기존 로직 유지하되, `judgment_phase` 조건을 제거하여 Phase 1+2 모두 스캔
+- **Sprint 30-BE와 실행 순서**: Sprint 30-BE ✅ → Sprint 58-BE (본 sprint). check_elec_completion 수정은 58-BE에서 담당
+
+---
+
+## Sprint 59-BE — TM 체크리스트 qr_doc_id 정규화 (SINGLE/DUAL 통합)
+
+> **참조**: `AXIS-VIEW/OPS_API_REQUESTS.md` (본 sprint에서 추가 예정)
+> **선행**: Sprint 57-C ✅, Sprint 57-D ✅, Sprint 30-BE ✅, Sprint 58-BE ✅
+> **배경**: Sprint 58-BE `confirmable` 토글 연동 후 TM 토글 ON 시 실적 버튼 비활성화 증상 발생. 원인 추적 결과, Sprint 57-B 이전 레거시 가정(`qr_doc_id=''`)이 실데이터(`DOC_{S/N}`)와 불일치. 동일 원인으로 협력사 체크리스트 성적서에서 SINGLE 모델 조회 시 0/15로 표시되는 버그 동반 확인.
+>
+> **근본 원인 (요약)**
+> - OPS 앱은 Sprint 57-D부터 TM 체크 저장 시 실제 `qr_doc_id`(SINGLE: `DOC_{S/N}`, DUAL: `DOC_{S/N}-L`/`DOC_{S/N}-R`)를 전송
+> - BE의 `_check_tm_completion()`, `get_checklist_report()` SINGLE 분기는 `qr_doc_id=''`로 하드코딩
+> - LEFT JOIN 매칭 실패 → null_count>0 → 완료 False + 성적서 0/n
+> - Sprint 58-BE 이전에는 `_check_tm_completion()` 반환값이 UX에 연결되지 않아 잠재 버그였음
+> - ELEC 실데이터 확인: `qr_doc_id=''` (31건) → 본 sprint 범위 외
+
+### qr_doc_id 규칙 (전제)
+
+| 공정 | 모델 | qr_doc_id 값 | 개수 |
+|---|---|---|---|
+| TM | SINGLE | `DOC_{S/N}` | 1개 |
+| TM | DUAL | `DOC_{S/N}-L`, `DOC_{S/N}-R` | 2개 (체크리스트 분리) |
+| MECH | 무관 | 미구현 | — |
+| ELEC | 무관 | `''` (빈 문자열) | 1개 |
+
+**진행률/실적 처리**: 항상 S/N 단위 통합 (TM DUAL도 L+R 합산하여 1건)
+**체크리스트 완료 판정**: qr_doc_id 단위로 각각 완료돼야 True
+- SINGLE: 1개 qr_doc_id 완료 = OK
+- DUAL: L, R 두 qr_doc_id 모두 완료돼야 OK
+
+### 사전 점검 SQL (실행 필수)
+
+```sql
+-- 점검 A: 레거시 `''` 또는 예상 외 qr_doc_id 검출
+SELECT cm.category, cr.qr_doc_id, COUNT(*) AS cnt,
+       COUNT(DISTINCT cr.serial_number) AS sn_cnt
+FROM checklist.checklist_record cr
+JOIN checklist.checklist_master cm ON cm.id = cr.master_id
+WHERE cm.category = 'TM'
+  AND cr.qr_doc_id NOT IN (
+      'DOC_' || cr.serial_number,
+      'DOC_' || cr.serial_number || '-L',
+      'DOC_' || cr.serial_number || '-R'
+  )
+GROUP BY 1,2 ORDER BY cnt DESC;
+
+-- 점검 B: 동일 (S/N, master_id, phase)에 복수 qr_doc_id 공존 (혼재 상태)
+SELECT cr.serial_number, cr.master_id, cr.judgment_phase,
+       COUNT(DISTINCT cr.qr_doc_id) AS qr_variants,
+       STRING_AGG(DISTINCT cr.qr_doc_id, ',') AS qrs
+FROM checklist.checklist_record cr
+JOIN checklist.checklist_master cm ON cm.id = cr.master_id
+WHERE cm.category = 'TM'
+GROUP BY 1,2,3
+HAVING COUNT(DISTINCT cr.qr_doc_id) > 1;
+```
+
+→ A 결과가 0건이면 마이그레이션 불필요. 있으면 Task 4 수행.
+→ B 결과가 0건이어야 정상. 있으면 데이터 무결성 점검 후 수동 정리.
+
+### Task 1: `_check_tm_completion()` qr_doc_id 리스트 기반 재작성
+
+**파일**: `backend/app/services/checklist_service.py` L546-675
+
+**현재 동작 (버그)**:
+- L598: `AND cr.qr_doc_id = ''` 하드코딩
+- SINGLE: 실제 `DOC_{S/N}` → JOIN 매칭 실패 → null_count=15 → False
+- DUAL: 실제 `DOC_{S/N}-L/-R` → JOIN 매칭 실패 → False (우연히 안전)
+
+**수정 내용**:
+```python
+def _check_tm_completion(serial_number: str, judgment_phase: int = 1) -> bool:
+    """
+    TM 체크리스트 전체 완료 여부 판정 (Sprint 59-BE: qr_doc_id 리스트 기반).
+
+    DUAL 모델: qr_doc_id='DOC_{S/N}-L', 'DOC_{S/N}-R' 두 개 모두 완료돼야 True
+    SINGLE 모델: qr_doc_id='DOC_{S/N}' 한 개 완료하면 True
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # product_info 조회 (모델 + 스코프 필터 결정)
+        cur.execute(
+            "SELECT product_code, model FROM plan.product_info WHERE serial_number = %s",
+            (serial_number,)
+        )
+        product_row = cur.fetchone()
+        if not product_row:
+            return False
+        product_code = product_row['product_code']
+        model = product_row['model']
+
+        # tm_checklist_scope 확인
+        cur.execute(
+            "SELECT setting_value FROM admin_settings WHERE setting_key = 'tm_checklist_scope'"
+        )
+        scope_row = cur.fetchone()
+        scope = 'product_code'
+        if scope_row:
+            sv = scope_row['setting_value']
+            scope = sv if isinstance(sv, str) else str(sv)
+
+        if scope == 'all' or not product_code:
+            master_filter = "cm.product_code = 'COMMON' AND cm.category = 'TM'"
+            master_params: list = []
+        else:
+            master_filter = "cm.product_code = %s AND cm.category = 'TM'"
+            master_params = [product_code]
+
+        # DUAL 판별 → qr_doc_id 리스트 구성
+        is_dual = _is_report_dual_model(model)
+        if is_dual:
+            qr_doc_ids = [f'DOC_{serial_number}-L', f'DOC_{serial_number}-R']
+        else:
+            qr_doc_ids = [f'DOC_{serial_number}']
+
+        # qr_doc_id별 루프 — 각각 완료돼야 함
+        for qr in qr_doc_ids:
+            null_check_query = f"""
+                SELECT COUNT(*) AS null_count
+                FROM checklist.checklist_master cm
+                LEFT JOIN checklist.checklist_record cr
+                    ON cr.master_id      = cm.id
+                   AND cr.serial_number  = %s
+                   AND cr.judgment_phase = %s
+                   AND cr.qr_doc_id      = %s
+                WHERE {master_filter}
+                  AND cm.is_active = TRUE
+                  AND cr.check_result IS NULL
+            """
+            params = [serial_number, judgment_phase, qr] + master_params
+            cur.execute(null_check_query, params)
+            if cur.fetchone()['null_count'] > 0:
+                return False
+
+        # 전체 항목 수 확인 (0건이면 마스터 없음)
+        total_query = f"""
+            SELECT COUNT(*) AS total_count
+            FROM checklist.checklist_master cm
+            WHERE {master_filter} AND cm.is_active = TRUE
+        """
+        cur.execute(total_query, master_params)
+        if cur.fetchone()['total_count'] == 0:
+            return False
+
+        # ISSUE alert (기존 로직 유지, qr_doc_id 조건 없이 전체 스캔)
+        # ... (기존 L623-666 로직 유지)
+
+        return True
+    except PsycopgError as e:
+        logger.error(f"_check_tm_completion failed: serial={serial_number}, error={e}")
+        return False
+    finally:
+        if conn:
+            put_conn(conn)
+```
+
+**핵심 변경**:
+- `qr_doc_id=''` 하드코딩 → DUAL 판별 후 qr_doc_id 리스트 생성
+- LEFT JOIN 조건 `qr_doc_id = %s` (실제 값 바인딩)
+- qr_doc_id별 루프 — **하나라도 미완료면 False** (DUAL L/R 안전장치)
+- `_is_report_dual_model()` 재사용 (L278)
+
+**호출부**: 시그니처 동일(`serial_number, judgment_phase=1`) → 변경 불필요
+- `upsert_tm_check()` L528 → 자동 반영
+- `_check_sn_checklist_complete()` (production.py) → 자동 반영
+
+### Task 2: `get_checklist_report()` SINGLE 분기 통합
+
+**파일**: `backend/app/services/checklist_service.py` L285-452
+
+**현재 동작 (버그)**:
+- L428-434 else 분기: `_get_checklist_by_category(qr_doc_id='')` 기본값 사용
+- SINGLE 실데이터 `DOC_{S/N}`과 불일치 → 모든 item이 LEFT JOIN NULL → 0/15
+
+**수정 내용**: DUAL 분기와 동일 패턴을 SINGLE에도 적용.
+
+```python
+elif cat == 'TM':
+    # Sprint 59-BE: DUAL/SINGLE 통합 — qr_doc_id별로 섹션 분리
+    if is_dual:
+        qr_doc_ids = [
+            (f'DOC_{serial_number}-L', 'L Tank'),
+            (f'DOC_{serial_number}-R', 'R Tank'),
+        ]
+    else:
+        qr_doc_ids = [(f'DOC_{serial_number}', None)]  # SINGLE은 label 없음
+
+    for tank_qr, tank_label in qr_doc_ids:
+        t_data = _get_checklist_by_category(
+            cur, serial_number, cat, product_code, scope,
+            judgment_phase, qr_doc_id=tank_qr
+        )
+        t_data['qr_doc_id'] = tank_qr
+        if tank_label:
+            t_data['phase_label'] = tank_label
+        if t_data['summary']['total'] > 0:
+            categories.append(t_data)
+
+else:
+    # MECH 등: 기존 그대로 qr_doc_id='' 사용
+    cat_data = _get_checklist_by_category(
+        cur, serial_number, cat, product_code, scope, judgment_phase
+    )
+    if cat_data['summary']['total'] > 0:
+        categories.append(cat_data)
+```
+
+**변경 요점**:
+- DUAL에서 `app_task_details` 조회로 qr_doc_id 뽑던 로직 제거 → 문자열 계산
+- SINGLE도 `DOC_{S/N}` 전달하여 LEFT JOIN 매칭 성공
+- DUAL L/R 섹션 표시 방식은 그대로 유지 (`phase_label='L Tank'/'R Tank'`)
+- SINGLE은 `phase_label` 없음 (기존 DUAL UI와 구분)
+- ELEC은 기존 분기 그대로(L372-395), MECH는 else 분기(`qr_doc_id=''`)
+
+### Task 3: FE 호환성 확인 (코드 변경 없음, 검증만)
+
+**영향 받을 수 있는 FE 응답 필드**:
+- `get_checklist_report` 응답 `categories[]` 항목 중 TM
+  - 이전 SINGLE: `{category: 'TM', items: [...], summary: {total: 15, checked: ?}}` — qr_doc_id 키 없음, phase_label 없음
+  - 변경 후 SINGLE: `{category: 'TM', qr_doc_id: 'DOC_{S/N}', items: [...], summary: {...}}` — qr_doc_id 추가, phase_label 없음
+  - DUAL: 변경 없음 (기존과 동일)
+
+**VIEW FE 검증**: 협력사 체크리스트 조회 화면에서 SINGLE의 qr_doc_id 필드 신규 노출이 렌더링에 영향 주는지 확인.
+
+### Task 4: 레거시 데이터 마이그레이션 (점검 A 결과 기반)
+
+**실행 조건**: 점검 SQL A 결과 >0건인 경우만
+
+**Option A (단순 삭제)**: 레거시 `''` 레코드가 소수이고 모두 NULL/TEST 데이터면
+```sql
+DELETE FROM checklist.checklist_record
+WHERE qr_doc_id = ''
+  AND master_id IN (SELECT id FROM checklist.checklist_master WHERE category = 'TM');
+```
+
+**Option B (UPDATE)**: 실데이터가 있어 보존 필요하면 — DUAL이면 L로 귀속, SINGLE이면 DOC_{SN}로 승격
+```sql
+-- SINGLE 모델만 (DUAL은 수동 정리 권장)
+UPDATE checklist.checklist_record cr
+SET qr_doc_id = 'DOC_' || cr.serial_number
+FROM plan.product_info pi
+WHERE cr.serial_number = pi.serial_number
+  AND cr.qr_doc_id = ''
+  AND cr.master_id IN (SELECT id FROM checklist.checklist_master WHERE category = 'TM')
+  AND <SINGLE 모델 판별 조건>;  -- _is_report_dual_model 로직 기준
+```
+
+→ **점검 결과 공유 후 실행 여부/방식 결정**. 마이그레이션 전 백업 필수.
+
+### 테스트 케이스
+
+```
+=== Sprint 59-BE 테스트 케이스 ===
+
+--- Task 1: _check_tm_completion() qr_doc_id 리스트 기반 ---
+
+TC-59B-01: SINGLE S/N, qr_doc_id='DOC_{SN}'로 15건 완료 → True
+TC-59B-02: SINGLE S/N, qr_doc_id='DOC_{SN}'로 14건 완료 (1건 NULL) → False
+TC-59B-03: SINGLE S/N, qr_doc_id=''로 15건 완료 (레거시) → False (의도된 동작 — 마이그레이션 대상)
+TC-59B-04: DUAL S/N, L 15건 완료 + R 15건 완료 → True
+TC-59B-05: DUAL S/N, L 15건 완료 + R 14건 완료 → False
+TC-59B-06: DUAL S/N, L 0건 + R 15건 완료 → False
+TC-59B-07: DUAL S/N, L/R 둘 다 미완료 → False
+TC-59B-08: 마스터 0건인 product_code → False
+TC-59B-09: 존재하지 않는 S/N → False
+TC-59B-10: scope='all' 모드에서 SINGLE/DUAL 판정 정상 동작
+
+--- Task 2: get_checklist_report() SINGLE 분기 ---
+
+TC-59B-11: SINGLE S/N 성적서 조회 → TM 섹션 1개, items=15, summary 정상
+TC-59B-12: SINGLE S/N 성적서 조회 → qr_doc_id='DOC_{SN}' 필드 포함
+TC-59B-13: SINGLE S/N 성적서 조회 → phase_label 키 없음 (DUAL과 구분)
+TC-59B-14: DUAL S/N 성적서 조회 → TM 섹션 2개 (L Tank, R Tank), 기존 동작 유지
+TC-59B-15: DUAL S/N 성적서 조회 → app_task_details 조회 없이 문자열 계산으로 정상 응답
+TC-59B-16: MECH 카테고리 섹션 → 기존 `qr_doc_id=''` 패턴 그대로
+TC-59B-17: ELEC Phase 1/2 섹션 → Sprint 30-BE 동작 그대로 유지
+
+--- 통합 테스트 ---
+
+TC-59B-18: Sprint 58-BE confirmable 토글 ON + SINGLE TM 체크리스트 완료 → 실적 버튼 활성화 (회귀 수정 검증)
+TC-59B-19: Sprint 58-BE confirmable 토글 ON + DUAL L/R 모두 완료 → 실적 버튼 활성화 (기존 동작 보존)
+TC-59B-20: Sprint 58-BE confirmable 토글 ON + DUAL L만 완료 → 실적 버튼 비활성화 (False Positive 방지)
+TC-59B-21: confirmable 토글 OFF → 체크리스트 무관 활성화 (Sprint 58-BE 동작 보존)
+TC-59B-22: 협력사 체크리스트 SINGLE 조회 → 0/15 → 15/15 (회귀 수정 검증)
+TC-59B-23: Dual-Trigger Path 1 (task_service L420) → upsert 후 `_check_tm_completion` 호출 정상
+TC-59B-24: ELEC `check_elec_completion()` 영향 없음 — Sprint 58-BE 동작 유지
+TC-59B-25: TM GET/PUT API (`qr_doc_id` 파라미터) 영향 없음 — 클라이언트 전송값 그대로 사용
+
+--- Regression 방어 ---
+
+TC-59B-26: upsert_tm_check() 호출 후 is_complete 반환값 — SINGLE/DUAL 모두 올바름
+TC-59B-27: tm_checklist_scope='all' 시 product_code 필터 로직 유지
+TC-59B-28: tm_checklist_issue_alert 설정 기반 ISSUE 알림 정상 발송
+TC-59B-29: UNIQUE 제약 (serial_number, master_id, judgment_phase, qr_doc_id) 기존 스키마 유지
+TC-59B-30: phase1_na 자동 N.A 로직 영향 없음 (TM은 phase 고정)
+```
+
+### 주의사항
+
+- **qr_doc_id 규칙 전제 의존**: 본 sprint는 `qr_doc_id = 'DOC_' + S/N` (DUAL은 `-L/-R` 접미) 규칙에 의존. OPS 앱/미래 공정 추가 시 규칙 변경되면 `_check_tm_completion`, `get_checklist_report` 모두 영향. 규칙은 코드 주석 + memory.md ADR에 명시
+- **`_is_report_dual_model()` 재사용**: L278에 이미 존재. `_check_tm_completion`에서도 동일 함수 사용하여 DUAL 판정 일관성 확보
+- **ELEC은 건드리지 않음**: ELEC qr_doc_id=`''` 실측 확인됨. `check_elec_completion()` 수정 금지
+- **MECH는 range 외**: MECH 마스터/record 미구현 상태. 추후 MECH 도입 시 동일 패턴 적용 (TM과 같은 qr_doc_id 규칙 적용 여부 설계 단계에서 결정)
+- **`_get_checklist_by_category()` 수정 금지**: Sprint 30-BE/54와 동일 원칙. qr_doc_id 파라미터는 이미 지원하므로 호출부만 조정
+- **`app_task_details` 조회 제거**: 기존 DUAL 분기(L397-410)에서 `SELECT DISTINCT qr_doc_id FROM app_task_details` 쿼리 제거. 문자열 계산으로 대체 시 성능 + 일관성 개선 (S/N 규칙에 의존)
+- **Sprint 58-BE `_check_sn_checklist_complete()` 자동 반영**: production.py의 TMS 분기는 `_check_tm_completion(serial_number)` 그대로 호출. 시그니처 변경 없음 → 코드 수정 불필요
+- **마이그레이션 선행**: 점검 SQL A 결과에 따라 Task 4 실행. 프로덕션 DB 마이그레이션 전 백업 + 스테이징 테스트 필수
+- **FE 응답 변경 주의**: SINGLE TM 섹션에 `qr_doc_id` 키가 신규 추가됨. VIEW FE 렌더링 호환성 확인 필요 (phase_label 키는 DUAL 전용으로 유지)
+- **Sprint 58-BE와 실행 순서**: Sprint 58-BE ✅ → Sprint 59-BE (본 sprint). 58-BE가 드러낸 잠재 버그를 59-BE가 해소
+
+---
+
+## Sprint 60-BE — ELEC 체크리스트 마스터 데이터 모델 정규화
+
+> **참조**: `AXIS-VIEW/OPS_API_REQUESTS.md` (본 sprint에서 추가 예정)
+> **선행**: Sprint 57-C ✅, Sprint 57-FE ✅, Sprint 58-BE ✅
+> **요청자**: VIEW 팀 (체크리스트 관리 페이지 ELEC 블러 해제 후속, Sprint 31-VIEW 연동)
+>
+> **배경**
+> 현재 ELEC 체크리스트 마스터는 적재 시점에 **분류 기준이 명시되지 않고**, 출력 시점에 플래그(`phase1_na`) + 문자열(`item_group = 'JIG 검사 및 특별관리 POINT'`) 추론으로 Phase/검수자를 도출하는 구조. 장기 유지보수성 / 신규 항목 추가 시 실수 여지 / 클라이언트(OPS Flutter, VIEW React) 양쪽에서 동일 추론 로직 반복 등 시스템 관점에서 원칙 위반.
+>
+> 요청자 원칙: **"데이터는 적재 시점에 분류되어야 하고, 출력 시점에 로직으로 끼워맞추지 않는다."**
+>
+> **엑셀 양식 실측** (`+_전장외주검사성적서.xlsx`)
+>
+> | 그룹 | 마스터 항목 수 | 1차 배선 | 2차 배선 | GST 검수 |
+> |---|---|---|---|---|
+> | Panel 검사 | 11 | ✅ 전체 | ✅ 전체 | ❌ |
+> | 조립 검사 | 6 | ⚠️ 5개만 (1개는 1차 N.A 고정) | ✅ 전체 | ❌ |
+> | JIG 검사 및 특별관리 POINT | 7 | ❌ (선행조건) | ✅ (2차 배선 담당자) | ✅ (GST 담당자, 동일 7항목 중복) |
+> | **합계 (마스터)** | **24** | | | |
+>
+> **현재 seed 상태**: 31 row (JIG 7항목을 WORKER용 7 + QI용 7로 **이중 저장**)
+>
+> **재검토 반영** (2026-04-15): 31 row → 24 row 물리 정리는 **본 sprint 보류**. 이유: JIG QI master에 이미 record 7건이 FK 연결되어 있어 DELETE 시 무결성 에러. 본 sprint는 **31 row 유지 + 신규 컬럼으로 의미 전환**만 수행하고, 물리 정리(마스터 row 통합)는 후속 sprint(record 재매핑 포함)로 분리.
+>
+> **사용자 의도 확정 사항**
+> 1. Panel/조립의 1차 배선과 2차 배선은 **별개의 작업 단계** (중복 검사가 아님 — 같은 기준을 각 작업 단계에서 각각 적용)
+> 2. JIG 검사만 "동일 7항목을 worker 2차 단계 + GST 확인"의 이중 체크 구조
+> 3. 조립 검사 "버너 위 배선상태"는 **1차 단계에 해당사항 없음** → 항목 단위로 1차 N.A 고정
+> 4. 관리 페이지 항목 추가 시 **그룹만 선택**하면 나머지(phase 적용/GST 필요 여부)가 자동 결정되는 게 이상적 (조립 일반 vs 조립 N.A 예외만 별도 토글)
+
+### 목표
+
+1. `checklist_master` 테이블에 **분류 컬럼 3개** 추가 — `phase1_applicable`, `qi_check_required`, `remarks`
+2. ELEC seed **31 row 유지** + 신규 플래그 의미 전환 (JIG row 14개 전체에 `qi_check_required=TRUE`)
+3. 서비스 로직의 문자열(`item_group` 비교) 추론 제거 — `phase1_applicable` 컬럼 직접 조회로 전환
+4. 마스터 API 응답에 3개 컬럼 포함 (VIEW FE 관리 페이지 + 항목 추가 모달 지원)
+5. **정책 유지**: Sprint 58-BE의 `check_elec_completion()` 완료 조건(WORKER만 판정, QI 제외)은 그대로 유지. QI 확인은 성적서 기록/GST 보증 절차이지 실적 게이트가 아님.
+6. OPS Flutter ELEC 화면의 Phase 분기 로직을 마스터 컬럼 기반으로 단순화 (별도 Sprint 60-FE 분리 고려)
+
+### qr_doc_id 규칙 (ELEC 전제, 변경 없음)
+
+- ELEC: `qr_doc_id = ''` 전체 (Sprint 59-BE에서 확인). 본 sprint 범위 외.
+- Sprint 59-BE(TM qr_doc_id 정규화)와 **상호 독립** — 동시 진행 가능하나 머지 순서 합의 필요.
+
+### 데이터 모델 (변경 후)
+
+```sql
+-- 신규 컬럼 3개
+ALTER TABLE checklist.checklist_master
+    ADD COLUMN phase1_applicable BOOLEAN NOT NULL DEFAULT TRUE,
+    ADD COLUMN qi_check_required BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN remarks            TEXT;
+
+-- 기존 컬럼 정리 대상 (Task 5)
+-- phase1_na         : phase1_applicable로 의미 전환 (반대값)
+-- checker_role      : JIG QI 이중 row와 함께 제거. checker_role은 record 단에서만 의미
+```
+
+**컬럼 의미**:
+| 컬럼 | 타입 | 의미 |
+|---|---|---|
+| `phase1_applicable` | bool | `true`=1차 단계에서도 OK/NG 체크, `false`=1차 단계 자동 N.A |
+| `qi_check_required` | bool | `true`=worker 체크 후 GST 검수 record 추가 필요 (JIG 항목만) |
+| `remarks` | text | 개정일자/사유 등 이력 (엑셀 양식의 "개정일자/사유" 컬럼 직접 반영) |
+
+**4개 그룹 × 24항목 매트릭스**:
+
+| 그룹 | 항목 수 | phase1_applicable | qi_check_required |
+|---|---|---|---|
+| PANEL 검사 | 11 | true | false |
+| 조립 검사 (일반) | 5 | true | false |
+| 조립 검사 (버너 위 배선) | 1 | **false** | false |
+| JIG 검사 및 특별관리 POINT | 7 | false | **true** |
+
+### 사전 점검 SQL
+
+```sql
+-- 점검 A: 현재 seed row 수 / 그룹별 분포
+SELECT cm.item_group,
+       COALESCE(cm.checker_role, 'WORKER') AS role,
+       COUNT(*) AS cnt
+FROM checklist.checklist_master cm
+WHERE cm.category = 'ELEC' AND cm.is_active = TRUE
+GROUP BY 1, 2
+ORDER BY 1, 2;
+-- 예상: PANEL=11, 조립=6, JIG WORKER=7, JIG QI=7 → 합 31
+
+-- 점검 B: 실제 record 데이터 존재 여부 (마이그레이션 시 영향 범위)
+SELECT cm.item_group, cr.judgment_phase,
+       COUNT(*) AS cnt,
+       COUNT(DISTINCT cr.serial_number) AS sn_cnt
+FROM checklist.checklist_record cr
+JOIN checklist.checklist_master cm ON cm.id = cr.master_id
+WHERE cm.category = 'ELEC'
+GROUP BY 1, 2
+ORDER BY 1, 2;
+-- 결과에 따라 JIG QI row 제거 시 record 정리 전략 결정
+```
+
+### Task 1: DB 마이그레이션 — `048_elec_master_normalization.sql`
+
+**파일**: `backend/migrations/048_elec_master_normalization.sql` (신규)
+
+**번호 선택**: 현재 migration 047까지 존재 → 다음 번호 **048** 사용. (이전 초안 062는 갭이 커서 수정)
+
+```sql
+-- Step 1: 컬럼 추가 (기본값으로 무중단 배포)
+ALTER TABLE checklist.checklist_master
+    ADD COLUMN IF NOT EXISTS phase1_applicable BOOLEAN NOT NULL DEFAULT TRUE,
+    ADD COLUMN IF NOT EXISTS qi_check_required BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS remarks            TEXT;
+
+COMMENT ON COLUMN checklist.checklist_master.phase1_applicable
+    IS 'Phase 1(1차 배선)에 적용되는 항목 여부. FALSE=1차 자동 N.A';
+COMMENT ON COLUMN checklist.checklist_master.qi_check_required
+    IS 'GST 검수원(QI) 확인 필요 항목 여부. 성적서 렌더링/UI 대기 표시용. check_elec_completion() 판정에는 미반영 (Sprint 58-BE 정책 유지)';
+COMMENT ON COLUMN checklist.checklist_master.remarks
+    IS '개정일자/사유 등 이력 (엑셀 성적서 양식의 "개정일자/사유" 컬럼 반영)';
+
+-- Step 2: ELEC 기존 데이터 분류 전환 (31 row 유지, 플래그만 의미 전환)
+-- 2a) JIG 그룹 전체 (WORKER 7 + QI 7 = 14 row) → phase1_applicable=FALSE, qi_check_required=TRUE
+UPDATE checklist.checklist_master
+   SET phase1_applicable = FALSE,
+       qi_check_required = TRUE
+ WHERE category = 'ELEC'
+   AND item_group = 'JIG 검사 및 특별관리 POINT';
+
+-- 2b) 조립 검사 "버너 위 배선상태" → phase1_applicable=FALSE (1차 N.A 고정)
+UPDATE checklist.checklist_master
+   SET phase1_applicable = FALSE
+ WHERE category = 'ELEC'
+   AND item_group = '조립 검사'
+   AND item_name = '버너 위 배선상태';
+
+-- 2c) 기존 phase1_na=TRUE 항목 일괄 보정 (누락 방지, 의미 반전)
+UPDATE checklist.checklist_master
+   SET phase1_applicable = FALSE
+ WHERE category = 'ELEC' AND phase1_na = TRUE;
+
+-- Step 3: (보류) JIG QI 마스터 row 물리 삭제
+--   ※ DB 점검 결과 JIG QI master에 연결된 record 7건 존재 → FK 무결성 에러 위험
+--   ※ 본 sprint는 31 row 유지 전략. 물리 정리는 후속 sprint에서 record 재매핑 포함하여 분리 수행
+--   ※ 현재는 qi_check_required 플래그로 의미상 정규화 달성, 물리 정리는 장기 과제
+
+-- Step 4 (후속, 별도 마이그레이션): phase1_na, checker_role(master) 컬럼 DROP
+--   Task 3 서비스 로직 전환 완료 + 검증 기간(1~2주) 후 별도 PR로 분리
+```
+
+**롤백 전략**:
+- Step 1~2만 실행 → 모두 컬럼 추가/UPDATE, 기존 read path 영향 없음 → 무중단 배포 가능
+- Step 3은 **본 sprint 실행 안 함** (보류)
+- Step 4 DROP은 다음 sprint로 분리
+
+### Task 2: ELEC seed 재정리 — `seed_elec_checklist.py`
+
+**파일**: `backend/scripts/seed_elec_checklist.py` (수정)
+
+**현재 구조** (L16): 튜플 7개 필드 `(item_group, item_name, description, item_order, checker_role, phase1_na, select_options)`
+**변경 후**: `(item_group, item_name, description, item_order, checker_role, phase1_applicable, qi_check_required, select_options, remarks)`
+  - `checker_role` **유지** (기존 JIG WORKER/QI row 구분용, 물리 정리 보류 이유)
+  - `phase1_na` → `phase1_applicable` (의미 반전)
+  - `qi_check_required` 신규
+  - `remarks` 신규 (엑셀 양식의 "개정일자/사유" 값 반영)
+
+**row 수 유지**: **31 → 31** (물리 정리 보류)
+- PANEL 11개 유지 (`phase1_applicable=True`, `qi_check_required=False`)
+- 조립 5개 유지 (동일)
+- 조립 "버너 위 배선상태" 1개 → `phase1_applicable=False`
+- JIG WORKER 7개 + JIG QI 7개 = **14개 유지**, 전부 `phase1_applicable=False`, `qi_check_required=True`
+- 물리 정리(14→7)는 FK 제약으로 보류 (후속 sprint에서 record 재매핑 포함 처리)
+
+**UNIQUE 제약**: 현재 `(product_code, category, item_group, item_name)` 그대로 유지. JIG WORKER/QI는 이미 `checker_role` 없이는 동명 충돌 발생 → 현재 seed 멱등성은 `ON CONFLICT DO NOTHING`으로 보호 (재실행 시 덮어쓰지 않음). 신규 플래그 의미 전환은 **Task 1 migration의 UPDATE만으로 달성**하고, seed 재실행은 불필요.
+
+### Task 3: 서비스 로직 단순화 — `checklist_service.py`
+
+**파일**: `backend/app/services/checklist_service.py`
+
+**3-1. `check_elec_completion()` L912-1014 재작성**
+
+```python
+def check_elec_completion(serial_number: str) -> bool:
+    """
+    ELEC 체크리스트 전체 완료 확인 (Sprint 60-BE: 마스터 컬럼 기반).
+
+    - Phase 1: phase1_applicable=TRUE + checker_role='WORKER' 마스터만 판정
+    - Phase 2: checker_role='WORKER' 마스터 전체 판정
+    - qi_check_required / checker_role='QI' 마스터는 **판정 대상 아님**
+      (Sprint 58-BE 정책 유지: WORKER만 ELEC 실적 게이트, QI 확인은 성적서/UI 대기 표시용)
+    - judgment_phase 파라미터 폐기 (Sprint 58-BE 연속)
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # === Phase 1: WORKER 마스터 중 phase1_applicable=TRUE 항목만 ===
+        cur.execute("""
+            SELECT COUNT(*) AS null_count
+            FROM checklist.checklist_master cm
+            LEFT JOIN checklist.checklist_record cr
+                ON cr.master_id     = cm.id
+               AND cr.serial_number = %s
+               AND cr.judgment_phase= 1
+               AND cr.qr_doc_id     = ''
+            WHERE cm.category          = 'ELEC'
+              AND cm.is_active         = TRUE
+              AND cm.checker_role      = 'WORKER'
+              AND cm.phase1_applicable = TRUE
+              AND cr.check_result IS NULL
+        """, (serial_number,))
+        if cur.fetchone()['null_count'] > 0:
+            return False
+
+        # === Phase 2: WORKER 마스터 전체 ===
+        cur.execute("""
+            SELECT COUNT(*) AS null_count
+            FROM checklist.checklist_master cm
+            LEFT JOIN checklist.checklist_record cr
+                ON cr.master_id     = cm.id
+               AND cr.serial_number = %s
+               AND cr.judgment_phase= 2
+               AND cr.qr_doc_id     = ''
+            WHERE cm.category     = 'ELEC'
+              AND cm.is_active    = TRUE
+              AND cm.checker_role = 'WORKER'
+              AND cr.check_result IS NULL
+        """, (serial_number,))
+        if cur.fetchone()['null_count'] > 0:
+            return False
+
+        # ※ QI 판정 블록 의도적으로 제외 (Sprint 58-BE 정책 유지)
+        #   qi_check_required=TRUE 항목의 GST 확인은 성적서 렌더링/UI 대기 표시용이며,
+        #   ELEC 실적 완료 게이트에는 반영하지 않는다.
+        #   (QI 미체크 시 ELEC 실적이 영원히 미완료가 되는 상황 방지)
+
+        # 전체 WORKER 마스터 존재 확인
+        cur.execute("""
+            SELECT COUNT(*) AS total
+            FROM checklist.checklist_master
+            WHERE category     = 'ELEC'
+              AND is_active    = TRUE
+              AND checker_role = 'WORKER'
+        """)
+        return cur.fetchone()['total'] > 0
+    except PsycopgError as e:
+        logger.error(f"check_elec_completion failed: sn={serial_number}, err={e}")
+        return False
+    finally:
+        if conn:
+            put_conn(conn)
+```
+
+**핵심 변경**:
+- `item_group != 'JIG 검사 및 특별관리 POINT'` 문자열 추론 **제거**
+- `cm.phase1_applicable` 직접 조회로 Phase 1 범위 결정
+- `qi_check_required` 컬럼은 성적서 렌더링/UI 대기 표시용 (완료 게이트 미반영)
+- Sprint 58-BE 정책(**WORKER만 ELEC 실적 판정**) 그대로 유지
+
+**3-2. `_get_checklist_by_category()` ELEC 분기 정리**
+
+`phase1_na` 추론 제거 → `cm.phase1_applicable = FALSE AND judgment_phase = 1`이면 자동 N.A 응답 구성
+
+**3-3. `_get_elec_phase_counts()` (routes/checklist.py L?) 단순화**
+
+Sprint 58-BE Task 3에서 생성된 헬퍼. JIG 조건 문자열 대신 `phase1_applicable` 조건으로 교체:
+
+```python
+def _get_elec_phase_counts(serial_number: str, phase: int) -> tuple:
+    jig_condition = "AND cm.phase1_applicable = TRUE" if phase == 1 else ""
+    # ... 나머지 동일
+```
+
+### Task 4: 마스터 API 응답 확장 — `routes/checklist.py`
+
+**파일**: `backend/app/routes/checklist.py` L256-349 `list_checklist_master()`
+
+**현재 응답 필드**: id, product_code, category, item_group, item_name, item_order, description, is_active
+**추가 필드**: `item_type`, `phase1_applicable`, `qi_check_required`, `remarks`, `select_options`
+
+```python
+items = [
+    {
+        'id': row['id'],
+        'product_code': row['product_code'],
+        'category': row['category'],
+        'item_group': row['item_group'],
+        'item_name': row['item_name'],
+        'item_order': row['item_order'],
+        'item_type': row.get('item_type', 'CHECK'),
+        'description': row['description'],
+        'is_active': row['is_active'],
+        # Sprint 60-BE 신규
+        'phase1_applicable': row['phase1_applicable'],
+        'qi_check_required': row['qi_check_required'],
+        'remarks': row['remarks'],
+        'select_options': row.get('select_options'),
+    }
+    for row in rows
+]
+```
+
+**POST/PUT 확장**:
+- `POST /api/admin/checklist/master` 페이로드에 `phase1_applicable`, `qi_check_required`, `remarks` 입력 허용
+- `PUT /api/admin/checklist/master/{id}` 동일
+- 기본값: `phase1_applicable=true`, `qi_check_required=false`, `remarks=null`
+- **그룹 기반 자동 추론 서버 검증** (선택):
+  - `item_group='JIG ...'` → `qi_check_required` 강제 true
+  - 서버에서 일관성 보장 (클라이언트 실수 방지)
+
+### Task 5: 레거시 컬럼 단계적 폐기 (`phase1_na`만)
+
+**주의**: 즉시 DROP 불가. 단계적 전환:
+
+1. **본 sprint**: 서비스 로직의 `phase1_na` 읽기 참조를 `phase1_applicable`로 전환. `phase1_na` 쓰기 중단.
+2. **배포 후 검증 기간** (1~2주): `phase1_na` 컬럼 **읽기 전용 상태**로 유지 (OPS Flutter 구버전 호환).
+3. **후속 sprint (61-BE 또는 hotfix)**: 검증 완료 후 `ALTER TABLE ... DROP COLUMN phase1_na` 별도 PR.
+
+**`checker_role` (master)는 유지**: JIG WORKER/QI 이중 row를 물리 정리(31→24)하기 전까지는 master 레벨 `checker_role`로 두 row를 구분해야 함 (UNIQUE 충돌 방지). 완료 판정 로직에서도 `checker_role='WORKER'` 필터로 QI row를 Sprint 58-BE 정책대로 제외.
+
+→ 본 sprint에서는 컬럼 DROP 미실행.
+
+### Task 6: 호출부 점검 (regression 방지)
+
+**수정 대상 파일 요약**:
+- `backend/app/services/checklist_service.py` — `check_elec_completion`, `_get_checklist_by_category` ELEC 분기, `_check_sn_checklist_complete` (변경 없음, 시그니처 호환)
+- `backend/app/routes/checklist.py` — `list_checklist_master`, `create_checklist_master`, `update_checklist_master`, `_get_elec_phase_counts`
+- `backend/app/routes/production.py` — Sprint 58-BE `_check_sn_checklist_complete()` 영향 없음 (시그니처 유지)
+- `backend/scripts/seed_elec_checklist.py` — 튜플 스키마 변경 (신규 seed 실행 시 참조용, 재실행 자체는 본 sprint 불필요)
+- `backend/migrations/048_elec_master_normalization.sql` — 신규
+
+**확인 쿼리**:
+```bash
+grep -rn "phase1_na\|checker_role" backend/app/services backend/app/routes
+```
+→ 참조부 모두 Task 3/4 수정 대상에 포함되는지 검증
+
+### Task 7 (선택, 별도 sprint): OPS Flutter ELEC 화면 단순화
+
+**파일**: `frontend/lib/screens/checklist/elec_checklist_screen.dart`
+
+**현재**: Phase 탭 + `phase1_na` 기반 자동 N.A + `item_group` 문자열 분기 (Sprint 57-C/D에 다수 존재)
+**변경**: 마스터 API 응답의 `phase1_applicable`, `qi_check_required` 필드를 그대로 사용
+
+→ **본 sprint 범위 외**로 `Sprint 60-FE` 별도 분리 권장. BE 마이그레이션 배포 후 FE 클라이언트 순차 업데이트.
+
+### 테스트 케이스
+
+```
+=== Sprint 60-BE 테스트 케이스 ===
+
+--- Task 1 마이그레이션 (048) ---
+
+TC-60B-01: migration 048 실행 후 3개 컬럼 추가 확인 (phase1_applicable, qi_check_required, remarks)
+TC-60B-02: JIG 그룹 14개 row(WORKER 7 + QI 7) 전체 phase1_applicable=FALSE, qi_check_required=TRUE로 업데이트
+TC-60B-03: 조립 검사 "버너 위 배선상태" phase1_applicable=FALSE 업데이트
+TC-60B-04: 나머지 항목은 기본값 유지 (phase1_applicable=TRUE, qi_check_required=FALSE)
+TC-60B-05: 기존 phase1_na=TRUE 항목 → phase1_applicable=FALSE 일치 확인
+TC-60B-06: 전체 row 수 31 유지 확인 (물리 삭제 없음, FK 무결성 보존)
+
+--- Task 2 seed 스키마 ---
+
+TC-60B-07: seed_elec_checklist.py 신규 튜플 스키마 import 정상 (재실행 없이 ON CONFLICT로 보호)
+TC-60B-08: PANEL 11개, 조립 6개, JIG WORKER 7개 + JIG QI 7개 = 31 row 분포 확인
+TC-60B-09: JIG 14 row 전체가 qi_check_required=TRUE
+TC-60B-10: 조립 "버너 위 배선상태" phase1_applicable=FALSE 검증
+
+--- Task 3 check_elec_completion (Sprint 58-BE 정책 유지) ---
+
+TC-60B-11: Panel 11개만 Phase 1 완료 + 나머지 미완료 → False
+TC-60B-12: Phase 1 전체(Panel 11 + 조립 5) 완료 + Phase 2 미완료 → False
+TC-60B-13: Phase 1 전체 + Phase 2 WORKER 전체(PANEL 11 + 조립 6 + JIG WORKER 7 = 24) 완료 → **True** (QI 미체크 무관)
+TC-60B-14: JIG QI row 체크 상태는 완료 판정에 영향 없음 — WORKER만 완료 시 True (정책 검증)
+TC-60B-15: 조립 "버너 위 배선상태" Phase 1 record 없어도 → Phase 1 완료 판정 유지 (phase1_applicable=FALSE)
+TC-60B-16: 마스터 비활성(is_active=FALSE) 항목은 판정 제외
+
+--- Task 4 마스터 API 응답 ---
+
+TC-60B-17: GET /api/admin/checklist/master?category=ELEC → 31 row + 신규 3 필드 포함
+TC-60B-18: JIG 14 row 모두 qi_check_required=true 반환
+TC-60B-19: POST 신규 항목 생성 시 그룹='JIG ...' → 서버가 qi_check_required 강제 true 적용
+TC-60B-20: PUT remarks 수정 → DB 반영 및 응답 확인
+TC-60B-21: GET TM 카테고리는 신규 필드 기본값(true/false/null) 반환 (regression)
+
+--- Sprint 58-BE 동작 유지 ---
+
+TC-60B-22: _is_process_confirmable(ELEC) 체크리스트 연동 정상 동작 (신규 로직 기반)
+TC-60B-23: /api/app/checklist/elec/{sn}/status Phase 1+2 합산 정상 (_get_elec_phase_counts 수정 후)
+
+--- Regression ---
+
+TC-60B-24: TM 카테고리 check_tm_completion 영향 없음 (Sprint 59-BE 연속)
+TC-60B-25: MECH 카테고리(미구현) 영향 없음
+TC-60B-26: OPS Flutter ELEC 화면 기존 동작 유지 (Task 7 전까지 `phase1_na` 읽기 호환성)
+```
+
+### 주의사항
+
+- **원칙**: 적재 시점 분류, 출력 시점 추론 금지. `item_group` 문자열 비교 및 `phase1_na` 플래그 의존 제거 대상.
+- **VIEW FE 의존성**: Sprint 31-VIEW("ELEC 체크리스트 VIEW 연동")의 **후속 연장**. 본 sprint 완료 후 VIEW 관리 페이지에서 항목 추가 모달을 그룹 드롭다운 단일화로 단순화 가능.
+- **OPS Flutter 호환성**: Task 7(FE 단순화)는 별도 sprint로 분리. 본 sprint 배포 시 FE는 `phase1_na` 컬럼을 **읽기 전용**으로 계속 참조 → 단계적 전환 (Task 5와 연계).
+- **`checker_role` 의미 재정의**: master 레벨 `checker_role`은 **유지** — JIG WORKER/QI 이중 row의 UNIQUE 충돌 회피 + `check_elec_completion()`에서 WORKER만 판정 필터로 사용. record 레벨에도 동일하게 유지. "누가 체크해야 하는지"는 `checker_role`(선발)과 `qi_check_required`(성적서용)의 이중 표현 — JIG 물리 통합(14→7)이 후속 sprint에서 완료되면 master `checker_role` 제거 재검토.
+- **QI 정책 유지 (Sprint 58-BE 연속)**: `check_elec_completion()`은 **WORKER만 판정**. `qi_check_required=TRUE` 항목의 GST 확인 미체크 시에도 ELEC 실적은 완료로 판정됨. 이유: QI 확인 미체크 시 실적이 영원히 미완료가 되는 상황 방지. QI 확인은 성적서 렌더링/UI 대기 표시용 정보이지 실적 게이트가 아님.
+- **seed 멱등성**: 본 sprint는 seed **재실행이 필요 없음**. 플래그 의미 전환은 migration 048의 UPDATE로 완결. `seed_elec_checklist.py` 튜플 스키마 변경은 "신규 환경/재구축 시" 올바른 형태로 채워지도록 준비하는 목적. 기존 Railway DB는 `ON CONFLICT DO NOTHING`으로 보호됨.
+- **Sprint 59-BE 독립성**: TM qr_doc_id 정규화(59-BE)와 ELEC 마스터 정규화(60-BE)는 파일/테이블 상호 영향 없음. 병행 가능. **migration 번호**: 현재 max 047 → 59-BE가 048을 선점하면 본 sprint는 049로 조정. 머지 순서 합의 필수.
+- **remarks 입력 시점**: 엑셀 양식의 "개정일자 2025-04-02 / 사유: 파트 오부착 발생으로 작업자 친필 서명란 추가" 같은 이력은 **Task 2 seed에 초기값 포함** 권장. 이후 관리자 PUT으로 수정.
+- **그룹 4개 고정**: 사용자 확정사항 — 그룹은 당분간 변동 없음 (PANEL / 조립 / JIG / 향후 필요 시 확장). FE 항목 추가 모달의 그룹 드롭다운은 하드코딩 가능.
+- **마이그레이션 선행 필수**: Task 2 seed 재실행 전 Task 1 migration 반드시 적용. 컬럼 없으면 INSERT 실패.
+
+---
+
+## Sprint 61-BE — 알람 강화 + 미종료 작업 API 확장
+
+> **버전**: v2.9.4
+> **목적**: (1) 전체 알람 메시지 O/N 통일 (2) 미작업 종료 에스컬레이션 사각지대 해소 (3) 미종료 작업 API에 미시작 task 포함
+> **선행**: Sprint 60-BE 완료 ✅, migration max = 048
+
+### 배경
+
+#### 문제 1 — 알람 메시지 O/N 미포함
+- 현업에서 O/N(Sales Order Number)으로 제품을 관리하나, 완료 연쇄 알람(4종)만 `[SN | O/N: xxx]` 형식
+- 나머지 14종(DURATION_EXCEEDED, TASK_REMINDER, TASK_ESCALATION 등)은 `[SN]`만 포함
+- 원인: `_sn_label()` 헬퍼가 `task_service.py` `_trigger_completion_alerts()` 내부 로컬 함수로만 존재
+
+#### 문제 2 — 에스컬레이션 사각지대
+- 기존 에스컬레이션 알람(D-8~12)은 모두 `started_at IS NOT NULL` 전제
+- **아무도 "참여" 안 누른 task**(started_at IS NULL)는 알람 0건, 미종료 화면에도 안 뜸
+- **체크리스트 100% 완료 + task 미완료** 조합도 감지 불가
+- ELEC 스크린 사례: IF_1, IF_2, INSPECTION 모두 "참여" 대기 상태로 방치 → 관리자 인지 불가
+
+#### 문제 3 — 미종료 작업 API 범위 부족
+- `GET /admin/tasks/pending` 쿼리: `started_at IS NOT NULL AND completed_at IS NULL`
+- 미시작 task는 조회 대상 아님 → OPS "미종료 작업" 화면 + VIEW 대시보드 모두 사각지대
+- VIEW 대시보드(`SNStatusPage.tsx`)에서 Admin/Manager가 강제 종료할 수 있어야 하나, 현재 force-close는 OPS에만 존재
+
+### 현재 알람 O/N 포함 현황 (수정 전)
+
+| 구분 | O/N 포함 | 알람 수 | 소스 |
+|---|---|---|---|
+| 완료 연쇄 (A) | ✅ `_sn_label()` 사용 | 4종 | task_service.py |
+| 시간 이상 (C) | ❌ `[SN]`만 | 3종 | duration_validator.py |
+| 스케줄러 (D) | ❌ `[SN]`만 | 5종 | scheduler_service.py |
+| 체크리스트 (G) | ❌ `[SN]`만 | 2종 | checklist_service.py |
+| 공정 선행 (B) | ❌ `[SN]`만 | 1종 | process_validator.py |
+| S/N 무관 (F,H,I) | — (O/N 불필요) | 5종 | — |
+
+### 현재 에스컬레이션 커버리지 Gap
+
+| task 상태 | 미종료 화면 | 에스컬레이션 알람 | 개선 후 |
+|---|---|---|---|
+| 시작 O + 완료 X | ✅ | ✅ D-8~12 | 유지 |
+| 시작 O + 14h 초과 | ✅ | ✅ UNFINISHED | 유지 |
+| 릴레이 중단 | ✅ | ✅ RELAY_ORPHAN | 유지 |
+| **시작 X (미참여)** | ❌ | ❌ | ✅ TASK_NOT_STARTED |
+| **체크리스트 완료 + task 미완료** | ❌ (미시작이면) | ❌ | ✅ CHECKLIST_DONE_TASK_OPEN |
+| **FINAL 완료 + 미시작 task 잔존** | ❌ | ❌ | ✅ ORPHAN_ON_FINAL |
+
+---
+
+### Task 1 — `_sn_label()` 공통 유틸 추출 + 전체 알람 O/N 통일
+
+**목표**: `task_service.py` 로컬 `_sn_label()` → `alert_service.py` 공통 함수로 이동. 모든 알람 메시지에서 일관된 `[SN | O/N: xxx]` 형식 사용.
+
+**1-1. `alert_service.py`에 공통 함수 추가**
+
+```python
+# alert_service.py 상단 추가
+from app.models.product_info import get_product_by_serial_number
+
+def sn_label(serial_number: str) -> str:
+    """[S/N | O/N: xxx] 포맷 생성 — 전체 알람 메시지 공통"""
+    product = get_product_by_serial_number(serial_number)
+    on = product.sales_order if product and product.sales_order else None
+    return f"[{serial_number} | O/N: {on}]" if on else f"[{serial_number}]"
+```
+
+**1-2. `task_service.py` 로컬 `_sn_label` 제거 → import로 교체**
+
+```python
+# task_service.py L490-494 제거, 대신:
+from app.services.alert_service import sn_label
+# L556: label = sn_label(task.serial_number)
+```
+
+**1-2b. `task_service.py` `_trigger_tm_checklist_alert()` L671-674 인라인 교체**
+
+```python
+# task_service.py _trigger_tm_checklist_alert() 내부
+# 변경 전 (L671-674):
+#   product = _get_product(serial_number)
+#   on = product.sales_order if product and product.sales_order else None
+#   label = f"[{serial_number} | O/N: {on}]" if on else f"[{serial_number}]"
+# 변경 후:
+from app.services.alert_service import sn_label  # 이미 상단 import에 포함
+label = sn_label(task.serial_number)
+```
+
+> ※ `_trigger_completion_alerts()`의 `_sn_label` 로컬과 동일 패턴이나, 별도 함수 내 인라인이라 1-2에서 누락. 동일하게 공통 `sn_label()` 교체.
+
+**1-3. `duration_validator.py` 메시지 교체 (3곳)**
+
+```python
+from app.services.alert_service import sn_label
+
+# L77 (REVERSE_COMPLETION):
+# 변경 전: f"[{task.serial_number}] {task.task_category} - {task.task_name}: 완료 시간이..."
+# 변경 후: f"{sn_label(task.serial_number)} {task.task_category} - {task.task_name}: 완료 시간이..."
+
+# L103 (DURATION_EXCEEDED):
+# 변경 전: f"[{task.serial_number}] {task.task_category} - {task.task_name}: 작업 시간..."
+# 변경 후: f"{sn_label(task.serial_number)} {task.task_category} - {task.task_name}: 작업 시간..."
+
+# L182 (UNFINISHED_AT_CLOSING):
+# 변경 전: f"[{row['serial_number']}] {row['task_category']} - {row['task_name']}: 작업 시작 후..."
+# 변경 후: f"{sn_label(row['serial_number'])} {row['task_category']} - {row['task_name']}: 작업 시작 후..."
+```
+
+**1-4. `scheduler_service.py` 메시지 교체 (2곳+)**
+
+```python
+from app.services.alert_service import sn_label
+
+# L668 (TASK_REMINDER / SHIFT_END_REMINDER):
+# 변경 전: f"[{task_row['serial_number']}] {task_row['task_name']}: {message}"
+# 변경 후: f"{sn_label(task_row['serial_number'])} {task_row['task_name']}: {message}"
+
+# L778 (TASK_ESCALATION):
+# 변경 전: f"[{row['serial_number']}] {row['task_name']}: {message}"
+# 변경 후: f"{sn_label(row['serial_number'])} {row['task_name']}: {message}"
+```
+
+RELAY_ORPHAN 메시지도 동일 패턴으로 교체 (scheduler_service.py 내 해당 라인 확인 후 적용).
+
+**1-4b. `scheduler_service.py` BREAK_TIME 메시지 교체 (2곳, 현재 비활성이나 코드 일관성)**
+
+```python
+# L668 (BREAK_TIME_PAUSE):
+# 변경 전: f"[{task_row['serial_number']}] {task_row['task_name']}: {message}"
+# 변경 후: f"{sn_label(task_row['serial_number'])} {task_row['task_name']}: {message}"
+
+# L778 (BREAK_TIME_END):
+# 변경 전: f"[{row['serial_number']}] {row['task_name']}: {message}"
+# 변경 후: f"{sn_label(row['serial_number'])} {row['task_name']}: {message}"
+```
+
+> ※ `auto_pause_enabled=FALSE`로 비활성 상태이나, 향후 재활성화 시 O/N 포맷 자동 적용.
+
+**1-5. `checklist_service.py` 메시지 교체 (2곳)**
+
+```python
+from app.services.alert_service import sn_label
+
+# L654 (CHECKLIST_ISSUE TM):
+# 변경 전: f'[{serial_number}] TM 체크리스트 ISSUE: ...'
+# 변경 후: f'{sn_label(serial_number)} TM 체크리스트 ISSUE: ...'
+
+# L1016 (CHECKLIST_ISSUE ELEC):
+# 변경 전: f'[{serial_number}] ELEC 체크리스트 ISSUE: ...'
+# 변경 후: f'{sn_label(serial_number)} ELEC 체크리스트 ISSUE: ...'
+```
+
+**1-6. `process_validator.py` 메시지 교체 (PROCESS_READY)**
+
+해당 파일의 메시지 생성부에서 `[{serial_number}]` → `sn_label(serial_number)` 교체.
+
+**수정 규모**: ~35줄, 6파일(duration_validator, scheduler_service, checklist_service, process_validator, task_service, alert_service). 기존 동작 무변 (포맷만 풍부해짐).
+
+---
+
+### Task 2 — 신규 에스컬레이션 알람 3종
+
+**2-1. `TASK_NOT_STARTED` — 생성 후 2일 미시작 task**
+
+- 스케줄: 매일 09:00 KST (cron)
+- 조건:
+  ```sql
+  SELECT td.id, td.serial_number, td.task_category, td.task_name, td.created_at
+  FROM app_task_details td
+  WHERE td.started_at IS NULL
+    AND td.completed_at IS NULL
+    AND td.is_applicable = TRUE
+    AND td.force_closed = FALSE
+    AND td.created_at < NOW() - INTERVAL '2 days'
+    -- 같은 serial_number의 다른 task 중 하나라도 시작된 게 있는 경우만 (전혀 작업 안 한 S/N은 제외)
+    AND EXISTS (
+      SELECT 1 FROM app_task_details td2
+      WHERE td2.serial_number = td.serial_number
+        AND td2.started_at IS NOT NULL
+    )
+  ```
+- 수신자: `target_role = td.task_category` 관리자
+- 메시지: `{sn_label(sn)} {task_category} - {task_name}: 생성 후 {N}일 경과, 아직 시작되지 않았습니다.`
+- 중복방지: `app_alert_logs`에 같은 `alert_type + serial_number + task_detail_id` 조합이 7일 이내 없을 때만 발송
+- admin_settings: `alert_task_not_started_enabled` (기본 TRUE)
+- 코드 위치: `scheduler_service.py` 신규 함수 `_check_not_started_tasks()`
+
+**⚠️ WebSocket room 매핑 주의 (A2 보정)**
+
+`target_role`에 `TMS`를 지정해도 WebSocket room은 `role_TM`이다 (TMS는 별도 room 없음, TM room에 합류).
+`create_and_broadcast_alert()` 호출 시 target_role 변환 필요:
+
+```python
+# alert_service.py 또는 각 호출부에서
+WS_ROOM_MAP = {'TMS': 'TM', 'MECH': 'MECH', 'ELEC': 'ELEC'}
+ws_room = f"role_{WS_ROOM_MAP.get(target_role, target_role)}"
+```
+
+> 기존 completion alerts(`_trigger_completion_alerts`)는 `create_alert()` (DB만) 사용이라 해당 없음.
+> 신규 3종은 `create_and_broadcast_alert()` 사용 → room 매핑 적용 필수.
+
+**2-2. `CHECKLIST_DONE_TASK_OPEN` — 체크리스트 완료 + task 미완료**
+
+- 스케줄: 매일 09:00 / 15:00 KST (cron, 하루 2회)
+- 조건:
+  ```sql
+  -- ELEC 체크리스트 전체 완료인 S/N 중 ELEC task 미완료 존재
+  WITH elec_complete_sns AS (
+    SELECT DISTINCT td.serial_number
+    FROM app_task_details td
+    WHERE td.task_category = 'ELEC'
+      AND td.completed_at IS NOT NULL
+      AND td.task_id = 'IF_2'
+    -- 또는 check_elec_completion(sn) = TRUE인 S/N (서비스 레벨 호출)
+  )
+  SELECT td.id, td.serial_number, td.task_category, td.task_name
+  FROM app_task_details td
+  WHERE td.task_category = 'ELEC'
+    AND td.completed_at IS NULL
+    AND td.is_applicable = TRUE
+    AND td.force_closed = FALSE
+    AND td.serial_number IN (SELECT serial_number FROM elec_complete_sns)
+  ```
+  - 실제 구현은 Python에서 `check_elec_completion(sn)` 호출 후 미완료 task 목록 조회
+- 수신자: ELEC partner 관리자
+- 메시지: `{sn_label(sn)} ELEC 체크리스트 완료 — {task_name} 미종료 상태입니다. 완료 처리가 필요합니다.`
+- 중복방지: serial_number당 3일 이내 1회
+- admin_settings: `alert_checklist_done_task_open_enabled` (기본 TRUE)
+- 코드 위치: `scheduler_service.py` 신규 함수 `_check_checklist_done_task_open()`
+
+**2-3. `ORPHAN_ON_FINAL` — FINAL task 완료 시 미시작 task 잔존**
+
+- 트리거: **실시간** — `complete_work()`에서 `task.task_id in FINAL_TASK_IDS` 이후
+- 조건:
+  ```python
+  # task_service.py complete_work() 내, FINAL_TASK_IDS auto-close 블록 직후
+  not_started_tasks = get_not_started_tasks(task.serial_number, task.task_category)
+  # started_at IS NULL AND completed_at IS NULL AND is_applicable = TRUE AND force_closed = FALSE
+  ```
+- 수신자: `target_role = task.task_category` 관리자
+- 메시지: `{sn_label(sn)} {task_category} {task_name} 완료 — 미시작 작업 {N}건 존재: {task_names}`
+- 중복방지: 없음 (FINAL 완료 시 1회성)
+- admin_settings: `alert_orphan_on_final_enabled` (기본 TRUE)
+- 코드 위치: `task_service.py` `complete_work()` L368 직후
+- **알람 발송 함수**: `create_and_broadcast_alert()` (실시간 WebSocket 전달 — 관리자 즉시 인지 필요)
+
+**2-4. `init_scheduler()` add_job 등록 (3개 추가)**
+
+```python
+# scheduler_service.py init_scheduler() 내, 기존 8개 job 아래에 추가
+
+# ── Sprint 61-BE: 미시작 task 에스컬레이션 — 매일 09:00 KST ──
+_scheduler.add_job(
+    func=_check_not_started_tasks,
+    trigger=CronTrigger(hour=9, minute=0),
+    id='check_not_started_tasks',
+    name='미시작 Task 에스컬레이션 (09:00 KST)',
+    replace_existing=True
+)
+
+# ── Sprint 61-BE: 체크리스트 완료 + task 미종료 감지 — 매일 09:00 KST ──
+_scheduler.add_job(
+    func=_check_checklist_done_task_open,
+    trigger=CronTrigger(hour=9, minute=0),
+    id='check_checklist_done_task_open_09',
+    name='체크리스트 완료 task 미종료 감지 (09:00 KST)',
+    replace_existing=True
+)
+
+# ── Sprint 61-BE: 체크리스트 완료 + task 미종료 감지 — 매일 15:00 KST ──
+_scheduler.add_job(
+    func=_check_checklist_done_task_open,
+    trigger=CronTrigger(hour=15, minute=0),
+    id='check_checklist_done_task_open_15',
+    name='체크리스트 완료 task 미종료 감지 (15:00 KST)',
+    replace_existing=True
+)
+```
+
+> 기존 8개 → **11개 job**. `init_scheduler()` 시작 로그를 `"Scheduler started: 11 jobs registered"` 로 수정 필요.
+
+**2-5. 알람 발송 함수 통일**
+
+신규 3종 모두 **`create_and_broadcast_alert()`** 사용 (DB 저장 + WebSocket 전달).
+기존 `_trigger_completion_alerts()`의 `create_alert()` (DB만) 사용은 기존 패턴 유지 — 본 sprint 범위 외.
+
+---
+
+### Task 3 — `GET /admin/tasks/pending` API 확장
+
+**목표**: 기존 "시작됨 + 미완료" 외에 "미시작 방치 task"도 조회 가능하게 확장.
+
+**3-1. 쿼리 파라미터 추가**
+
+```
+GET /admin/tasks/pending?include_not_started=true&company=FNI
+```
+
+| 파라미터 | 타입 | 기본값 | 설명 |
+|---|---|---|---|
+| `include_not_started` | bool | false | true면 미시작 방치 task도 포함 |
+| `company` | string | null | 회사 필터 (Manager는 본인 company 강제) |
+| `category` | string | null | 공정 카테고리 필터 (MECH, ELEC, TMS 등) |
+| `limit` | int | 50 | 최대 반환 수 |
+
+**3-2. 확장 쿼리 (include_not_started=true 일 때)**
+
+```sql
+-- 기존 쿼리 (시작됨 + 미완료)
+SELECT
+    t.id, t.worker_id, w.name AS worker_name,
+    t.serial_number, t.qr_doc_id, t.task_category, t.task_id, t.task_name,
+    t.started_at, t.completed_at,
+    pi.sales_order,
+    EXTRACT(EPOCH FROM (NOW() - t.started_at)) / 60 AS elapsed_minutes,
+    'IN_PROGRESS' AS status
+FROM app_task_details t
+JOIN workers w ON t.worker_id = w.id
+LEFT JOIN plan.product_info pi ON pi.serial_number = t.serial_number
+WHERE t.started_at IS NOT NULL
+  AND t.completed_at IS NULL
+  AND t.is_applicable = TRUE
+  AND t.force_closed = FALSE
+  AND (w.company = %s OR %s IS NULL)
+
+UNION ALL
+
+-- 추가 쿼리 (미시작 방치 — 같은 S/N의 다른 task가 시작된 경우만)
+SELECT
+    t.id, NULL AS worker_id, NULL AS worker_name,
+    t.serial_number, t.qr_doc_id, t.task_category, t.task_id, t.task_name,
+    NULL AS started_at, NULL AS completed_at,
+    pi.sales_order,
+    EXTRACT(EPOCH FROM (NOW() - t.created_at)) / 60 AS elapsed_minutes,
+    'NOT_STARTED' AS status
+FROM app_task_details t
+LEFT JOIN plan.product_info pi ON pi.serial_number = t.serial_number
+WHERE t.started_at IS NULL
+  AND t.completed_at IS NULL
+  AND t.is_applicable = TRUE
+  AND t.force_closed = FALSE
+  AND EXISTS (
+    SELECT 1 FROM app_task_details t2
+    WHERE t2.serial_number = t.serial_number
+      AND t2.started_at IS NOT NULL
+  )
+  AND (%s IS NULL OR t.task_category IN (
+    SELECT unnest(string_to_array(
+      CASE %s
+        WHEN 'FNI' THEN 'MECH'
+        WHEN 'BAT' THEN 'MECH'
+        WHEN 'TMS(M)' THEN 'MECH,TMS'
+        WHEN 'TMS(E)' THEN 'ELEC'
+        WHEN 'P&S' THEN 'ELEC'
+        WHEN 'C&A' THEN 'ELEC'
+        ELSE ''
+      END, ','
+    ))
+  ))
+
+ORDER BY status DESC, elapsed_minutes DESC
+LIMIT %s
+```
+
+**3-3. 응답 스키마 확장**
+
+```json
+{
+  "tasks": [
+    {
+      "id": 123,
+      "worker_id": null,
+      "worker_name": null,
+      "serial_number": "GBWS-6920",
+      "sales_order": "6656",
+      "qr_doc_id": "DOC_GBWS-6920",
+      "task_category": "ELEC",
+      "task_id": "IF_2",
+      "task_name": "I.F 2",
+      "started_at": null,
+      "elapsed_minutes": 14400,
+      "status": "NOT_STARTED"
+    },
+    {
+      "id": 456,
+      "worker_id": 10,
+      "worker_name": "김OO",
+      "serial_number": "GBWS-6905",
+      "sales_order": "6526",
+      ...
+      "status": "IN_PROGRESS"
+    }
+  ],
+  "total": 2,
+  "counts": {
+    "in_progress": 1,
+    "not_started": 1
+  }
+}
+```
+
+- `sales_order` 필드 추가 (VIEW에서 O/N 표시용)
+- `status` 필드 추가: `IN_PROGRESS` / `NOT_STARTED`
+- `counts` 요약 추가
+- `task_id` 필드 추가 (VIEW에서 task 유형 구분용)
+- 기존 FE(OPS)는 `include_not_started` 미전송 시 기존 동작 100% 유지 (하위호환)
+
+**3-4. total 계산 — LIMIT 독립 COUNT 쿼리 (M5 보정)**
+
+기존 `total = len(tasks)` 는 LIMIT 적용 후 결과이므로 실제 전체 건수와 불일치.
+별도 COUNT 쿼리로 정확한 전체 건수 + status별 counts 반환:
+
+```python
+# admin.py get_pending_tasks() 내, 메인 쿼리 실행 전 또는 후에 별도 실행
+count_sql = """
+    SELECT
+        COUNT(*) FILTER (WHERE started_at IS NOT NULL AND completed_at IS NULL
+                         AND is_applicable AND NOT force_closed) AS in_progress,
+        COUNT(*) FILTER (WHERE started_at IS NULL AND completed_at IS NULL
+                         AND is_applicable AND NOT force_closed
+                         AND EXISTS (SELECT 1 FROM app_task_details t2
+                                     WHERE t2.serial_number = app_task_details.serial_number
+                                       AND t2.started_at IS NOT NULL)
+                        ) AS not_started
+    FROM app_task_details
+    WHERE (company_filter_condition)
+"""
+# include_not_started=false 일 때: not_started = 0, total = in_progress
+# include_not_started=true 일 때: total = in_progress + not_started
+```
+
+응답:
+```json
+{
+  "tasks": [...],
+  "total": 127,
+  "counts": { "in_progress": 85, "not_started": 42 }
+}
+```
+
+> `total`은 LIMIT과 무관한 실제 전체 건수. FE 페이지네이션에 활용 가능.
+
+**3-5. company→category 매핑 — Python 헬퍼 사용 (M6 보정)**
+
+SQL 내 CASE 하드코딩 대신 Python `COMPANY_CATEGORIES` 딕셔너리로 관리:
+
+```python
+# admin.py 상단 또는 utils.py
+COMPANY_CATEGORIES = {
+    'FNI':    ['MECH'],
+    'BAT':    ['MECH'],
+    'TMS(M)': ['MECH', 'TMS'],
+    'TMS(E)': ['ELEC'],
+    'P&S':    ['ELEC'],
+    'C&A':    ['ELEC'],
+}
+
+def get_categories_for_company(company: str) -> list[str] | None:
+    """회사명 → 담당 task_category 목록. None이면 전체."""
+    return COMPANY_CATEGORIES.get(company)
+```
+
+SQL에서 `CASE %s WHEN ...` 대신 Python에서 카테고리 리스트를 구한 후 파라미터로 전달:
+
+```python
+# get_pending_tasks() 내
+if company:
+    categories = get_categories_for_company(company)
+    if categories:
+        # WHERE ... AND t.task_category = ANY(%s)
+        params.append(categories)
+    else:
+        # 매핑 없는 회사 → 빈 결과 (또는 전체, 정책에 따라)
+        pass
+```
+
+> VIEW `SNStatusPage.tsx`의 `COMPANY_CATEGORIES` (L19-26) 과 동일한 매핑.
+> 변경 시 한 곳(Python dict)만 수정하면 됨. SQL 복잡도 감소.
+
+**코드 위치**: `admin.py` `get_pending_tasks()` L1619-1708
+
+**3-6. `force_close_task()` NOT_STARTED 대응 (A3 보정)**
+
+기존 `PUT /admin/tasks/{id}/force-close` (L1032-1108)는 `worker_id`로 회사 검증:
+```python
+# L1092: LEFT JOIN workers w ON t.worker_id = w.id
+# L1108: if worker_company != current_user_company → 403
+```
+
+**문제**: NOT_STARTED task는 `worker_id = NULL` → `worker_company = NULL` → Manager 권한 검증 실패.
+
+**수정**:
+```python
+# force_close_task() L1108 부근
+if task_row['worker_id'] is None:
+    # 미시작 task → worker 없음 → task_category 기준 권한 검증
+    allowed_categories = get_categories_for_company(current_user_company)
+    if allowed_categories and task_row['task_category'] not in allowed_categories:
+        return {"error": "해당 공정에 대한 권한이 없습니다"}, 403
+else:
+    # 기존 로직: worker 회사 기준 검증
+    if worker_company != current_user_company:
+        return {"error": "..."}, 403
+```
+
+추가로 NOT_STARTED task 강제 종료 시:
+- `started_at` 미설정 → `duration` 계산 스킵 (0으로 설정 또는 NULL)
+- `completed_at` = 지정 시각 또는 NOW()
+- `force_closed = TRUE`
+- `force_close_reason` = 사유
+
+---
+
+### Task 4 — Migration 049
+
+**파일**: `backend/migrations/049_alert_escalation_expansion.sql`
+
+```sql
+-- Sprint 61-BE: 에스컬레이션 알람 확장
+-- 신규 alert_type 3종 추가
+
+ALTER TYPE alert_type_enum ADD VALUE IF NOT EXISTS 'TASK_NOT_STARTED';
+ALTER TYPE alert_type_enum ADD VALUE IF NOT EXISTS 'CHECKLIST_DONE_TASK_OPEN';
+ALTER TYPE alert_type_enum ADD VALUE IF NOT EXISTS 'ORPHAN_ON_FINAL';
+
+-- app_alert_logs 중복방지용 task_detail_id 컬럼 추가 (A1 보정)
+ALTER TABLE app_alert_logs ADD COLUMN IF NOT EXISTS task_detail_id INTEGER NULL;
+-- TASK_NOT_STARTED, CHECKLIST_DONE_TASK_OPEN 중복 발송 체크 시 사용
+-- (alert_type + serial_number + task_detail_id + 기간) 조합으로 dedupe
+CREATE INDEX IF NOT EXISTS idx_alert_logs_dedupe
+    ON app_alert_logs (alert_type, serial_number, task_detail_id)
+    WHERE task_detail_id IS NOT NULL;
+
+-- 신규 admin_settings 기본값
+INSERT INTO admin_settings (setting_key, setting_value) VALUES
+  ('alert_task_not_started_enabled', 'true'),
+  ('alert_checklist_done_task_open_enabled', 'true'),
+  ('alert_orphan_on_final_enabled', 'true'),
+  ('task_not_started_threshold_days', '2')
+ON CONFLICT (setting_key) DO NOTHING;
+```
+
+**4-2. `admin.py` SETTING_KEYS 딕셔너리 등록 (5개)**
+
+`SETTING_KEYS` (L26~70)에 신규 키 등록 — 미등록 시 `ALLOWED_KEYS` 검증에서 거부됨:
+
+```python
+# ── Sprint 61-BE: 에스컬레이션 알람 설정 추가 (기존 항목 아래) ──
+'alert_task_not_started_enabled':          {'type': 'bool', 'default': True,  'label': '미시작 작업 알람'},
+'alert_checklist_done_task_open_enabled':   {'type': 'bool', 'default': True,  'label': '체크리스트완료+미종료 알람'},
+'alert_orphan_on_final_enabled':           {'type': 'bool', 'default': True,  'label': 'FINAL 완료시 미시작 알람'},
+'task_not_started_threshold_days':         {'type': 'int',  'default': 2,     'label': '미시작 경과 기준일'},
+'elec_checklist_issue_alert':              {'type': 'bool', 'default': True,  'label': 'ELEC 체크리스트 ISSUE 알람'},
+```
+
+> ※ 상위 4개는 Sprint 61-BE 신규. `elec_checklist_issue_alert`는 기존 코드에서 사용 중이나 SETTING_KEYS 미등록 상태 — 함께 등록.
+> ※ 등록 후 기존 36개 → **41개** 엔트리. `ALLOWED_KEYS = set(SETTING_KEYS.keys())` 자동 반영.
+
+---
+
+### Task 5 — task_detail 모델 헬퍼 추가
+
+**파일**: `backend/app/models/task_detail.py`
+
+```python
+def get_not_started_tasks(serial_number: str, task_category: str) -> list:
+    """미시작 task 목록 (started_at IS NULL, completed_at IS NULL, applicable, not force_closed)"""
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, task_id, task_name
+            FROM app_task_details
+            WHERE serial_number = %s
+              AND task_category = %s
+              AND started_at IS NULL
+              AND completed_at IS NULL
+              AND is_applicable = TRUE
+              AND force_closed = FALSE
+            """,
+            (serial_number, task_category)
+        )
+        return cur.fetchall()
+    finally:
+        put_conn(conn)
+```
+
+---
+
+### Task 6 — BACKLOG-ALARM.md 업데이트 + 테스트
+
+**6-1. BACKLOG-ALARM.md 섹션 J 추가**
+
+```markdown
+### J. 미작업 에스컬레이션 (3종) — Sprint 61-BE 추가
+
+| # | 알람 타입 | 트리거 | 수신자 | 메시지 | admin_settings |
+|---|---|---|---|---|---|
+| 21 | TASK_NOT_STARTED | 매일 09시, 생성 후 2일 미시작 | task_category 관리자 | [SN|O/N] 카테고리 - 작업명: N일 경과, 미시작 | alert_task_not_started_enabled |
+| 22 | CHECKLIST_DONE_TASK_OPEN | 매일 09/15시, 체크리스트 완료+task 미완료 | ELEC partner 관리자 | [SN|O/N] ELEC 체크리스트 완료 — 작업명 미종료 | alert_checklist_done_task_open_enabled |
+| 23 | ORPHAN_ON_FINAL | FINAL task 완료 시 (실시간) | task_category 관리자 | [SN|O/N] 카테고리 완료 — 미시작 N건 존재 | alert_orphan_on_final_enabled |
+```
+
+**6-2. 테스트 케이스**
+
+```
+--- Task 1: O/N 메시지 통일 ---
+TC-61B-01: DURATION_EXCEEDED 알람 메시지에 O/N 포함 확인
+TC-61B-02: REVERSE_COMPLETION 알람 메시지에 O/N 포함 확인
+TC-61B-03: TASK_REMINDER 알람 메시지에 O/N 포함 확인
+TC-61B-04: SHIFT_END_REMINDER 알람 메시지에 O/N 포함 확인
+TC-61B-05: TASK_ESCALATION 알람 메시지에 O/N 포함 확인
+TC-61B-06: UNFINISHED_AT_CLOSING 알람 메시지에 O/N 포함 확인
+TC-61B-07: RELAY_ORPHAN 알람 메시지에 O/N 포함 확인
+TC-61B-08: CHECKLIST_ISSUE (TM/ELEC) 알람 메시지에 O/N 포함 확인
+TC-61B-09: PROCESS_READY 알람 메시지에 O/N 포함 확인
+TC-61B-10: sales_order NULL인 S/N → [SN] 형식 (O/N 없이 정상)
+TC-61B-11: 기존 완료 연쇄 알람(TMS_TANK_COMPLETE 등) O/N 유지 (regression)
+
+--- Task 2: 신규 에스컬레이션 ---
+TC-61B-12: TASK_NOT_STARTED — 2일 미시작 + 같은 S/N 다른 task 시작됨 → 알람 발생
+TC-61B-13: TASK_NOT_STARTED — 전체 S/N 미시작 (작업 자체 안 시작) → 알람 미발생
+TC-61B-14: TASK_NOT_STARTED — 1일 경과 → 알람 미발생 (threshold 미달)
+TC-61B-15: TASK_NOT_STARTED — 7일 이내 중복 발송 방지
+TC-61B-16: TASK_NOT_STARTED — admin_settings OFF → 알람 미발생
+TC-61B-17: CHECKLIST_DONE_TASK_OPEN — ELEC 체크리스트 100% + IF_2 미완료 → 알람 발생
+TC-61B-18: CHECKLIST_DONE_TASK_OPEN — 체크리스트 미완료 → 알람 미발생
+TC-61B-19: CHECKLIST_DONE_TASK_OPEN — 3일 이내 중복 발송 방지
+TC-61B-20: ORPHAN_ON_FINAL — IF_2 완료 시 미시작 ELEC task 존재 → 알람 발생
+TC-61B-21: ORPHAN_ON_FINAL — IF_2 완료 시 모든 task 완료 → 알람 미발생
+TC-61B-22: ORPHAN_ON_FINAL — admin_settings OFF → 알람 미발생
+
+--- Task 3: API 확장 ---
+TC-61B-23: GET /admin/tasks/pending (기존 파라미터) → 기존 동작 100% 유지
+TC-61B-24: GET /admin/tasks/pending?include_not_started=true → NOT_STARTED status task 포함
+TC-61B-25: NOT_STARTED task의 worker_id, worker_name, started_at 모두 NULL
+TC-61B-26: 응답에 sales_order 필드 포함
+TC-61B-27: 응답에 counts.in_progress, counts.not_started 포함
+TC-61B-28: Manager 조회 시 본인 company만 (기존 권한 로직 유지)
+TC-61B-29: category 파라미터 필터 정상
+TC-61B-30: force_closed=TRUE task는 어떤 status에서도 미표시
+
+--- Regression ---
+TC-61B-31: OPS 미종료 작업 화면 — include_not_started 미전송 시 기존 동작 유지
+TC-61B-32: 기존 20종 알람 정상 발송 (enum 추가로 인한 side-effect 없음)
+TC-61B-33: PUT /admin/tasks/{id}/force-close — NOT_STARTED task에도 정상 동작
+```
+
+### 수정 파일 요약
+
+| 파일 | 수정 내용 |
+|---|---|
+| `alert_service.py` | `sn_label()` 공통 함수 추가 |
+| `task_service.py` | 로컬 `_sn_label` 제거 → import, ORPHAN_ON_FINAL 트리거 추가 |
+| `duration_validator.py` | 메시지 3곳 `sn_label()` 교체 |
+| `scheduler_service.py` | 메시지 교체 + `_check_not_started_tasks()`, `_check_checklist_done_task_open()` 추가 |
+| `checklist_service.py` | 메시지 2곳 `sn_label()` 교체 |
+| `process_validator.py` | 메시지 `sn_label()` 교체 |
+| `admin.py` | `get_pending_tasks()` 쿼리 확장 + COUNT 분리 + COMPANY_CATEGORIES 헬퍼, `force_close_task()` NOT_STARTED 권한 보정, SETTING_KEYS 5개 추가 |
+| `task_detail.py` | `get_not_started_tasks()` 헬퍼 추가 |
+| `migrations/049_*.sql` | enum 3종 + admin_settings 4종 + `app_alert_logs.task_detail_id` 컬럼 + dedupe 인덱스 |
+
+### 주의사항
+
+- **하위호환**: OPS FE의 미종료 화면(`manager_pending_tasks_screen.dart`)은 `include_not_started` 파라미터를 보내지 않으므로 기존 동작 100% 유지. OPS 측 수정 불필요.
+- **`sn_label()` 성능**: 알람 발송 시 `get_product_by_serial_number()` 추가 DB 호출 1회. 스케줄러에서 다수 task 순회 시 N+1 쿼리 가능성 → 대량 발송 시 batch 조회 최적화 고려 (현재 규모에서는 문제 없음, 추후 S/N 수백 건 이상 시 리팩터링).
+- **CHECKLIST_DONE_TASK_OPEN은 ELEC 전용**: 현재 체크리스트 completion 함수가 ELEC(`check_elec_completion`)과 TM(`check_tm_completion`)만 존재. TM은 별도 플로우(체크리스트→성적서)라 동일 문제 낮음. MECH 체크리스트 미구현. 향후 MECH 추가 시 확장.
+- **force-close API와 NOT_STARTED**: Task 3-6에서 보정 완료. worker_id=NULL 시 `COMPANY_CATEGORIES` 기반 task_category 권한 검증으로 대체. duration 계산 스킵.
+- **Migration 049 선행**: enum ADD VALUE는 트랜잭션 내 불가 → `049_*.sql`은 각 ALTER TYPE 별도 실행. Railway 배포 시 주의.
+
+---
+
+## BUG-43 — 분석 대시보드 기능별 사용량 한글 라벨 누락 (24건)
+
+**날짜**: 2026-04-17
+**파일**: `backend/app/routes/analytics.py`
+
+**문제**: Sprint 52 이후 추가된 엔드포인트 24개가 `_ENDPOINT_LABELS` 미등록 → VIEW 분석 대시보드 "기능별 사용량 TOP 10"에서 영문 엔드포인트명 그대로 노출 (예: `checklist.upsert_tm_checklist_record`)
+
+**수정**: `_ENDPOINT_LABELS`에 24개 항목 추가 (기존 111키 → 135키, 유니크 라우트 108개 전수 커버)
+
+```python
+# 추가된 24개:
+# checklist: TM 3개, ELEC 3개, 마스터 5개, 성적서 2개 = 13개
+# admin: 5개 (force_complete_task, get_active_tasks, get_alerts_summary, get_pending_tasks, get_task_corrections)
+# product: 2개 (get_completion_status, update_location)
+# work: 3개 (validate_process, reactivate_task_route, update_location_compat)
+# auth: 1개 (approve)
+```
+
+**수정 규모**: ~24줄 추가, 1파일. 기존 라벨 무변경.
