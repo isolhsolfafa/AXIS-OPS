@@ -31,6 +31,13 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
   bool _alertTmTankModuleToElecEnabled = false;
   bool _alertMechPressureToQiEnabled = false;
 
+  // 에스컬레이션 알림 설정 (Sprint 61-BE)
+  bool _alertTaskNotStartedEnabled = true;
+  bool _alertChecklistDoneTaskOpenEnabled = true;
+  bool _alertOrphanOnFinalEnabled = true;
+  bool _elecChecklistIssueAlert = true;
+  int _taskNotStartedThresholdDays = 2;
+
   // PI 위임 설정 (Sprint 34-A + 31C-A)
   List<String> _piCapableMechPartners = [];
   List<String> _piGstOverrideLines = [];
@@ -312,6 +319,13 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
           _alertElecToPiEnabled = response['alert_elec_to_pi_enabled'] as bool? ?? false;
           _alertTmTankModuleToElecEnabled = response['alert_tm_tank_module_to_elec_enabled'] as bool? ?? false;
           _alertMechPressureToQiEnabled = response['alert_mech_pressure_to_qi_enabled'] as bool? ?? false;
+          // 에스컬레이션 알림 설정 (Sprint 61-BE)
+          _alertTaskNotStartedEnabled = response['alert_task_not_started_enabled'] as bool? ?? true;
+          _alertChecklistDoneTaskOpenEnabled = response['alert_checklist_done_task_open_enabled'] as bool? ?? true;
+          _alertOrphanOnFinalEnabled = response['alert_orphan_on_final_enabled'] as bool? ?? true;
+          _elecChecklistIssueAlert = response['elec_checklist_issue_alert'] as bool? ?? true;
+          final rawThreshold = response['task_not_started_threshold_days'];
+          _taskNotStartedThresholdDays = (rawThreshold is int) ? rawThreshold : int.tryParse(rawThreshold?.toString() ?? '2') ?? 2;
           _isLoadingSettings = false;
         });
       }
@@ -337,6 +351,10 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
           if (key == 'alert_elec_to_pi_enabled') _alertElecToPiEnabled = value;
           if (key == 'alert_tm_tank_module_to_elec_enabled') _alertTmTankModuleToElecEnabled = value;
           if (key == 'alert_mech_pressure_to_qi_enabled') _alertMechPressureToQiEnabled = value;
+          if (key == 'alert_task_not_started_enabled') _alertTaskNotStartedEnabled = value;
+          if (key == 'alert_checklist_done_task_open_enabled') _alertChecklistDoneTaskOpenEnabled = value;
+          if (key == 'alert_orphan_on_final_enabled') _alertOrphanOnFinalEnabled = value;
+          if (key == 'elec_checklist_issue_alert') _elecChecklistIssueAlert = value;
         });
         _showSnack('설정이 저장되었습니다.', isError: false);
       }
@@ -1584,6 +1602,91 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
                             subtitle: 'DRAGON 모델 MECH 가압검사 완료 시 QI 담당자에게 알림',
                             value: _alertMechPressureToQiEnabled,
                             onChanged: (v) => _updateSetting('alert_mech_pressure_to_qi_enabled', v),
+                          ),
+                          const Divider(height: 1, color: GxColors.mist),
+                          // ── Sprint 61-BE: 에스컬레이션 알림 ──
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+                            child: Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFFFF3E0),
+                                    borderRadius: BorderRadius.circular(GxRadius.sm),
+                                    border: Border.all(color: const Color(0xFFFFCC80), width: 1),
+                                  ),
+                                  child: const Text(
+                                    '에스컬레이션 알림',
+                                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFFE65100)),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          _buildSettingToggle(
+                            title: '미시작 작업 알림',
+                            subtitle: '생성 후 N일 경과 + 미참여 시 관리자 알림',
+                            value: _alertTaskNotStartedEnabled,
+                            onChanged: (v) => _updateSetting('alert_task_not_started_enabled', v),
+                          ),
+                          const Divider(height: 1, color: GxColors.mist),
+                          _buildSettingToggle(
+                            title: '체크리스트 완료 + 미종료 알림',
+                            subtitle: 'ELEC 체크리스트 완료 후 작업 미종료 시 알림',
+                            value: _alertChecklistDoneTaskOpenEnabled,
+                            onChanged: (v) => _updateSetting('alert_checklist_done_task_open_enabled', v),
+                          ),
+                          const Divider(height: 1, color: GxColors.mist),
+                          _buildSettingToggle(
+                            title: 'FINAL 완료 시 미시작 알림',
+                            subtitle: 'FINAL 작업 완료 시 미시작 작업 잔존하면 알림',
+                            value: _alertOrphanOnFinalEnabled,
+                            onChanged: (v) => _updateSetting('alert_orphan_on_final_enabled', v),
+                          ),
+                          const Divider(height: 1, color: GxColors.mist),
+                          _buildSettingToggle(
+                            title: 'ELEC 체크리스트 ISSUE 알림',
+                            subtitle: 'ELEC 체크리스트 ISSUE 발생 시 관리자 알림',
+                            value: _elecChecklistIssueAlert,
+                            onChanged: (v) => _updateSetting('elec_checklist_issue_alert', v),
+                          ),
+                          const Divider(height: 1, color: GxColors.mist),
+                          // 미시작 경과 기준일 설정
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                            child: Row(
+                              children: [
+                                const Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text('미시작 경과 기준일', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+                                      SizedBox(height: 2),
+                                      Text('이 일수 이상 미참여 시 알림 발송', style: TextStyle(fontSize: 12, color: GxColors.slate)),
+                                    ],
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: 70,
+                                  child: DropdownButton<int>(
+                                    value: _taskNotStartedThresholdDays,
+                                    isExpanded: true,
+                                    underline: Container(height: 1, color: GxColors.mist),
+                                    items: [1, 2, 3, 5, 7].map((d) => DropdownMenuItem(
+                                      value: d,
+                                      child: Text('$d일', style: const TextStyle(fontSize: 14)),
+                                    )).toList(),
+                                    onChanged: (v) {
+                                      if (v != null) {
+                                        setState(() => _taskNotStartedThresholdDays = v);
+                                        _updateSettingValue('task_not_started_threshold_days', v);
+                                      }
+                                    },
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ],
                       ),
