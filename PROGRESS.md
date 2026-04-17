@@ -3,7 +3,31 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.9.4 (Sprint 61-BE 알람 강화 + 미종료 작업 API 확장, 2026-04-17)
+> **현재 버전**: v2.9.6 (BUG-45 force_close completed_at 범위 검증, 2026-04-17)
+
+---
+
+## BUG-45: force_close completed_at 범위 검증 + VIEW useForceClose 필드명 정정 (2026-04-17, v2.9.6)
+
+**수정 파일 (BE 1파일 + TEST 1파일 + FE(VIEW) 1파일 + Docs 4파일)**:
+- `backend/app/routes/admin.py` — `force_close_task()` L1185-1203 (validation 14줄), L1098-1099 docstring Returns 추가
+- `tests/backend/test_force_close.py` — TC-FC-11~18 (BUG-45 신규 8건)
+- `AXIS-VIEW/app/src/hooks/useForceClose.ts` L24 — `reason → close_reason` (FE-17)
+- `backend/version.py` + `frontend/lib/utils/app_version.dart` — v2.9.5 → v2.9.6
+- `CLAUDE.md` / `BACKLOG.md` / `AGENT_TEAM_LAUNCH.md` / `handoff.md` / `memory.md` (ADR-016)
+
+**가드 2종 (1차 Must)**:
+- `INVALID_COMPLETED_AT_FUTURE` — 미래 시각 차단 (60s clock skew 허용, NTP/브라우저 오차 커버)
+- `INVALID_COMPLETED_AT_BEFORE_START` — started_at 이전 시각 차단 (`==` 경계 허용 = 0분 task 가능)
+
+**Codex 합의 핵심**:
+- force_complete_task() 동일 패턴은 Advisory(미호출 엔드포인트)
+- 테스트 경로 `tests/backend/`, TC 번호 `TC-FC-11~18` 사용
+- helper 함수 추출 보류(인라인 1회 권고)
+
+**테스트 결과**: 17/17 passed (BUG-45 8 + 회귀 9, 1 skipped는 pre-existing) + admin 회귀 46/46 passed = **63 passed, 1 skipped, 0 failed**
+
+**배포**: Netlify 배포 완료 (https://gaxis-ops.netlify.app, deploy 69e1b2bd21d313bb22e8c48c)
 
 ---
 

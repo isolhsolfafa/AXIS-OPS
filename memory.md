@@ -1,0 +1,339 @@
+# AXIS-OPS Memory
+
+> 세션 간 누적되는 의사결정, 아키텍처 판단, 감사 결과를 기록합니다.
+> CLAUDE.md = 프로젝트 고정 정보 / memory.md = 누적 학습 / handoff.md = 세션 인계
+> 마지막 업데이트: 2026-04-07
+
+---
+
+## 1. 아키텍처 의사결정 기록 (ADR)
+
+### ADR-001: FK CASCADE → RESTRICT 전환 (2026-03-15)
+- **맥락**: 초기 migration(001-005)이 전부 CASCADE로 생성됨. worker 삭제 시 출퇴근/작업이력 전부 소실 위험
+- **결정**: worker FK는 RESTRICT 또는 SET NULL로 전환
+- **현황**: migration 023(qr_doc_id, serial_number), 024(work_start/completion_log, hr 테이블), 025(serial_number) 완료
+- **잔존**: 001(email_verification→CASCADE), 005(offline_sync_queue, location_history→CASCADE), 018(refresh_tokens→CASCADE)
+- **잔존 리스크**: 낮음 — email_verification, sync_queue, refresh_tokens는 일시적 데이터로 CASCADE 적절
+
+### ADR-002: 테스트 DB 분리 (2026-03-26)
+- **맥락**: Railway 운영 DB 하나에서 테스트+운영 동시 수행 → conftest.py가 운영 데이터 접근
+- **결정**: `TEST_DATABASE_URL` 환경변수 분리 + `.env.test` 자동 로딩
+- **결과**: Sprint 39 완료. regression 118건→0건 해결
+
+### ADR-003: app_access_log 30일 보관 → last_login_at 컬럼 (2026-03-27)
+- **맥락**: 비활성 사용자 감지에 app_access_log 사용하려 했으나 30일 보관 한계
+- **결정**: workers 테이블에 `last_login_at` 컬럼 추가 (migration 040)
+- **결과**: 로그인 시 auth_service.py가 last_login_at 갱신. 30일 미로그인 = 비활성 후보
+
+### ADR-004: Soft Delete 패턴 — is_active (2026-03-27)
+- **맥락**: 퇴사/비활성 사용자 처리. 물리 삭제 시 FK RESTRICT로 삭제 불가 + 이력 소실
+- **결정**: `workers.is_active BOOLEAN DEFAULT TRUE` + `deactivated_at TIMESTAMPTZ`
+- **결과**: Sprint 40-C 완료. login 시 is_active 체크, admin 승인 후 비활성화
+
+### ADR-005: admin.py 모놀리스 유지 결정 (2026-03-29, 감사 리뷰)
+- **맥락**: admin.py 2,352줄. worker/attendance/settings/kpi 서비스 미분리
+- **결정**: 당장 분리하지 않음. APS Lite 작업이 더 시급. 분리는 체크리스트 BE Sprint 때 함께 진행
+- **리스크**: 중간. 새 기능 추가 시 충돌 가능성 증가
+
+### ADR-006: WebSocket flask-sock 전환 (2026-03-08)
+- **맥락**: Flask-SocketIO 프로토콜 불일치 (BUG-2)
+- **결정**: flask-sock(raw WebSocket) 마이그레이션. events.py 전체 리라이트
+- **결과**: Sprint 13 완료. FE 변경 0건
+
+### ADR-007: checklist 스키마 확장 방향 (2026-03-26)
+- **맥락**: 기존 단순 item_name 기반 → 실제 MECH 양식은 20그룹 60항목 + CHECK/INPUT 구분
+- **결정**: item_type(CHECK/INPUT) + inspection_group + spec_criteria 컬럼 추가. BOM 기반은 보류
+- **선행조건**: ELEC 양식 수집 완료 후 진행
+- **설계 원칙**: 대시보드 중심 관리 (코드 레벨 조건부 로직 사용 안 함)
+
+### ADR-008: 작업 릴레이 — finalize 파라미터 분리 (2026-03-30)
+- **맥락**: 판넬작업 등 1개 task를 여러 작업자가 순차 교대. 유저1이 종료하면 재시작 불가
+- **결정**: complete_work()에 `finalize: bool = True` 추가. False="내 작업 종료"(task 열린 상태), True="작업 완료"(기존 동작)
+- **결과**: Sprint 41 구현. 릴레이 재시작 허용(_worker_already_completed_task 체크), _all_workers_completed COUNT(DISTINCT worker_id) 버그 수정
+- **하위 호환**: finalize 미전달 시 True → 기존 FE 정상 동작
+
+### ADR-009: Manager 재활성화 — VIEW에 배치 (2026-03-30)
+- **맥락**: 실수로 완료된 task 복구 기능. APP에 넣으면 현장 작업자 실수 리스크
+- **결정**: VIEW 생산현황 S/N 디테일 ProcessStepCard worker 행 단위에 배치
+- **정합성**: reactivate 시 completed_at/started_at/worker_id NULL + completion_status 롤백 + production_confirm soft-delete
+- **권한**: is_manager || is_admin → canReactivate 단일 prop
+- **task_detail_id**: BE 수정 불필요. SNDetailPanel 병합 시 t.id 주입으로 해결
+
+### ADR-010: Partner → Company 매핑 규칙 및 알림 분기 참조 (2026-04-02)
+
+#### 배경
+product_info의 partner 컬럼(mech_partner, elec_partner, module_outsourcing)과 workers.company 사이에 매핑 규칙이 존재. TMS만 특수 케이스(회사 하나가 기구/전장/모듈 3역할 분리).
+완료 알림이 `get_managers_for_role('MECH')` 등으로 전체 role에 발송하고 있었으나, 실제 의도는 해당 S/N의 partner 회사 매니저에게만 발송.
+
+#### partner → company 매핑
+
+| partner_field | partner값 | workers.company | 비고 |
+|---|---|---|---|
+| mech_partner | TMS | TMS(M) | 기구 담당 |
+| mech_partner | FNI | FNI | 그대로 |
+| mech_partner | BAT | BAT | 그대로 |
+| elec_partner | TMS | TMS(E) | 전장 담당 |
+| elec_partner | P&S | P&S | 그대로 |
+| elec_partner | C&A | C&A | 그대로 |
+| module_outsourcing | TMS | TMS(M) | 모듈 조립 담당 |
+
+#### 공정 흐름 및 알림 트리거
+
+```
+TM ──(가압완료)──▶ MECH ──(도킹완료)──▶ ELEC ──(자주검사완료)──▶ PI ──▶ QI ──▶ SI
+     trigger①         trigger②              trigger③
+```
+
+- trigger①: TMS 완료 → mech_partner company 매니저 (mech_partner=module_outsourcing 회사면 스킵)
+- trigger②: MECH TANK_DOCKING 완료 → elec_partner company 매니저
+- trigger③: ELEC 자주검사 전체 완료 → PI 매니저 (GST)
+- CHECKLIST_TM_READY: TMS TANK_MODULE 완료(비매니저) → module_outsourcing company 매니저
+- 각 트리거는 admin_settings on/off로 제어
+
+#### 코드 참조 위치 (이 매핑을 사용하는 곳)
+
+| 파일 | 라인 | 용도 | 방향 |
+|------|------|------|------|
+| `services/task_seed.py` | L495-600 | task 가시성 분기 (QR 스캔 시 어떤 task를 보여줄지) | company → partner |
+| `services/progress_service.py` | L196-224 | 진행현황 조회 필터 (S/N 목록 조회) | company → partner |
+| `routes/work.py` | L250-280 | 재활성화 권한 체크 | company → partner (접미사 제거) |
+| `services/task_service.py` | L414-488 | 완료 알림 트리거 (**수정 대상**) | partner → company (신규) |
+| `services/task_service.py` | L543-605 | CHECKLIST_TM_READY 알림 (**수정 대상**) | partner → company (신규) |
+
+#### 결정
+- 알림 트리거에서 `get_managers_for_role(role)` → `get_managers_by_partner(serial_number, partner_field)` 신규 함수로 교체
+- 역방향 매핑 함수 `_partner_to_company(partner_value, partner_field)` 도입
+- TMS 특수 케이스: mech_partner/module_outsourcing → TMS(M), elec_partner → TMS(E)
+- 기타 회사: partner값 = company값 (FNI, BAT, P&S, C&A)
+
+### ADR-011: Friday-based 주차→월 매핑 (2026-04-06)
+- **맥락**: monthly-summary에서 W14(3/30~4/5)가 월요일 기준으로 3월에 배정되는 문제. 생산 현장은 금요일이 주의 마지막이므로 금요일 기준이 자연스러움
+- **결정**: `friday = start_date + timedelta(days=4)` → friday의 month = 주차 소속 월
+- **적용 범위**: VIEW 월별 조회 전용. 기존 `confirmed_month` 데이터는 변경 없음 (실적 처리는 주차 페이지에서)
+- **한국 연휴**: 무관 — 캘린더 날짜 고정이므로 연휴 조건 불필요
+- **참조**: `AGENT_TEAM_LAUNCH.md` Sprint 53, `OPS_API_REQUESTS.md` #53
+
+### ADR-012: 개인정보 동의 — 필수/선택 분리 + 파견법 대응 (2026-04-06)
+- **맥락**: 개인정보보호법 §15/§17/§21 준수 + 파견법 리스크(시스템 알림 ≠ 업무 명령) 대응 필요. 협력사 작업자 포함
+- **결정**:
+  - 이용약관 + 개인정보 수집·이용 = **필수 동의** (철회 = 탈퇴)
+  - 제3자 제공 = **선택 동의** (토글로 철회 가능)
+  - 최초 동의 = Blocking 팝업 (로그인 시 강제)
+  - 설정 관리 = Non-blocking 토글 (profile_screen)
+- **DB**: `terms_agreed_at`, `terms_version`, `privacy_agreed_at` on workers + 선택적 `third_party_agreed_at`
+- **파견법 문구**: "본 시스템은 공정 현황 공유를 위한 도구이며, 시스템 알림은 업무 명령이 아닌 현장 상태 정보 공유"
+- **보류 사항**: 제3자 제공 해당 여부 법적 검토, `consent_history` 이력 테이블
+- **참조**: `AGENT_TEAM_LAUNCH.md` BACKLOG, `G-AXIS_앱_이용동의_화면명세.docx`
+
+### ADR-013: analytics 스키마 = WH 분석 결과 적재소 + CT 분석 확장 (2026-04-07)
+- **맥락**: `analytics` 스키마에 defect 가공 결과만 4개 테이블 존재. CT(Cycle Time) 분석 결과를 어디에 넣을지 결정 필요. 별도 `ct` 스키마 vs `analytics` 확장
+- **결정**:
+  - `analytics` 스키마는 **WH(Warehouse) 역할** — 각 도메인의 가공/분석 결과를 적재하는 곳
+  - CT 분석 테이블은 `analytics` 스키마에 `ct_` prefix로 추가
+  - 스키마 추가하지 않음 (8개 유지)
+  - 원본 데이터는 각 도메인 스키마에 유지 (`public.app_task_details`, `hr.partner_attendance` 등)
+- **네이밍 규칙**: `analytics.{도메인}_{내용}` — 예: `analytics.ct_task_realtime`, `analytics.defect_statistics`
+- **설정값 위치**: 근무 스케줄(휴식/식사), 공수 기준(8H/440분) → `public.admin_settings` key-value 활용 (별도 테이블 생성 금지)
+- **BE 모듈 구조**: `analytics_prod_service.py` + `analytics_prod.py` (route) — 분리 모듈로, 향후 서버 분리 시 떼어내기 용이
+- **참조**: `sql/elec_realtime_analysis.sql` (프로토타입 쿼리)
+
+- **스키마 맵 상세**: `DB_SCHEMA_MAP.md` 참조 (8개 스키마, 43개 테이블, FK 관계도 포함)
+
+### ADR-014: resume 권한 — 다중작업자 동료 허용 → Sprint 55에서 제거 예정 (2026-04-07, BUG-6)
+- **맥락**: Partner 회사(FNI, C&A) 다중작업자 task에서 동료가 resume 시 403 FORBIDDEN 발생
+- **임시 수정 (배포 완료)**: `_worker_has_started_task` 조건 추가 — 같은 task 참여자도 resume 허용
+- **최종 방향 (Sprint 55)**: worker별 독립 pause/resume로 전환 → 동료 resume 자체가 불필요해짐 (본인 pause만 본인이 resume)
+- **참조**: `BUG-6_ANALYSIS.md`, `test_pause_resume.py` TC-PR-19~22
+
+### ADR-015: Worker별 Pause + Auto-Finalize + FINAL task 릴레이 불가 (2026-04-07)
+- **맥락**: task 단위 pause로는 개인별 작업시간 산출 불가 (CT 오차 최대 80%). 전원 릴레이 종료 시 task 미완료 (progress 0%). FINAL task(자주검사) 릴레이 시 자동 마감 트리거 미발동
+- **결정 3가지**:
+  1. **worker별 pause**: `work_pause_log`에 이미 worker_id 존재, DB 변경 없이 로직만 변경. `task.is_paused` = 전원 paused일 때만 true (하위호환)
+  2. **auto-finalize**: `complete_work(finalize=false)`에서 전원 completion_log 도달 시 즉시 finalize. 스케줄러 지연 없이 실시간 progress
+  3. **FINAL task 릴레이 불가**: `FINAL_TASK_IDS`(자주검사, 가압검사 등) → `finalize=true` 강제. 자주검사는 관리자 선언 행위이므로 릴레이 개념 부적합
+- **work_completion_log 현황**: 다중작업자 task에서 completers=1 (현장에서 대표 1명만 완료 누름). 코드상 개인별 기록 지원 확인 (`_record_completion_log`). auto-finalize로 전원 completion_log 자연 수집
+- **APS 연결**: 개인별 net_minutes → 표준공수 산출 → APS Lite 자원 배정 기초
+- **참조**: Sprint 55 (AGENT_TEAM_LAUNCH.md), `SPRINT_WORKER_PAUSE.md` (설계 원본)
+
+### ADR-016: 강제 종료 API 입력값 가드 — completed_at 범위 검증 (2026-04-17, BUG-45)
+- **맥락**: VIEW `useForceClose.ts`가 `datetime-local` 입력으로 임의 시각 전달 가능. BE는 `datetime.fromisoformat()` 파싱 후 KST tz 보정만, 논리적 타당성(미래/started_at 이전) 검사 부재 → 음수 duration 위험
+- **결정 4가지**:
+  1. **미래 차단 + 60s clock skew 허용**: `completed_at > now_kst + timedelta(seconds=60)` → 400 `INVALID_COMPLETED_AT_FUTURE`. NTP/브라우저 시계 오차 커버 (30s는 false positive 위험, 5분은 너무 관대)
+  2. **started_at 이전 차단**: `started_at != None and completed_at < started_at` → 400 `INVALID_COMPLETED_AT_BEFORE_START`. NOT_STARTED task(started_at=NULL)는 미래 검증만 적용
+  3. **`==` 경계 허용**: `<`만 차단 = 0분 task 허용. 기존 NOT_STARTED 경로(`duration=0`)와 일관성
+  4. **force_complete_task() 동일 가드는 Advisory**: OPS/VIEW 어디에서도 호출 안 하는 미사용 엔드포인트 → 1차 Must 범위에서 제외
+- **계약 정합성**: VIEW `useForceClose.ts`가 `reason` 키로 전송하던 BUG는 OPS와 BE 계약(`close_reason`)에 맞춰 정정. 하위 호환 미지원 (전수 grep 결과 OPS는 `close_reason`만 사용)
+- **참조**: BUG-45 (AGENT_TEAM_LAUNCH.md L28138), HANDOVER_FULL.md 3-6 섹션, Codex 1차 보정 합의 (force_complete → Advisory 하향, 테스트 경로 정정, TC 번호 `TC-FC-11~18` 사용)
+
+---
+
+## 2. 시스템 감사 결과 (2026-03-29 재검토)
+
+### 점수카드
+| 영역 | 점수 | 비고 |
+|------|------|------|
+| OPS BE | 6.4/10 | 소폭 개선 (6.25→6.4) |
+| VIEW FE | 5.9/10 | 소폭 개선 (5.8→5.9) |
+
+### 해결된 항목 (6건)
+1. ✅ DB Connection Pool (Sprint 30, 33파일 175건)
+2. ✅ FK CASCADE→RESTRICT (migration 023-025)
+3. ✅ 테스트 DB 분리 (Sprint 39)
+4. ✅ Logout Storm 수정 (Sprint 25, 3중 방어)
+5. ✅ Refresh Token Rotation (Sprint 19-A/B)
+6. ✅ QR 카메라 안정화 (BUG-5~BUG-29, 20회+ 수정)
+
+### 미해결 이슈 (10건, 우선순위 순)
+1. 🔴 **CORS `origins="*"` 전면 개방** — `__init__.py` 라인 41-44. 운영 환경에서 도메인 제한 필요
+2. 🔴 **JWT_SECRET_KEY 하드코딩 dev 기본값** — config.py. 환경변수로 분리 필요
+3. 🟠 **admin.py 모놀리스** (2,352줄) — 서비스 레이어 미분리
+4. 🟠 **UnitOfWork 패턴 부재** — raw conn.commit/rollback 직접 호출
+5. 🟠 **Down migration 없음** — 32개 migration 전부 UP only
+6. 🟡 **work_site/product_line CHECK 제약** (mig 017) — enum 권장
+7. 🟡 **quantity VARCHAR(50)** (mig 002) — NUMERIC 타입 권장
+8. 🟡 **VIEW FE 테스트 2개뿐** — vitest 설치됨 but 테스트 부재
+9. 🟡 **React.lazy/Suspense 미사용** — 코드 스플리팅 없음
+10. 🟡 **ChartSection.tsx 하드코딩 색상** — GxColors 디자인 토큰 존재하나 미적용
+
+---
+
+## 3. APS Lite 데이터 준비도
+
+### 5축 데이터 아키텍처 (2026-03-29 분석)
+
+| 축 | 준비도 | AXIS 현황 | 필요 조치 |
+|----|--------|-----------|-----------|
+| 수요 (Demand) | 80% | product_info에 납기/수량 있음 | 우선순위 가중치 미정의 |
+| 공정능력 (Capacity) | 90% | duration_minutes로 역산 가능 | 전용 standard_manhour 테이블 부재 |
+| 자재 (Material) | **0%** | AXIS에 전혀 없음 | SAP MM 또는 구매팀 엑셀에서 수급 |
+| 캘린더/인력 (Calendar) | 50% | partner_attendance 있음, 공장 캘린더 없음 | factory_calendar 테이블 설계 필요 |
+| 공정 제약 (Constraint) | 30% | completion_status 선후관계 있음 | 명시적 dependency 테이블 없음 |
+
+### 식별된 데이터 Gap (5건)
+1. **PartnerEvaluation BE 부재** — VIEW UI mockup만 존재 (EvalRow 인터페이스). BE 테이블/API 없음
+2. **표준공수 테이블 부재** — duration_minutes 역산은 가능하나 plan.standard_manhour 부재
+3. **납기준수율 미정의** — KPI 산식/기준 없음
+4. **자재 데이터 0%** — 입고예정일, 가용상태, 리드타임 전무
+5. **공장 캘린더 부재** — factory_calendar(date, is_working, shift_hours, note) 필요
+
+### 권고 Phase 수정 (2026-03-29)
+- **기존**: Phase 1(사내서버+SAP) → Phase 2(APS 엔진)
+- **수정**: Phase 0(데이터 축적) → Phase 1(APS 엔진, 현재 인프라) → Phase 2(사내서버+SAP RFC) → Phase 3(고도화)
+- **이유**: 사내서버 마이그레이션 없이도 APS 엔진 개발/검증 가능. 데이터 축적이 먼저
+
+---
+
+## 4. ETL 변경이력 패턴 (2026-03-29 분석)
+
+- **14일간 659건**, 일 평균 47건
+- **빈도 순위**: 출하예정(175) > 가압시작(148) > 마무리계획(93)
+- **O/N 종속 캐스케이드**: 동일 O/N(예: 6590)의 복수 S/N(GBWS-6889, 6890)이 동일 패턴(-9d, -6d)으로 변경
+- **시사점**: APS에서 O/N 단위 일괄 조정 로직 필요. 개별 S/N 단위로만 관리하면 불일치 발생
+
+---
+
+## 5. 코드베이스 수치 (2026-03-29 기준)
+
+### OPS BE
+- **총 라인**: ~18,600줄
+- **Routes**: 15파일 8,123줄 (admin.py 2,352줄 = 29%)
+- **Services**: 11파일 4,868줄
+- **Models**: 14파일 4,289줄
+- **Migrations**: 32파일 (001-032 + 040-041, 번호 공백 011-016)
+- **테스트**: 최근 기준 667+ passed
+
+### OPS FE (Flutter)
+- PWA 배포: gaxis-ops.netlify.app
+- QR 카메라: html5-qrcode JS interop (BUG-5~29, 20회+ 수정 이력)
+- 버전: v2.1.0
+
+### VIEW FE (React)
+- 19개 페이지
+- 테스트: 2개 파일만 (productionFilters.test.ts, production.test.ts)
+- vitest ^4.1.0 + @testing-library/react 설치됨
+
+---
+
+## 6. 반복 실수 방지
+
+### QR 카메라 수정 금지 사항
+- MutationObserver 로직 건드리지 말 것
+- `_forceSquareAfterCameraStart` 건드리지 말 것
+- CSS `aspect-ratio:1/1 !important` 건드리지 말 것
+- qrbox 정수값과 cameraSize clamp 범위만 변경 가능
+- **이력**: BUG-5~BUG-29까지 20회+ 수정. 매번 다른 환경(iOS Safari, Android Chrome, Desktop)에서 재발
+
+### QR 명판 인식 개선 — 미완료 (2026-03-30)
+- **현황**: qrbox 160→200 적용 완료. 스티커 QR 인식률 향상 확인. 명판 QR은 접사 포커싱 문제 잔존
+- **원인**: html5-qrcode가 매크로 포커스 미지원. 폰 기본 카메라는 오토포커스+매크로로 정상 인식
+- **시도 실패**: `advanced: [{focusMode: continuous}]`를 constraints에 넣으면 facingMode를 덮어써서 셀프 카메라로 전환됨 → 원복
+- **해결 방향**: 카메라 start() 후 MediaStreamTrack.applyConstraints()로 focusMode 별도 설정 필요. html5-qrcode 내부 track 접근 방법 조사 필요
+- **참조**: OPS_API_REQUESTS.md #47
+
+### conftest.py 운영 데이터 보호
+- workers, hr.worker_auth_settings, hr.partner_attendance, qr_registry, plan.product_info — 백업/복원 구현됨
+- `ALTER TABLE` 실행 전 반드시 수동 pg_dump
+
+### task_seed.py 주의사항
+- migration 미적용 상태에서 silent fail 발생 이력 있음 (BUG-24)
+- schema_check.py ensure_schema()가 앱 시작 시 자동 검증
+
+### completion 함수 인터페이스 리팩토링 계획 (2026-04-13)
+- **현재**: TM = `_check_tm_completion()` (private), ELEC = `check_elec_completion()` (public). 네이밍/접근수준 불일치
+- **결정**: 지금은 private 그대로 import해서 사용. MECH 체크리스트 추가 시점에 TM/ELEC/MECH completion 함수를 공개(public) 인터페이스로 일괄 정리
+- **사유**: 현재 wrapper 만들면 MECH 추가 시 또 수정 대상만 늘어남. 3개 공정 확정된 시점에 한번에 정리가 효율적
+- **참조 위치**: `_check_sn_checklist_complete()` in `production.py` (Sprint 58-BE Task 2)
+
+### ELEC 체크리스트 완료 기준 확정 (2026-04-13, Sprint 58-BE 완료 2026-04-14)
+- **완료 기준**: Phase 1 (1차배선) + Phase 2 (2차배선) = **41건** 전체 완료
+- Phase 1: PANEL 11 + 조립 6 = 17건 (JIG 제외)
+- Phase 2: PANEL 11 + 조립 6 + JIG WORKER 7 = 24건
+- QI 항목 (7건, checker_role='QI') 항상 제외 — GST 공정 체크이므로 협력사 실적과 무관
+- **동적 COUNT**: 마스터 테이블 `is_active=TRUE AND checker_role!='QI'` 기준. VIEW에서 항목 추가/삭제 시 자동 반영
+- **아이템 타입 분포**:
+  - PANEL 검사: CHECK 다수 + SELECT 1건 (TUBE 종류 3가지 중 선택)
+  - 조립 검사: CHECK
+  - JIG 검사: CHECK만
+- **해결 이력**: Sprint 58-BE에서 수정 완료. check_elec_completion()이 Phase 1(JIG 제외) + Phase 2(전체 WORKER) 각각 확인 → 둘 다 완료 시 True
+
+### confirmable 판정 구조 (2026-04-13)
+- **토글 OFF** (confirm_checklist_required=false): confirmable = progress 100% (기존)
+- **토글 ON** (confirm_checklist_required=true): confirmable = progress 100% + 체크리스트 완료
+- `_is_process_confirmable()` (production.py): progress 체크는 `_CONFIRM_TASK_FILTER` 기반. ELEC은 filter 미등록 → else 분기에서 카테고리 전체 체크 (정상 동작)
+- 체크리스트 체크는 `_check_sn_checklist_complete()` 헬퍼로 분리. 공정별 분기 (TMS/ELEC/MECH)
+- MECH: 체크리스트 BE 미구현 → `return True` (통과). 구현 시 분기 추가 필요
+- **DB 확인 완료**: `admin_settings`에 `confirm_checklist_required` 키 존재. migration 불필요
+
+---
+
+## 7. 협력사 구조
+
+| 코드 | 업종 | 공정 | 비고 |
+|------|------|------|------|
+| FNI | 기구 | MECH | PI 위임 코드 준비됨 (미적용) |
+| BAT | 기구 | MECH | PI 위임 코드 준비됨 (미적용) |
+| TMS(M) | 기구 | MECH + TMS | **PI 위임 적용 중** (pi_capable_mech_partners 설정) |
+| TMS(E) | 전기 | ELEC | elec_partner 매칭 |
+| P&S | 전기 | ELEC | elec_partner 매칭 |
+| C&A | 전기 | ELEC | elec_partner 매칭 |
+| GST | 자사 | PI/QI/SI/PM | 관리 + 자사 검사 공정 |
+
+### 제품 모델
+GAIA-I DUAL, DRAGON-V, GALLANT-III, MITHAS-II, SDS-100, SWS-200
+- DUAL: L/R 분리 QR (migration 024-025)
+- DRAGON: 전용 MECH 공정 + PI 위임 가능
+
+---
+
+## 8. 배포 환경
+
+| 구성요소 | 환경 | URL |
+|----------|------|-----|
+| OPS BE | Railway (Flask) | axis-ops-api.up.railway.app |
+| OPS FE | Netlify (PWA) | gaxis-ops.netlify.app |
+| VIEW FE | (별도) | (AXIS-VIEW 참조) |
+| DB | Railway PostgreSQL | 운영 DB 단일 인스턴스 |
+| ETL | axis-core-etl repo | (별도) |
+
+- Railway Pro: 자동 일일 백업 + 7일 보관
+- CI/CD: 미구축 (GitHub Actions 예정)
