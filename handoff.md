@@ -22,8 +22,10 @@
 1. **Sprint 61-BE**: 알람 O/N 통일 + 에스컬레이션 3종 + pending API 확장 + SETTING_KEYS 5개
 2. **BUG-43**: 분석 대시보드 한글 라벨 24개 누락 전수 등록 (111→135키)
 3. **에스컬레이션 토글 UI**: admin_options_screen 알림 트리거 설정 하단에 토글 4개 + 기준일 드롭다운
-4. **BUG-44**: 미종료 작업 0건 — INNER JOIN → LATERAL JOIN (work_start_log FK). Claude×Codex 교차 검증 합의
-5. **Claude × Codex 교차 리뷰**: Sprint 61 설계 9건 합의 + BUG-44 원인/수정안 6건 합의
+4. **BUG-44**: 미종료 작업 0건 — INNER JOIN → LATERAL JOIN (work_start_log FK)
+5. **Sprint 61-BE-B**: pending/task API company + force_closed 필드 추가 (#60, #61)
+6. **HOTFIX-01**: force_close/force_complete TypeError — naive vs aware datetime 정규화
+7. **Claude × Codex 교차 리뷰**: Sprint 61 설계 9건 + BUG-44 6건 + HOTFIX 원인 수정 합의
 
 ---
 

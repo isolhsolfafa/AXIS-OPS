@@ -79,11 +79,13 @@
 | 59-BE | TM qr_doc_id 정규화 | ✅ 완료 (2026-04-14) | _check_tm_completion SINGLE DOC_{S/N} + DUAL L/R, get_checklist_report 통합, 레거시 UPDATE. 37/37 passed |
 | 60-BE | ELEC 마스터 정규화 | ✅ 완료 (2026-04-15) | phase1_applicable + qi_check_required + remarks 컬럼, 문자열 추론 제거, 마스터 API 확장. migration 048. 42/43 passed |
 | 61-BE | 알람 강화 + 미종료 작업 API 확장 | ✅ 완료 (2026-04-17) | sn_label() O/N 통일, 에스컬레이션 3종, pending API 확장, SETTING_KEYS +5, migration 049. 29/29 passed |
+| 61-BE-B | BUG-44 보완 + #60 company / #61 force_closed 필드 | ✅ 완료 (2026-04-17, v2.9.5) | admin.py + work.py 7개 포인트 반영. VIEW Sprint 33 FE-15 선행 조건 해소 |
 | FEAT-1 | 사용자 행위 트래킹 + 분석 대시보드 | ✅ BE Sprint 32 완료 (2026-03-19) | `app_access_log` 테이블 + analytics API 4개 + 30일 정리 스케줄러. VIEW 분석 대시보드는 별도 Sprint |
 | BUG-41 | PWA 업데이트 시 PIN 초기화 + 이메일 재입력 요구 | 🟡 BACKLOG (우선순위 보류) | Chrome PWA 환경에서 업데이트 후 PIN 로그인 화면 대신 초기 이메일 로그인 화면으로 진입, 이메일 전체 재입력 필요. 변경 범위/regression 리스크 대비 우선순위 낮음 — 아래 "BUG-41 상세" 섹션 참조 |
 | BUG-42 | 명판 소형 QR 접사 인식 실패 | 🔴 OPEN | 기본 카메라로는 문자열 정상 읽힘 / OPS 앱 스캐너(html5-qrcode)는 미인식. 명판 QR 이미지 크기가 스티커 대비 작아 매크로 포커스 + 고해상도 + 줌 필요. 아래 "BUG-42 상세" 섹션 참조 |
 | BUG-43 | 분석 대시보드 기능별 사용량 한글 라벨 누락 (24건) | ✅ 수정 완료 (2026-04-17) | Sprint 52+ 체크리스트/성적서/ELEC 엔드포인트 등 24개 `_ENDPOINT_LABELS` 미등록 → 전수 등록. 기존 111키 → 135키 (유니크 108 라우트 커버) |
 | BUG-44 | OPS 미종료 작업 목록 0건 반환 (Admin/Manager 양쪽) | ✅ 수정 완료 (2026-04-17) | `get_pending_tasks()` INNER JOIN → LATERAL JOIN (work_start_log FK). Claude×Codex 교차 검증 합의. 29/29 passed |
+| HOTFIX-01 | force_close/force_complete TypeError (naive vs aware datetime) | ✅ 수정 완료 (2026-04-17) | `completed_at` + `started_at` 양쪽 naive→KST aware 정규화. force_close + force_complete 2곳 적용. Claude×Codex 합의: completed_at이 진짜 원인. 29/29 passed |
 
 ---
 
@@ -1015,7 +1017,7 @@ Future<void> _applyZoomIfSupported() async {
 
 ---
 
-## 🔴 BUG-44 상세: OPS 미종료 작업 목록 0건 반환
+## ✅ BUG-44 상세: OPS 미종료 작업 목록 0건 반환 (수정 완료 2026-04-17)
 
 **현상**
 - OPS Admin 계정: `/admin/tasks/pending` → `{"tasks":[], "total":0}`
