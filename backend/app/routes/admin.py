@@ -947,8 +947,14 @@ def force_complete_task(task_id: int) -> Tuple[Dict[str, Any], int]:
         else:
             completed_at = datetime.now(Config.KST)
 
+        # HOTFIX: naive datetime → KST aware 정규화
+        if completed_at.tzinfo is None:
+            completed_at = completed_at.replace(tzinfo=Config.KST)
+
         # duration 계산 (started_at이 있을 경우)
         started_at = row['started_at']
+        if started_at and started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=Config.KST)
         if started_at:
             duration_minutes = int((completed_at - started_at).total_seconds() / 60)
         else:
@@ -1172,8 +1178,14 @@ def force_close_task(task_id: int) -> Tuple[Dict[str, Any], int]:
         else:
             completed_at = datetime.now(Config.KST)
 
+        # HOTFIX: naive datetime → KST aware 정규화 (fromisoformat offset 누락 대응)
+        if completed_at.tzinfo is None:
+            completed_at = completed_at.replace(tzinfo=Config.KST)
+
         # duration / elapsed 계산
         started_at = row['started_at']
+        if started_at and started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=Config.KST)
 
         if started_at is None:
             # NOT_STARTED task: duration 계산 스킵

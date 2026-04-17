@@ -27826,6 +27826,7 @@ ORDER BY t.started_at ASC
 
 ## Sprint 61-BE-B — BUG-44 보완 + API 응답 확장 (#60, #61)
 
+**상태**: ✅ **코드 적용 완료** (2026-04-17, v2.9.5) — admin.py + work.py 7개 포인트 전수 반영
 **날짜**: 2026-04-17
 **버전**: v2.9.5
 **선행**: BUG-44 LATERAL JOIN 적용 완료 (admin.py L1723-1729 확인됨)
@@ -28046,3 +28047,72 @@ workers_list = [{
 **Migration**: 없음 (기존 컬럼 활용)
 **하위호환**: 필드 추가만 — 기존 FE(OPS) 영향 없음
 **FE 소비**: VIEW Sprint 33 FE-15에서 `company` + `force_closed` 활용
+
+---
+
+## HOTFIX — force_close_task() TypeError: naive vs aware datetime (2026-04-17)
+
+**상태**: 🟡 **코드 적용 완료, pytest 진행 중** — 그린 확인 후 v2.9.5 배포
+**파일**: `backend/app/routes/admin.py` — `force_close_task()` L1183
+**심각도**: 🔴 Critical — 강제 종료 기능 완전 불능 (500 에러)
+
+### 증상
+
+VIEW에서 `PUT /api/admin/tasks/{id}/force-close` 호출 시 500 응답:
+```json
+{"error": "INTERNAL_SERVER_ERROR", "message": "서버 내부 오류가 발생했습니다."}
+```
+
+### Railway 로그
+
+```
+File "/app/app/routes/admin.py", line 1183, in force_close_task
+    elapsed_minutes = int((completed_at - started_at).total_seconds() / 60)
+                           ~~~~~~~~~~~~~^~~~~~~~~~~~
+TypeError: can't subtract offset-naive and offset-aware datetimes
+```
+
+### 원인 분석
+
+L1183에서 `completed_at - started_at` 뺄셈 시 timezone 불일치:
+
+| 변수 | 출처 | timezone |
+|------|------|----------|
+| `completed_at` | `datetime.now(Config.KST)` (L1173) | **offset-aware** (KST, +09:00) |
+| `started_at` | DB `row['started_at']` (L1176) | **offset-naive** (tzinfo=None) |
+
+PostgreSQL `TIMESTAMP WITH TIME ZONE` 컬럼이지만, psycopg2가 `cursor_factory=RealDictCursor`로 가져올 때 DB 설정에 따라 naive datetime을 반환하는 경우가 있음. `completed_at`은 Python에서 `Config.KST`로 직접 생성하니 aware.
+
+Python은 naive - aware datetime 뺄셈을 허용하지 않아 `TypeError` 발생.
+
+### 수정
+
+**admin.py L1176 이후, L1178 이전에 추가**:
+
+```python
+        # duration / elapsed 계산
+        started_at = row['started_at']
+        # HOTFIX: DB에서 naive datetime 반환 시 KST aware로 통일
+        if started_at and started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=Config.KST)
+
+        if started_at is None:
+```
+
+**변경**: 2줄 추가. `started_at`이 naive면 `Config.KST` timezone을 붙여서 aware로 변환.
+
+### 영향 범위
+
+- `force_close_task()` 내에서만 사용되는 로컬 변수 — 다른 함수에 영향 없음
+- DB 값 자체는 변경하지 않음 (읽기 후 Python 변수에만 적용)
+- `_calculate_working_minutes()` (L1211)에 전달되는 `completed_at`도 aware이므로 동일 이슈 가능성 있지만, 해당 함수 내부에서 별도 처리 필요 여부 확인 권장
+
+### 추가 점검 (동일 패턴)
+
+동일 파일 내 `started_at` - `completed_at` 뺄셈이 있는 다른 위치도 점검 필요:
+
+```bash
+grep -n "total_seconds\|timedelta\|started_at.*completed_at" backend/app/routes/admin.py
+```
+
+같은 패턴이 있으면 동일 hotfix 적용.
