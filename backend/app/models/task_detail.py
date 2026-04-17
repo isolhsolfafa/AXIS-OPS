@@ -72,6 +72,8 @@ class TaskDetail:
     total_pause_minutes: int = 0             # 누적 일시정지 시간 (분)
     # Sprint 27: 단일 액션 Task 지원
     task_type: str = 'NORMAL'  # 'NORMAL' 또는 'SINGLE_ACTION'
+    # HOTFIX-04 (옵션 C'): 강제종료한 관리자 이름 (DB 컬럼 아님 — LEFT JOIN workers 결과 런타임 바인딩)
+    closed_by_name: Optional[str] = None
 
     @staticmethod
     def from_db_row(row: Dict[str, Any]) -> "TaskDetail":
@@ -107,6 +109,8 @@ class TaskDetail:
             is_paused=row.get('is_paused') or False,
             total_pause_minutes=row.get('total_pause_minutes') or 0,
             task_type=row.get('task_type') or 'NORMAL',
+            # HOTFIX-04: JOIN 없는 경로에서는 None 자동 반환
+            closed_by_name=row.get('closed_by_name'),
         )
 
 
@@ -300,18 +304,22 @@ def get_tasks_by_serial_number(
         if task_category:
             cur.execute(
                 """
-                SELECT * FROM app_task_details
-                WHERE serial_number = %s AND task_category = %s AND is_applicable = TRUE
-                ORDER BY id
+                SELECT td.*, w.name AS closed_by_name
+                FROM app_task_details td
+                LEFT JOIN workers w ON td.closed_by = w.id
+                WHERE td.serial_number = %s AND td.task_category = %s AND td.is_applicable = TRUE
+                ORDER BY td.id
                 """,
                 (serial_number, task_category)
             )
         else:
             cur.execute(
                 """
-                SELECT * FROM app_task_details
-                WHERE serial_number = %s AND is_applicable = TRUE
-                ORDER BY id
+                SELECT td.*, w.name AS closed_by_name
+                FROM app_task_details td
+                LEFT JOIN workers w ON td.closed_by = w.id
+                WHERE td.serial_number = %s AND td.is_applicable = TRUE
+                ORDER BY td.id
                 """,
                 (serial_number,)
             )
@@ -354,18 +362,22 @@ def get_tasks_by_qr_doc_id(
         if task_category:
             cur.execute(
                 """
-                SELECT * FROM app_task_details
-                WHERE qr_doc_id = %s AND task_category = %s AND is_applicable = TRUE
-                ORDER BY id
+                SELECT td.*, w.name AS closed_by_name
+                FROM app_task_details td
+                LEFT JOIN workers w ON td.closed_by = w.id
+                WHERE td.qr_doc_id = %s AND td.task_category = %s AND td.is_applicable = TRUE
+                ORDER BY td.id
                 """,
                 (qr_doc_id, task_category)
             )
         else:
             cur.execute(
                 """
-                SELECT * FROM app_task_details
-                WHERE qr_doc_id = %s AND is_applicable = TRUE
-                ORDER BY id
+                SELECT td.*, w.name AS closed_by_name
+                FROM app_task_details td
+                LEFT JOIN workers w ON td.closed_by = w.id
+                WHERE td.qr_doc_id = %s AND td.is_applicable = TRUE
+                ORDER BY td.id
                 """,
                 (qr_doc_id,)
             )

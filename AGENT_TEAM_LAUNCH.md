@@ -27025,6 +27025,61 @@ TC-60B-26: OPS Flutter ELEC 화면 기존 동작 유지 (Task 7 전까지 `phase
 - **그룹 4개 고정**: 사용자 확정사항 — 그룹은 당분간 변동 없음 (PANEL / 조립 / JIG / 향후 필요 시 확장). FE 항목 추가 모달의 그룹 드롭다운은 하드코딩 가능.
 - **마이그레이션 선행 필수**: Task 2 seed 재실행 전 Task 1 migration 반드시 적용. 컬럼 없으면 INSERT 실패.
 
+### 🔧 FIX-24 (2026-04-17 설계 / 배포 예정 v2.9.9) — OPS 미종료 작업 카드에 O/N(sales_order) 뱃지 추가
+
+**배경**: Twin파파 요청 — "sn만 보이는데 on도 같이 보이면 좋을거 같아". 현재 Admin 옵션 화면 / Manager 미종료 작업 화면 카드에 S/N(serial_number)만 표시. 동일 S/N이 여러 O/N(sales_order)로 분리 발주되는 경우 운영자가 어느 수주 건인지 즉시 식별 어려움. VIEW(웹)는 이미 `salesOrder` 기준으로 카드 분류 → 본 작업은 **OPS(Flutter) 전용**.
+
+**전제 확인 (2026-04-17, 코드 실측)**:
+- BE `backend/app/routes/work.py` `get_pending_tasks()` 응답 dict에 `sales_order` 키 이미 포함 (L1750 admin / L1839 manager 양쪽). **BE 변경 0줄, FE only**.
+- 카드 헤더 구조: `task_category` 뱃지 + `task_name` + `미종료` 뱃지 (Row 1) → `worker_name` + `serial_number` (Row 2) → 시작 시각/duration (Row 3).
+
+**수정 위치 (Dart FE 2파일)**:
+1. `frontend/lib/screens/admin/admin_options_screen.dart` `_buildPendingTaskCard()` L2467~ (변수 선언 L2471 직후 + Row 2 L2530~2540)
+2. `frontend/lib/screens/manager/manager_pending_tasks_screen.dart` `_buildTaskCard()` L346~ (변수 선언 L350 직후 + 동일 Row 2)
+
+**패치 (양쪽 동일 패턴, 약 6줄)**:
+
+```dart
+// (1) 변수 추가 — serialNumber 다음 줄
+final salesOrder = task['sales_order'] as String? ?? '';
+
+// (2) S/N 묶음 다음에 sales_order 묶음 conditional spread 추가
+//    [기존] Icon(person) + Text(workerName) + Icon(qr_code) + Text(serialNumber)
+//    [추가] if (salesOrder.isNotEmpty) ...[ Icon(receipt_long) + Text(salesOrder) ]
+const SizedBox(width: 4),
+Text(serialNumber, style: const TextStyle(fontSize: 12, color: GxColors.slate)),
+if (salesOrder.isNotEmpty) ...[
+  const SizedBox(width: 16),
+  const Icon(Icons.receipt_long, size: 14, color: GxColors.steel),
+  const SizedBox(width: 4),
+  Text(salesOrder, style: const TextStyle(fontSize: 12, color: GxColors.slate)),
+],
+```
+
+**디자인 결정**:
+- S/N과 **동일 행**, 동일 폰트/색상 (person → qr_code → receipt_long 3단 아이콘 라인)
+- 아이콘: `Icons.receipt_long` (수주서/영수증 직관)
+- 빈 값(`''` / `null`) 시 **미렌더** (`if (salesOrder.isNotEmpty)`) — 카드 폭 절약 + 누락 데이터 시각 잡음 제거 + 기존 화면 회귀 0
+
+**검증 (수동, 양쪽 화면)**:
+1. 미종료 task 1건에 sales_order='SO-2026-001' → 카드 Row 2 에 `👤 박*규  📷 GST24A-001  📋 SO-2026-001` 동시 표시
+2. sales_order=NULL/빈 문자열 → 기존 그대로 `👤 박*규  📷 GST24A-001` (regression 0)
+3. Admin 옵션 화면 ↔ Manager 미종료 작업 화면 시각적 일관성 확인
+4. 라이트/다크 모드 양쪽 색상 회귀 — `GxColors.steel`/`GxColors.slate` 재사용이라 위험 낮음
+
+**영향 범위 / 회귀 위험**: **매우 낮음**.
+- Flutter 위젯 추가만, 기존 분기·이벤트 핸들러 변경 없음
+- BE/DB/migration/pytest **영향 0**
+- HOTFIX-04(BE work.py SQL + TaskDetail model + VIEW ProcessStepCard.tsx)와 **파일 겹침 없음** → 병행 배포 가능
+- 변경 LOC: 약 6줄 × 2파일 = 12줄
+
+**연계**:
+- `BACKLOG.md` FIX-24: 🟡 BACKLOG → 🔴 OPEN (Sprint 착수, HOTFIX-04와 병행)
+- 본 작업은 OPS 단독 — VIEW(웹)는 이미 동등 정보 표시 중이라 추가 작업 불요
+- 추후 BE pending-tasks 응답 필드 확장 시(예: 우선순위/마감) 동일 패턴으로 Row 2 또는 Row 3에 conditional spread 추가
+
+---
+
 ### 🔧 HOTFIX-05 (2026-04-17, v2.9.7) — Admin 옵션 미종료 작업 카드 시간 UTC 오표시 (`.toLocal()` 누락)
 
 **증상**: Admin 옵션 화면 → 미종료 작업 목록 카드에 시작 시각이 UTC 기준으로 표시됨 (예: `2026-04-01 06:41` ← KST 15:41이 실제). 대시보드(VIEW) 및 OPS manager 화면은 KST 정상 표시. 시간 불일치로 Admin이 잘못된 task를 강제종료 대상으로 오인할 여지.
@@ -27051,6 +27106,232 @@ TC-60B-26: OPS Flutter ELEC 화면 기존 동작 유지 (Task 7 전까지 `phase
 **검증 권장**: Admin 로그인 → 옵션 → 미종료 작업 탭에서 시각이 KST(실제 작업 시작 시각)로 표시되는지 육안 확인.
 
 **연계**: `BACKLOG.md` HOTFIX-05, 실시간 동기화(OPS↔VIEW) 이슈는 별개 사안으로 미확정.
+
+---
+
+### 🔧 HOTFIX-04 (2026-04-17 ✅ BE 완료 v2.9.8) — 강제종료 표시 누락 종합 수정 (방안 B + 확장 A 통합, M2 옵션 C' 재확정)
+
+> ✅ **BE 구현/테스트 완료 (2026-04-17)**: pytest 신규 9 TC + 회귀 TC-FC/WA 24건 → **33/33 PASSED**. 옵션 C' 구현 (task_detail.py TaskDetail 모델 `closed_by_name` 필드 + `from_db_row()` 매핑 + `get_tasks_by_serial_number()`·`get_tasks_by_qr_doc_id()` 4 SELECT `LEFT JOIN workers`). work.py `_task_to_dict()` 3키 노출 + workers 쿼리 Case 1 SQL 확장(COALESCE + is_orphan + task_closed_at). VIEW FE-19 placeholder 렌더는 VIEW 리포 별도 진행.
+
+**커버 범위**: 강제종료된 task가 VIEW에 제대로 보이지 않는 **두 가지 케이스**를 한 번에 수정.
+- Case 1 (Orphan work_start_log) — wsl 있음 + wcl 없음 → "진행중" 오표시
+- Case 2 (미시작 강제종료) — wsl 자체 없음 → worker 라인 자체가 누락, 상단 `🔒 강제종료` 뱃지만 남음
+
+---
+
+#### Case 1 — Orphan work_start_log "진행중" 오표시
+
+**증상**: OPS Admin/Manager에서 task를 강제종료 후에도 VIEW S/N 상세뷰 "미종료 작업" 목록에 해당 worker들이 여전히 "진행중"으로 표시됨. **새로고침해도 변하지 않음**. 사례: `ELEC 전장` 상세뷰에서 박*현(자주검사) + 김*욱(LF 2) — OPS에서 강제종료 완료했는데도 VIEW에선 진행중 표시. VIEW에서 해당 worker 강제종료 시도 시 `TASK_ALREADY_COMPLETED 400` 반환 → 복구 경로 없음.
+
+**근본 원인**:
+- OPS 강제종료(`PUT /admin/tasks/<id>/force-close`)는 `app_task_details.completed_at`만 세팅. 개별 worker의 `work_completion_log` row는 생성하지 않음 (task 전체를 닫는 권한 종료이므로 설계상 의도).
+- `backend/app/routes/work.py` L601 `get_tasks_by_serial()`의 workers 배열 조회 SQL:
+  ```sql
+  CASE WHEN wcl.id IS NOT NULL THEN 'completed' ELSE 'in_progress' END AS status
+  FROM work_start_log wsl
+  LEFT JOIN work_completion_log wcl ON wsl.task_id = wcl.task_id AND wsl.worker_id = wcl.worker_id
+  ```
+  → worker completion_log 없는 orphan row는 일괄 `'in_progress'` 반환. task 레벨 `completed_at` 참조 없음.
+- VIEW는 BE 응답 계약대로 `status='in_progress'` → "진행중" 렌더링 (정상 동작).
+- 동일 로직으로 VIEW 강제종료 재시도 시 task는 이미 `completed_at` 세팅 상태라 400 반환 → 데드락.
+
+#### Case 2 — 미시작 강제종료 표시 누락
+
+**증상**: TM 모듈 가압검사처럼 **work_start_log 자체가 없는** task를 OPS Admin 옵션 → 미종료 작업에서 강제종료하면, VIEW S/N 상세뷰 해당 ProcessStepCard에:
+- 상단 `🔒 강제종료` 뱃지 O (정상)
+- 상단 상태 뱃지 `○ 대기중` (비정상 — 완료로 보여야 함)
+- worker 라인 자체가 없고 "대기중" 텍스트만 노출
+- 강제종료한 시각/사유/처리자 정보 **완전 소실**
+
+**근본 원인**:
+- `work_start_log`에 row 없음 → `get_tasks_by_serial()` workers 쿼리가 `FROM work_start_log wsl`로 시작하므로 **0건 반환**.
+- VIEW `ProcessStepCard.tsx` L55 `taskStatus()`: `workers.length === 0` → `'waiting'` 판정.
+- `app_task_details.force_closed`, `close_reason`, `closed_by`는 DB에 세팅되어 있으나 BE 응답에 일부만 노출 (`force_closed`는 있고 `close_reason`/`closed_by`는 누락).
+- **Twin파파 확정 (2026-04-17)**: "가압검사로 한정짓지 말고 나머지 task도 마찬가지" — 패턴은 모든 task 유형에 적용.
+
+---
+
+**제품 결정 — 방안 B + 확장 A 통합 (Twin파파 2026-04-17)**:
+
+| 축 | 선택 | 근거 |
+|---|---|---|
+| Case 1 처리 | **방안 B** (BE SQL COALESCE + is_orphan 메타필드) | BE 단일 지점에서 계약 일관화, 모든 소비처(VIEW/OPS) 자동 정상화 |
+| Case 2 처리 | **확장 A** (BE task 응답에 close_reason/closed_by_name 추가 + VIEW FE placeholder 렌더) | BE placeholder row(확장 B) 대비 KPI 오염 없음. 실제 worker 아닌 사실 왜곡 방지 |
+| M1 (Codex 권고 duration COALESCE) | **미반영 (옵션 α)** | Orphan worker 실제 작업 시간은 관측 불가. `td.duration_minutes` fallback 시 복수 worker orphan에서 N배 부풀림 → garbage data. `wcl.duration_minutes` NULL 유지로 SUM 집계 자연 제외 |
+| M2 (Codex 재검증 — closed_by_name 주입 위치) | **옵션 C' 채택 (재확정, Twin파파 2026-04-17)** | 원안 `_task_to_dict()` 내부 `_lookup_worker_name()` 직접 호출은 단일 task 변환 함수 특성상 worker_map 접근 불가. Codex 권고 옵션 A(후처리 루프)는 단기 해법 — 새 응답 경로마다 루프 복제 필요 → 가비지 위험. **장기 시스템 원칙(APS-Lite 타겟)** 에 따라 `TaskDetail` 모델에 `closed_by_name` 필드를 자리잡게 하고 SELECT에 `LEFT JOIN workers`를 추가하는 방식 채택. 경로 확장 시 모델은 그대로 두고 쿼리만 추가하면 자동 일관 |
+| closed_by 표시 | 이름 마스킹 노출 (`김*규`) | VIEW 기존 `maskName()` 재사용. `close_reason`은 원문 표시 |
+| 통합 배포 | Case 1 + Case 2 동시 릴리스 | 사용자 체감 단일 사안, 두 번 배포 불필요 |
+
+**기각안**:
+- Case 1 방안 A (VIEW FE 분기만): 계약 일관성 훼손
+- Case 2 확장 B (BE placeholder worker 합성): 실제 worker 아닌 것을 worker로 표현 → KPI 집계 왜곡 위험
+- Case 1 방안 C (orphan backfill API): 방안 B 단독 배포로 신규·기존 orphan 모두 해소. 추후 DB 감사 필요 시 보조 수단
+
+---
+
+**수정 #1 — BE `work.py` `get_tasks_by_serial()` workers 쿼리 (L589~L609)**:
+
+```sql
+-- Before
+SELECT
+    wsl.task_id, wsl.task_category, wsl.task_id_ref,
+    wsl.worker_id, w.name AS worker_name, w.company AS worker_company,
+    wsl.started_at,
+    wcl.completed_at,
+    wcl.duration_minutes,
+    CASE WHEN wcl.id IS NOT NULL THEN 'completed' ELSE 'in_progress' END AS status
+FROM work_start_log wsl
+JOIN workers w ON wsl.worker_id = w.id
+LEFT JOIN work_completion_log wcl
+    ON wsl.task_id = wcl.task_id AND wsl.worker_id = wcl.worker_id
+WHERE wsl.serial_number = %s
+
+-- After (M1 미반영: wcl.duration_minutes NULL 유지)
+SELECT
+    wsl.task_id, wsl.task_category, wsl.task_id_ref,
+    wsl.worker_id, w.name AS worker_name, w.company AS worker_company,
+    wsl.started_at,
+    COALESCE(wcl.completed_at, td.completed_at) AS completed_at,
+    wcl.duration_minutes,                                   -- ⚠ COALESCE 미적용 (garbage 방지, 옵션 α)
+    CASE
+        WHEN wcl.id IS NOT NULL           THEN 'completed'
+        WHEN td.completed_at IS NOT NULL  THEN 'completed'  -- task 레벨 종료 (orphan)
+        ELSE                                   'in_progress'
+    END AS status,
+    (wcl.id IS NULL AND td.completed_at IS NOT NULL) AS is_orphan,
+    td.completed_at AS task_closed_at
+FROM work_start_log wsl
+JOIN workers w ON wsl.worker_id = w.id
+LEFT JOIN work_completion_log wcl
+    ON wsl.task_id = wcl.task_id AND wsl.worker_id = wcl.worker_id
+LEFT JOIN app_task_details td
+    ON wsl.task_id = td.id
+WHERE wsl.serial_number = %s
+```
+
+응답 dict 매핑 (동일 함수 내 row 빌더):
+- `completed_at` — 기존 키 유지 (값 소스만 `COALESCE`로 확장)
+- `duration_minutes` — 기존 키 유지, **NULL 허용** (Orphan worker는 NULL 응답. FE에서 `"—"` 렌더링)
+- `status` — 기존 키 유지 (값 규칙 확장)
+- `is_orphan` (신규) — boolean
+- `task_closed_at` (신규) — ISO8601, 감사/추후 UI용 메타데이터
+
+**수정 #2 — BE `TaskDetail` 모델 (task_detail.py) + SELECT 2경로 LEFT JOIN workers (옵션 C' 채택)**:
+
+**M1 정정 (Codex 재검증 2026-04-17)**: `force_closed`/`closed_by`/`close_reason` 3개 필드는 **이미 `TaskDetail` dataclass(L67~L69)에 선언되어 있고 `from_db_row()`(L104~L106)에도 매핑되어 있음**. 재추가 불필요.
+
+**M2 옵션 C' 재확정 근거**:
+- 원안 `_task_to_dict()` 내부 `_lookup_worker_name()` 직접 호출 → 단일 task 변환 함수라 `worker_map` 접근 불가.
+- Codex 1차 권고 옵션 A(후처리 루프) → 새 응답 경로마다 동일 루프 복제 필요, 누락 시 `closed_by_name=None` 가비지 위험.
+- **채택: 옵션 C'** — `TaskDetail` 모델 자체에 `closed_by_name` 런타임 필드를 두고, 모델 조회 SELECT에 `LEFT JOIN workers` 추가. 이후 응답 경로 확장 시 모델은 불변, 쿼리만 JOIN 추가하면 자동 일관.
+
+**수정 내역**:
+
+```python
+# task_detail.py — TaskDetail dataclass에 신규 필드 1개만 추가 (force_closed/closed_by/close_reason은 기존 유지)
+closed_by_name: Optional[str] = None    # 강제 종료한 관리자 이름 (LEFT JOIN 결과, DB 컬럼 아님)
+
+# task_detail.py — from_db_row() 매핑 1줄 추가
+closed_by_name=row.get('closed_by_name'),   # JOIN 없는 경로에서는 None 자동 반환
+```
+
+```sql
+-- task_detail.py `get_tasks_by_serial_number()` L259/L303/L312 — SELECT * 3곳 전부 JOIN alias 전환
+-- Before
+SELECT * FROM app_task_details
+WHERE serial_number = %s AND is_applicable = TRUE
+...
+
+-- After
+SELECT td.*, w.name AS closed_by_name
+FROM app_task_details td
+LEFT JOIN workers w ON td.closed_by = w.id
+WHERE td.serial_number = %s AND td.is_applicable = TRUE
+...
+```
+
+```sql
+-- task_detail.py `get_tasks_by_qr_doc_id()` L357/L366 — SELECT * 2곳 동일 패턴 적용
+SELECT td.*, w.name AS closed_by_name
+FROM app_task_details td
+LEFT JOIN workers w ON td.closed_by = w.id
+WHERE td.qr_doc_id = %s AND td.is_applicable = TRUE
+...
+```
+
+```python
+# work.py `_task_to_dict()` L77~L102 — 3키 자동 노출 (모델 속성 그대로)
+'close_reason': task.close_reason,
+'closed_by': task.closed_by,
+'closed_by_name': task.closed_by_name,   # 모델에서 LEFT JOIN 결과 이미 바인딩됨
+```
+
+**A2 (worker_ids 세트 확장) — 불필요**: 이름이 이미 모델 단계에서 바인딩되므로 `get_tasks_by_serial()`의 worker_map 후처리 조회 대상에 `closed_by`를 추가할 필요 없음.
+
+**회귀 안전성 근거**:
+- `SELECT *` → `SELECT td.*, w.name AS closed_by_name` — `td.*`로 기존 모든 컬럼 보존. `LEFT JOIN`이라 `closed_by` NULL/FK 미매칭이어도 row 유지 → 기존 응답 변화 없음.
+- 다른 조회 경로(`get_by_id`, `find_by_id_category_serial`, scheduler, admin 통계 등)는 쿼리 미변경 → `closed_by_name` 자연 `None` 반환 (backward-compat).
+- HOTFIX-03에서 건드린 쿼리와 동일 위치(`WHERE ... AND is_applicable = TRUE`) — 충돌 없음.
+
+**수정 #3 — VIEW FE `ProcessStepCard.tsx`** (별도 요청: `AXIS-VIEW/VIEW_FE_Request.md` FE-19):
+
+1. L55 `taskStatus()` — `workers.length === 0` 분기에서 `task?.force_closed === true`면 `'completed'` 반환 (상단 뱃지 `✅ 완료` 전환).
+2. L178~L180 `workers.length === 0 && status === 'waiting' && !hasChecklist` 블록 — `task?.force_closed === true`면 placeholder row 렌더:
+   ```
+   👤 (강제 종료 · 작업 이력 없음) · 처리: {maskName(task.closed_by_name)} · {formatDateTime(task.completed_at)} · 사유: {task.close_reason}
+   ```
+3. `SNTaskDetail` 타입 (`types/snStatus.ts`)에 `close_reason?: string`, `closed_by_name?: string` 선택 필드 추가.
+
+---
+
+**기존 orphan / 미시작 강제종료 데이터 처리**:
+- 박*현, 김*욱처럼 이미 DB에 쌓인 Case 1 orphan row는 **BE 배포 즉시 자동 정상화**. 응답 매핑 단계만 바뀌므로 DB backfill 불필요.
+- TM 모듈 가압검사처럼 DB에 이미 `force_closed`/`close_reason`/`closed_by` 세팅된 Case 2 task도 응답 노출만 추가하면 **VIEW FE 배포 즉시 복구**.
+- `work_completion_log` 레코드 자체는 생성하지 않음 (task 레벨 종료의 의미론 유지 — 개별 worker가 "작업 종료 클릭"한 이력이 아니라는 사실 보존).
+
+**영향 범위**:
+- BE: `work.py` `get_tasks_by_serial()` SQL(Case 1 JOIN 확장) + `_task_to_dict()` 3키 노출 / `task_detail.py` `TaskDetail` **1필드 신규**(`closed_by_name`, M1 정정 반영) + `from_db_row()` 1줄 + `get_tasks_by_serial_number()` SELECT 3곳·`get_tasks_by_qr_doc_id()` SELECT 2곳 LEFT JOIN workers 추가. **2파일**.
+- VIEW FE: `ProcessStepCard.tsx` 2곳(taskStatus 분기 + placeholder 렌더) + `types/snStatus.ts` 2필드. 2파일.
+- OPS FE: **변경 없음**. `manager_pending_tasks_screen.dart`, `admin_options_screen.dart` 양쪽 영향 없음.
+- DB Migration: **없음** (스키마 불변. `closed_by_name`은 런타임 JOIN 결과만 모델에 바인딩 — DB 컬럼 아님).
+- 다른 TaskDetail 조회 경로(scheduler, admin 통계, checklist, production, gst, factory 등): **영향 없음** (해당 쿼리 미변경 → `closed_by_name=None` 자동 반환, backward-compat).
+
+**테스트 TC**:
+
+Case 1 (Orphan wsl):
+- `TC-ORPHAN-01`: task.completed_at 세팅 + wcl 없음 → 응답 `status='completed'`, `completed_at=task.completed_at`, `duration_minutes IS NULL`, `is_orphan=true`
+- `TC-ORPHAN-02`: wcl 있음 + task.completed_at 있음 → `status='completed'`, `completed_at=wcl.completed_at` (worker 실제 종료 시각 우선), `duration_minutes=wcl.duration_minutes`, `is_orphan=false`
+- `TC-ORPHAN-03`: wcl 없음 + task.completed_at NULL → `status='in_progress'`, `is_orphan=false` (정상 진행중 유지)
+- `TC-ORPHAN-04`: 복수 worker 중 일부만 wcl 존재 + task.completed_at 세팅 → wcl 있는 worker는 실제 종료, 없는 worker는 orphan 처리 (row별 독립 판정). Orphan row의 `duration_minutes IS NULL` 확인 (M1 미반영 — garbage 방지)
+
+Case 2 (미시작 강제종료):
+- `TC-FORCECLOSE-NS-01`: `work_start_log` 없음 + task `force_closed=true`, `close_reason='작성안함'`, `closed_by=관리자ID` → task 응답에 `close_reason`, `closed_by_name` 포함. workers 배열은 빈 배열 `[]`.
+- `TC-FORCECLOSE-NS-02`: 동일 상황에서 `completed_at`(task 레벨)이 ISO8601 KST로 응답되는지 확인.
+- `TC-FORCECLOSE-NS-03` (Codex 재검증 A1): 같은 S/N 안에 정상 task + Case 1 orphan task + Case 2 미시작 강제종료 task **3종 혼재** → 각 task가 올바른 분기로 렌더되고 `closed_by_name`이 해당 task에만 바인딩되는지 확인.
+- `TC-FORCECLOSE-NS-04` (Codex 재검증 A1): 기존 legacy 강제종료 레코드(`closed_by IS NULL` — 과거 migration 이전 데이터) → `closed_by_name` None 안전 반환, VIEW placeholder에서 "처리: ?" 깨짐 없이 마스킹 fallback(`maskName(null)` 동작) 확인. backward-compat 보장.
+- `TC-FORCECLOSE-NS-05` (Codex 재검증 A1): Case 1 + Case 2 경계 중첩 — `wsl` 있음 + `wcl` 없음 + `td.completed_at` 있음 + `td.force_closed=true` 동시 성립 시 **Case 1 로직 우선 적용** 확인 (worker row가 `is_orphan=true, status='completed'`로 렌더되고, Case 2 placeholder row는 `workers.length > 0`이므로 렌더되지 않음).
+
+회귀: 기존 `TC-FC-01~18` (BUG-45 / HOTFIX-01 강제종료 시리즈) 전체 GREEN 유지.
+추가 회귀: `get_tasks_by_qr_doc_id()` 경유 엔드포인트(`GET /api/v1/work/qr/<doc_id>`)에서 `closed_by_name` 포함 응답 + 미변경 경로(scheduler `next-tasks`, admin 통계, production 조회 등)는 `closed_by_name` 키 **누락 상태** 유지(JSON 스키마 하위 호환) 검증.
+
+**배포 순서**:
+1. BE 배포 (SQL + 응답 dict 확장). Case 1은 이 시점에 자동 해소 (VIEW가 기존 `status`/`completed_at` 기반 렌더링 그대로 동작).
+2. VIEW FE 배포 (ProcessStepCard.tsx + types). Case 2는 이 시점에 placeholder 렌더 활성.
+3. 운영 확인: 박*현/김*욱(Case 1), TM 모듈 가압검사(Case 2) 두 사례 모두 KST 종료 시각 + 사유 + 처리자(마스킹) 정상 표시 검증.
+
+**연계**:
+- `BACKLOG.md` HOTFIX-04: 🟡 BACKLOG (설계 대기) → 🔴 OPEN (Sprint 착수, 범위 확장: VIEW FE 소폭 수정 포함) 전환
+- `AXIS-VIEW/VIEW_FE_Request.md` FE-19 (HOTFIX-04 연계 VIEW FE 보정) 신규 등록
+- 실시간 동기화(OPS↔VIEW WebSocket broadcast + VIEW React Query 구독)는 **별도 사안**. HOTFIX-04 배포 후 데이터 정합성 확정된 상태에서 조사 시작 예정.
+- OPS 강제종료 다이얼로그 UX 통일 건은 **불요** (Twin파파 2026-04-17 확인: 이미 OPS 양쪽 다이얼로그에 시각 입력 필드 존재)
+
+**검증 권장**:
+1. pytest `TC-ORPHAN-01~04` + `TC-FORCECLOSE-NS-01~05` 신규 작성 + `TC-FC-01~18` 전체 회귀 GREEN (A1 반영: NS-03 혼재 / NS-04 legacy backward-compat / NS-05 Case 1+2 경계 중첩)
+2. Codex 교차 검증 완료 (2026-04-17) — M1(TaskDetail 기존 필드 중복 제거) / M2(옵션 C' 모델 필드 + SELECT JOIN 재확정) / A1(TC-NS-03/04/05 추가) / A2(worker_ids 확장 불필요, 모델 바인딩으로 대체) 반영됨. `is_orphan` / `close_reason` / `closed_by` / `closed_by_name` 필드 하위 호환 유지 (미변경 쿼리 경로는 `closed_by_name` 키 누락 → FE `optional` 처리)
+3. 스테이징 배포 후 두 사례 육안 확인:
+   - `ELEC 전장` 상세뷰 박*현 / 김*욱 → KST 종료 시각 + "완료" 뱃지 표시
+   - `TM 모듈` 가압검사(미시작 강제종료) → placeholder row("강제 종료 · 작업 이력 없음 · 처리: 김*규 · 사유: 작성안함") 표시
+4. 신규 Case 2 재현: OPS 관리자가 미시작 task 강제종료 → VIEW 새로고침 즉시 placeholder 반영
 
 ---
 

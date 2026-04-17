@@ -91,6 +91,10 @@ def _task_to_dict(task) -> Dict[str, Any]:
         'duration_minutes': task.duration_minutes,
         'is_applicable': task.is_applicable,
         'force_closed': getattr(task, 'force_closed', False),
+        # HOTFIX-04 Case 2: 미시작 강제종료 정보 노출 (옵션 C' — 모델 필드에서 직접 바인딩)
+        'close_reason': getattr(task, 'close_reason', None),
+        'closed_by': getattr(task, 'closed_by', None),
+        'closed_by_name': getattr(task, 'closed_by_name', None),
         'location_qr_verified': task.location_qr_verified,
         'created_at': task.created_at.isoformat() if task.created_at else None,
         'updated_at': task.updated_at.isoformat() if task.updated_at else None,
@@ -596,13 +600,21 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
                     w.name AS worker_name,
                     w.company AS worker_company,
                     wsl.started_at,
-                    wcl.completed_at,
+                    COALESCE(wcl.completed_at, td.completed_at) AS completed_at,
                     wcl.duration_minutes,
-                    CASE WHEN wcl.id IS NOT NULL THEN 'completed' ELSE 'in_progress' END AS status
+                    CASE
+                        WHEN wcl.id IS NOT NULL           THEN 'completed'
+                        WHEN td.completed_at IS NOT NULL  THEN 'completed'
+                        ELSE                                   'in_progress'
+                    END AS status,
+                    (wcl.id IS NULL AND td.completed_at IS NOT NULL) AS is_orphan,
+                    td.completed_at AS task_closed_at
                 FROM work_start_log wsl
                 JOIN workers w ON wsl.worker_id = w.id
                 LEFT JOIN work_completion_log wcl
                     ON wsl.task_id = wcl.task_id AND wsl.worker_id = wcl.worker_id
+                LEFT JOIN app_task_details td
+                    ON wsl.task_id = td.id
                 WHERE wsl.serial_number = %s
                 ORDER BY wsl.task_category, wsl.started_at ASC
                 """,
@@ -619,6 +631,9 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
                     'completed_at': row['completed_at'].isoformat() if row['completed_at'] else None,
                     'duration_minutes': row['duration_minutes'],
                     'status': row['status'],
+                    # HOTFIX-04 Case 1: orphan 메타데이터
+                    'is_orphan': bool(row.get('is_orphan')),
+                    'task_closed_at': row['task_closed_at'].isoformat() if row.get('task_closed_at') else None,
                 }
                 if tid in workers_by_task:
                     # 1차: task_id로 직접 매핑 (정상 경우)

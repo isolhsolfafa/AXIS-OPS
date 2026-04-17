@@ -3,7 +3,37 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.9.7 (HOTFIX-05 Admin 옵션 미종료 작업 카드 시간 UTC 오표시 수정, 2026-04-17)
+> **현재 버전**: v2.9.8 (HOTFIX-04 강제종료 표시 누락 종합 수정, 2026-04-17)
+
+---
+
+## HOTFIX-04: 강제종료 표시 누락 종합 수정 (2026-04-17, v2.9.8, 방안 B + 확장 A + 옵션 C')
+
+**커버 범위**: 강제종료된 task가 VIEW에서 제대로 보이지 않는 2가지 케이스 통합 수정
+- Case 1 (Orphan wsl): `work_start_log` 있음 + `work_completion_log` 없음 → "진행중" 오표시
+- Case 2 (NS 강제종료): wsl 자체 없음 + force_closed → worker 라인·시각·사유 소실
+
+**수정 파일 (BE 2파일 + TEST 1파일 + Docs 5파일)**:
+- `backend/app/models/task_detail.py` — TaskDetail dataclass `closed_by_name: Optional[str] = None` 1줄 + `from_db_row()` 매핑 1줄 + `get_tasks_by_serial_number()` 2 SELECT + `get_tasks_by_qr_doc_id()` 2 SELECT → 4개 쿼리 모두 `LEFT JOIN workers w ON td.closed_by = w.id` + `SELECT td.*, w.name AS closed_by_name`
+- `backend/app/routes/work.py` — `_task_to_dict()` L77-102에 `close_reason`/`closed_by`/`closed_by_name` 3키 노출 + workers 쿼리 Case 1 SQL 확장(`COALESCE(wcl.completed_at, td.completed_at)` + CASE orphan 판정 + `is_orphan`/`task_closed_at` 메타필드 + `LEFT JOIN app_task_details td`)
+- `tests/backend/test_hotfix04_orphan.py` — 신규 9 TC
+- `backend/version.py` + `frontend/lib/utils/app_version.dart` — v2.9.7 → v2.9.8
+- `CLAUDE.md` / `BACKLOG.md` / `AGENT_TEAM_LAUNCH.md` / `handoff.md` / `memory.md` (ADR-018)
+
+**핵심 설계 결정**:
+- **옵션 C' (장기 시스템 원칙)**: TaskDetail 모델에 `closed_by_name` 런타임 필드 + SELECT LEFT JOIN workers. 새 응답 경로 확장 시 모델 불변·쿼리만 추가하면 자동 일관 (APS-Lite 타겟)
+- 옵션 A(후처리 루프) 반려 — 새 응답 경로마다 루프 복제 필요, 누락 시 가비지 위험
+- M1 COALESCE duration 미반영 — Orphan 복수 worker 시 `td.duration_minutes` N배 부풀림 garbage 방지
+
+**테스트 결과**: 33 passed, 1 skipped (pre-existing)
+- 신규 TC-ORPHAN-01~04 + TC-FORCECLOSE-NS-01~05 (9건) 모두 PASSED
+- 회귀 TC-FC-01~18 + TC-WA 24건 모두 PASSED
+
+**회귀 안전성**:
+- `SELECT *` → `SELECT td.*, w.name AS closed_by_name` — `td.*`로 기존 컬럼 전체 보존, LEFT JOIN이라 row 감소 없음
+- 타 조회 경로(`get_by_id`, scheduler, admin 통계 등) 쿼리 미변경 → `closed_by_name=None` backward-compat
+
+**배포 전략**: BE 먼저 배포 → Case 1 자동 해소. VIEW FE-19(placeholder 렌더) 별도 배포 → Case 2 UI 활성화.
 
 ---
 

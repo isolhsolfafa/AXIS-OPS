@@ -155,6 +155,22 @@ TM ──(가압완료)──▶ MECH ──(도킹완료)──▶ ELEC ──(
 - **APS 연결**: 개인별 net_minutes → 표준공수 산출 → APS Lite 자원 배정 기초
 - **참조**: Sprint 55 (AGENT_TEAM_LAUNCH.md), `SPRINT_WORKER_PAUSE.md` (설계 원본)
 
+### ADR-018: 강제종료 응답 필드 바인딩 — 옵션 C' (모델 필드 + LEFT JOIN) 채택 (2026-04-17, HOTFIX-04)
+- **맥락**: HOTFIX-04에서 `closed_by_name`(관리자 이름)을 API 응답에 노출해야 하는데, `_task_to_dict()` 단일 task 변환 함수에서는 `worker_map` 캐시 접근 불가
+- **대안 3가지**:
+  - 원안 (기각): `_task_to_dict()` 내부 `_lookup_worker_name(closed_by)` 호출 — worker_map 접근 불가로 구현 불가
+  - 옵션 A (Codex 1차 권고, 반려): 후처리 루프에서 `worker_map`으로 `closed_by_name` 주입 — 단기 해법. 새 응답 경로마다 루프 복제 필요, 누락 시 `closed_by_name=None` 가비지 위험
+  - **옵션 C' (채택)**: `TaskDetail` dataclass에 `closed_by_name: Optional[str]` 런타임 필드 추가 + `get_tasks_by_serial_number()`·`get_tasks_by_qr_doc_id()` SELECT에 `LEFT JOIN workers` 추가 → 모델 단계 바인딩으로 어떤 응답 경로에서도 자동 일관
+- **선택 근거 (장기 시스템 원칙, APS-Lite 타겟)**:
+  - 새 API 엔드포인트 추가 시 모델 변경 없이 쿼리만 JOIN 추가하면 됨
+  - 타 조회 경로(scheduler, admin 통계, checklist 등) 쿼리 미변경 시에도 `closed_by_name=None`로 자동 backward-compat (LEFT JOIN 특성)
+  - `SELECT *` → `SELECT td.*, w.name AS closed_by_name` — `td.*`로 기존 컬럼 전체 보존
+- **M1 COALESCE(duration_minutes) 미반영 (옵션 α)**: Orphan worker 실제 작업시간 관측 불가. `td.duration_minutes` fallback 시 복수 orphan에서 N배 부풀림 → garbage data. `wcl.duration_minutes` NULL 유지로 SUM 집계 자연 제외
+- **A1 TC 추가**: TC-FORCECLOSE-NS-03(혼재) / NS-04(legacy backward-compat) / NS-05(Case 1+2 경계 중첩)
+- **A2 worker_ids 세트 확장 불필요**: 이름이 이미 모델 단계 바인딩되므로 `worker_map` 후처리 조회 대상에 `closed_by` 추가 불요
+- **Codex 교차 검증**: 1차 옵션 A 권고 → Twin파파가 옵션 C'로 재확정 (장기 원칙). M1/M2 문서 정정 반영
+- **참조**: HOTFIX-04 (AGENT_TEAM_LAUNCH.md L27112), BACKLOG.md HOTFIX-04, pytest `test_hotfix04_orphan.py` 9 TC GREEN
+
 ### ADR-017: 비활성 task 조회 필터 — 모델 레벨 (방안 A) 채택 (2026-04-17, HOTFIX-03)
 - **맥락**: `is_applicable=FALSE` task가 조회 응답에 포함되어 VIEW 미시작 카운트 오염(Heating Jacket 사례). `filter_tasks_for_worker()`는 `task_category`만 필터하므로 모델 레벨에서 걸러야 함
 - **대안 비교**:
