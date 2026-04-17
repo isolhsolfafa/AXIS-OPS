@@ -688,6 +688,497 @@ class TestForceClosePauseDeduction:
             f"Elapsed should be ~540, got {elapsed}"
         )
 
+    def test_fc11_completed_at_in_past_within_started_range_succeeds(
+        self,
+        client,
+        create_test_worker,
+        create_test_product,
+        create_test_task,
+        create_test_completion_status,
+        get_auth_token,
+    ):
+        """
+        TC-FC-11 (BUG-45): started_at < completed_at <= now → 200 OK
+
+        Given:  started_at = now - 5h, completed_at = now - 1h
+        When:   force-close 호출
+        Then:   200 OK, duration_minutes ≈ 4h (240분, 휴게시간 차감 가능)
+        """
+        import time
+        suffix = int(time.time() * 1000) + 11
+
+        admin_id = create_test_worker(
+            email=f'fc_admin_11_{suffix}@test.com', password='Test123!',
+            name='FC Admin 11', role='ADMIN', company='GST',
+            is_admin=True
+        )
+        worker_id = create_test_worker(
+            email=f'fc_worker_11_{suffix}@test.com', password='Test123!',
+            name='FC Worker 11', role='MECH', company='FNI'
+        )
+
+        qr_doc_id = f'DOC-FC-{suffix}'
+        serial_number = f'SN-FC-{suffix}'
+        create_test_product(qr_doc_id=qr_doc_id, serial_number=serial_number, model='GALLANT-50')
+        create_test_completion_status(serial_number=serial_number)
+
+        started_at = datetime.now(timezone.utc) - timedelta(hours=5)
+        task_id = create_test_task(
+            worker_id=worker_id,
+            serial_number=serial_number,
+            qr_doc_id=qr_doc_id,
+            task_category='MECH',
+            task_id='SELF_INSPECTION',
+            task_name='자주검사',
+            started_at=started_at
+        )
+
+        completed_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        token = get_auth_token(admin_id, role='ADMIN', is_admin=True)
+        response = client.put(
+            f'/api/admin/tasks/{task_id}/force-close',
+            json={
+                'close_reason': 'BUG-45 valid past completion',
+                'completed_at': completed_at.isoformat(),
+            },
+            headers={'Authorization': f'Bearer {token}'}
+        )
+
+        assert response.status_code == 200, (
+            f"Expected 200, got {response.status_code}: {response.get_json()}"
+        )
+        data = response.get_json()
+        elapsed = data.get('elapsed_minutes', 0)
+        # elapsed = completed - started = 4h = 240분 (±2분 허용)
+        assert abs(elapsed - 240) <= 2, f"elapsed should be ~240, got {elapsed}"
+
+    def test_fc12_completed_at_before_started_returns_400(
+        self,
+        client,
+        create_test_worker,
+        create_test_product,
+        create_test_task,
+        create_test_completion_status,
+        get_auth_token,
+    ):
+        """
+        TC-FC-12 (BUG-45): completed_at < started_at → 400 INVALID_COMPLETED_AT_BEFORE_START
+
+        Given:  started_at = now - 2h, completed_at = now - 5h (started_at 이전)
+        When:   force-close 호출
+        Then:   400 INVALID_COMPLETED_AT_BEFORE_START
+        """
+        import time
+        suffix = int(time.time() * 1000) + 12
+
+        admin_id = create_test_worker(
+            email=f'fc_admin_12_{suffix}@test.com', password='Test123!',
+            name='FC Admin 12', role='ADMIN', company='GST',
+            is_admin=True
+        )
+        worker_id = create_test_worker(
+            email=f'fc_worker_12_{suffix}@test.com', password='Test123!',
+            name='FC Worker 12', role='MECH', company='FNI'
+        )
+
+        qr_doc_id = f'DOC-FC-{suffix}'
+        serial_number = f'SN-FC-{suffix}'
+        create_test_product(qr_doc_id=qr_doc_id, serial_number=serial_number, model='GALLANT-50')
+        create_test_completion_status(serial_number=serial_number)
+
+        started_at = datetime.now(timezone.utc) - timedelta(hours=2)
+        task_id = create_test_task(
+            worker_id=worker_id,
+            serial_number=serial_number,
+            qr_doc_id=qr_doc_id,
+            task_category='MECH',
+            task_id='SELF_INSPECTION',
+            task_name='자주검사',
+            started_at=started_at
+        )
+
+        completed_at = datetime.now(timezone.utc) - timedelta(hours=5)
+        token = get_auth_token(admin_id, role='ADMIN', is_admin=True)
+        response = client.put(
+            f'/api/admin/tasks/{task_id}/force-close',
+            json={
+                'close_reason': 'BUG-45 before-start',
+                'completed_at': completed_at.isoformat(),
+            },
+            headers={'Authorization': f'Bearer {token}'}
+        )
+
+        assert response.status_code == 400, (
+            f"Expected 400, got {response.status_code}: {response.get_json()}"
+        )
+        data = response.get_json()
+        assert data.get('error') == 'INVALID_COMPLETED_AT_BEFORE_START', (
+            f"Expected INVALID_COMPLETED_AT_BEFORE_START, got {data.get('error')}"
+        )
+
+    def test_fc13_completed_at_in_future_returns_400(
+        self,
+        client,
+        create_test_worker,
+        create_test_product,
+        create_test_task,
+        create_test_completion_status,
+        get_auth_token,
+    ):
+        """
+        TC-FC-13 (BUG-45): completed_at > now + 60s → 400 INVALID_COMPLETED_AT_FUTURE
+
+        Given:  started_at = now - 2h, completed_at = now + 5h
+        When:   force-close 호출
+        Then:   400 INVALID_COMPLETED_AT_FUTURE
+        """
+        import time
+        suffix = int(time.time() * 1000) + 13
+
+        admin_id = create_test_worker(
+            email=f'fc_admin_13_{suffix}@test.com', password='Test123!',
+            name='FC Admin 13', role='ADMIN', company='GST',
+            is_admin=True
+        )
+        worker_id = create_test_worker(
+            email=f'fc_worker_13_{suffix}@test.com', password='Test123!',
+            name='FC Worker 13', role='MECH', company='FNI'
+        )
+
+        qr_doc_id = f'DOC-FC-{suffix}'
+        serial_number = f'SN-FC-{suffix}'
+        create_test_product(qr_doc_id=qr_doc_id, serial_number=serial_number, model='GALLANT-50')
+        create_test_completion_status(serial_number=serial_number)
+
+        started_at = datetime.now(timezone.utc) - timedelta(hours=2)
+        task_id = create_test_task(
+            worker_id=worker_id,
+            serial_number=serial_number,
+            qr_doc_id=qr_doc_id,
+            task_category='MECH',
+            task_id='SELF_INSPECTION',
+            task_name='자주검사',
+            started_at=started_at
+        )
+
+        completed_at = datetime.now(timezone.utc) + timedelta(hours=5)
+        token = get_auth_token(admin_id, role='ADMIN', is_admin=True)
+        response = client.put(
+            f'/api/admin/tasks/{task_id}/force-close',
+            json={
+                'close_reason': 'BUG-45 future',
+                'completed_at': completed_at.isoformat(),
+            },
+            headers={'Authorization': f'Bearer {token}'}
+        )
+
+        assert response.status_code == 400, (
+            f"Expected 400, got {response.status_code}: {response.get_json()}"
+        )
+        data = response.get_json()
+        assert data.get('error') == 'INVALID_COMPLETED_AT_FUTURE', (
+            f"Expected INVALID_COMPLETED_AT_FUTURE, got {data.get('error')}"
+        )
+
+    def test_fc14_completed_at_omitted_uses_now(
+        self,
+        client,
+        create_test_worker,
+        create_test_product,
+        create_test_task,
+        create_test_completion_status,
+        get_auth_token,
+    ):
+        """
+        TC-FC-14 (BUG-45): completed_at 미지정 → 200 OK, completed_at = now()
+
+        Given:  started_at = now - 3h, completed_at 미지정
+        When:   force-close 호출
+        Then:   200 OK (default now() → 미래 시각 검증 통과)
+        """
+        import time
+        suffix = int(time.time() * 1000) + 14
+
+        admin_id = create_test_worker(
+            email=f'fc_admin_14_{suffix}@test.com', password='Test123!',
+            name='FC Admin 14', role='ADMIN', company='GST',
+            is_admin=True
+        )
+        worker_id = create_test_worker(
+            email=f'fc_worker_14_{suffix}@test.com', password='Test123!',
+            name='FC Worker 14', role='MECH', company='FNI'
+        )
+
+        qr_doc_id = f'DOC-FC-{suffix}'
+        serial_number = f'SN-FC-{suffix}'
+        create_test_product(qr_doc_id=qr_doc_id, serial_number=serial_number, model='GALLANT-50')
+        create_test_completion_status(serial_number=serial_number)
+
+        started_at = datetime.now(timezone.utc) - timedelta(hours=3)
+        task_id = create_test_task(
+            worker_id=worker_id,
+            serial_number=serial_number,
+            qr_doc_id=qr_doc_id,
+            task_category='MECH',
+            task_id='SELF_INSPECTION',
+            task_name='자주검사',
+            started_at=started_at
+        )
+
+        token = get_auth_token(admin_id, role='ADMIN', is_admin=True)
+        response = client.put(
+            f'/api/admin/tasks/{task_id}/force-close',
+            json={'close_reason': 'BUG-45 default now'},
+            headers={'Authorization': f'Bearer {token}'}
+        )
+
+        assert response.status_code == 200, (
+            f"Expected 200, got {response.status_code}: {response.get_json()}"
+        )
+
+    def test_fc15_not_started_with_future_completed_at_returns_400(
+        self,
+        client,
+        create_test_worker,
+        create_test_product,
+        create_test_task,
+        create_test_completion_status,
+        get_auth_token,
+    ):
+        """
+        TC-FC-15 (BUG-45): started_at = NULL + completed_at = now+1h → 400 FUTURE
+
+        Given:  started_at = None, completed_at = now + 1h
+        When:   force-close 호출
+        Then:   400 INVALID_COMPLETED_AT_FUTURE (started_at NULL이어도 미래 차단)
+        """
+        import time
+        suffix = int(time.time() * 1000) + 15
+
+        admin_id = create_test_worker(
+            email=f'fc_admin_15_{suffix}@test.com', password='Test123!',
+            name='FC Admin 15', role='ADMIN', company='GST',
+            is_admin=True
+        )
+        worker_id = create_test_worker(
+            email=f'fc_worker_15_{suffix}@test.com', password='Test123!',
+            name='FC Worker 15', role='MECH', company='FNI'
+        )
+
+        qr_doc_id = f'DOC-FC-{suffix}'
+        serial_number = f'SN-FC-{suffix}'
+        create_test_product(qr_doc_id=qr_doc_id, serial_number=serial_number, model='GALLANT-50')
+        create_test_completion_status(serial_number=serial_number)
+
+        # started_at=None → NOT_STARTED task
+        task_id = create_test_task(
+            worker_id=worker_id,
+            serial_number=serial_number,
+            qr_doc_id=qr_doc_id,
+            task_category='MECH',
+            task_id='SELF_INSPECTION',
+            task_name='자주검사',
+            started_at=None
+        )
+
+        completed_at = datetime.now(timezone.utc) + timedelta(hours=1)
+        token = get_auth_token(admin_id, role='ADMIN', is_admin=True)
+        response = client.put(
+            f'/api/admin/tasks/{task_id}/force-close',
+            json={
+                'close_reason': 'BUG-45 NOT_STARTED future',
+                'completed_at': completed_at.isoformat(),
+            },
+            headers={'Authorization': f'Bearer {token}'}
+        )
+
+        assert response.status_code == 400
+        data = response.get_json()
+        assert data.get('error') == 'INVALID_COMPLETED_AT_FUTURE'
+
+    def test_fc16_not_started_with_valid_completed_at_succeeds(
+        self,
+        client,
+        create_test_worker,
+        create_test_product,
+        create_test_task,
+        create_test_completion_status,
+        get_auth_token,
+    ):
+        """
+        TC-FC-16 (BUG-45): started_at = NULL + completed_at = 유효 → 200 OK, duration=0
+
+        Given:  started_at = None, completed_at = now - 1h (유효 과거)
+        When:   force-close 호출
+        Then:   200 OK, duration_minutes = 0 (NOT_STARTED 경로)
+        """
+        import time
+        suffix = int(time.time() * 1000) + 16
+
+        admin_id = create_test_worker(
+            email=f'fc_admin_16_{suffix}@test.com', password='Test123!',
+            name='FC Admin 16', role='ADMIN', company='GST',
+            is_admin=True
+        )
+        worker_id = create_test_worker(
+            email=f'fc_worker_16_{suffix}@test.com', password='Test123!',
+            name='FC Worker 16', role='MECH', company='FNI'
+        )
+
+        qr_doc_id = f'DOC-FC-{suffix}'
+        serial_number = f'SN-FC-{suffix}'
+        create_test_product(qr_doc_id=qr_doc_id, serial_number=serial_number, model='GALLANT-50')
+        create_test_completion_status(serial_number=serial_number)
+
+        task_id = create_test_task(
+            worker_id=worker_id,
+            serial_number=serial_number,
+            qr_doc_id=qr_doc_id,
+            task_category='MECH',
+            task_id='SELF_INSPECTION',
+            task_name='자주검사',
+            started_at=None
+        )
+
+        completed_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        token = get_auth_token(admin_id, role='ADMIN', is_admin=True)
+        response = client.put(
+            f'/api/admin/tasks/{task_id}/force-close',
+            json={
+                'close_reason': 'BUG-45 NOT_STARTED valid',
+                'completed_at': completed_at.isoformat(),
+            },
+            headers={'Authorization': f'Bearer {token}'}
+        )
+
+        assert response.status_code == 200, (
+            f"Expected 200, got {response.status_code}: {response.get_json()}"
+        )
+        data = response.get_json()
+        # NOT_STARTED → duration = 0, elapsed = 0
+        assert data.get('duration_minutes', -1) == 0
+        assert data.get('elapsed_minutes', -1) == 0
+
+    def test_fc17_completed_at_equals_started_at_succeeds(
+        self,
+        client,
+        create_test_worker,
+        create_test_product,
+        create_test_task,
+        create_test_completion_status,
+        get_auth_token,
+    ):
+        """
+        TC-FC-17 (BUG-45 쟁점 #5): completed_at == started_at → 200 OK (== 허용, < 만 차단)
+
+        Given:  started_at = T, completed_at = T (동일 시각)
+        When:   force-close 호출
+        Then:   200 OK, duration_minutes = 0 (0분 task 허용)
+        """
+        import time
+        suffix = int(time.time() * 1000) + 17
+
+        admin_id = create_test_worker(
+            email=f'fc_admin_17_{suffix}@test.com', password='Test123!',
+            name='FC Admin 17', role='ADMIN', company='GST',
+            is_admin=True
+        )
+        worker_id = create_test_worker(
+            email=f'fc_worker_17_{suffix}@test.com', password='Test123!',
+            name='FC Worker 17', role='MECH', company='FNI'
+        )
+
+        qr_doc_id = f'DOC-FC-{suffix}'
+        serial_number = f'SN-FC-{suffix}'
+        create_test_product(qr_doc_id=qr_doc_id, serial_number=serial_number, model='GALLANT-50')
+        create_test_completion_status(serial_number=serial_number)
+
+        started_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        task_id = create_test_task(
+            worker_id=worker_id,
+            serial_number=serial_number,
+            qr_doc_id=qr_doc_id,
+            task_category='MECH',
+            task_id='SELF_INSPECTION',
+            task_name='자주검사',
+            started_at=started_at
+        )
+
+        # completed_at == started_at (같은 ISO 문자열)
+        token = get_auth_token(admin_id, role='ADMIN', is_admin=True)
+        response = client.put(
+            f'/api/admin/tasks/{task_id}/force-close',
+            json={
+                'close_reason': 'BUG-45 zero-duration boundary',
+                'completed_at': started_at.isoformat(),
+            },
+            headers={'Authorization': f'Bearer {token}'}
+        )
+
+        assert response.status_code == 200, (
+            f"Expected 200 (== allowed), got {response.status_code}: {response.get_json()}"
+        )
+
+    def test_fc18_completed_at_within_60s_skew_succeeds(
+        self,
+        client,
+        create_test_worker,
+        create_test_product,
+        create_test_task,
+        create_test_completion_status,
+        get_auth_token,
+    ):
+        """
+        TC-FC-18 (BUG-45 쟁점 #1): completed_at = now + 30s → 200 OK (60초 clock skew 허용)
+
+        Given:  started_at = now - 1h, completed_at = now + 30s
+        When:   force-close 호출
+        Then:   200 OK (60초 허용 범위 내)
+        """
+        import time
+        suffix = int(time.time() * 1000) + 18
+
+        admin_id = create_test_worker(
+            email=f'fc_admin_18_{suffix}@test.com', password='Test123!',
+            name='FC Admin 18', role='ADMIN', company='GST',
+            is_admin=True
+        )
+        worker_id = create_test_worker(
+            email=f'fc_worker_18_{suffix}@test.com', password='Test123!',
+            name='FC Worker 18', role='MECH', company='FNI'
+        )
+
+        qr_doc_id = f'DOC-FC-{suffix}'
+        serial_number = f'SN-FC-{suffix}'
+        create_test_product(qr_doc_id=qr_doc_id, serial_number=serial_number, model='GALLANT-50')
+        create_test_completion_status(serial_number=serial_number)
+
+        started_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        task_id = create_test_task(
+            worker_id=worker_id,
+            serial_number=serial_number,
+            qr_doc_id=qr_doc_id,
+            task_category='MECH',
+            task_id='SELF_INSPECTION',
+            task_name='자주검사',
+            started_at=started_at
+        )
+
+        completed_at = datetime.now(timezone.utc) + timedelta(seconds=30)
+        token = get_auth_token(admin_id, role='ADMIN', is_admin=True)
+        response = client.put(
+            f'/api/admin/tasks/{task_id}/force-close',
+            json={
+                'close_reason': 'BUG-45 60s skew boundary',
+                'completed_at': completed_at.isoformat(),
+            },
+            headers={'Authorization': f'Bearer {token}'}
+        )
+
+        assert response.status_code == 200, (
+            f"Expected 200 (within 60s skew), got {response.status_code}: {response.get_json()}"
+        )
+
     def test_fc10_force_close_with_break_overlap(
         self,
         client,

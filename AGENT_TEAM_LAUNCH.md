@@ -28050,11 +28050,20 @@ workers_list = [{
 
 ---
 
-## HOTFIX — force_close_task() TypeError: naive vs aware datetime (2026-04-17)
+## HOTFIX — force_close_task() / force_complete_task() TypeError: naive vs aware datetime (2026-04-17)
 
-**상태**: 🟡 **코드 적용 완료, pytest 진행 중** — 그린 확인 후 v2.9.5 배포
-**파일**: `backend/app/routes/admin.py` — `force_close_task()` L1183
+**상태**: ✅ **수정 완료 (pytest 29/29 passed, v2.9.5)** — Netlify 재배포 단계로 진입
+**파일**: `backend/app/routes/admin.py` — `force_close_task()` L1170-1200, `force_complete_task()` L897-960
 **심각도**: 🔴 Critical — 강제 종료 기능 완전 불능 (500 에러)
+
+### Claude × Codex 교차 검증 결과 (설계 대비 확장)
+
+| 구분 | 원래 설계 | 실제 구현 |
+|------|-----------|-----------|
+| 근본 원인 | DB `started_at` naive 반환 | **`completed_at`이 진짜 원인** — `datetime.fromisoformat()`가 offset 없는 ISO 문자열을 받으면 naive 반환 |
+| 정규화 대상 | `started_at`만 (2줄 추가) | **`completed_at` + `started_at` 양쪽** (safety net) |
+| 적용 위치 | `force_close_task()` 1곳 | **`force_close_task()` + `force_complete_task()` 2곳** (동일 패턴) |
+| 검증 | 설계 단계 | **pytest 29/29 passed** |
 
 ### 증상
 
@@ -28085,34 +28094,258 @@ PostgreSQL `TIMESTAMP WITH TIME ZONE` 컬럼이지만, psycopg2가 `cursor_facto
 
 Python은 naive - aware datetime 뺄셈을 허용하지 않아 `TypeError` 발생.
 
-### 수정
+### 수정 (실제 구현 — 설계 확장분 포함)
 
-**admin.py L1176 이후, L1178 이전에 추가**:
+**`force_close_task()` L1170-1200**:
 
 ```python
+        # completed_at 설정
+        if completed_at_param:
+            try:
+                completed_at = datetime.fromisoformat(completed_at_param)
+            except ValueError:
+                return jsonify({...}), 400
+        else:
+            completed_at = datetime.now(Config.KST)
+
+        # HOTFIX: naive datetime → KST aware 정규화 (fromisoformat offset 누락 대응)
+        if completed_at.tzinfo is None:
+            completed_at = completed_at.replace(tzinfo=Config.KST)
+
         # duration / elapsed 계산
         started_at = row['started_at']
-        # HOTFIX: DB에서 naive datetime 반환 시 KST aware로 통일
         if started_at and started_at.tzinfo is None:
             started_at = started_at.replace(tzinfo=Config.KST)
-
-        if started_at is None:
 ```
 
-**변경**: 2줄 추가. `started_at`이 naive면 `Config.KST` timezone을 붙여서 aware로 변환.
+**`force_complete_task()` L897-960** — 동일 패턴 2곳 적용 (`completed_at` + `started_at`).
+
+**변경**: 함수당 4줄 × 2함수 = 총 8줄 추가. naive→aware 정규화 safety net으로 fromisoformat / DB 양쪽 대응.
 
 ### 영향 범위
 
-- `force_close_task()` 내에서만 사용되는 로컬 변수 — 다른 함수에 영향 없음
-- DB 값 자체는 변경하지 않음 (읽기 후 Python 변수에만 적용)
-- `_calculate_working_minutes()` (L1211)에 전달되는 `completed_at`도 aware이므로 동일 이슈 가능성 있지만, 해당 함수 내부에서 별도 처리 필요 여부 확인 권장
+- `force_close_task()` + `force_complete_task()` 로컬 변수에만 적용 — 다른 함수에 영향 없음
+- DB 값 자체는 변경하지 않음 (읽기 후 Python 변수에만 KST 부여)
+- `completed_at` 정규화가 `_calculate_working_minutes()`로 전달되어 하위 계산도 aware 일관성 확보
 
-### 추가 점검 (동일 패턴)
+### 검증 결과
 
-동일 파일 내 `started_at` - `completed_at` 뺄셈이 있는 다른 위치도 점검 필요:
+- **pytest 29/29 passed** (Claude × Codex 합의 후 VSCode 터미널에서 실행)
+- 실제 500 원인은 `completed_at` naive 경로였음 — 설계 단계 추정(DB 반환값)과 달랐음. safety net으로 양쪽 모두 커버하여 향후 DB/클라이언트 동작 변경에도 견고
 
-```bash
-grep -n "total_seconds\|timedelta\|started_at.*completed_at" backend/app/routes/admin.py
+---
+
+## BUG-45 — 강제 종료 API 계약 정합성 + completed_at 시각 검증 (2026-04-17)
+
+**상태**: ✅ **수정 완료 (pytest 17/17 + 회귀 46/46 GREEN, v2.9.6)** — Netlify 재배포 단계로 진입
+**파일**: `backend/app/routes/admin.py` — `force_close_task()` L1185-1203 (가드 14줄) + L1098-1099 (docstring)
+**심각도**: 🟡 Major → Resolved
+**동반 FE 수정**: `AXIS-VIEW/app/src/hooks/useForceClose.ts` L24 — `reason → close_reason` (FE-17 완료)
+
+### 구현 결과 (1차 Must 범위)
+
+- BE: `force_close_task()`에 `INVALID_COMPLETED_AT_FUTURE` (60s skew 허용) + `INVALID_COMPLETED_AT_BEFORE_START` 가드 적용. docstring Returns 섹션 갱신.
+- Test: `tests/backend/test_force_close.py`에 TC-FC-11~18 (8 TC) 추가. 모두 PASSED.
+- FE: `useForceClose.ts` L24 `close_reason` 필드명 정정.
+- 회귀: TC-FC-01~10 + test_admin_api + test_admin_options_api 합계 63/63 GREEN.
+- `force_complete_task()` 동일 패턴은 Advisory(미호출 엔드포인트) — 후순위 보류.
+
+> 아래 설계 본문은 이력 보존 목적으로 유지함.
+
+---
+
+### Codex 교차검증 결과 (2026-04-17 1차)
+
+| ID | 분류 | 내용 | 반영 |
+|----|------|------|------|
+| M1→A | 재분류 | `force_complete_task()` 가드 적용은 외부 호출처 부재 — Advisory 하향 | Task 2를 선택 구현(A) |
+| M2 | Must | 테스트 경로 `backend/tests/` → `tests/backend/` 정정 | Task 4 경로 수정 |
+| M3 | Must | TC 번호 기존 `TC-FC-01~10` 충돌 — `TC-FC-11~18` 재번호 | Task 4 표 재번호 |
+| A1 | Closed | 쟁점 #2: `started_at=NULL` 처리 기 구현 (L1190-1193 확인) | 쟁점 #2 CLOSED |
+| A2 | Advisory | 에러 메시지 ISO 노출 사용자 모호 → `details` 필드 분리 | 응답 구조 개선안 반영 |
+| A3 | Closed | 쟁점 #3: OPS Dart 2곳 모두 `close_reason` 확인 — legacy 없음 | 쟁점 #3 CLOSED |
+| A4 | 유지 | 60초 clock skew 적절 | 설계 그대로 |
+| - | Closed | OpenAPI 갱신: 프로젝트에 `openapi*.yaml` 없음 — docstring만 갱신 | Task 3 범위 축소 |
+
+### 증상
+
+1. VIEW(`useForceClose.ts`)가 `{ reason, completed_at }`을 전송 → BE가 `close_reason`을 읽어 `INVALID_REQUEST` 400 반환. 강제 종료 전면 불능.
+2. VIEW가 완료 시각(`datetime-local`)을 자유롭게 선택할 수 있지만, BE가 `completed_at < started_at` 또는 `completed_at > now()` 시 **L1197 `elapsed_minutes = int((completed_at - started_at).total_seconds() / 60)`가 무가드로 음수 저장** → 이어서 L1242-1243 fallback(`if duration_minutes == 0 and elapsed_minutes > 0: duration_minutes = elapsed_minutes`)이 의도한 "정상 복구"가 아닌 **왜곡된 duration** 저장을 야기. (L1240 `duration_minutes = max(0, duration_minutes - manual_pause_minutes)` clamp는 pause 차감 음수만 방어, elapsed 음수 원인은 차단 불가)
+
+### 원인 분석
+
+**1. 필드명 계약 미스매치** (FE 쪽 문제지만 BE 관점에서도 계약 명세 강화 필요)
+
+| 쪽 | 파일·라인 | 전송/기대 필드 |
+|----|-----------|----------------|
+| OPS Flutter (정상) | `admin_options_screen.dart` L716 / `manager_pending_tasks_screen.dart` L236 | `'close_reason': reason` ✅ |
+| VIEW (에러) | `useForceClose.ts` L24 | `reason` ❌ |
+| BE 요구 | `admin.py` L1104 | `data.get('close_reason', '').strip()` — empty→400 |
+
+FE 수정이 주 해결책이지만, BE는 아래 2가지를 추가 제공해 재발 방지:
+- 명세 docstring 상단에 필드명 고정 명시 (이미 있음, 유지)
+- `reason` 키로 들어오는 경우 **하위 호환 폴백 없음** 정책 명문화(Codex 확인 필요 — 현재 레거시 OPS client 없음)
+
+**2. `completed_at` 범위 검증 부재**
+
+`force_close_task()` L1170-1200, `force_complete_task()` L897-960 둘 다 `datetime.fromisoformat(completed_at_param)`으로 파싱한 뒤 HOTFIX로 KST tz만 보정할 뿐, 값 자체의 **논리적 타당성**은 검사하지 않음:
+
+```python
+# 현재 (HOTFIX 적용 후)
+if completed_at_param:
+    try:
+        completed_at = datetime.fromisoformat(completed_at_param)
+    except ValueError:
+        return jsonify({...}), 400
+else:
+    completed_at = datetime.now(Config.KST)
+
+if completed_at.tzinfo is None:
+    completed_at = completed_at.replace(tzinfo=Config.KST)
+
+# ❌ 여기에 started_at 비교 / 미래 시각 검증 없음
+# ❌ L1197: elapsed_minutes = int((completed_at - started_at).total_seconds() / 60)  → 무가드, 음수 가능
+# ❌ L1240: duration_minutes = max(0, duration_minutes - manual_pause_minutes)  → pause 차감 음수만 방어
+# ❌ L1242-1243: if duration_minutes == 0 and elapsed_minutes > 0: duration_minutes = elapsed_minutes
+#    - 과거 시각(completed_at < started_at): elapsed<0 → 조건 미충족 → duration=0, elapsed<0 DB 저장
+#    - 미래 시각(completed_at > now): elapsed>>0 → duration==0일 때 fallback이 elapsed를 duration으로 복사 → 과대 duration 저장
 ```
 
-같은 패턴이 있으면 동일 hotfix 적용.
+### 수정 설계
+
+**Task 1. `force_close_task()` L1183 직후 (tzinfo 정규화 완료 후, duration 계산 전) 검증 블록 추가**
+
+```python
+        # HOTFIX: naive datetime → KST aware 정규화 (기존 유지)
+        if completed_at.tzinfo is None:
+            completed_at = completed_at.replace(tzinfo=Config.KST)
+
+        # BUG-45 Task 1: completed_at 범위 검증
+        # 1-a. 미래 시각 차단 (60초 clock skew 허용 — NTP/브라우저 오차 감안, A4 근거)
+        now_kst = datetime.now(Config.KST)
+        if completed_at > now_kst + timedelta(seconds=60):
+            return jsonify({
+                'error': 'INVALID_COMPLETED_AT_FUTURE',
+                'message': '완료 시각은 현재 시각 이후로 설정할 수 없습니다.',
+                'details': {
+                    'completed_at': completed_at.isoformat(),
+                    'now': now_kst.isoformat(),
+                }
+            }), 400
+
+        # 1-b. started_at 이전 시각 차단 (started_at이 있는 task만, == 은 허용)
+        started_at_raw = row['started_at']
+        if started_at_raw is not None:
+            started_at_check = started_at_raw
+            if started_at_check.tzinfo is None:
+                started_at_check = started_at_check.replace(tzinfo=Config.KST)
+            if completed_at < started_at_check:
+                return jsonify({
+                    'error': 'INVALID_COMPLETED_AT_BEFORE_START',
+                    'message': '완료 시각은 시작 시각 이전일 수 없습니다.',
+                    'details': {
+                        'completed_at': completed_at.isoformat(),
+                        'started_at': started_at_check.isoformat(),
+                    }
+                }), 400
+```
+
+> **A2 반영**: 사람용 `message`는 간결하게, 기계 파싱용 ISO 문자열은 `details` 필드로 분리. VIEW는 message만 토스트에 노출하고 details는 콘솔 로그로 활용 가능.
+
+**Task 2 (Advisory — 선택 구현). `force_complete_task()` L952 직후 동일 패턴**
+
+**근거 (Codex M1→A)**: `force_complete_task()`는 현재 OPS Flutter/VIEW React 어디에서도 호출되지 않음 — `backend/app/routes/admin.py` + `tests/backend/test_admin_api.py`에만 존재하는 **테스트 전용 엔드포인트**. Must로 다루면 우선순위 왜곡, Advisory로 보관하여 "추후 외부 노출 결정 시 적용" 처리.
+
+**구현 시 권고 패턴 (현 시점 선택사항)**: 3번째 등장(force_close + force_complete + α)이 확정되면 helper 함수로 추출:
+
+```python
+# backend/app/services/task_service.py 또는 admin.py 내부
+def _validate_completed_at(completed_at: datetime, started_at: Optional[datetime],
+                          now_kst: Optional[datetime] = None, skew_seconds: int = 60
+                         ) -> Optional[Tuple[Dict[str, Any], int]]:
+    """completed_at 범위 검증. 에러 시 (응답 dict, HTTP status) 반환, 정상 시 None."""
+    now_kst = now_kst or datetime.now(Config.KST)
+    if completed_at > now_kst + timedelta(seconds=skew_seconds):
+        return {'error': 'INVALID_COMPLETED_AT_FUTURE', 'message': '...', 'details': {...}}, 400
+    if started_at and completed_at < started_at:
+        return {'error': 'INVALID_COMPLETED_AT_BEFORE_START', 'message': '...', 'details': {...}}, 400
+    return None
+```
+
+1차에서는 `force_close_task()`에 인라인으로만 넣고, helper 추출은 추후.
+
+**Task 3. docstring 명세 갱신 (OpenAPI 파일 없음 확인)**
+
+- `force_close_task()` docstring의 `Returns` 섹션에 400 에러 코드 2개 추가:
+  - `INVALID_COMPLETED_AT_FUTURE`
+  - `INVALID_COMPLETED_AT_BEFORE_START`
+- `force_complete_task()` — Task 2 적용 시에만 반영 (1차 스코프에서는 skip)
+
+> 프로젝트에 `openapi*.yaml`이 없음을 확인 — docstring이 유일한 API 계약 문서.
+
+**Task 4. pytest 시나리오 추가 (`tests/backend/test_force_close.py` 기존 확장)**
+
+- **기존 TC**: `TC-FC-01 ~ TC-FC-10` (기본 07 + BUG-9 Pause 08~10) — 유지
+- **신규 TC**: `TC-FC-11 ~ TC-FC-18` (기존 번호와 충돌 방지 — Codex M3 반영)
+
+| TC | Given | When | Then |
+|----|-------|------|------|
+| TC-FC-11 | task 시작 (started_at=10:00), now=15:00 | `completed_at=14:00` 강제 종료 | 200 OK, duration=4h |
+| TC-FC-12 | task 시작 (started_at=10:00), now=15:00 | `completed_at=09:00` 강제 종료 | 400 INVALID_COMPLETED_AT_BEFORE_START, details.started_at 포함 |
+| TC-FC-13 | task 시작 (started_at=10:00), now=15:00 | `completed_at=20:00` 강제 종료 | 400 INVALID_COMPLETED_AT_FUTURE, details.now 포함 |
+| TC-FC-14 | task 시작, `completed_at` 미지정 | 강제 종료 | 200 OK, completed_at≈now() |
+| TC-FC-15 | task 미시작 (started_at=NULL) | `completed_at=지금+1h` 강제 종료 | 400 INVALID_COMPLETED_AT_FUTURE |
+| TC-FC-16 | task 미시작 (started_at=NULL) | `completed_at` 유효 | 200 OK, duration=0 (L1190-1193 기존 경로 유지) |
+| TC-FC-17 | `close_reason` 누락 (기존 TC-FC-05 시나리오 변종) | 강제 종료 | 400 INVALID_REQUEST (기존 경로, 회귀 검증용) |
+| TC-FC-18 | `completed_at == started_at` | 강제 종료 | 200 OK, duration=0 (쟁점 #5 근거 — `==` 허용) |
+
+### 구현 범위 (Codex 교차검증 1차 반영 후)
+
+| 구분 | 파일 | 변경 라인 | 분류 |
+|------|------|-----------|------|
+| BE | `backend/app/routes/admin.py` — `force_close_task()` L1183 직후 | ~14줄 (details 필드 포함) | **Must** |
+| BE | `backend/app/routes/admin.py` — `force_close_task()` docstring | Returns 섹션 400 에러코드 2개 | **Must** |
+| BE | `backend/app/routes/admin.py` — `force_complete_task()` L952 직후 | ~14줄 (동일 패턴) | Advisory (외부 호출처 없음) |
+| Test | `tests/backend/test_force_close.py` (기존 확장) | TC-FC-11~18 신규 8건 | **Must** |
+| FE | `AXIS-VIEW/app/src/hooks/useForceClose.ts` L24 | `reason → close_reason` (FE-17, 별도 문서) | **Must** |
+
+**1차 스코프 (Must만)**: force_close 가드 + TC 8건 + FE 1줄. 약 30줄 변경 + 테스트.
+**2차 스코프 (Advisory, 추후)**: force_complete 가드 + helper 함수 추출 (3번째 등장 시).
+
+### Claude × Codex 교차검증 포인트 (구현 전 확인 사항 — 1차 완료)
+
+| # | 쟁점 | 결정 | 상태 |
+|---|------|------|------|
+| 1 | 미래 시각 허용 오차 | **60초** 유지 (A4 — NTP/브라우저 분단위 선택 대응) | ✅ 확정 |
+| 2 | ~~started_at=NULL + completed_at 전달~~ | 현 코드 L1190-1193 기 처리 확인 (duration=0, elapsed=0) | 🔒 CLOSED (A1) |
+| 3 | ~~`reason` 필드 하위 호환~~ | OPS Dart grep 완료 — force-close 2곳 모두 `close_reason`. legacy 없음 | 🔒 CLOSED (A3) |
+| 4 | 에러 코드 네이밍 | `INVALID_COMPLETED_AT_FUTURE` / `_BEFORE_START` — 기존 `INVALID_REQUEST` / `TASK_ALREADY_COMPLETED` 컨벤션과 일관 | ✅ 확정 |
+| 5 | `completed_at == started_at` | **허용** (< 만 차단) — TC-FC-18로 회귀 검증 | ✅ 확정 |
+| 6 | force_complete vs force_close 가드 공통화 | 1차는 인라인, 3번째 등장 시 `_validate_completed_at()` helper 추출 | ✅ 확정 (Advisory) |
+| 7 | force_complete_task() 적용 우선순위 | 외부 호출처 없음 확인 → Advisory 하향 | ✅ 확정 (M1→A) |
+| 8 | 에러 메시지 ISO 노출 | `message`(사람용) + `details`(ISO) 분리 | ✅ 확정 (A2) |
+| 9 | 테스트 파일 경로 | `tests/backend/test_force_close.py` (repo 최상위) | ✅ 확정 (M2) |
+| 10 | TC 번호 | 기존 `TC-FC-01~10` 다음인 `TC-FC-11~18` 사용 | ✅ 확정 (M3) |
+
+### 영향 범위
+
+- 로컬 변수/응답만 변경 — DB 스키마 변경 없음, migration 불필요
+- 기존 정상 시각으로 들어오던 요청에는 영향 없음 (400이 새로 생기는 것은 잘못된 입력 한정)
+- Sprint 61-BE의 `sn_label()` 알림, `force_closed` 필드 응답은 건드리지 않음
+
+### 작업 순서 (Codex 1차 보정 완료 — VSCode 이관 준비됨)
+
+1. ✅ (설계) 본 문서 확정 — Codex 교차검증 1차 반영 완료
+2. ⏳ (Cowork→VSCode 이관) 본 섹션 + FE-17 내용 전달
+3. ⏳ (VSCode) BE 1곳 `force_close_task()` 가드 + docstring + pytest TC-FC-11~18 추가 → pytest 그린
+4. ⏳ (VSCode) VIEW `useForceClose.ts` L24 `reason → close_reason` 수정 → VIEW 빌드
+5. ⏳ (VSCode) OPS 회귀 테스트 — OPS 앱에서 강제 종료(기존 경로) 정상 확인 + 기존 `TC-FC-01~10` 회귀 pass
+6. ⏳ (배포) OPS Railway 재배포 + VIEW Netlify 재배포
+7. ⏳ (완료) BACKLOG.md BUG-45 ✅, 본 섹션 상태 ✅
+8. ⏸️ (후순위, Advisory) `force_complete_task()` 가드 + helper 함수 추출 — 외부 노출 결정 시 재착수
+
+### 참고 — `completed_at` 범위 검증이 HOTFIX가 아닌 BUG-45로 분리된 이유
+
+- HOTFIX-01은 **TypeError 방지**가 목표 (tz 일관성) — 잘못된 값 입력은 별도 문제
+- BUG-45는 **비정상 입력값 차단**이 목표 — 정책 결정이 필요한 사안
+- 두 수정을 합치면 commit 책임 범위가 불명확해지므로 분리 관리

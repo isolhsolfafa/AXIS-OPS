@@ -86,6 +86,8 @@
 | BUG-43 | 분석 대시보드 기능별 사용량 한글 라벨 누락 (24건) | ✅ 수정 완료 (2026-04-17) | Sprint 52+ 체크리스트/성적서/ELEC 엔드포인트 등 24개 `_ENDPOINT_LABELS` 미등록 → 전수 등록. 기존 111키 → 135키 (유니크 108 라우트 커버) |
 | BUG-44 | OPS 미종료 작업 목록 0건 반환 (Admin/Manager 양쪽) | ✅ 수정 완료 (2026-04-17) | `get_pending_tasks()` INNER JOIN → LATERAL JOIN (work_start_log FK). Claude×Codex 교차 검증 합의. 29/29 passed |
 | HOTFIX-01 | force_close/force_complete TypeError (naive vs aware datetime) | ✅ 수정 완료 (2026-04-17) | `completed_at` + `started_at` 양쪽 naive→KST aware 정규화. force_close + force_complete 2곳 적용. Claude×Codex 합의: completed_at이 진짜 원인. 29/29 passed |
+| BUG-45 | VIEW 강제 종료 INVALID_REQUEST (close_reason 필드 미스매치) + 완료 시각 검증 부재 | ✅ 수정 완료 (2026-04-17, v2.9.6) | BE: `force_close_task()` 미래 시각(60s skew) + started_at 이전 가드 14줄 + docstring Returns 2건. FE-17: VIEW `useForceClose.ts` L24 `reason → close_reason`. pytest TC-FC-11~18 8/8 GREEN, 회귀 TC-FC-01~10 + admin 46건 모두 GREEN. force_complete는 Advisory(미호출 엔드포인트) |
+| TEST-CONTRACT-01 | VIEW↔BE API 필드 계약 자동 검증 테스트 도입 | 🟡 BACKLOG (중간, 재발 방지 Advisory) | BUG-45 후속 — `close_reason`/`reason` 같은 필드명 미스매치를 CI 단계에서 자동 차단. 과거 유사 사례: `is_pinned`/`priority` (공지), `qr_doc_id`, `taskId` snake/camel. 본건은 Bug fix 아닌 **재발 방지 구조 개선** → 기존 BUG-45 배포에 영향 없음. 설계: `AGENT_TEAM_LAUNCH.md` TEST-CONTRACT-01 섹션 (pytest + JSON Schema 우선, OpenAPI/Pact는 후보안). 등록: 2026-04-17 |
 
 ---
 

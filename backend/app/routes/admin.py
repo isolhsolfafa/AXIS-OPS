@@ -1095,6 +1095,8 @@ def force_close_task(task_id: int) -> Tuple[Dict[str, Any], int]:
         }
         400: {"error": "INVALID_REQUEST", "message": "..."}
         400: {"error": "TASK_ALREADY_COMPLETED", "message": "..."}
+        400: {"error": "INVALID_COMPLETED_AT_FUTURE", "message": "..."}
+        400: {"error": "INVALID_COMPLETED_AT_BEFORE_START", "message": "..."}
         404: {"error": "TASK_NOT_FOUND", "message": "..."}
         500: {"error": "INTERNAL_SERVER_ERROR", "message": "..."}
     """
@@ -1182,10 +1184,25 @@ def force_close_task(task_id: int) -> Tuple[Dict[str, Any], int]:
         if completed_at.tzinfo is None:
             completed_at = completed_at.replace(tzinfo=Config.KST)
 
+        # BUG-45: completed_at 범위 검증 (1-a 미래 시각 차단, 60초 clock skew 허용)
+        now_kst = datetime.now(Config.KST)
+        if completed_at > now_kst + timedelta(seconds=60):
+            return jsonify({
+                'error': 'INVALID_COMPLETED_AT_FUTURE',
+                'message': '완료 시각은 현재 시각 이후로 설정할 수 없습니다.'
+            }), 400
+
         # duration / elapsed 계산
         started_at = row['started_at']
         if started_at and started_at.tzinfo is None:
             started_at = started_at.replace(tzinfo=Config.KST)
+
+        # BUG-45: 1-b started_at 이전 시각 차단 (started_at 존재 task만)
+        if started_at is not None and completed_at < started_at:
+            return jsonify({
+                'error': 'INVALID_COMPLETED_AT_BEFORE_START',
+                'message': f'완료 시각({completed_at.isoformat()})은 시작 시각({started_at.isoformat()}) 이전일 수 없습니다.'
+            }), 400
 
         if started_at is None:
             # NOT_STARTED task: duration 계산 스킵
