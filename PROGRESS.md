@@ -3,7 +3,37 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.9.8 (HOTFIX-04 강제종료 표시 누락 종합 수정, 2026-04-17)
+> **현재 버전**: v2.9.9 (FIX-24 OPS 미종료 작업 카드 O/N 뱃지 추가, 2026-04-18)
+
+---
+
+## FIX-24: OPS 미종료 작업 카드에 O/N(sales_order) 뱃지 추가 (2026-04-18, v2.9.9)
+
+**배경**: Twin파파 요청 — "sn만 보이는데 on도 같이 보이면 좋을거 같아". 동일 S/N이 여러 O/N으로 분리 발주되는 경우 운영자가 수주 건 즉시 식별 가능.
+
+**수정 파일 (FE 2파일 + Docs 4파일)**:
+- `frontend/lib/screens/admin/admin_options_screen.dart` — `_buildPendingTaskCard()` 변수 1줄 + Row 2 conditional spread 5줄
+- `frontend/lib/screens/manager/manager_pending_tasks_screen.dart` — `_buildTaskCard()` 동일 패턴
+- `backend/version.py` + `frontend/lib/utils/app_version.dart` — v2.9.8 → v2.9.9
+- `CLAUDE.md` / `BACKLOG.md` / `AGENT_TEAM_LAUNCH.md` / `handoff.md`
+
+**패턴**:
+```dart
+if (salesOrder.isNotEmpty) ...[
+  const SizedBox(width: 16),
+  const Icon(Icons.receipt_long, size: 14, color: GxColors.steel),
+  const SizedBox(width: 4),
+  Text(salesOrder, style: const TextStyle(fontSize: 12, color: GxColors.slate)),
+],
+```
+
+**BE 변경**: 0줄 (pending-tasks 응답에 `sales_order` 이미 포함 — admin.py L1750/L1839)
+
+**결정 사항**:
+- A1 오버플로 방어(Flexible/ellipsis) 미반영 — Twin파파 확정 "sales_order 6자리 이하"로 모바일 최소 폭(375px)에서도 여유
+- `Icons.receipt_long` 아이콘으로 수주서/영수증 직관 표현
+
+**검증**: 수동 — salesOrder 값 있을 때 `📋 SO1234` 렌더 확인, 빈 값일 때 기존 Row 2 회귀 0
 
 ---
 

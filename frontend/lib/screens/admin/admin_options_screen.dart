@@ -2469,6 +2469,7 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
     final taskName = task['task_name'] as String? ?? '';
     final workerName = task['worker_name'] as String? ?? '';
     final serialNumber = task['serial_number'] as String? ?? '';
+    final salesOrder = task['sales_order'] as String? ?? '';
     final taskCategory = task['task_category'] as String? ?? '';
     final startedAt = task['started_at'] != null
         ? DateTime.tryParse(task['started_at'] as String)?.toLocal()
@@ -2536,6 +2537,12 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
                 const Icon(Icons.qr_code, size: 14, color: GxColors.steel),
                 const SizedBox(width: 4),
                 Text(serialNumber, style: const TextStyle(fontSize: 12, color: GxColors.slate)),
+                if (salesOrder.isNotEmpty) ...[
+                  const SizedBox(width: 16),
+                  const Icon(Icons.receipt_long, size: 14, color: GxColors.steel),
+                  const SizedBox(width: 4),
+                  Text(salesOrder, style: const TextStyle(fontSize: 12, color: GxColors.slate)),
+                ],
               ],
             ),
             if (startedAt != null) ...[

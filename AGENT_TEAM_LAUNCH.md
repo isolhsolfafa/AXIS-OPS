@@ -27025,7 +27025,10 @@ TC-60B-26: OPS Flutter ELEC 화면 기존 동작 유지 (Task 7 전까지 `phase
 - **그룹 4개 고정**: 사용자 확정사항 — 그룹은 당분간 변동 없음 (PANEL / 조립 / JIG / 향후 필요 시 확장). FE 항목 추가 모달의 그룹 드롭다운은 하드코딩 가능.
 - **마이그레이션 선행 필수**: Task 2 seed 재실행 전 Task 1 migration 반드시 적용. 컬럼 없으면 INSERT 실패.
 
-### 🔧 FIX-24 (2026-04-17 설계 / 배포 예정 v2.9.9) — OPS 미종료 작업 카드에 O/N(sales_order) 뱃지 추가
+### 🔧 FIX-24 (2026-04-18 ✅ 완료 v2.9.9) — OPS 미종료 작업 카드에 O/N(sales_order) 뱃지 추가
+
+> ✅ **구현 완료 (2026-04-18, v2.9.9)**: 설계 원안 그대로 적용 (A1 오버플로 방어는 Twin파파 확정 "sales_order 6자리 이하"로 불필요). `admin_options_screen.dart` + `manager_pending_tasks_screen.dart` 2파일 Row 2에 `Icons.receipt_long` + `Text(salesOrder)` conditional spread 약 6줄×2 추가. BE 변경 0줄. Netlify 배포 완료.
+
 
 **배경**: Twin파파 요청 — "sn만 보이는데 on도 같이 보이면 좋을거 같아". 현재 Admin 옵션 화면 / Manager 미종료 작업 화면 카드에 S/N(serial_number)만 표시. 동일 S/N이 여러 O/N(sales_order)로 분리 발주되는 경우 운영자가 어느 수주 건인지 즉시 식별 어려움. VIEW(웹)는 이미 `salesOrder` 기준으로 카드 분류 → 본 작업은 **OPS(Flutter) 전용**.
 
