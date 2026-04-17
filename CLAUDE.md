@@ -1207,3 +1207,4 @@ VALUES ('📱 OPS v2.2.1 업데이트 안내', '본문...', '2.2.1', TRUE, {admi
 | v2.9.3 | 2026-04-16 | Sprint 60-BE | ELEC 마스터 정규화 — phase1_applicable + qi_check_required + remarks, 문자열 추론 제거, migration 048 |
 | v2.9.4 | 2026-04-17 | Sprint 61-BE | 알람 O/N 통일 + 에스컬레이션 3종 + pending API 확장 + SETTING_KEYS 5개 |
 | v2.9.4 | 2026-04-17 | BUG-43 | 분석 대시보드 한글 라벨 누락 24건 전수 등록 (111→135키, 108 라우트 커버) |
+| v2.9.4 | 2026-04-17 | BUG-44 | 미종료 작업 0건 — INNER JOIN → LATERAL JOIN (work_start_log FK). Claude×Codex 교차 검증 합의 |

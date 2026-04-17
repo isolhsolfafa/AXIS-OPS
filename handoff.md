@@ -19,11 +19,11 @@
 
 ## 직전 세션 작업 내용 (2026-04-17)
 
-1. **Sprint 61-BE**: 알람 메시지 O/N 통일 — sn_label() 공통 함수 도입, 6파일 메시지 교체
-2. **Sprint 61-BE**: 에스컬레이션 알람 3종 (TASK_NOT_STARTED, CHECKLIST_DONE_TASK_OPEN, ORPHAN_ON_FINAL)
-3. **Sprint 61-BE**: GET /admin/tasks/pending 확장 (include_not_started, COMPANY_CATEGORIES, COUNT 분리)
-4. **Sprint 61-BE**: force_close NOT_STARTED 대응, SETTING_KEYS 5개 추가
-5. **Claude x Codex 교차 리뷰** — 합의 9건 반영 후 구현
+1. **Sprint 61-BE**: 알람 O/N 통일 + 에스컬레이션 3종 + pending API 확장 + SETTING_KEYS 5개
+2. **BUG-43**: 분석 대시보드 한글 라벨 24개 누락 전수 등록 (111→135키)
+3. **에스컬레이션 토글 UI**: admin_options_screen 알림 트리거 설정 하단에 토글 4개 + 기준일 드롭다운
+4. **BUG-44**: 미종료 작업 0건 — INNER JOIN → LATERAL JOIN (work_start_log FK). Claude×Codex 교차 검증 합의
+5. **Claude × Codex 교차 리뷰**: Sprint 61 설계 9건 합의 + BUG-44 원인/수정안 6건 합의
 
 ---
 
@@ -85,7 +85,7 @@
 | BUG-3 | 출퇴근 버튼 퇴근 후 비활성화 (FE 상태 머신) | 낮음 | FE 상태 리셋 |
 | ~~BUG-4~~ | ~~CHECKLIST_TM_READY 알림 미생성~~ | ~~높음~~ | ✅ Sprint 54(알림) 완료로 해결 |
 | BUG-5 | Manager 완료 시 checklist_ready 플래그 FE 미처리 | 중 | task_detail_screen.dart _handleCompleteTask() 수정 |
-| BUG-6 | 다중작업자 task에서 동료가 resume 시 403 FORBIDDEN | 높음 | work.py L1055 — 현재 `pause 본인 OR admin OR GST동료`만 허용. 같은 task start_log에 있는 coworker 허용 조건 추가 필요. 영향: FNI·C&A Partner 다중작업자 전체 |
+| ~~BUG-6~~ | ~~다중작업자 task에서 동료가 resume 시 403 FORBIDDEN~~ | ~~높음~~ | ✅ Sprint 55 Worker별 Pause로 근본 해결 |
 
 ---
 
