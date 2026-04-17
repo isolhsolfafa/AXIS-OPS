@@ -3,7 +3,24 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.9.6 (BUG-45 force_close completed_at 범위 검증, 2026-04-17)
+> **현재 버전**: v2.9.7 (HOTFIX-05 Admin 옵션 미종료 작업 카드 시간 UTC 오표시 수정, 2026-04-17)
+
+---
+
+## HOTFIX-05: Admin 옵션 미종료 작업 카드 시간 UTC 오표시 (2026-04-17, v2.9.7)
+
+**수정 파일 (FE 1파일 + Docs 4파일)**:
+- `frontend/lib/screens/admin/admin_options_screen.dart` L2474 — `DateTime.tryParse(...)?.toLocal()` 1줄 추가
+- `backend/version.py` + `frontend/lib/utils/app_version.dart` — v2.9.6 → v2.9.7
+- `CLAUDE.md` / `BACKLOG.md` / `AGENT_TEAM_LAUNCH.md` / `handoff.md`
+
+**증상**: Admin 옵션 → 미종료 작업 카드에 시각이 UTC 기준 표시 (06:41 ← KST 15:41). Manager 화면은 이미 `.toLocal()` 적용되어 KST 정상 → 화면 간 불일치
+
+**원인**: Dart `DateTime.tryParse("...+09:00")` → 내부 UTC DateTime 저장 → 게터가 UTC 값 반환. `.toLocal()` 미호출로 변환 스킵
+
+**영향**: FE only. BE/DB/API 계약 변경 없음. Manager 화면(L353)과 일관성 확보
+
+**배포**: flutter build web + Netlify 배포 진행
 
 ---
 

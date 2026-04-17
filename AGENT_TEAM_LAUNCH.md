@@ -27025,6 +27025,35 @@ TC-60B-26: OPS Flutter ELEC 화면 기존 동작 유지 (Task 7 전까지 `phase
 - **그룹 4개 고정**: 사용자 확정사항 — 그룹은 당분간 변동 없음 (PANEL / 조립 / JIG / 향후 필요 시 확장). FE 항목 추가 모달의 그룹 드롭다운은 하드코딩 가능.
 - **마이그레이션 선행 필수**: Task 2 seed 재실행 전 Task 1 migration 반드시 적용. 컬럼 없으면 INSERT 실패.
 
+### 🔧 HOTFIX-05 (2026-04-17, v2.9.7) — Admin 옵션 미종료 작업 카드 시간 UTC 오표시 (`.toLocal()` 누락)
+
+**증상**: Admin 옵션 화면 → 미종료 작업 목록 카드에 시작 시각이 UTC 기준으로 표시됨 (예: `2026-04-01 06:41` ← KST 15:41이 실제). 대시보드(VIEW) 및 OPS manager 화면은 KST 정상 표시. 시간 불일치로 Admin이 잘못된 task를 강제종료 대상으로 오인할 여지.
+
+**원인**: `frontend/lib/screens/admin/admin_options_screen.dart` `_buildPendingTaskCard()` L2473-2475에서 `DateTime.tryParse()` 결과를 그대로 사용. Dart `DateTime.tryParse("2026-04-01T15:41:00+09:00")`는 offset 있는 문자열을 **내부 UTC DateTime**으로 저장하며(`.isUtc=true`), 이후 `.year/.hour` 게터는 UTC값을 반환. `.toLocal()` 호출이 있어야 디바이스 local(KST) 값으로 변환됨.
+
+비교 — `frontend/lib/screens/manager/manager_pending_tasks_screen.dart` L353은 이미 `.toLocal()` 적용되어 있어 동일 데이터가 Manager 화면에서는 KST 정상 표시.
+
+**수정 (FE 1줄)**:
+```dart
+// admin_options_screen.dart L2474 (before)
+? DateTime.tryParse(task['started_at'] as String)
+
+// after
+? DateTime.tryParse(task['started_at'] as String)?.toLocal()
+```
+
+**영향 범위**:
+- Admin 옵션 화면 → 미종료 작업 카드 시각 KST 정상화
+- BE/DB 변경 없음 — 기존 API 응답 포맷(+09:00 offset) 그대로 유지
+- Manager 화면은 이미 정상이었으므로 영향 없음
+- 다른 시각 표시 지점은 현재 `.toLocal()` 적용 여부 개별 확인 필요 — 별도 audit 권장
+
+**검증 권장**: Admin 로그인 → 옵션 → 미종료 작업 탭에서 시각이 KST(실제 작업 시작 시각)로 표시되는지 육안 확인.
+
+**연계**: `BACKLOG.md` HOTFIX-05, 실시간 동기화(OPS↔VIEW) 이슈는 별개 사안으로 미확정.
+
+---
+
 ### 🔧 HOTFIX-03 (2026-04-17) — 비활성 task 조회 필터 누락
 
 **증상**: S/N 상세뷰에서 `Heating Jacket` task가 OPS 설정상 비활성(`is_applicable=FALSE`)인데도 VIEW에서 "⏳ 미시작 1건"으로 카운트됨.

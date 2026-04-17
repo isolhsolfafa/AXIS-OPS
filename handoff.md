@@ -7,10 +7,10 @@
 
 ## 현재 버전
 
-- **OPS BE**: v2.9.6 (HOTFIX-02/03 후속 적용)
-- **OPS FE (Flutter PWA)**: v2.9.6
-- **최근 Sprint**: HOTFIX-03 (비활성 task 조회 필터 누락, 방안 A) — ✅ 완료
-- **최근 완료 Sprint**: HOTFIX-03, HOTFIX-02, BUG-45, 61-BE-B, 61-BE, BUG-43/44, HOTFIX-01, 60-BE, 59-BE, 58-BE
+- **OPS BE**: v2.9.7
+- **OPS FE (Flutter PWA)**: v2.9.7
+- **최근 Sprint**: HOTFIX-05 (Admin 옵션 미종료 작업 카드 시간 UTC 오표시 `.toLocal()`) — ✅ 완료
+- **최근 완료 Sprint**: HOTFIX-05, HOTFIX-03, HOTFIX-02, BUG-45, 61-BE-B, 61-BE, BUG-43/44, HOTFIX-01, 60-BE, 59-BE, 58-BE
 - **최근 Migration**: 049 (alert_escalation_expansion)
 - **체크리스트 현황**: TM 완료 (SINGLE/DUAL qr_doc_id 정규화) / ELEC 완료 (Phase 1+2, 마스터 정규화) / MECH 미구현
 - **RULE-01**: Sprint 완료 시 FE flutter build web + Netlify 배포 필수
@@ -30,7 +30,9 @@
 9. **TEST-CONTRACT-01 BACKLOG 등록**: VIEW↔BE API 필드 계약 자동 검증 (pytest + JSON Schema). BUG-45 재발 방지 Advisory. 설계: AGENT_TEAM_LAUNCH.md TEST-CONTRACT-01 섹션
 10. **HOTFIX-03**: 비활성 task 조회 필터 누락 — `get_tasks_by_serial_number()` + `get_tasks_by_qr_doc_id()` 4 SELECT에 `AND is_applicable = TRUE` 추가 (방안 A 채택). VIEW S/N 상세뷰 Heating Jacket 미시작 카운트 오염 정상화 (OPS #60 DONE)
 11. **DOC-SYNC-01 BACKLOG 등록**: OPS_API_REQUESTS.md / VIEW_FE_Request.md 잔여 PENDING 13건+ 실구현 상태 교차 검증 (관리 작업)
-12. **Claude × Codex 교차 리뷰**: Sprint 61 설계 9건 + BUG-44 6건 + HOTFIX 원인 수정 + BUG-45 1차 Must 보정 + HOTFIX-02/03 합의
+12. **HOTFIX-05 (v2.9.7)**: Admin 옵션 미종료 작업 카드 시간 UTC 오표시 — `admin_options_screen.dart` L2474 `.toLocal()` 1줄 추가. Manager 화면과 일관성 확보. FE only, BE 영향 없음
+13. **HOTFIX-04 BACKLOG 등록**: Orphan work_start_log "진행중" 오표시 (task 마감됐으나 worker completion_log 없음) — VIEW/BE 해결안 3안 제시, 사용자 결정 대기
+14. **Claude × Codex 교차 리뷰**: Sprint 61 설계 9건 + BUG-44 6건 + HOTFIX 원인 수정 + BUG-45 1차 Must 보정 + HOTFIX-02/03/05 합의
 
 ---
 

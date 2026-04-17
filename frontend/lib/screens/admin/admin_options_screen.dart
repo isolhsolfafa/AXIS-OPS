@@ -2471,7 +2471,7 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
     final serialNumber = task['serial_number'] as String? ?? '';
     final taskCategory = task['task_category'] as String? ?? '';
     final startedAt = task['started_at'] != null
-        ? DateTime.tryParse(task['started_at'] as String)
+        ? DateTime.tryParse(task['started_at'] as String)?.toLocal()
         : null;
 
     Color categoryColor;
