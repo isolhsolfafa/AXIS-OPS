@@ -1702,11 +1702,13 @@ def get_pending_tasks() -> Tuple[Dict[str, Any], int]:
         cur = conn.cursor()
 
         # ── 1) 진행 중 (started_at IS NOT NULL, completed_at IS NULL) ──
+        # BUG-44 수정: app_task_details.worker_id는 NULL (start_task()가 미설정)
+        # → work_start_log FK 기반 LATERAL JOIN으로 최근 작업자 조회
         cur.execute(
             """
             SELECT
                 t.id,
-                t.worker_id,
+                wsl.worker_id,
                 w.name AS worker_name,
                 t.serial_number,
                 t.qr_doc_id,
@@ -1718,7 +1720,14 @@ def get_pending_tasks() -> Tuple[Dict[str, Any], int]:
                 pi.sales_order,
                 'in_progress' AS status
             FROM app_task_details t
-            JOIN workers w ON t.worker_id = w.id
+            LEFT JOIN LATERAL (
+                SELECT wsl2.worker_id
+                FROM work_start_log wsl2
+                WHERE wsl2.task_id = t.id
+                ORDER BY wsl2.started_at DESC
+                LIMIT 1
+            ) wsl ON TRUE
+            LEFT JOIN workers w ON wsl.worker_id = w.id
             LEFT JOIN plan.product_info pi ON pi.serial_number = t.serial_number
             WHERE t.started_at IS NOT NULL
               AND t.completed_at IS NULL

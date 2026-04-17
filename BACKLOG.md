@@ -83,6 +83,7 @@
 | BUG-41 | PWA 업데이트 시 PIN 초기화 + 이메일 재입력 요구 | 🟡 BACKLOG (우선순위 보류) | Chrome PWA 환경에서 업데이트 후 PIN 로그인 화면 대신 초기 이메일 로그인 화면으로 진입, 이메일 전체 재입력 필요. 변경 범위/regression 리스크 대비 우선순위 낮음 — 아래 "BUG-41 상세" 섹션 참조 |
 | BUG-42 | 명판 소형 QR 접사 인식 실패 | 🔴 OPEN | 기본 카메라로는 문자열 정상 읽힘 / OPS 앱 스캐너(html5-qrcode)는 미인식. 명판 QR 이미지 크기가 스티커 대비 작아 매크로 포커스 + 고해상도 + 줌 필요. 아래 "BUG-42 상세" 섹션 참조 |
 | BUG-43 | 분석 대시보드 기능별 사용량 한글 라벨 누락 (24건) | ✅ 수정 완료 (2026-04-17) | Sprint 52+ 체크리스트/성적서/ELEC 엔드포인트 등 24개 `_ENDPOINT_LABELS` 미등록 → 전수 등록. 기존 111키 → 135키 (유니크 108 라우트 커버) |
+| BUG-44 | OPS 미종료 작업 목록 0건 반환 (Admin/Manager 양쪽) | 🔴 OPEN — 원인 규명 완료 | `get_pending_tasks()` 쿼리가 `app_task_details.worker_id`(항상 NULL)로 INNER JOIN → 0건. `work_start_log` 기반 LEFT JOIN으로 교체 필요. 아래 "BUG-44 상세" 참조 |
 
 ---
 
@@ -1011,3 +1012,37 @@ Future<void> _applyZoomIfSupported() async {
 **관련**
 - BUG-41 (PWA PIN 로그인 유실) — 동일 PWA 업데이트 플로우 의존. 빌드·배포 루틴 정착이 재현 디버깅의 선행 조건.
 - `frontend/web/index.html` L180-232 — `controllerchange` → `showUpdateToast()` → `window.location.reload()` 구현 (이미 존재, 새 빌드 해시 트리거가 없으면 무용지물).
+
+---
+
+## 🔴 BUG-44 상세: OPS 미종료 작업 목록 0건 반환
+
+**현상**
+- OPS Admin 계정: `/admin/tasks/pending` → `{"tasks":[], "total":0}`
+- OPS Manager(C&A): `/admin/tasks/pending?company=C%26A` → 동일 0건
+- VIEW(React)에서는 동일 S/N의 진행 중 작업 정상 표시
+
+**원인 규명 (2026-04-17)**
+
+`get_pending_tasks()` (admin.py L1721)의 INNER JOIN이 근본 원인:
+
+```sql
+FROM app_task_details t
+JOIN workers w ON t.worker_id = w.id   -- ← worker_id가 전부 NULL → 0건
+```
+
+진단 과정:
+1. ✅ DB 정상 — is_admin/is_manager 값 확인됨
+2. ✅ v2.9.4 배포 확인
+3. ✅ API 호출 정상 — DevTools에서 pending 엔드포인트 응답 확인 (빈 배열)
+4. 🔑 `SELECT ... FROM app_task_details WHERE started_at IS NOT NULL AND completed_at IS NULL` → 20건+ 존재 (worker_id **전부 NULL**)
+5. 🔑 `SELECT ... FROM app_task_details t JOIN workers w ON t.worker_id = w.id WHERE started_at IS NOT NULL AND completed_at IS NULL` → **0건**
+
+**근본 원인**: `start_task()` (task_detail.py L384-419)는 `started_at`만 UPDATE하고 `worker_id`는 세팅하지 않음. 작업자 추적은 `work_start_log` 테이블에서 별도 관리. VIEW는 `work_start_log`에서 JOIN하므로 정상 작동.
+
+**수정** (Claude × Codex 교차 검증 합의, 2026-04-17):
+- FK 매칭 LATERAL JOIN — `wsl2.task_id = t.id` (DDL: `REFERENCES app_task_details(id)`)
+- `task_id_ref` 단독 매칭 금지 — VARCHAR라 S/N 간 중복 가능 (unsafe)
+- `AND (w.company = %s OR %s IS NULL)` **유지** — 제거 시 FNI/BAT MECH 권한 분리 깨짐
+- 파라미터 바인딩 `(company, company)` 유지, API 응답 형식 무변경
+- 상세 설계는 `AGENT_TEAM_LAUNCH.md` BUG-44 섹션 + `HANDOVER_BUG44.md` 참조
