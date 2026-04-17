@@ -1211,3 +1211,4 @@ VALUES ('📱 OPS v2.2.1 업데이트 안내', '본문...', '2.2.1', TRUE, {admi
 | v2.9.5 | 2026-04-17 | Sprint 61-BE-B | BUG-44 보완 + API 응답 확장 — pending/task 응답에 company 필드(#60) + force_closed 필드(#61) 추가 |
 | v2.9.5 | 2026-04-17 | HOTFIX | force_close/force_complete TypeError — naive vs aware datetime 정규화 (completed_at + started_at 양쪽) |
 | v2.9.6 | 2026-04-17 | BUG-45 | force_close completed_at 범위 검증 — 미래 차단(60s skew 허용) + started_at 이전 차단. VIEW useForceClose 필드명 정정(FE-17). pytest 17/17(BUG-45 8 TC), 회귀 46/46 GREEN |
+| v2.9.6 | 2026-04-17 | HOTFIX-02 | 체크리스트 마스터 API `checker_role` 키 노출 누락 — Sprint 60-BE 후속. `list_checklist_master()` SELECT + 응답 dict 2줄 추가. VIEW JIG WORKER/QI 뱃지 분기 정상화 (OPS #59-B DONE / VIEW FE-18 ✅) |

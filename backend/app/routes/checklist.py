@@ -279,7 +279,11 @@ def list_checklist_master() -> Tuple[Dict[str, Any], int]:
                     "item_name": str,
                     "item_order": int,
                     "description": str|null,
-                    "is_active": bool
+                    "is_active": bool,
+                    "phase1_applicable": bool,
+                    "qi_check_required": bool,
+                    "remarks": str|null,
+                    "checker_role": str  # 'WORKER' | 'QI' (NULL은 'WORKER'로 치환)
                 }, ...
             ],
             "total": int
@@ -326,7 +330,8 @@ def list_checklist_master() -> Tuple[Dict[str, Any], int]:
                 cm.is_active,
                 cm.phase1_applicable,
                 cm.qi_check_required,
-                cm.remarks
+                cm.remarks,
+                cm.checker_role
             FROM checklist.checklist_master cm
             WHERE {where_clause}
             ORDER BY cm.item_order ASC, cm.id ASC
@@ -348,6 +353,7 @@ def list_checklist_master() -> Tuple[Dict[str, Any], int]:
                 'phase1_applicable': row.get('phase1_applicable', True),
                 'qi_check_required': row.get('qi_check_required', False),
                 'remarks': row.get('remarks'),
+                'checker_role': row.get('checker_role') or 'WORKER',
             }
             for row in rows
         ]

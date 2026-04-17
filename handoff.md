@@ -7,10 +7,10 @@
 
 ## 현재 버전
 
-- **OPS BE**: v2.9.6
+- **OPS BE**: v2.9.6 (HOTFIX-02 후속 적용)
 - **OPS FE (Flutter PWA)**: v2.9.6
-- **최근 Sprint**: BUG-45 (force_close completed_at 범위 검증) — ✅ 완료
-- **최근 완료 Sprint**: BUG-45, 61-BE-B, 61-BE, BUG-43/44, HOTFIX-01, 60-BE, 59-BE, 58-BE
+- **최근 Sprint**: HOTFIX-02 (체크리스트 마스터 `checker_role` 키 노출, Sprint 60-BE 후속) — ✅ 완료
+- **최근 완료 Sprint**: HOTFIX-02, BUG-45, 61-BE-B, 61-BE, BUG-43/44, HOTFIX-01, 60-BE, 59-BE, 58-BE
 - **최근 Migration**: 049 (alert_escalation_expansion)
 - **체크리스트 현황**: TM 완료 (SINGLE/DUAL qr_doc_id 정규화) / ELEC 완료 (Phase 1+2, 마스터 정규화) / MECH 미구현
 - **RULE-01**: Sprint 완료 시 FE flutter build web + Netlify 배포 필수
@@ -26,7 +26,9 @@
 5. **Sprint 61-BE-B**: pending/task API company + force_closed 필드 추가 (#60, #61)
 6. **HOTFIX-01**: force_close/force_complete TypeError — naive vs aware datetime 정규화
 7. **BUG-45 (v2.9.6)**: force_close `completed_at` 범위 검증 — 미래 차단(60s skew 허용) + started_at 이전 차단. VIEW useForceClose `reason → close_reason` (FE-17). TC-FC-11~18 8건 추가, 회귀 GREEN
-8. **Claude × Codex 교차 리뷰**: Sprint 61 설계 9건 + BUG-44 6건 + HOTFIX 원인 수정 + BUG-45 1차 Must 보정 합의
+8. **HOTFIX-02 (Sprint 60-BE 후속)**: 체크리스트 마스터 API `checker_role` 키 응답 누락 — `list_checklist_master()` SELECT/응답 dict 2줄 추가. VIEW JIG WORKER/QI 뱃지 분기 정상화 (OPS #59-B DONE / VIEW FE-18 ✅)
+9. **TEST-CONTRACT-01 BACKLOG 등록**: VIEW↔BE API 필드 계약 자동 검증 (pytest + JSON Schema). BUG-45 재발 방지 Advisory. 설계: AGENT_TEAM_LAUNCH.md TEST-CONTRACT-01 섹션
+10. **Claude × Codex 교차 리뷰**: Sprint 61 설계 9건 + BUG-44 6건 + HOTFIX 원인 수정 + BUG-45 1차 Must 보정 + HOTFIX-02 키 누락 확인 합의
 
 ---
 

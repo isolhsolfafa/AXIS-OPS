@@ -88,6 +88,7 @@
 | HOTFIX-01 | force_close/force_complete TypeError (naive vs aware datetime) | ✅ 수정 완료 (2026-04-17) | `completed_at` + `started_at` 양쪽 naive→KST aware 정규화. force_close + force_complete 2곳 적용. Claude×Codex 합의: completed_at이 진짜 원인. 29/29 passed |
 | BUG-45 | VIEW 강제 종료 INVALID_REQUEST (close_reason 필드 미스매치) + 완료 시각 검증 부재 | ✅ 수정 완료 (2026-04-17, v2.9.6) | BE: `force_close_task()` 미래 시각(60s skew) + started_at 이전 가드 14줄 + docstring Returns 2건. FE-17: VIEW `useForceClose.ts` L24 `reason → close_reason`. pytest TC-FC-11~18 8/8 GREEN, 회귀 TC-FC-01~10 + admin 46건 모두 GREEN. force_complete는 Advisory(미호출 엔드포인트) |
 | TEST-CONTRACT-01 | VIEW↔BE API 필드 계약 자동 검증 테스트 도입 | 🟡 BACKLOG (중간, 재발 방지 Advisory) | BUG-45 후속 — `close_reason`/`reason` 같은 필드명 미스매치를 CI 단계에서 자동 차단. 과거 유사 사례: `is_pinned`/`priority` (공지), `qr_doc_id`, `taskId` snake/camel. 본건은 Bug fix 아닌 **재발 방지 구조 개선** → 기존 BUG-45 배포에 영향 없음. 설계: `AGENT_TEAM_LAUNCH.md` TEST-CONTRACT-01 섹션 (pytest + JSON Schema 우선, OpenAPI/Pact는 후보안). 등록: 2026-04-17 |
+| HOTFIX-02 | 체크리스트 마스터 API `checker_role` 키 노출 누락 (Sprint 60-BE 후속) | ✅ 수정 완료 (2026-04-17) | `backend/app/routes/checklist.py` `list_checklist_master()` SELECT 절에 `cm.checker_role` + 응답 dict에 `'checker_role': row.get('checker_role') or 'WORKER'` 2줄 추가 + docstring Response 스펙 동기화. 증상: VIEW 체크리스트 관리 JIG 14 row 전체 WORKER 뱃지 (원래 7 WORKER + 7 QI 분리 필요). OPS #59-B DONE / VIEW FE-18 ✅. 상세: `AGENT_TEAM_LAUNCH.md` Sprint 60-BE 후속 핫픽스 섹션 |
 
 ---
 
