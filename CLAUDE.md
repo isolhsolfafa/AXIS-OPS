@@ -1208,3 +1208,4 @@ VALUES ('📱 OPS v2.2.1 업데이트 안내', '본문...', '2.2.1', TRUE, {admi
 | v2.9.4 | 2026-04-17 | Sprint 61-BE | 알람 O/N 통일 + 에스컬레이션 3종 + pending API 확장 + SETTING_KEYS 5개 |
 | v2.9.4 | 2026-04-17 | BUG-43 | 분석 대시보드 한글 라벨 누락 24건 전수 등록 (111→135키, 108 라우트 커버) |
 | v2.9.4 | 2026-04-17 | BUG-44 | 미종료 작업 0건 — INNER JOIN → LATERAL JOIN (work_start_log FK). Claude×Codex 교차 검증 합의 |
+| v2.9.5 | 2026-04-17 | Sprint 61-BE-B | BUG-44 보완 + API 응답 확장 — pending/task 응답에 company 필드(#60) + force_closed 필드(#61) 추가 |

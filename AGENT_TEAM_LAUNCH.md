@@ -27821,3 +27821,228 @@ ORDER BY t.started_at ASC
 - **파라미터 바인딩**: `(company, company)` 그대로 유지
 - **하위호환**: API 응답 형식 동일. FE 변경 불필요.
 - **리스크**: LOW — FK 기반 LATERAL JOIN + 기존 company 필터 유지
+
+---
+
+## Sprint 61-BE-B — BUG-44 보완 + API 응답 확장 (#60, #61)
+
+**날짜**: 2026-04-17
+**버전**: v2.9.5
+**선행**: BUG-44 LATERAL JOIN 적용 완료 (admin.py L1723-1729 확인됨)
+**참조**: `AXIS-VIEW/OPS_API_REQUESTS.md` #60, #61
+
+### 배경
+
+BUG-44 (LATERAL JOIN) 코드 수정은 완료되었으나, VIEW Sprint 33 (미종료 작업 강제 종료) 구현을 위해 BE 응답 필드 2개 추가가 필요:
+
+1. **#60**: pending 응답 + S/N task worker에 `company` 필드 → Manager 행 레벨 권한 판단
+2. **#61**: S/N task 응답에 `force_closed` 필드 → 강제종료 뱃지 렌더링
+
+### Task 1 — `get_pending_tasks()` 응답에 `company` 필드 추가 (#60)
+
+**파일**: `backend/app/routes/admin.py`
+
+**1-1. SELECT에 `w.company` 추가** (L1709 부근)
+
+현재:
+```sql
+SELECT
+    t.id,
+    wsl.worker_id,
+    w.name AS worker_name,
+    t.serial_number,
+    ...
+```
+
+변경:
+```sql
+SELECT
+    t.id,
+    wsl.worker_id,
+    w.name AS worker_name,
+    w.company AS worker_company,
+    t.serial_number,
+    ...
+```
+
+**1-2. 응답 dict에 `company` 키 추가** (L1795-1811)
+
+현재 (L1795-1809):
+```python
+tasks = [
+    {
+        'id': row['id'],
+        'worker_id': row['worker_id'],
+        'worker_name': row['worker_name'],
+        'serial_number': row['serial_number'],
+        ...
+        'status': row['status'],
+    }
+    for row in all_rows
+]
+```
+
+변경:
+```python
+tasks = [
+    {
+        'id': row['id'],
+        'worker_id': row['worker_id'],
+        'worker_name': row['worker_name'],
+        'company': row.get('worker_company'),       # #60: Manager 행 레벨 권한용
+        'serial_number': row['serial_number'],
+        ...
+        'status': row['status'],
+    }
+    for row in all_rows
+]
+```
+
+> 미시작 row는 worker가 없으므로 `company: null` 반환 — FE에서 null 처리 필요.
+
+**1-3. 미시작 쿼리에 `NULL AS worker_company` 추가 (B1 보완 — 🔴 필수)**
+
+미시작 쿼리(L1748-1775)에 `worker_company` 컬럼이 없으면 진행 중 row와 미시작 row를 합칠 때 `row['worker_company']` KeyError 발생.
+
+```sql
+-- 미시작 쿼리 SELECT 절에 추가
+SELECT
+    t.id,
+    t.worker_id,
+    NULL AS worker_name,
+    NULL AS worker_company,          -- B1: 진행 중 row와 컬럼 일치
+    t.serial_number,
+    ...
+```
+
+### Task 2 — S/N task worker 응답에 `company` 필드 추가 (#60)
+
+**파일**: `backend/app/routes/work.py`
+
+**2-1. work_start_log 쿼리에 `w.company` SELECT 추가** (L588-608)
+
+현재:
+```sql
+SELECT
+    wsl.task_id,
+    wsl.task_category,
+    wsl.task_id_ref,
+    wsl.worker_id,
+    w.name AS worker_name,
+    wsl.started_at,
+    ...
+```
+
+변경:
+```sql
+SELECT
+    wsl.task_id,
+    wsl.task_category,
+    wsl.task_id_ref,
+    wsl.worker_id,
+    w.name AS worker_name,
+    w.company AS worker_company,
+    wsl.started_at,
+    ...
+```
+
+**2-2. worker_entry dict에 `company` 추가** (L612-619)
+
+현재:
+```python
+worker_entry = {
+    'worker_id': row['worker_id'],
+    'worker_name': row['worker_name'],
+    'started_at': ...,
+    'completed_at': ...,
+    'duration_minutes': row['duration_minutes'],
+    'status': row['status'],
+}
+```
+
+변경:
+```python
+worker_entry = {
+    'worker_id': row['worker_id'],
+    'worker_name': row['worker_name'],
+    'company': row['worker_company'],                # #60
+    'started_at': ...,
+    'completed_at': ...,
+    'duration_minutes': row['duration_minutes'],
+    'status': row['status'],
+}
+```
+
+**2-3. legacy fallback workers_list에 `company` 키 추가 (B2 보완)**
+
+work.py L683-694 legacy fallback (work_start_log 없는 경우) 응답에도 `company` 키 필요:
+
+```python
+# L683-694 legacy fallback
+workers_list = [{
+    'worker_id': item['worker_id'],
+    'worker_name': item.get('worker_name'),
+    'company': None,                                     # B2: 응답 shape 일관성
+    'started_at': started,
+    'completed_at': completed,
+    'duration_minutes': item.get('duration_minutes'),
+    'status': status_str,
+}]
+```
+
+### Task 3 — S/N task 응답에 `force_closed` 필드 추가 (#61)
+
+**파일**: `backend/app/routes/work.py`
+
+**3-1. task_list 직렬화에 `force_closed` 추가** (L80-101)
+
+현재:
+```python
+{
+    'id': task.id,
+    ...
+    'is_applicable': task.is_applicable,
+    'location_qr_verified': task.location_qr_verified,
+    ...
+    'task_type': getattr(task, 'task_type', 'NORMAL'),
+}
+```
+
+변경:
+```python
+{
+    'id': task.id,
+    ...
+    'is_applicable': task.is_applicable,
+    'force_closed': getattr(task, 'force_closed', False),  # #61
+    'location_qr_verified': task.location_qr_verified,
+    ...
+    'task_type': getattr(task, 'task_type', 'NORMAL'),
+}
+```
+
+> `app_task_details` 테이블에 `force_closed BOOLEAN DEFAULT FALSE` 컬럼 이미 존재.
+> TaskDetail 모델에서 `force_closed` 속성 접근 가능 여부 확인 필요 — 없으면 `getattr` fallback.
+
+### 수정 요약
+
+| Task | 파일 | 변경 | 라인 |
+|------|------|------|------|
+| 1-1 | admin.py | SELECT에 `w.company AS worker_company` 추가 | ~L1712 |
+| 1-2 | admin.py | 응답 dict에 `'company': row.get('worker_company')` | ~L1798 |
+| 1-3 | admin.py | 미시작 쿼리에 `NULL AS worker_company` 추가 (B1) | ~L1751 |
+| 2-1 | work.py | SELECT에 `w.company AS worker_company` 추가 | ~L595 |
+| 2-2 | work.py | worker_entry에 `'company': row['worker_company']` | ~L614 |
+| 2-3 | work.py | legacy fallback에 `'company': None` 추가 (B2) | ~L688 |
+| 3-1 | work.py | task dict에 `'force_closed': getattr(task, 'force_closed', False)` | ~L92 |
+
+**교차 검증 보완 (Claude × Codex)**:
+- B1 🔴: 미시작 쿼리 `NULL AS worker_company` 누락 → KeyError 방지 (필수)
+- B2 ⚠️: legacy fallback `company: None` 누락 → 응답 shape 일관성 (권장)
+- B3 ℹ️: `force_closed`가 `_task_to_dict` 공용 → 모든 /work 응답에 노출 (하위호환 OK, 인지)
+
+**변경 파일**: 2개 (`admin.py`, `work.py`)
+**변경 규모**: ~8줄 추가
+**Migration**: 없음 (기존 컬럼 활용)
+**하위호환**: 필드 추가만 — 기존 FE(OPS) 영향 없음
+**FE 소비**: VIEW Sprint 33 FE-15에서 `company` + `force_closed` 활용

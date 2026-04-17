@@ -7,10 +7,10 @@
 
 ## 현재 버전
 
-- **OPS BE**: v2.9.4
-- **OPS FE (Flutter PWA)**: v2.9.4
-- **최근 Sprint**: 61-BE (알람 O/N 통일 + 에스컬레이션 3종 + pending API 확장) — ✅ 완료
-- **최근 완료 Sprint**: 61-BE, 60-BE (ELEC 마스터 정규화), 59-BE (TM qr_doc_id), 58-BE (Phase 1+2 합산)
+- **OPS BE**: v2.9.5
+- **OPS FE (Flutter PWA)**: v2.9.5
+- **최근 Sprint**: 61-BE-B (pending/task API company + force_closed 필드 추가) — ✅ 완료
+- **최근 완료 Sprint**: 61-BE-B, 61-BE, BUG-43/44, 60-BE, 59-BE, 58-BE
 - **최근 Migration**: 049 (alert_escalation_expansion)
 - **체크리스트 현황**: TM 완료 (SINGLE/DUAL qr_doc_id 정규화) / ELEC 완료 (Phase 1+2, 마스터 정규화) / MECH 미구현
 - **RULE-01**: Sprint 완료 시 FE flutter build web + Netlify 배포 필수

@@ -90,6 +90,7 @@ def _task_to_dict(task) -> Dict[str, Any]:
         'duration': task.duration_minutes,  # FE 호환: duration_minutes를 duration으로도 제공
         'duration_minutes': task.duration_minutes,
         'is_applicable': task.is_applicable,
+        'force_closed': getattr(task, 'force_closed', False),
         'location_qr_verified': task.location_qr_verified,
         'created_at': task.created_at.isoformat() if task.created_at else None,
         'updated_at': task.updated_at.isoformat() if task.updated_at else None,
@@ -593,6 +594,7 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
                     wsl.task_id_ref,
                     wsl.worker_id,
                     w.name AS worker_name,
+                    w.company AS worker_company,
                     wsl.started_at,
                     wcl.completed_at,
                     wcl.duration_minutes,
@@ -612,6 +614,7 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
                 worker_entry = {
                     'worker_id': row['worker_id'],
                     'worker_name': row['worker_name'],
+                    'company': row['worker_company'],
                     'started_at': row['started_at'].isoformat() if row['started_at'] else None,
                     'completed_at': row['completed_at'].isoformat() if row['completed_at'] else None,
                     'duration_minutes': row['duration_minutes'],
@@ -687,6 +690,7 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
             workers_list = [{
                 'worker_id': item['worker_id'],
                 'worker_name': item.get('worker_name'),
+                'company': None,
                 'started_at': started,
                 'completed_at': completed,
                 'duration_minutes': item.get('duration_minutes'),
