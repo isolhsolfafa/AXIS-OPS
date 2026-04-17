@@ -155,6 +155,17 @@ TM ──(가압완료)──▶ MECH ──(도킹완료)──▶ ELEC ──(
 - **APS 연결**: 개인별 net_minutes → 표준공수 산출 → APS Lite 자원 배정 기초
 - **참조**: Sprint 55 (AGENT_TEAM_LAUNCH.md), `SPRINT_WORKER_PAUSE.md` (설계 원본)
 
+### ADR-017: 비활성 task 조회 필터 — 모델 레벨 (방안 A) 채택 (2026-04-17, HOTFIX-03)
+- **맥락**: `is_applicable=FALSE` task가 조회 응답에 포함되어 VIEW 미시작 카운트 오염(Heating Jacket 사례). `filter_tasks_for_worker()`는 `task_category`만 필터하므로 모델 레벨에서 걸러야 함
+- **대안 비교**:
+  - **방안 A (채택)**: `get_tasks_by_serial_number()` + `get_tasks_by_qr_doc_id()` 4 SELECT 전체에 `AND is_applicable = TRUE` 추가. 단순·일관성·하위 호환
+  - 방안 B: `?all=true` 파라미터 분기(관리자만 비활성 포함) — 현재 사용처 없어 YAGNI
+  - 방안 C: 응답에 `is_applicable` 필드 포함하고 FE가 필터 — 양쪽 수정 + FE 부담
+- **선택 근거**: 비활성 task는 DB에서 "해당 공정 건너뜀"으로 명시된 상태. 일반 조회에서 완전 제외가 업무 흐름상 자연스럽고, completion 판정(check_elec_completion 등)에서도 동일 처리가 일관성 있음. 관리자 설정 확인은 OPS 설정 페이지에서 수행
+- **확장 여지**: 관리자용 전체 조회가 필요해지면 `?include_inactive=true` 파라미터(방안 C 축소판)로 확장 가능 — 당장은 도입하지 않음 (YAGNI)
+- **영향 범위**: VIEW S/N 상세뷰 미시작 카운트 정상화 (FE 수정 불필요), OPS 앱 `all=true` 경로도 비활성 제외(의도), `filter_tasks_for_worker()` 후처리와 이중 필터되나 무해
+- **참조**: AGENT_TEAM_LAUNCH.md HOTFIX-03 섹션, OPS_API_REQUESTS.md #60 DONE, BACKLOG.md HOTFIX-03
+
 ### ADR-016: 강제 종료 API 입력값 가드 — completed_at 범위 검증 (2026-04-17, BUG-45)
 - **맥락**: VIEW `useForceClose.ts`가 `datetime-local` 입력으로 임의 시각 전달 가능. BE는 `datetime.fromisoformat()` 파싱 후 KST tz 보정만, 논리적 타당성(미래/started_at 이전) 검사 부재 → 음수 duration 위험
 - **결정 4가지**:

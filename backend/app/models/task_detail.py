@@ -301,7 +301,7 @@ def get_tasks_by_serial_number(
             cur.execute(
                 """
                 SELECT * FROM app_task_details
-                WHERE serial_number = %s AND task_category = %s
+                WHERE serial_number = %s AND task_category = %s AND is_applicable = TRUE
                 ORDER BY id
                 """,
                 (serial_number, task_category)
@@ -310,7 +310,7 @@ def get_tasks_by_serial_number(
             cur.execute(
                 """
                 SELECT * FROM app_task_details
-                WHERE serial_number = %s
+                WHERE serial_number = %s AND is_applicable = TRUE
                 ORDER BY id
                 """,
                 (serial_number,)
@@ -355,7 +355,7 @@ def get_tasks_by_qr_doc_id(
             cur.execute(
                 """
                 SELECT * FROM app_task_details
-                WHERE qr_doc_id = %s AND task_category = %s
+                WHERE qr_doc_id = %s AND task_category = %s AND is_applicable = TRUE
                 ORDER BY id
                 """,
                 (qr_doc_id, task_category)
@@ -364,7 +364,7 @@ def get_tasks_by_qr_doc_id(
             cur.execute(
                 """
                 SELECT * FROM app_task_details
-                WHERE qr_doc_id = %s
+                WHERE qr_doc_id = %s AND is_applicable = TRUE
                 ORDER BY id
                 """,
                 (qr_doc_id,)

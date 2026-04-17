@@ -27025,6 +27025,36 @@ TC-60B-26: OPS Flutter ELEC 화면 기존 동작 유지 (Task 7 전까지 `phase
 - **그룹 4개 고정**: 사용자 확정사항 — 그룹은 당분간 변동 없음 (PANEL / 조립 / JIG / 향후 필요 시 확장). FE 항목 추가 모달의 그룹 드롭다운은 하드코딩 가능.
 - **마이그레이션 선행 필수**: Task 2 seed 재실행 전 Task 1 migration 반드시 적용. 컬럼 없으면 INSERT 실패.
 
+### 🔧 HOTFIX-03 (2026-04-17) — 비활성 task 조회 필터 누락
+
+**증상**: S/N 상세뷰에서 `Heating Jacket` task가 OPS 설정상 비활성(`is_applicable=FALSE`)인데도 VIEW에서 "⏳ 미시작 1건"으로 카운트됨.
+
+**원인**: `backend/app/models/task_detail.py` 의 task 조회 2개 함수 (`get_tasks_by_serial_number()` / `get_tasks_by_qr_doc_id()`) 총 4개 SELECT 쿼리에 `is_applicable` 필터 부재. `services/task_seed.py` `filter_tasks_for_worker()`는 task_category만 필터하고 `is_applicable`은 검사하지 않음 → 모델 레벨에서 걸러야 함.
+
+**수정 (방안 A — Twin파파 결정, 2026-04-17)**:
+```python
+# get_tasks_by_serial_number() (L301~) 2개 쿼리
+WHERE serial_number = %s AND task_category = %s AND is_applicable = TRUE
+WHERE serial_number = %s                         AND is_applicable = TRUE
+
+# get_tasks_by_qr_doc_id() (L354~) 2개 쿼리
+WHERE qr_doc_id = %s AND task_category = %s AND is_applicable = TRUE
+WHERE qr_doc_id = %s                         AND is_applicable = TRUE
+```
+
+**제품 결정 근거**: 비활성 task는 DB에서 "이 S/N은 이 공정 건너뜀"으로 명시해둔 상태. 일반 조회 응답에서 완전 제외하는 게 업무 흐름상 자연스러움. 관리자가 비활성 task 설정 상태를 확인할 필요가 있으면 OPS 설정 페이지(product 설정)에서 확인. 추후 관리자용 전체 조회가 필요해지면 `?include_inactive=true` 쿼리 파라미터(방안 C)로 확장.
+
+**영향 범위**:
+- VIEW S/N 상세뷰: 비활성 task `workers=[]` placeholder 미생성 → 미시작 카운트 정상화
+- OPS 앱 `all=true`: 관리자 전체 조회에서도 비활성 task 제외 (의도된 동작)
+- OPS 앱 일반 작업자 조회: `filter_tasks_for_worker()` 거친 뒤에도 필터 적용됨 (카테고리 + is_applicable 이중 필터)
+
+**연계**: `AXIS-VIEW/OPS_API_REQUESTS.md` #60 DONE, `BACKLOG.md` HOTFIX-03.
+
+**검증 권장**: Codex 또는 통합 테스트 (TaskDetail 조회 시 is_applicable=FALSE row 제외 확인 + VIEW S/N 상세뷰 미시작 카운트 회귀 체크).
+
+---
+
 ### 🔧 Sprint 60-BE 후속 핫픽스 (2026-04-17) — `list_checklist_master()` `checker_role` 노출 누락
 
 **증상**: VIEW 체크리스트 관리 ELEC 페이지에서 JIG 14 row 전체가 `WORKER` 뱃지로만 표시됨 (원래 7 WORKER + 7 QI 뱃지 구분 필요).
