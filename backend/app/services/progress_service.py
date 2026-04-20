@@ -65,6 +65,7 @@ def get_partner_sn_progress(
                     pi.mech_partner,
                     pi.elec_partner,
                     pi.module_outsourcing,
+                    pi.line,
                     COALESCE(cs.all_completed, false) AS all_completed,
                     cs.all_completed_at
                 FROM qr_registry qr
@@ -95,6 +96,7 @@ def get_partner_sn_progress(
                 sn.mech_partner,
                 sn.elec_partner,
                 sn.module_outsourcing,
+                sn.line,
                 sn.all_completed,
                 sn.all_completed_at,
                 tp.task_category,
@@ -265,6 +267,7 @@ def _aggregate_products(
                 'mech_partner': row['mech_partner'],
                 'elec_partner': row['elec_partner'],
                 'module_outsourcing': row['module_outsourcing'],
+                'line': row['line'],
                 'categories': {},
             }
 
@@ -292,11 +295,6 @@ def _aggregate_products(
             company, is_admin, sn_data.get('mech_partner'), sn_data.get('elec_partner'),
             sn_data.get('module_outsourcing'),
         )
-
-        # 응답에서 partner 필드 제거 (내부용)
-        sn_data.pop('mech_partner', None)
-        sn_data.pop('elec_partner', None)
-        sn_data.pop('module_outsourcing', None)
 
         products.append(sn_data)
 

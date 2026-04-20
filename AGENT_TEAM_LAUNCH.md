@@ -27116,6 +27116,36 @@ if (salesOrder.isNotEmpty) ...[
 
 > ✅ **BE 구현/테스트 완료 (2026-04-17)**: pytest 신규 9 TC + 회귀 TC-FC/WA 24건 → **33/33 PASSED**. 옵션 C' 구현 (task_detail.py TaskDetail 모델 `closed_by_name` 필드 + `from_db_row()` 매핑 + `get_tasks_by_serial_number()`·`get_tasks_by_qr_doc_id()` 4 SELECT `LEFT JOIN workers`). work.py `_task_to_dict()` 3키 노출 + workers 쿼리 Case 1 SQL 확장(COALESCE + is_orphan + task_closed_at). VIEW FE-19 placeholder 렌더는 VIEW 리포 별도 진행.
 
+---
+
+#### 📐 설계 원칙 — 클린 코어 데이터 (2026-04-20 확정, Twin파파 승인)
+
+> **강제종료 task는 실행 측정값(work_start_log / work_completion_log / duration_sec)을 절대 생성하지 않는다. NULL이 정직한 답이다.**
+
+**원칙**:
+1. **실행 트레일 불가침**: 강제종료 경로에서 `work_start_log` / `work_completion_log` row를 **새로 만들지 않는다**. 기존 wsl이 있으면 그대로 두고, 없으면 없는 상태 유지.
+2. **duration 계산 금지**: 강제종료 task의 `duration_sec` 또는 이와 동등한 집계 컬럼에 추정값·기본값·NOW() 기반 값을 넣지 않는다.
+3. **감사 트레일 분리**: 관리자 액션은 `app_task_details.completed_at` + `force_closed=TRUE` + `close_reason` + `closed_by` 4필드에만 기록한다 (감사 로그, 실행 측정값 아님).
+4. **UI 책임**: VIEW에서 `completed_at` / `force_closed_at` 같은 강제종료 감사 시각 노출 시 반드시 **감사 액션을 명시하는 라벨 동반** (예: 상태 컬럼 `🔒 강제종료 {시각}` / 툴팁 `종료 처리: {시각}`). 단독 시각만 표시 금지. 현행 구현(v1.32.2): worker row 상태 컬럼은 `🔒 강제종료 {formatTime(w.force_closed_at)}` 형태로 이미 충족, 툴팁 용어 정합은 FE-19.1.
+
+**Why (이 원칙이 왜 필요한가)**:
+- G-AXIS 장기 목표는 **APS-Lite** — 공정별 cycle time 분포, 리드타임, OEE 분석이 전제.
+- 강제종료 = 실측이 없는 상태(시작 못함 / 완료 못함)로, 추측 시간을 채우면 시계열이 영구 오염.
+- 추정값 한 번 들어가면 진짜 데이터와 구분 불가 → 분석 쿼리마다 `WHERE is_estimated = FALSE` 필터 필요 → 휴먼 에러 고위험.
+- NULL은 분석자에게 "측정되지 않음. 감사 로그(`completed_at`, `close_reason`, `closed_by`)를 참조하라"고 정직하게 말해준다.
+
+**How to apply (구현·설계 시 자동 적용 가이드)**:
+- BE force-close 엔드포인트에 wsl/wcl insert 코드를 **절대 추가 금지**. 리뷰/코드리뷰에서 발견 시 즉시 반려.
+- 새로운 SELECT 쿼리에서 강제종료 task의 duration 계산이 필요하면, `completed_at - created_at` 같은 **추정 연산 금지** — 대신 `NULL AS duration_sec` 명시.
+- VIEW에서 강제종료 task의 시간 필드(`completed_at` / `force_closed_at` 등) 노출 시 단독 시각 표시 금지, 반드시 감사 액션 라벨 동반 (상태 컬럼 `🔒 강제종료 {시각}` / 툴팁 `종료 처리: {시각}` 등). 현행 v1.32.2는 상태 컬럼 측면 이미 충족, 툴팁 용어 정합만 FE-19.1로 잔여.
+- 회귀 방지 가드: `TEST-CLEAN-CORE-01` pytest 1건 — force_close 호출 후 wsl/wcl 테이블 row 0건 확인 (BACKLOG 등록).
+
+**스코프**:
+- 본 원칙은 **강제종료 경로에만** 한정. 정상 완료(`work_completion_log` 자발 생성)는 측정값이므로 적용 대상 아님.
+- HOTFIX-04 Case 1(Orphan wsl)의 경우 **기존 wsl은 진짜 측정값**이므로 그대로 보존. wcl만 "없으면 없는 대로" 처리.
+
+---
+
 **커버 범위**: 강제종료된 task가 VIEW에 제대로 보이지 않는 **두 가지 케이스**를 한 번에 수정.
 - Case 1 (Orphan work_start_log) — wsl 있음 + wcl 없음 → "진행중" 오표시
 - Case 2 (미시작 강제종료) — wsl 자체 없음 → worker 라인 자체가 누락, 상단 `🔒 강제종료` 뱃지만 남음
@@ -27390,6 +27420,225 @@ docstring Response 스펙에도 `checker_role`, `phase1_applicable`, `qi_check_r
 **연계**: `AXIS-VIEW/OPS_API_REQUESTS.md` #59 DONE, `AXIS-VIEW/VIEW_FE_Request.md` FE-18.
 
 **검증 권장**: Codex에 재검증 의뢰 (판정 기준: `curl ... | grep -c '"checker_role"'` 결과가 0 → ≥1로 변했는지 + VIEW 화면 JIG 14 row 중 `(GST)` 접미사 7건이 QI 뱃지로 표시되는지).
+
+---
+
+### 🔧 FIX-25 (2026-04-20 설계 v4 — Codex M1(tasks API breaking) 지적 + 실측 재조사로 progress API 단일 확장으로 전환) — VIEW 상세뷰·O/N 리스트에 협력사명 + line 노출
+
+> **📐 설계 원칙 — BE 코드 클린 코어 (2026-04-20 Twin파파 확정)**:
+> BE 코드 추가 시 **기존 모듈 재사용 우선**, 거미줄식 신규 JOIN·dict 빌더 중복 금지. FE는 본 원칙 엄격 적용 대상 아님. 상세: `feedback_system_design_principle.md` "세부 원칙 — BE 코드 구조" 참조.
+>
+> **연계 VIEW FE**: `AXIS-VIEW/VIEW_FE_Request.md` FE-20 (상세뷰 카테고리 회사명) + FE-21 (line 값 노출). BE 배포 후 FE 착수. **v4 전환으로 FE 설계서도 대응 수정 필요** (별도 세션 또는 터미널 교차검증 완료 후 정리).
+>
+> **Twin파파 확인 사항 (2026-04-20)**:
+> - PI/QI/SI는 회사명 표시 불필요 (GST 자체검사 고정) → BE 응답에는 4필드 모두 포함, **필터링은 FE에서**.
+> - `module_outsourcing` 실질 고정값 "TMS" (변경 이력 없음).
+> - S/N 채번 시 협력사 배정 완료 → NULL 사실상 없음. 방어 코드는 유지.
+> - line 변경 이력 추적 요구 **없음** — DB 현재값 그대로 응답.
+>
+> **Codex 교차검증 v3 → v4 업그레이드 핵심 (2026-04-20)**:
+> - **v3 치명적 결함**: 설계서 예시 `response = {'tasks': [...], 'product_info': {...}}` 가 **실제 `work.py:718` `return jsonify(task_list)` 리스트 응답 구조와 불일치** → 구현 시 VIEW `snStatus.ts getSNTasks()` (`Array.isArray(data) ? data : []`) + OPS `task_service.dart` 모든 소비처 동시 breaking.
+> - **실측 재조사 결과 (결정적 발견)**: `progress_service.py` L65~67에 이미 `pi.mech_partner` / `elec_partner` / `module_outsourcing` **3필드 SELECT 중**, L296~299에서 `sn_data.pop(...)` 으로 응답에서만 제거 (주석 원문: "응답에서 partner 필드 제거 (내부용)"). 권한 숨김 아닌 my_category 계산 후 단순 미노출 상태.
+> - **v4 전환**: tasks API(`work.py`) + production.py 완전 무변경. **`progress_service.py` 단일 파일에서 SELECT 2줄 + dict 1줄 추가 + pop 3줄 제거 = touch 6줄 / net 0줄 (+3 / −3)**. Breaking change 0건, 신규 엔드포인트 0건, 신규 JOIN 0건.
+
+**배경**: Twin파파 요청 — (1) 상세뷰 MECH/ELEC/TM 카테고리 헤더에 담당 회사명(`에스이엔지`/`GST`/`TMS` 등) 동반 표시, (2) 생산현황 O/N 카드와 S/N 상세뷰 헤더에 고객사 공정 라인(`line`, 예: `TW(F16)` / `JP(F15)` / `FAB2` / `FOUNDRY` / `P4-D`) 노출. 두 건 모두 **동일 source table(`plan.product_info`)** → BE 변경은 **progress API 1곳만** 확장해 처리.
+
+---
+
+#### 🔍 v3 폐기 + 실측 재조사 요약 (v4 전환 근거)
+
+**v1 ~ v3 진화 요약**:
+- v1: task_detail 2쿼리 + production 모두에 신규 LEFT JOIN 거미줄 → 폐기
+- v2: `get_product_by_serial_number()` 모델 재사용 + production CTE 집계 → 중간안
+- v3: production CTE 제거 + 단순 LEFT JOIN + tasks 응답에 `product_info` 주입 → **Codex M1 breaking change 지적** (설계서 dict 예시 vs `work.py:718` list 응답 불일치)
+
+**v4 전환을 촉발한 실측 결과 (2026-04-20 Codex M1 반응 + Claude grep)**:
+1. `work.py:718` `return jsonify(task_list), 200` — **tasks API는 List 응답 확정**. dict 래핑 시 VIEW `snStatus.ts` `Array.isArray(data) ? data : []` + OPS `task_service.dart:102~112` List/Map 양면 파싱 모두 영향 → 동시 배포 강제.
+2. `progress_service.py` L57~77 `sn_list` CTE + L88~105 메인 SELECT 에서 **`pi.mech_partner` / `pi.elec_partner` / `pi.module_outsourcing` 3필드 이미 SELECT 중**. L253~268 `sn_map[sn]` dict 조립에도 3필드 포함. 직후 L296~299 `sn_data.pop(...)` **3줄 삭제로 응답에서 제거 중** — 주석 원문 "응답에서 partner 필드 제거 (내부용)". 권한 숨김 목적이 아닌 my_category 계산 용도로만 쓰고 그 이후 버리는 중.
+3. VIEW `SNDetailPanel.tsx:17` 는 이미 `product: SNProduct` prop 으로 받음. `SNStatusPage.tsx:41,277` 는 progress API products 배열에서 `selectedProduct = useMemo(...)` 로 뽑아 상세 패널에 내려주는 구조 완비.
+4. OPS FE는 `/api/app/product/progress` **사용 중** (`frontend/lib/screens/progress/sn_progress_screen.dart:44` `apiService.get('/app/product/progress')`). 단, `_fetchProgress()` 가 `response['products']` 를 `Map<String, dynamic>.from(e)` 로 통째 담아 `_products` state에 넣고 기존 키만 UI에서 꺼내 쓰는 패턴이라, **신규 키 4개 추가는 파싱 무영향** (Dart Map 은 unknown key 무시, 추가 필드는 silent carry). → progress 응답 확장은 **OPS FE 영향 0건** (미사용이 아니라 "사용 중이나 추가 전용 변경으로 깨지지 않음" 근거).
+
+→ **결론**: tasks API 건드리지 않고 progress API 응답에서 pop 제거 + `line` 1필드 추가만으로 FE-20/FE-21 모두 데이터 공급 가능. **v3 대비 breaking 위험 0, BE touch 6줄 / net 0줄 (v3 ~40줄 대비 추가 절감).**
+
+---
+
+#### 🎯 v4 채택안 — `progress_service.py` 단일 확장
+
+**핵심 전략**:
+- BE: `/api/app/product/progress` 응답에 `mech_partner` / `elec_partner` / `module_outsourcing` / `line` 4필드 노출 복구 (+line 신규 SELECT 1줄).
+- VIEW: `SNProduct` 인터페이스 4필드 확장. 상세뷰(FE-20)는 `selectedProduct.mech_partner` 등으로, O/N 카드(FE-21)는 `groupedByON` 내부에서 products 배열의 `line` 최빈값 집계로 처리.
+- tasks API (`work.py`), production.py, `models/product_info.py` 전부 **무변경**.
+
+---
+
+#### 📦 수정 범위 (BE 1파일, 순 diff ~5줄 + 테스트)
+
+**1. `backend/app/services/progress_service.py`** (유일 수정 파일)
+
+**① sn_list CTE SELECT 확장 (L64~67 부근)** — `pi.line` 1줄 추가:
+```python
+query = f"""
+    WITH sn_list AS (
+        SELECT
+            qr.serial_number,
+            qr.qr_doc_id,
+            pi.model,
+            pi.customer,
+            pi.ship_plan_date,
+            pi.sales_order,
+            pi.mech_partner,
+            pi.elec_partner,
+            pi.module_outsourcing,
+            pi.line,                     -- ← 신규 1줄
+            COALESCE(cs.all_completed, false) AS all_completed,
+            cs.all_completed_at
+        FROM qr_registry qr
+        JOIN plan.product_info pi ON qr.serial_number = pi.serial_number
+        ...
+```
+
+**② 메인 SELECT 컬럼 확장 (L94~97 부근)** — `sn.line` 1줄 추가:
+```python
+    SELECT
+        sn.serial_number,
+        sn.qr_doc_id,
+        sn.model,
+        sn.customer,
+        sn.ship_plan_date,
+        sn.sales_order,
+        sn.mech_partner,
+        sn.elec_partner,
+        sn.module_outsourcing,
+        sn.line,                         -- ← 신규 1줄
+        sn.all_completed,
+        ...
+```
+
+**③ `_aggregate_products()` dict 조립에 line 추가 (L256~268 부근)** — `'line': row['line']` 1줄 추가:
+```python
+sn_map[sn] = {
+    'serial_number': sn,
+    'qr_doc_id': row['qr_doc_id'],
+    'model': row['model'],
+    'customer': row['customer'],
+    'ship_plan_date': ...,
+    'sales_order': row['sales_order'],
+    'all_completed': row['all_completed'],
+    'all_completed_at': ...,
+    'mech_partner': row['mech_partner'],
+    'elec_partner': row['elec_partner'],
+    'module_outsourcing': row['module_outsourcing'],
+    'line': row['line'],                 -- ← 신규 1줄
+    'categories': {},
+}
+```
+
+**④ L296~299 pop 3줄 제거** — 내부용 삭제 블록 전체 삭제:
+```python
+# 삭제 대상 (L296~299):
+#   sn_data.pop('mech_partner', None)
+#   sn_data.pop('elec_partner', None)
+#   sn_data.pop('module_outsourcing', None)
+```
+→ my_category 계산(L291~294)은 해당 pop 이전에 완료되므로 pop 제거 부작용 0. 동일 필드를 그대로 응답에 노출할 뿐.
+
+**순 diff**: +3 줄 (line 관련 SELECT 2 + dict 1) −3 줄 (pop 3) = **touch 6줄, net 0줄**.
+
+**2. `work.py`**, **`routes/production.py`**, **`models/product_info.py`** — **모두 무변경**. v3 설계의 task_detail / production 변경은 전면 철회.
+
+**3. 테스트** (`tests/backend/services/test_progress_service.py` 또는 신규 파일)
+- `TC-PROGRESS-PI-01`: 일반 협력사 S/N 1건 → `products[0].mech_partner="에스이엔지"`, `elec_partner="GST"`, `module_outsourcing="TMS"`, `line="TW(F16)"`.
+- `TC-PROGRESS-PI-02`: 4필드 중 일부 NULL → 각 키 존재, 값 None. `line IS NULL` 시 `"line": null`.
+- `TC-PROGRESS-PI-03`: GST 자체생산(`mech_partner="GST"`) 케이스 정확 반환.
+- `TC-PROGRESS-PI-04`: Admin 요청 시 회사 필터 우회 후에도 4필드 전체 응답 (권한 누설 아닌 이미 필터된 row 범위 내).
+- `TC-PROGRESS-PI-05`: `company_override` 적용 시 협력사 작업자처럼 자기 회사 S/N만 + 해당 row의 4필드.
+- `TC-PROGRESS-PI-06`: O/N 내 혼재(F16×3 + F15×1) 시 products 배열에 per-S/N `line` 정확 반환 (**집계는 FE 책임 — BE 테스트에서는 per-S/N 값만 확인**).
+- 회귀: 기존 `test_progress_service` 테스트(있으면) GREEN 유지. SELECT 컬럼 추가 + pop 제거라 row 수·다른 필드 무변경.
+
+---
+
+#### 📊 변경 요약 비교 (v1 폐기 → v2 중간안 → v3 폐기(Codex M1) → v4 채택)
+
+| 항목 | 원안 v1 (거미줄) | 중간안 v2 (BE 집계 CTE) | v3 (Codex M1 breaking) | **v4 채택 (progress 단일 확장)** |
+|---|---|---|---|---|
+| 수정 대상 BE 파일 | task_detail + production 2곳 | production 1곳 (CTE) | tasks + production 2곳 | **progress_service.py 1곳** |
+| 신규 SQL JOIN 추가 | 3건 | 1건 (CTE) | 1건 (단순 LEFT JOIN) | **0건 (기존 SELECT 확장만)** |
+| 신규 dict 빌더 중복 정의 | 2~3곳 | 0곳 | 0곳 | **0곳 (기존 `_aggregate_products` 재사용)** |
+| BE 혼재 집계 로직 | 없음 | CTE 18줄 | 없음 | **없음 (FE 책임 유지)** |
+| 예상 순 diff | ~150줄 | ~60줄 | ~40줄 | **6 touch줄 / net 0줄 (+3/-3)** |
+| 기존 표준 패턴 활용 | ❌ | ✅ 모델 재사용 | ✅ 모델 재사용 | **✅ pop 제거 + SELECT 1줄 추가** |
+| 모델 수정 | 있음 | 0줄 | 0줄 | **0줄** |
+| 거미줄 지수 | 🔴 높음 | 🟡 중간(CTE) | 🟡 낮음(JOIN 추가) | **🟢 없음(JOIN 증가 0)** |
+| BE/FE 로직 중복 위험 | - | 🟡 있음 | 🟢 없음 | **🟢 없음** |
+| Breaking change 위험 | 🔴 매우 높음 | 🟡 중간 | 🔴 **높음**(tasks List→Dict, VIEW+OPS FE 동시 깨짐) | **🟢 없음(tasks API 무변경)** |
+| OPS FE 영향 | 큼 | 중간 | **큼**(`task_service.dart` 파서 동시 배포 강제) | **없음**(progress API 미소비) |
+| VIEW FE 영향 | 큼 | 중간 | 큼(신규 키 + 타입 2벌) | **작음**(`SNProduct` 4필드 확장 + `useMemo` 2개) |
+
+---
+
+#### ✅ 영향 범위 (v4)
+
+- **BE 파일: 1개** (`backend/app/services/progress_service.py`) + 테스트 1개
+- **예상 diff**: 서비스 ~6 touch줄 (net 0줄) + 테스트 ~80줄 = 약 **85줄** (대부분 테스트)
+- **신규 쿼리 0건** — 기존 CTE + 메인 SELECT 컬럼 1개 추가만
+- **신규 JOIN 0건** — `plan.product_info` JOIN은 이미 `sn_list` CTE(L73)에 존재
+- **API 하위 호환 유지**: `/api/app/product/progress` products 요소에 `mech_partner` / `elec_partner` / `module_outsourcing` / `line` 4 키 추가만. 기존 필드 변경 0건, 제거 0건.
+- **tasks API (`work.py`) 무변경** — v3 breaking change(List→Dict) 원천 차단.
+- **production.py 무변경** — v2/v3 에서 고려하던 LEFT JOIN·CTE 확장 철회.
+- **OPS FE 영향 0건** — `/api/app/product/progress` 미사용 (`task_service.dart`, `work_service.dart` 모두 tasks/product/work API 만 소비).
+- **DB migration 0건**
+- **모델 확장 0줄** — `ProductInfo` dataclass는 이미 4필드 전부 보유 (현 FIX에서는 dataclass 미경유, progress_service 직접 SELECT)
+
+---
+
+#### 🚀 배포 순서
+
+1. **BE 단독 배포** (`progress_service.py` 1파일). 기존 클라이언트는 신규 키 무시 → 무영향. **rollback 시 pop 3줄 복구 + line SELECT 1줄 제거로 원복 가능 (5분 내)**.
+2. **VIEW FE 별도 배포** (FE-20/FE-21):
+   - `SNProduct` 인터페이스에 4필드 추가 (`types/snStatus.ts`).
+   - `SNDetailPanel` 카테고리 헤더 JSX 수정 (FE-20).
+   - `SNStatusPage` `groupedByON` 내부 `useMemo` 로 per-O/N `line` 최빈값 / 혼재여부 계산 (FE-21).
+   - VIEW FE 설계서(`VIEW_FE_Request.md`) v4 대응 수정은 터미널 Codex 교차검증 완료 후 별도 커밋.
+3. **운영 확인**: 실제 S/N 샘플 3종(협력사 / GST 자체생산 / line 혼재 O/N) 육안 검증. tasks API + OPS FE 회귀 샘플링 1회.
+
+---
+
+#### 🔎 검증 권장 (v4)
+
+1. pytest `TC-PROGRESS-PI-01~06` 신규 작성 + 기존 `test_progress_service` / `test_work_route` / `test_production_route` 전체 GREEN (특히 tasks API / production 회귀 0건 확인).
+2. Codex 교차검증 (v4 재검증 포인트):
+   - **v3 M1 breaking change 완전 철회 여부**: `work.py:718` `return jsonify(task_list), 200` **무변경** 확인.
+   - **JOIN 증가 0건**: `progress_service.py` 내 `plan.product_info` JOIN 개수 diff **없음** 확인 (CTE L73 기존 JOIN 1건 그대로).
+   - **pop 제거 부작용 0**: `_aggregate_products()` 내 my_category 계산(L291~294)이 pop 제거된 필드들에 의존하지 않는지, 또는 pop 이전에 이미 소비되었는지 재확인.
+   - **production.py 무변경 확인**: v3 에서 설계했던 LEFT JOIN·신규 SELECT 실제 커밋에 **없는지** 확인.
+3. **실측 API 응답 확인**:
+   - `curl '<host>/api/app/product/progress' -H 'Authorization: ...' | jq '.products[0] | {serial_number, mech_partner, elec_partner, module_outsourcing, line}'` → 4필드 모두 존재, 값 정상.
+   - `curl '<host>/api/app/tasks/<serial_number>?all=true' | jq 'type'` → `"array"` 유지 (dict 래핑 **없음**) 확인. v3 breaking 방지.
+4. VIEW 육안 검증:
+   - `SNStatusPage` 상세 패널 헤더 MECH/ELEC/TMS 라인에 회사명 출력.
+   - O/N 카드 `line` 표시. 혼재 O/N 은 `혼재(F16×3, F15×1)` 또는 동등 표현.
+5. OPS 회귀: `/api/app/tasks/<sn>` Flutter 응답 파싱 스팟 체크 — `task_service.dart:102~112` List 분기 정상 진입.
+
+---
+
+#### 🧩 향후 리팩토링 힌트 (범위 외, 기록용)
+
+- `progress_service.py` `_aggregate_products()` 의 my_category 계산 블록(L291~294)은 partner 필드 3개에 대한 **if/elif 체인**. 카테고리가 4~5개로 늘어나면 `{category: partner_field}` 매핑 dict 로 치환 검토 (현 시점 YAGNI).
+- `plan.product_info` 추가 노출 요청이 2회 더 오면 (예: `maintainer`, `test_partner` 등) `progress_service.py` SELECT 직접 나열 대신 `ProductInfo.to_dict(keys: list[str])` 공용 직렬화 메서드 도입 검토. 현 FIX 에서는 3필드 pop 제거 + 1필드 SELECT 추가 수준이라 **YAGNI**.
+- tasks API 에 product_info 노출이 실제 필요해지는 시점이 오면, v3 설계(Dict 래핑) 가 아니라 **쿼리 파라미터**(`?include=product_info`) 로 opt-in 하는 설계로 breaking 회피 (미래 과제).
+
+---
+
+**연계**:
+- `AXIS-VIEW/VIEW_FE_Request.md` FE-20 + FE-21 (v4 대응 수정은 터미널 Codex 교차검증 후 별도 세션에서 반영 예정)
+- `AXIS-OPS/BACKLOG.md` FIX-25 행 (v4 기준 동기화 필요)
+- `feedback_system_design_principle.md` "세부 원칙 — BE 코드 구조" 적용 사례 — v4 에서 "기존 파일 내 pop 제거 + SELECT 1줄" 수준까지 축소되어 원칙 최대 충족.
+
+**우선순위**: **중간** (운영 가시성 개선, 기존 기능 영향 없음, breaking 위험 제거)
+
+**예상 소요 (v4 기준, Codex M1 반영)**:
+- BE 구현 15분 (단일 파일, diff 6 touch줄) + 테스트 작성 45분 + 스테이징 검증 30분 + Codex 재검증 30분 = 총 **약 2시간**
+- v3(1시간 50분) 대비 큰 차이 없으나, **breaking change 위험 0 + OPS FE 회귀 테스트 부담 제거**로 실측 위험가중 소요는 오히려 감소.
 
 ---
 

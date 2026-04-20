@@ -59,17 +59,18 @@ def cleanup_progress_data(db_conn):
 
 def _seed_product(db_conn, serial_number: str, model: str = 'GAIA-100',
                   mech_partner: str = 'FNI', elec_partner: str = 'P&S',
-                  module_outsourcing: str = '', ship_plan_date: str = '2026-04-01'):
+                  module_outsourcing: str = '', ship_plan_date: str = '2026-04-01',
+                  line: str = None):
     """테스트용 product_info + qr_registry + completion_status 시드"""
     cursor = db_conn.cursor()
     qr_doc_id = f'DOC_{serial_number}'
 
     cursor.execute("""
         INSERT INTO plan.product_info (serial_number, model, mech_partner, elec_partner,
-            module_outsourcing, ship_plan_date)
-        VALUES (%s, %s, %s, %s, %s, %s)
+            module_outsourcing, ship_plan_date, line)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (serial_number) DO NOTHING
-    """, (serial_number, model, mech_partner, elec_partner, module_outsourcing, ship_plan_date))
+    """, (serial_number, model, mech_partner, elec_partner, module_outsourcing, ship_plan_date, line))
 
     cursor.execute("""
         INSERT INTO qr_registry (qr_doc_id, serial_number, status)
@@ -417,3 +418,156 @@ class TestSnProgress:
         sns = [p['serial_number'] for p in data['products']]
         assert sn_ps in sns
         assert sn_ca not in sns
+
+
+class TestProductInfoFields:
+    """FIX-25 v4: progress API에 mech/elec_partner + module_outsourcing + line 4필드 노출"""
+
+    def _find(self, products, sn):
+        for p in products:
+            if p['serial_number'] == sn:
+                return p
+        return None
+
+    def test_tc_progress_pi_01_fni_partner_fields(self, client, create_test_worker, get_auth_token, db_conn):
+        """TC-PROGRESS-PI-01: 일반 협력사 S/N 1건 → 4필드 정확 반환"""
+        sn = _sn(f'PI01_{_TS()}')
+        _seed_product(db_conn, sn, mech_partner='FNI', elec_partner='P&S',
+                      module_outsourcing='TMS', line='TW(F16)')
+
+        worker_id = create_test_worker(
+            email=f'prog_pi01_{_TS()}@test.com', password='Test123!',
+            name='Admin PI01', role='ADMIN', company='GST', is_admin=True,
+        )
+        token = get_auth_token(worker_id)
+
+        response = client.get('/api/app/product/progress',
+                              headers={'Authorization': f'Bearer {token}'})
+        assert response.status_code == 200
+
+        p = self._find(response.get_json()['products'], sn)
+        assert p is not None
+        assert p['mech_partner'] == 'FNI'
+        assert p['elec_partner'] == 'P&S'
+        assert p['module_outsourcing'] == 'TMS'
+        assert p['line'] == 'TW(F16)'
+
+    def test_tc_progress_pi_02_null_fields(self, client, create_test_worker, get_auth_token, db_conn):
+        """TC-PROGRESS-PI-02: 4필드 중 일부 NULL → 각 키 존재, 값 None"""
+        sn = _sn(f'PI02_{_TS()}')
+        _seed_product(db_conn, sn, mech_partner='FNI', elec_partner='',
+                      module_outsourcing='', line=None)
+
+        worker_id = create_test_worker(
+            email=f'prog_pi02_{_TS()}@test.com', password='Test123!',
+            name='Admin PI02', role='ADMIN', company='GST', is_admin=True,
+        )
+        token = get_auth_token(worker_id)
+
+        response = client.get('/api/app/product/progress',
+                              headers={'Authorization': f'Bearer {token}'})
+        assert response.status_code == 200
+
+        p = self._find(response.get_json()['products'], sn)
+        assert p is not None
+        assert 'mech_partner' in p and 'elec_partner' in p
+        assert 'module_outsourcing' in p and 'line' in p
+        assert p['mech_partner'] == 'FNI'
+        assert p['elec_partner'] == ''
+        assert p['module_outsourcing'] == ''
+        assert p['line'] is None
+
+    def test_tc_progress_pi_03_gst_in_house(self, client, create_test_worker, get_auth_token, db_conn):
+        """TC-PROGRESS-PI-03: GST 자체생산(mech_partner='GST') 케이스 정확 반환"""
+        sn = _sn(f'PI03_{_TS()}')
+        _seed_product(db_conn, sn, mech_partner='GST', elec_partner='GST',
+                      module_outsourcing='', line='FAB2')
+
+        worker_id = create_test_worker(
+            email=f'prog_pi03_{_TS()}@test.com', password='Test123!',
+            name='Admin PI03', role='ADMIN', company='GST', is_admin=True,
+        )
+        token = get_auth_token(worker_id)
+
+        response = client.get('/api/app/product/progress',
+                              headers={'Authorization': f'Bearer {token}'})
+        assert response.status_code == 200
+
+        p = self._find(response.get_json()['products'], sn)
+        assert p is not None
+        assert p['mech_partner'] == 'GST'
+        assert p['elec_partner'] == 'GST'
+        assert p['line'] == 'FAB2'
+
+    def test_tc_progress_pi_04_admin_all_fields(self, client, create_test_worker, get_auth_token, db_conn):
+        """TC-PROGRESS-PI-04: Admin 전체 조회에도 4필드 전부 포함"""
+        sn1 = _sn(f'PI04A_{_TS()}')
+        sn2 = _sn(f'PI04B_{_TS()}')
+        _seed_product(db_conn, sn1, mech_partner='FNI', line='TW(F16)')
+        _seed_product(db_conn, sn2, mech_partner='BAT', line='JP(F15)')
+
+        worker_id = create_test_worker(
+            email=f'prog_pi04_{_TS()}@test.com', password='Test123!',
+            name='Admin PI04', role='ADMIN', company='GST', is_admin=True,
+        )
+        token = get_auth_token(worker_id)
+
+        response = client.get('/api/app/product/progress',
+                              headers={'Authorization': f'Bearer {token}'})
+        assert response.status_code == 200
+        products = response.get_json()['products']
+
+        p1 = self._find(products, sn1)
+        p2 = self._find(products, sn2)
+        assert p1 and p2
+        assert p1['mech_partner'] == 'FNI' and p1['line'] == 'TW(F16)'
+        assert p2['mech_partner'] == 'BAT' and p2['line'] == 'JP(F15)'
+
+    def test_tc_progress_pi_05_company_override(self, client, create_test_worker, get_auth_token, db_conn):
+        """TC-PROGRESS-PI-05: Admin company_override 적용 시에도 4필드 전체 응답"""
+        sn_fni = _sn(f'PI05F_{_TS()}')
+        sn_bat = _sn(f'PI05B_{_TS()}')
+        _seed_product(db_conn, sn_fni, mech_partner='FNI', line='TW(F16)')
+        _seed_product(db_conn, sn_bat, mech_partner='BAT', line='JP(F15)')
+
+        worker_id = create_test_worker(
+            email=f'prog_pi05_{_TS()}@test.com', password='Test123!',
+            name='Admin PI05', role='ADMIN', company='GST', is_admin=True,
+        )
+        token = get_auth_token(worker_id)
+
+        response = client.get('/api/app/product/progress?company=FNI',
+                              headers={'Authorization': f'Bearer {token}'})
+        assert response.status_code == 200
+        products = response.get_json()['products']
+
+        p = self._find(products, sn_fni)
+        assert p is not None
+        assert p['mech_partner'] == 'FNI'
+        assert p['line'] == 'TW(F16)'
+        assert self._find(products, sn_bat) is None
+
+    def test_tc_progress_pi_06_on_mixed_line(self, client, create_test_worker, get_auth_token, db_conn):
+        """TC-PROGRESS-PI-06: O/N 혼재(F16×3 + F15×1) 시 per-S/N line 정확 반환 (BE 집계 0)"""
+        sns_f16 = [_sn(f'PI06F16A_{_TS()}'), _sn(f'PI06F16B_{_TS()}'), _sn(f'PI06F16C_{_TS()}')]
+        sn_f15 = _sn(f'PI06F15_{_TS()}')
+        for s in sns_f16:
+            _seed_product(db_conn, s, mech_partner='FNI', line='TW(F16)')
+        _seed_product(db_conn, sn_f15, mech_partner='FNI', line='JP(F15)')
+
+        worker_id = create_test_worker(
+            email=f'prog_pi06_{_TS()}@test.com', password='Test123!',
+            name='Admin PI06', role='ADMIN', company='GST', is_admin=True,
+        )
+        token = get_auth_token(worker_id)
+
+        response = client.get('/api/app/product/progress',
+                              headers={'Authorization': f'Bearer {token}'})
+        assert response.status_code == 200
+        products = response.get_json()['products']
+
+        for s in sns_f16:
+            p = self._find(products, s)
+            assert p is not None and p['line'] == 'TW(F16)'
+        p15 = self._find(products, sn_f15)
+        assert p15 is not None and p15['line'] == 'JP(F15)'

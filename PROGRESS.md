@@ -3,7 +3,52 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.9.9 (FIX-24 OPS 미종료 작업 카드 O/N 뱃지 추가, 2026-04-18)
+> **현재 버전**: v2.9.10 (FIX-25 v4 progress API에 partner/line 4필드 노출, 2026-04-20)
+
+---
+
+## FIX-25 v4: progress API에 협력사/line 4필드 노출 (2026-04-20, v2.9.10)
+
+**배경**: Twin파파 요청 — (1) VIEW 상세뷰 MECH/ELEC/TM 카테고리 헤더에 담당 회사명 동반 표시 (FE-20), (2) 생산현황 O/N 카드와 S/N 상세뷰 헤더에 고객사 공정 라인 노출 (FE-21). 두 건 모두 동일 source table(`plan.product_info`).
+
+**설계 진화 (v1 → v4)**:
+- v1: 거미줄 JOIN 3곳 → 폐기
+- v2: production CTE 집계 → 폐기 (과설계)
+- v3: tasks API에 `product_info` dict 주입 → 폐기 (work.py:718 `jsonify(task_list)` 리스트 응답과 List→Dict breaking change)
+- **v4**: `progress_service.py` 단일 확장, touch 6줄 / net 0줄 채택
+
+**수정 파일 (BE 1파일 + Test 1파일)**:
+- `backend/app/services/progress_service.py` — sn_list CTE + 메인 SELECT에 `pi.line` 추가 (각 1줄), `_aggregate_products` dict `'line': row['line']` 추가, L296~299 `sn_data.pop(...)` 3줄 + 주석 블록 제거. 순 diff `+3 / -3 = 0`.
+- `tests/backend/test_sn_progress.py` — `_seed_product()` helper에 `line` 파라미터 추가 + `TestProductInfoFields` 클래스 신설 (TC-PROGRESS-PI-01~06)
+
+**무변경 (v3에서 고려했던 것 철회)**:
+- `backend/app/routes/work.py` — tasks API(L718 `jsonify(task_list)`) 무변경 → v3 breaking change 원천 차단
+- `backend/app/routes/production.py` — LEFT JOIN·CTE 확장 철회
+- `backend/app/models/product_info.py` — ProductInfo dataclass 무변경 (이미 4필드 보유)
+
+**결정적 실측 발견 (v3 → v4 전환 근거)**:
+- `progress_service.py` L57~77/L88~105 SELECT에 `mech_partner`/`elec_partner`/`module_outsourcing` 3필드 **이미 SELECT 중**. 직후 L296~299 `sn_data.pop(...)` 3줄로 응답에서만 제거 (주석: "응답에서 partner 필드 제거 (내부용)"). my_category 계산 후 버리는 구조.
+- → pop 제거 + line 1필드 SELECT 추가만으로 FE-20/FE-21 모두 데이터 공급. v3 대비 breaking 위험 0.
+
+**Claude×Codex 교차검증 로그**:
+- v3 1차 Codex 지적: tasks API dict 래핑 시 VIEW `snStatus.ts` + OPS `task_service.dart` 동시 breaking → M1 판정
+- Claude 실측 재조사: progress_service.py pop 패턴 발견 → v4 단일 파일 전환 제안
+- 설계서 L27459/L27588 "OPS FE 미사용" 서술 오류 (실제: `sn_progress_screen.dart:44`에서 사용 중) → A급 정정 완료. 파싱 breaking 0 근거(Dart `Map<String, dynamic>.from(e)` 패턴) 명시
+
+**테스트 결과 (pytest, test DB)**:
+- `test_sn_progress.py` — **16/16 PASS** (기존 TC-PROG-01~10 + 신규 TC-PROGRESS-PI-01~06)
+- `test_product_api.py` — **17/17 PASS** (회귀 0)
+- `test_production.py` — **9/9 PASS** (회귀 0)
+- **합계 42/42 GREEN** — Codex 합의 단계 진입 없이 첫 시도 통과
+
+**API 변경 요약**:
+- `GET /api/app/product/progress` 응답 `products[].*` 에 신규 키 4개 추가:
+  - `mech_partner`, `elec_partner`, `module_outsourcing`, `line`
+- 기존 필드 변경 0건, 제거 0건. 하위 호환 100%.
+
+**연계**:
+- VIEW FE-20 (상세뷰 카테고리 회사명) + FE-21 (O/N line 노출) — BE 배포 후 FE 착수 예정
+- line 혼재 집계(`{line} 외 {N-1}`)는 FE `groupedByON` useMemo 책임 (BE 집계 0)
 
 ---
 

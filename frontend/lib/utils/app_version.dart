@@ -1,6 +1,6 @@
 /// AXIS-OPS 앱 버전 — 단일 소스
 class AppVersion {
-  static const String version = '2.9.9';
-  static const String buildDate = '2026-04-18';
+  static const String version = '2.9.10';
+  static const String buildDate = '2026-04-20';
   static String get display => 'G-AXIS OPS v$version';
 }
