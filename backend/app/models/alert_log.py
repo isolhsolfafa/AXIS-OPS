@@ -132,9 +132,16 @@ def create_alert(
         return alert_id
 
     except PsycopgError as e:
+        # HOTFIX-SCHEDULER-PHASE1.5 (2026-04-22): ERROR 로깅 prefix + 파라미터 전체 포함
         if conn:
             conn.rollback()
-        logger.error(f"Alert creation failed: {e}")
+        logger.error(
+            f"[alert_insert_fail] INSERT failed: alert_type={alert_type}, "
+            f"serial_number={serial_number}, qr_doc_id={qr_doc_id}, "
+            f"task_detail_id={task_detail_id}, target_role={target_role}, "
+            f"target_worker_id={target_worker_id}, message={message!r}, error={e}",
+            exc_info=True
+        )
         return None
     finally:
         if conn:

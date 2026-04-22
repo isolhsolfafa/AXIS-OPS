@@ -1,6 +1,7 @@
 """
 알림 서비스
 Sprint 3: 알림 생성 + 조회 + 읽음 처리 + WebSocket broadcast
+HOTFIX-SCHEDULER-PHASE1.5 (2026-04-22): alert silent fail ERROR 로깅 추가
 """
 
 import logging
@@ -20,6 +21,13 @@ from app.db_pool import put_conn
 
 
 logger = logging.getLogger(__name__)
+
+# HOTFIX-SCHEDULER-PHASE1.5: Sentry SDK 선택적 import (패키지 미설치 시 조용히 건너뛰기)
+try:
+    import sentry_sdk
+    _SENTRY_AVAILABLE = True
+except ImportError:
+    _SENTRY_AVAILABLE = False
 
 
 def sn_label(serial_number: str) -> str:
@@ -47,43 +55,71 @@ def create_and_broadcast_alert(alert_data: Dict[str, Any]) -> Optional[int]:
     Returns:
         alert_id, 실패 시 None
     """
-    alert_id = create_alert(
-        alert_type=alert_data['alert_type'],
-        message=alert_data['message'],
-        serial_number=alert_data.get('serial_number'),
-        qr_doc_id=alert_data.get('qr_doc_id'),
-        triggered_by_worker_id=alert_data.get('triggered_by_worker_id'),
-        target_worker_id=alert_data.get('target_worker_id'),
-        target_role=alert_data.get('target_role'),
-        task_detail_id=alert_data.get('task_detail_id')
-    )
+    # HOTFIX-SCHEDULER-PHASE1.5: 전체 경로 ERROR 로깅 승격 (가능성 3 / G.3 silent fail 포착)
+    try:
+        alert_id = create_alert(
+            alert_type=alert_data['alert_type'],
+            message=alert_data['message'],
+            serial_number=alert_data.get('serial_number'),
+            qr_doc_id=alert_data.get('qr_doc_id'),
+            triggered_by_worker_id=alert_data.get('triggered_by_worker_id'),
+            target_worker_id=alert_data.get('target_worker_id'),
+            target_role=alert_data.get('target_role'),
+            task_detail_id=alert_data.get('task_detail_id')
+        )
 
-    if alert_id:
-        # WebSocket broadcast (Sprint 3)
-        from app.websocket.events import emit_new_alert, emit_process_alert
-        from datetime import datetime
-        from app.config import Config
+        if alert_id is None:
+            logger.error(
+                "[alert_create_none] create_alert returned None: alert_data=%s",
+                alert_data
+            )
+            return None
 
-        ws_alert_data = {
-            "alert_id": alert_id,
-            "alert_type": alert_data['alert_type'],
-            "serial_number": alert_data.get('serial_number'),
-            "qr_doc_id": alert_data.get('qr_doc_id'),
-            "message": alert_data['message'],
-            "created_at": datetime.now(Config.KST).isoformat()
-        }
+        # WebSocket broadcast (Sprint 3) — 개별 try/except 로 DB insert 결과 보존
+        try:
+            from app.websocket.events import emit_new_alert, emit_process_alert
+            from datetime import datetime
+            from app.config import Config
 
-        # 특정 작업자에게 전송
-        if alert_data.get('target_worker_id'):
-            emit_new_alert(alert_data['target_worker_id'], ws_alert_data)
-        # 역할 기반 전송 (공정 알림)
-        elif alert_data.get('target_role'):
-            ws_alert_data['target_role'] = alert_data['target_role']
-            emit_process_alert(ws_alert_data)
+            ws_alert_data = {
+                "alert_id": alert_id,
+                "alert_type": alert_data['alert_type'],
+                "serial_number": alert_data.get('serial_number'),
+                "qr_doc_id": alert_data.get('qr_doc_id'),
+                "message": alert_data['message'],
+                "created_at": datetime.now(Config.KST).isoformat()
+            }
 
-        logger.info(f"Alert created and broadcasted: alert_id={alert_id}")
+            # 특정 작업자에게 전송
+            if alert_data.get('target_worker_id'):
+                emit_new_alert(alert_data['target_worker_id'], ws_alert_data)
+            # 역할 기반 전송 (공정 알림)
+            elif alert_data.get('target_role'):
+                ws_alert_data['target_role'] = alert_data['target_role']
+                emit_process_alert(ws_alert_data)
 
-    return alert_id
+            logger.info(f"Alert created and broadcasted: alert_id={alert_id}")
+        except Exception as ws_exc:
+            logger.error(
+                f"[alert_silent_fail] WebSocket broadcast failed: "
+                f"alert_id={alert_id}, alert_data={alert_data}, error={ws_exc}",
+                exc_info=True
+            )
+            if _SENTRY_AVAILABLE:
+                sentry_sdk.capture_exception(ws_exc)
+            # broadcast 실패여도 DB insert 는 성공했으므로 alert_id 반환 유지
+
+        return alert_id
+
+    except Exception as e:
+        logger.error(
+            f"[alert_silent_fail] create_and_broadcast_alert exception: "
+            f"alert_data={alert_data}, error={e}",
+            exc_info=True
+        )
+        if _SENTRY_AVAILABLE:
+            sentry_sdk.capture_exception(e)
+        return None
 
 
 def get_worker_alerts(
