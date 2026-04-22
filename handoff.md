@@ -50,10 +50,21 @@
 
 ## 현재 버전
 
-- **OPS BE**: v2.9.10 (commit `4a6caf8` + pgAdmin 수동 SQL 047 블록 — HOTFIX-ALERT-SCHEMA-RESTORE 완료, v2.9.10 유지)
-- **OPS FE (Flutter PWA)**: v2.9.10 (version 파일만 bump, OPS FE 코드 변경 0 — Netlify 배포 skip)
-- **최근 Sprint**: HOTFIX-ALERT-SCHEMA-RESTORE-20260422 (migration 049 수동 복구) — ✅ 완료 (2026-04-22 11:25 KST), 12:00 tick 16건 INSERT 확인
-- **최근 완료 Sprint**: HOTFIX-ALERT-SCHEMA-RESTORE-20260422, HOTFIX-SCHEDULER-PHASE1.5, FIX-25 v4, FIX-24, HOTFIX-04, HOTFIX-05, HOTFIX-03, HOTFIX-02, BUG-45, 61-BE-B, 61-BE, BUG-43/44, HOTFIX-01, 60-BE, 59-BE, 58-BE
+- **OPS BE**: v2.9.11 (2026-04-22, 4 HOTFIX 통합 PATCH)
+- **OPS FE (Flutter PWA)**: v2.9.11 (version 파일만 bump, OPS FE 코드 변경 0 — Netlify 배포 skip)
+- **최근 Sprint**: HOTFIX-ALERT-SCHEDULER-DELIVERY-20260422 (scheduler 3곳 target_worker_id 표준 패턴 + 배치 dedupe) — ✅ 완료 (2026-04-22)
+- **최근 완료 Sprint**: HOTFIX-ALERT-SCHEDULER-DELIVERY, HOTFIX-SCHEDULER-DUP, HOTFIX-ALERT-SCHEMA-RESTORE, HOTFIX-SCHEDULER-PHASE1.5, FIX-25 v4, FIX-24, HOTFIX-04, HOTFIX-05, HOTFIX-03, HOTFIX-02, BUG-45, 61-BE-B, 61-BE, BUG-43/44, HOTFIX-01, 60-BE, 59-BE, 58-BE
+
+### 🗓 v2.9.11 포함 HOTFIX 이력 (SHA 별도 기록 — Codex A7 지적 반영)
+
+| HOTFIX ID | Commit SHA | 변경 범위 | 배포 시각 (KST) |
+|---|---|---|---|
+| HOTFIX-SCHEDULER-PHASE1.5 | `4a6caf8` | ERROR 로깅 prefix 추가 (관찰용) | 2026-04-22 10:47 |
+| HOTFIX-ALERT-SCHEMA-RESTORE | (pgAdmin SQL) | migration 049 수동 복구 (task_detail_id 컬럼 + enum 3종) | 2026-04-22 11:25 |
+| HOTFIX-SCHEDULER-DUP | `f1af8a4` | fcntl file lock — scheduler 단일 실행 | 2026-04-22 13:24 |
+| HOTFIX-ALERT-SCHEDULER-DELIVERY | `(this commit)` | scheduler 3곳 target_worker_id 표준 패턴 + 배치 dedupe | 2026-04-22 (예정) |
+
+⚠️ FE version skew 주의: 저장소 v2.9.11 vs Netlify 배포 v2.9.10 (FE 코드 변경 0, 다음 FE 배포 시 자동 반영)
 - **Migration 049**: Railway prod DB 에 migration_runner 미실행 → 2026-04-22 11:25 수동 SQL 복구 (id=37 기록)
 - **체크리스트 현황**: TM 완료 (SINGLE/DUAL qr_doc_id 정규화) / ELEC 완료 (Phase 1+2, 마스터 정규화) / MECH 미구현
 - **RULE-01**: Sprint 완료 시 FE flutter build web + Netlify 배포 필수

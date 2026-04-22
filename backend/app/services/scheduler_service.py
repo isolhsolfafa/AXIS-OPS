@@ -24,6 +24,26 @@ from app.db_pool import put_conn
 
 logger = logging.getLogger(__name__)
 
+# HOTFIX-ALERT-SCHEDULER-DELIVERY-20260422:
+# task_category → partner_field 매핑 (task_service.py L524-548 동일 규약 재사용)
+_CATEGORY_PARTNER_FIELD = {
+    'TMS':  'module_outsourcing',
+    'MECH': 'mech_partner',
+    'ELEC': 'elec_partner',
+}
+
+
+def _resolve_managers_for_category(serial_number: str, category: str) -> list:
+    """
+    task_category → 해당 관리자 worker_id 리스트.
+    Partner 기반 (TMS/MECH/ELEC) 또는 Role 기반 (PI/QI/SI) 자동 분기.
+    task_service.py L571 의 표준 알람 수신자 결정 패턴을 scheduler 에 적용.
+    """
+    from app.services.process_validator import get_managers_by_partner, get_managers_for_role
+    if category in _CATEGORY_PARTNER_FIELD:
+        return get_managers_by_partner(serial_number, _CATEGORY_PARTNER_FIELD[category])
+    return get_managers_for_role(category)
+
 # 전역 스케줄러 인스턴스
 _scheduler: Optional[BackgroundScheduler] = None
 
@@ -857,38 +877,48 @@ def check_orphan_relay_tasks_job() -> None:
         alert_count = 0
 
         for orphan in orphans:
-            # 중복 알림 방지: 같은 task에 대해 24시간 내 이미 알림이 존재하는지 확인
+            # HOTFIX-ALERT-SCHEDULER-DELIVERY-20260422:
+            # 배치 dedupe (M2 수용) — target_worker_id 지정된 row 만 고려 (legacy NULL 제외)
+            # 기존 query 는 target_worker_id 구분 없이 any row 체크하여 legacy 가 새 배송 차단
             cur.execute("""
-                SELECT 1 FROM app_alert_logs
+                SELECT DISTINCT target_worker_id FROM app_alert_logs
                 WHERE alert_type = 'RELAY_ORPHAN'
                   AND serial_number = %s
+                  AND target_worker_id IS NOT NULL
                   AND message LIKE %s
                   AND created_at > NOW() - INTERVAL '24 hours'
-                LIMIT 1
             """, (orphan['serial_number'], f"%{orphan['task_name']}%"))
+            already_sent = {row['target_worker_id'] for row in cur.fetchall()}
 
-            if cur.fetchone():
-                continue  # 24시간 내 이미 알림 발송됨
-
-            # Manager 알림 생성
-            create_and_broadcast_alert({
-                'alert_type': 'RELAY_ORPHAN',
-                'message': (
-                    f"[릴레이 미완료] {sn_label(orphan['serial_number'])} "
-                    f"{orphan['task_name']} — "
-                    f"작업자 {orphan['worker_count']}명 참여 후 "
-                    f"4시간 이상 미완료 상태입니다."
-                ),
-                'serial_number': orphan['serial_number'],
-                'qr_doc_id': orphan['qr_doc_id'],
-                'target_role': orphan['task_category'],  # 해당 카테고리 Manager에게
-            })
-            alert_count += 1
-
-            logger.info(
-                f"Relay orphan alert sent: task_id={orphan['task_detail_id']}, "
-                f"serial_number={orphan['serial_number']}"
+            # 표준 패턴 (task_service.py L571) — 관리자별 개별 INSERT
+            managers = _resolve_managers_for_category(
+                orphan['serial_number'], orphan['task_category']
             )
+            message = (
+                f"[릴레이 미완료] {sn_label(orphan['serial_number'])} "
+                f"{orphan['task_name']} — "
+                f"작업자 {orphan['worker_count']}명 참여 후 "
+                f"4시간 이상 미완료 상태입니다."
+            )
+            for manager_id in managers:
+                if manager_id in already_sent:
+                    continue
+                create_and_broadcast_alert({
+                    'alert_type': 'RELAY_ORPHAN',
+                    'message': message,
+                    'serial_number': orphan['serial_number'],
+                    'qr_doc_id': orphan['qr_doc_id'],
+                    'target_worker_id': manager_id,
+                    'target_role': orphan['task_category'],  # 라벨용 유지
+                })
+                alert_count += 1
+
+            if managers:
+                logger.info(
+                    f"Relay orphan alert sent: task_id={orphan['task_detail_id']}, "
+                    f"serial_number={orphan['serial_number']}, "
+                    f"managers={len(managers)}, already_sent={len(already_sent)}"
+                )
 
         logger.info(f"check_orphan_relay_tasks_job: {alert_count} alerts sent (orphans={len(orphans)})")
 
@@ -941,17 +971,17 @@ def _check_not_started_tasks():
                 sn = task_row['serial_number']
                 td_id = task_row['id']
 
-                # 중복방지: 7일 이내 같은 task_detail_id로 발송 이력 있으면 스킵
+                # HOTFIX-ALERT-SCHEDULER-DELIVERY-20260422:
+                # 배치 dedupe (M2) — target_worker_id 지정된 row 만 legacy 제외
                 cur.execute("""
-                    SELECT 1 FROM app_alert_logs
+                    SELECT DISTINCT target_worker_id FROM app_alert_logs
                     WHERE alert_type = 'TASK_NOT_STARTED'
                       AND serial_number = %s
                       AND task_detail_id = %s
+                      AND target_worker_id IS NOT NULL
                       AND created_at > NOW() - INTERVAL '7 days'
-                    LIMIT 1
                 """, (sn, td_id))
-                if cur.fetchone():
-                    continue
+                already_sent = {row['target_worker_id'] for row in cur.fetchall()}
 
                 days_elapsed = (datetime.now(Config.KST) - task_row['created_at']).days
                 label = sn_label(sn)
@@ -960,15 +990,24 @@ def _check_not_started_tasks():
                     f"생성 후 {days_elapsed}일 경과, 아직 시작되지 않았습니다."
                 )
 
-                create_and_broadcast_alert({
-                    'alert_type': 'TASK_NOT_STARTED',
-                    'message': message,
-                    'serial_number': sn,
-                    'target_role': task_row['task_category'],
-                    'task_detail_id': td_id,
-                })
-                alert_count += 1
-                logger.info(f"TASK_NOT_STARTED alert: sn={sn}, task={task_row['task_name']}, days={days_elapsed}")
+                managers = _resolve_managers_for_category(sn, task_row['task_category'])
+                for manager_id in managers:
+                    if manager_id in already_sent:
+                        continue
+                    create_and_broadcast_alert({
+                        'alert_type': 'TASK_NOT_STARTED',
+                        'message': message,
+                        'serial_number': sn,
+                        'target_worker_id': manager_id,
+                        'target_role': task_row['task_category'],
+                        'task_detail_id': td_id,
+                    })
+                    alert_count += 1
+                if managers:
+                    logger.info(
+                        f"TASK_NOT_STARTED alert: sn={sn}, task={task_row['task_name']}, "
+                        f"days={days_elapsed}, managers={len(managers)}, already_sent={len(already_sent)}"
+                    )
 
             logger.info(f"_check_not_started_tasks: {alert_count} alerts sent (candidates={len(tasks)})")
         finally:
@@ -1020,16 +1059,16 @@ def _check_checklist_done_task_open():
                 sn = task_row['serial_number']
                 td_id = task_row['id']
 
-                # 중복방지: 3일 이내 같은 serial_number로 발송 이력
+                # HOTFIX-ALERT-SCHEDULER-DELIVERY-20260422:
+                # 배치 dedupe (M2) — target_worker_id 지정된 row 만 legacy 제외
                 cur.execute("""
-                    SELECT 1 FROM app_alert_logs
+                    SELECT DISTINCT target_worker_id FROM app_alert_logs
                     WHERE alert_type = 'CHECKLIST_DONE_TASK_OPEN'
                       AND serial_number = %s
+                      AND target_worker_id IS NOT NULL
                       AND created_at > NOW() - INTERVAL '3 days'
-                    LIMIT 1
                 """, (sn,))
-                if cur.fetchone():
-                    continue
+                already_sent = {row['target_worker_id'] for row in cur.fetchall()}
 
                 label = sn_label(sn)
                 message = (
@@ -1037,15 +1076,24 @@ def _check_checklist_done_task_open():
                     f"{task_row['task_name']} 미종료 상태입니다. 완료 처리가 필요합니다."
                 )
 
-                create_and_broadcast_alert({
-                    'alert_type': 'CHECKLIST_DONE_TASK_OPEN',
-                    'message': message,
-                    'serial_number': sn,
-                    'target_role': 'ELEC',
-                    'task_detail_id': td_id,
-                })
-                alert_count += 1
-                logger.info(f"CHECKLIST_DONE_TASK_OPEN alert: sn={sn}, task={task_row['task_name']}")
+                managers = _resolve_managers_for_category(sn, 'ELEC')
+                for manager_id in managers:
+                    if manager_id in already_sent:
+                        continue
+                    create_and_broadcast_alert({
+                        'alert_type': 'CHECKLIST_DONE_TASK_OPEN',
+                        'message': message,
+                        'serial_number': sn,
+                        'target_worker_id': manager_id,
+                        'target_role': 'ELEC',
+                        'task_detail_id': td_id,
+                    })
+                    alert_count += 1
+                if managers:
+                    logger.info(
+                        f"CHECKLIST_DONE_TASK_OPEN alert: sn={sn}, task={task_row['task_name']}, "
+                        f"managers={len(managers)}, already_sent={len(already_sent)}"
+                    )
 
             logger.info(f"_check_checklist_done_task_open: {alert_count} alerts sent (candidates={len(tasks)})")
         finally:

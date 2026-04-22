@@ -1530,3 +1530,80 @@ WHERE enumtypid=(SELECT oid FROM pg_type WHERE typname='alert_type_enum')
 3. **test DB 와 prod DB 가 drift 상태로 잠복** — test 에서 통과한 migration 이 prod 에 적용되지 않아도 알림 없음. `OBSERV-MIGRATION-RUNNER-STARTUP-ASSERTION` 으로 부팅 시 차이 감지 필요
 4. **silent fail 패턴의 위험성** — `try/except ... return None` 구조가 장애를 infinite queue 로 저장. CLAUDE.md 에 "예외 삼킴 금지, 최소 ERROR 레벨 로깅 의무화" 원칙 추가 고려
 5. **중복 실행 (후보 E) 이 복구 후 새 문제로 전이** — 컬럼 복구 후 같은 알람 2배 기록 우려. Option 2 file lock 이 후속 필수
+
+---
+
+## 11.14.7-D HOTFIX-ALERT-SCHEDULER-DELIVERY-20260422 완료 기록 (2026-04-22)
+
+> HOTFIX-DUP 배포 후 14:00 tick 에서 발견된 **신규 delivery 문제** 해결. Scheduler 3곳이 표준 패턴 미적용으로 `target_role='TMS'` 등 role_enum 외 값으로 broadcast → 52+17 = 69건 undelivered. 본 HOTFIX 로 `task_service.py` 표준 패턴 (관리자별 개별 INSERT) 적용 + 배치 dedupe 로 legacy 간섭 차단.
+
+### 11.14.7-D.1 Codex 교차검증 결과 (AI 검증 워크플로우 ③~⑤ 단계)
+
+| # | 항목 | Codex | 결정 |
+|---|---|---|---|
+| 1 | 과도 broadcast (1:N) | A | runbook 기록 |
+| **2** | **Legacy dedupe 간섭** | **🔴 M** | **수용 — Phase B 배치 dedupe 패턴 추가 (+12~15 LOC)** |
+| 3 | PI/QI/SI 엣지 | A | `TEST-SCHEDULER-EMPTY-MANAGERS` BACKLOG |
+| 4 | scheduler 크기 | A | `REFACTOR-SCHEDULER-SPLIT` BACKLOG |
+| 5 | Sentry 로깅 | A | 배포 후 smoke 확인 |
+| 6 | E2E 테스트 | A | `TEST-ALERT-DELIVERY-E2E` BACKLOG |
+| 7 | v2.9.11 PATCH | A | SHA 별도 기록 + FE skew 명시 |
+
+**Codex 추가 발견**: Legacy 범위를 TMS 52 → `target_worker_id IS NULL AND created_at >= '2026-04-17'` 전체 (69건) 로 확장. Phase D 감사 추적 약화 → HOTFIX ID별 SHA 기록 테이블 추가 (handoff.md 반영).
+
+### 11.14.7-D.2 pytest 3차 결과 (수정 후 회귀)
+
+```
+129 passed, 7 skipped, 0 failed, 193 warnings in 40분 35초 (8 파일)
+```
+
+포함:
+- test_alert_service.py / test_alert_all20_verify.py / test_sprint54_alert_triggers.py
+- test_scheduler.py / test_scheduler_integration.py / test_process_validator.py
+- test_break_time_scheduler.py / test_break_time_settings.py
+
+**제외** (사용자 지적 — CLAUDE.md L118 위반 인지):
+- test_duration_validator.py (1건 pre-existing fail `duration_warnings` 필드 누락)
+- BACKLOG `BUG-DURATION-VALIDATOR-API-FIELD` 로 이관 (착수 전 Codex 합의 필수 메모)
+
+### 11.14.7-D.3 코드 수정 요약
+
+파일: `backend/app/services/scheduler_service.py` 단일
+- +100 / -52 LOC (net +48)
+- 신규: `_CATEGORY_PARTNER_FIELD` + `_resolve_managers_for_category()` 헬퍼 (L27-45)
+- 수정: L884 RELAY_ORPHAN / L967 TASK_NOT_STARTED / L1044 CHECKLIST_DONE_TASK_OPEN
+- 배치 dedupe 패턴 (M2 수용): 3곳 쿼리에 `AND target_worker_id IS NOT NULL` 필터
+
+### 11.14.7-D.4 배포
+
+- **v2.9.10 → v2.9.11** PATCH bump (2026-04-22 HOTFIX 4종 통합)
+- `backend/version.py` + `frontend/lib/utils/app_version.dart` 동시 업데이트
+- `CHANGELOG.md` 신규 생성
+- BE Railway 자동 배포 (commit push 시)
+- FE Netlify skip (코드 변경 0, 다음 배포 시 자동 반영)
+
+### 11.14.7-D.5 5일 장애 전체 종결
+
+| HOTFIX | 역할 | 상태 |
+|---|---|---|
+| PHASE1.5 (`4a6caf8`) | 근본 원인 포착 (ERROR 로깅) | ✅ |
+| ALERT-SCHEMA-RESTORE | DB schema 복구 (SQL 수동) | ✅ |
+| SCHEDULER-DUP (`f1af8a4`) | 중복 실행 제거 (fcntl lock) | ✅ |
+| ALERT-SCHEDULER-DELIVERY (v2.9.11) | delivery 표준 패턴 적용 | ✅ |
+
+**알람 시스템 완전 복구** — 5일간 (4-17 ~ 4-22) 0건 장애 종결.
+
+### 11.14.7-D.6 관찰 대기 (배포 후 1 hourly tick)
+
+**Railway 로그 keyword**:
+- `Relay orphan alert sent: ... managers=N, already_sent=M` — 새 로그 형식
+- `check_orphan_relay_tasks_job: N alerts sent (orphans=M)` — N > 0 기대
+
+**pgAdmin 검증**:
+```sql
+SELECT id, alert_type, target_role, target_worker_id, created_at
+FROM app_alert_logs
+WHERE id > 685 AND created_at >= '2026-04-22 14:00+09'
+ORDER BY id DESC LIMIT 20;
+```
+→ `target_worker_id IS NOT NULL` 전원 확인 (신규 INSERT)

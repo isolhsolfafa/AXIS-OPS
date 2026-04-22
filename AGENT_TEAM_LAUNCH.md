@@ -30172,3 +30172,454 @@ railway deployments --service axis-ops-api
 1. **HOTFIX-SCHEDULER-DUP-20260422 배포 완료** — 중복 실행 해소 확인 후 착수 (조사 중 중복 알람 재발로 오염 방지)
 2. **24h 이상 알람 시스템 안정 관찰** — 복구 직후 혼란기 회피
 3. **Twin파파 / Opus 합의** — 조사 범위·산출 형식 사전 동의
+
+---
+
+## 🔧 HOTFIX-ALERT-SCHEDULER-DELIVERY-20260422 프롬프트 — Scheduler 알람 delivery 복구 (🔴 S2)
+
+> **등록일**: 2026-04-22 14:40 KST
+> **우선순위**: 🔴 S2 (긴급 HOTFIX 예외 조항 적용 — 52건 완전 undelivered + Sprint 61-BE 신규 2개 타입 잠재 실패)
+> **상태**: 🔴 OPEN (설계 검증 후 즉시 착수)
+> **예상 소요**: 45~75분 (구현 20분 + 테스트 20분 + 배포 관찰 15~30분)
+> **트리거 근거**: `ALERT_SCHEDULER_DIAGNOSIS.md` §11.14.7-D (예정) — pgAdmin Q5~Q9 실측 + 코드 검토
+> **담당**: BE teammate 1명 (Opus 리뷰 후 배포 → 24h 이내 Codex 사후 검토)
+
+### 🎯 목적
+
+HOTFIX-ALERT-SCHEMA-RESTORE + HOTFIX-SCHEDULER-DUP 배포 후에도 `app_alert_logs` 에 INSERT 된 알람이 FE 에 도달하지 않는 **신규 delivery 버그** 발견. 3개 scheduler job 이 `target_worker_id` 지정 없이 `target_role` 만 사용하는 **비표준 구현**을 `task_service.py` 표준 패턴 (개별 관리자 INSERT) 로 통일.
+
+### 📋 배경 (실측 증거)
+
+**pgAdmin Q5 — `role_enum` 허용값**:
+```
+['MECH', 'ELEC', 'TM', 'PI', 'QI', 'SI', 'ADMIN', 'PM']
+'TMS' 포함 여부: False  ← 🔴
+```
+
+**pgAdmin Q7 — 역사적 `target_role` 분포 + read 비율**:
+| target_role | 건수 | read% | 판정 |
+|---|---|---|---|
+| MECH | 118 | 75.4% | 🟢 정상 |
+| ELEC | 117 | 38.5% | 🟡 일부 지연 |
+| **TMS** | **52** | **0%** | 🔴 enum 에 없음 — **완전 undelivered** |
+| QI | 16 | 0% | 🟠 enum OK but 관리자 미접속 (별건) |
+| elec_partner / mech_partner / module_outsourcing | 17 | 혼재 | 🟡 column 이름 오용 (target_worker_id 병행으로 delivery 일부 성공) |
+
+**FE WebSocket 구독 확인** (`events.py:47` + 실 로그):
+```
+WS registered: ws_id=ef4369fb, worker_id=4477, role=MECH, rooms={'worker_4477', 'role_MECH'}
+```
+→ FE 는 자기 `role_<VALUE>` room 만 구독. `role_TMS` 는 아무도 구독 안 함.
+
+**코드 버그 3곳** (`backend/app/services/scheduler_service.py`):
+| 라인 | 함수 | 알람 타입 | `target_role` 값 |
+|---|---|---|---|
+| **L884** | `check_orphan_relay_tasks_job` | RELAY_ORPHAN | `orphan['task_category']` (TMS 포함) |
+| **L967** | `_check_not_started_tasks` | TASK_NOT_STARTED (Sprint 61-BE) | `task_row['task_category']` |
+| **L1044** | `_check_checklist_done_task_open` | CHECKLIST_DONE_TASK_OPEN (Sprint 61-BE) | `'ELEC'` hardcoded |
+
+공통 문제: `target_worker_id` 미지정 → `emit_process_alert()` 경로 → `role_<VALUE>` room broadcast → FE 구독 불일치.
+
+**표준 패턴** (`task_service.py` L571-591):
+```python
+managers = get_managers_by_partner(serial_number, target_source)  # or get_managers_for_role
+for manager_id in managers:
+    create_alert(..., target_worker_id=manager_id, target_role=target_label)
+```
+→ 관리자별 개별 INSERT + `emit_new_alert(manager_id)` → `worker_{id}` room delivery (FE 가 자기 worker room 구독 중이라 정상 도달).
+
+### 🧩 수정 범위
+
+**대상 파일**: `backend/app/services/scheduler_service.py` 단일 파일
+**예상 diff**: +18~25 LOC / -3 LOC
+
+**무변경 파일**: `task_service.py`, `alert_service.py`, `alert_log.py`, `__init__.py`, migrations/
+
+### 🛠 Phase A — 헬퍼 함수 추가 (~12 LOC)
+
+파일 상단 (import 블록 근처) 에 추가:
+
+```python
+# HOTFIX-ALERT-SCHEDULER-DELIVERY-20260422: task_service.py 표준 패턴 재사용
+_CATEGORY_PARTNER_FIELD = {
+    'TMS':  'module_outsourcing',
+    'MECH': 'mech_partner',
+    'ELEC': 'elec_partner',
+}
+
+def _resolve_managers_for_category(serial_number: str, category: str) -> list:
+    """
+    task_category → 해당 관리자 worker_id 리스트.
+    Partner 기반 (TMS/MECH/ELEC) 또는 Role 기반 (PI/QI/SI) 자동 분기.
+    task_service.py L571 의 표준 알람 수신자 결정 패턴을 scheduler 에도 적용.
+    """
+    from app.services.process_validator import get_managers_by_partner, get_managers_for_role
+    if category in _CATEGORY_PARTNER_FIELD:
+        return get_managers_by_partner(serial_number, _CATEGORY_PARTNER_FIELD[category])
+    return get_managers_for_role(category)  # PI / QI / SI
+```
+
+### 🛠 Phase B — 3곳 적용
+
+#### B.1 — L884 `check_orphan_relay_tasks_job` (RELAY_ORPHAN)
+
+```python
+# 기존
+create_and_broadcast_alert({
+    'alert_type': 'RELAY_ORPHAN',
+    'message': message,
+    'serial_number': orphan['serial_number'],
+    'qr_doc_id': orphan['qr_doc_id'],
+    'target_role': orphan['task_category'],  # 🔴 BUG
+})
+alert_count += 1
+
+# 수정
+managers = _resolve_managers_for_category(orphan['serial_number'], orphan['task_category'])
+for manager_id in managers:
+    create_and_broadcast_alert({
+        'alert_type': 'RELAY_ORPHAN',
+        'message': message,
+        'serial_number': orphan['serial_number'],
+        'qr_doc_id': orphan['qr_doc_id'],
+        'target_worker_id': manager_id,
+        'target_role': orphan['task_category'],  # 라벨용 유지 (display only)
+    })
+    alert_count += 1
+```
+
+#### B.2 — L967 `_check_not_started_tasks` (TASK_NOT_STARTED)
+
+```python
+# 기존
+create_and_broadcast_alert({
+    'alert_type': 'TASK_NOT_STARTED',
+    'message': message,
+    'serial_number': sn,
+    'target_role': task_row['task_category'],  # 🔴 BUG
+    'task_detail_id': td_id,
+})
+
+# 수정
+managers = _resolve_managers_for_category(sn, task_row['task_category'])
+for manager_id in managers:
+    create_and_broadcast_alert({
+        'alert_type': 'TASK_NOT_STARTED',
+        'message': message,
+        'serial_number': sn,
+        'target_worker_id': manager_id,
+        'target_role': task_row['task_category'],
+        'task_detail_id': td_id,
+    })
+```
+
+#### B.3 — L1044 `_check_checklist_done_task_open` (CHECKLIST_DONE_TASK_OPEN)
+
+```python
+# 기존
+create_and_broadcast_alert({
+    'alert_type': 'CHECKLIST_DONE_TASK_OPEN',
+    'message': message,
+    'serial_number': sn,
+    'target_role': 'ELEC',  # hardcoded, 🔴 관리자 외 전체 ELEC 구독자에게 과도 broadcast
+    'task_detail_id': td_id,
+})
+
+# 수정
+managers = _resolve_managers_for_category(sn, 'ELEC')
+for manager_id in managers:
+    create_and_broadcast_alert({
+        'alert_type': 'CHECKLIST_DONE_TASK_OPEN',
+        'message': message,
+        'serial_number': sn,
+        'target_worker_id': manager_id,
+        'target_role': 'ELEC',
+        'task_detail_id': td_id,
+    })
+```
+
+### 🛠 Phase C — 테스트
+
+1. **syntax / compile**: `python -m py_compile backend/app/services/scheduler_service.py`
+2. **pytest**: `pytest tests/backend/test_scheduler.py tests/backend/test_scheduler_integration.py tests/backend/test_alert_all20_verify.py tests/backend/test_alert_service.py -v`
+   - **기대**: 기존 테스트 GREEN 유지
+   - **주의**: 기존 테스트가 target_role 만 체크하는 경우 수정 전후 동작 변화 확인 — `target_worker_id` 가 이제 항상 지정됨
+3. **수동 smoke (선택)**: conftest 로 fake S/N + fake manager 생성 후 job 직접 호출 → `app_alert_logs` 에 `target_worker_id` 지정된 row 생성 확인
+
+### 📋 배포 전 검증 (Gate 15개)
+
+| # | 항목 | 확인 | 기대 |
+|---|---|---|---|
+| 1 | 변경 파일 수 | `git diff --name-only` | 정확히 1 파일 |
+| 2 | 변경 라인 수 | `git diff --stat` | +20~30 / -3 LOC |
+| 3 | task_service.py / alert_service.py / alert_log.py 무변경 | `git diff backend/app/services/task_service.py backend/app/services/alert_service.py backend/app/models/alert_log.py` | 출력 없음 |
+| 4 | __init__.py 무변경 | `git diff backend/app/__init__.py` | 출력 없음 |
+| 5 | migration 추가·수정 없음 | `git diff backend/migrations/` | 출력 없음 |
+| 6 | requirements.txt 무변경 | `git diff backend/requirements.txt` | 출력 없음 |
+| 7 | `_resolve_managers_for_category` 존재 | `grep -n "_resolve_managers_for_category" backend/app/services/scheduler_service.py` | 정의 1 + 호출 3 |
+| 8 | `for manager_id in managers` 루프 존재 | `grep -n "for manager_id in managers" backend/app/services/scheduler_service.py` | 3곳 |
+| 9 | 각 수정부에 `target_worker_id=manager_id` 존재 | diff 검토 | 3곳 |
+| 10 | flake8 | `flake8 backend/app/services/scheduler_service.py --max-line-length=120` | HOTFIX 신규 violation 0 |
+| 11 | py_compile | `python -m py_compile ...` | OK |
+| 12 | 기존 pytest GREEN | `pytest tests/backend/test_alert*.py tests/backend/test_scheduler*.py` | fail 0 |
+| 13 | 함수 시그니처 무변경 | `check_orphan_relay_tasks_job` / `_check_not_started_tasks` / `_check_checklist_done_task_open` | 그대로 |
+| 14 | alert_count 집계 로직 유지 | 각 루프 내 `alert_count += 1` | OK |
+| 15 | 로깅 유지 | `logger.info(f"... alert sent: ...")` | OK |
+
+### 📋 배포 후 관찰 — 1 hourly tick (~1시간)
+
+| # | 항목 | 방법 | 기대 |
+|---|---|---|---|
+| A | 배포 성공 | Railway Deployments | SUCCESS + `/health` 200 |
+| B | `Scheduler initialized and started (file lock acquired, ...)` | Railway logs | 1회 (HOTFIX-DUP 유지 확인) |
+| C | 다음 정각 tick — `check_orphan_relay_tasks_job: N alerts sent (orphans=M)` | Railway logs | N = M × 관리자 수 (이전 `N=0`) |
+| D | `app_alert_logs` 신규 INSERT | pgAdmin `SELECT MAX(id), COUNT(*) FROM app_alert_logs WHERE created_at >= <배포 시각>` | RELAY_ORPHAN 타입 신규 건 + **`target_worker_id` 모두 NOT NULL** |
+| E | R1 재실행 — 중복 | pgAdmin `GROUP BY ... HAVING COUNT(*) > 1` in 신규 tick | 0 rows 유지 (HOTFIX-DUP 효과 유지) |
+| F | TMS(M) 관리자 실기기 수신 확인 | tms(m)test id=750 로 OPS app 접속 → 알람 목록 | RELAY_ORPHAN 알람 표시됨 |
+| G | MECH 일반 worker 는 RELAY_ORPHAN 미수신 | 비관리자 MECH worker 로 확인 | 알람 없음 (관리자 전용) |
+
+### ⚠️ 리스크 및 대응
+
+| 리스크 | 가능성 | 대응 |
+|---|---|---|
+| `get_managers_by_partner` 가 빈 리스트 반환 (partner 값 없음) | 중간 | 루프 skip → INSERT 0 건 (로그만 기록). 정상 동작 — warning 로그 기존 보존 |
+| TMS task 인데 `module_outsourcing` 이 NULL 인 S/N | 낮음 | 빈 리스트 → skip. 기존 동작 대비 나쁘지 않음 (이전에는 FE 도 못 받았음) |
+| 관리자 수 증가로 알람 건수 급증 | 낮음 | TMS(M) 관리자 3명 × orphan N개 = 3N건. 이전 N건 → 3N건. 알람 목록에 중복 보이지만 개별 관리자당 1건이라 UX 이슈 없음 |
+| 기존 `target_role='TMS'` 알람 52건은 여전히 undelivered | 확정 | **BACKLOG 별도 이관**: `FIX-LEGACY-ALERT-TMS-DELIVERY` — 기존 52건을 관리자별로 복제 INSERT 할지 여부 결정 (대개 과거 알람이라 skip 해도 무해) |
+| QI 16건 미수신 (별건) | 확정 | 별도 이슈 — QI 관리자 OPS app 미접속이 원인. `OBSERV-QI-MANAGER-USAGE` BACKLOG 별건 |
+
+### 🔗 연계 문서
+
+- `AXIS-OPS/BACKLOG-ALARM.md` L136-140 (알람 수신자 결정 방식 — 표준 패턴)
+- `AXIS-OPS/ALERT_SCHEDULER_DIAGNOSIS.md` §11.14.7-D (예정, 본 Sprint 완료 후 작성)
+- `backend/app/services/task_service.py` L571-591 (표준 패턴 참조 구현)
+- `backend/app/services/process_validator.py` L158-225 (`get_managers_by_partner`, `get_managers_for_role`)
+- `backend/app/websocket/events.py` L46-49 (role_* room 등록), L214-233 (`emit_process_alert`)
+
+### 📌 후속 조치 (별건 Sprint)
+
+| 항목 | 우선순위 | 범위 |
+|---|---|---|
+| `OBSERV-RAILWAY-LOG-LEVEL-MAPPING` | 🔴 P1 | INFO → stdout 분리, Sentry 연동 blocker. 30~45분 |
+| `FIX-LEGACY-ALERT-TMS-DELIVERY` | 🟡 P3 | 기존 52건 `target_role='TMS'` 알람 복제 INSERT 여부 결정. 대개 skip 권고 (과거 알람) |
+| `OBSERV-QI-MANAGER-USAGE` | 🟡 P2 | QI 관리자 OPS app 사용 빈도 ↑ 유도. 이메일 연동 / 리포팅 |
+| `POST-REVIEW-SPRINT-41B-42-61-BE-ALERT-DELIVERY` | 🟠 P2 | 왜 RELAY_ORPHAN (Sprint 41-B) + TASK_NOT_STARTED/CHECKLIST_DONE (Sprint 61-BE) 가 표준 패턴 아닌 단순 broadcast 로 작성됐는지 조사. 재발 방지 프로세스 (PR 리뷰 체크리스트 추가 등) |
+
+### ⏱ 예상 소요 시간
+
+| 단계 | 소요 |
+|---|---|
+| Phase A — 헬퍼 함수 추가 | 10분 |
+| Phase B — 3곳 적용 | 15분 |
+| Phase C — 로컬 pytest | 15분 |
+| 배포 전 Gate 15개 체크 | 10분 |
+| Railway 배포 + `/health` 확인 | 5분 |
+| 다음 hourly tick 관찰 | 최대 60분 대기 |
+| 결과 기록 + BACKLOG 갱신 | 15분 |
+| **합계** | **75~130분 (관찰 대기 포함)** |
+
+### 🚫 착수 전제 조건
+
+1. **HOTFIX-SCHEDULER-DUP-20260422 배포 완료** — 중복 실행 해소 확인 후 착수 (이미 commit `f1af8a4` 배포 완료, 14:00 tick GREEN)
+2. **AI 검증 워크플로우 ③단계 Codex 독립 검증 완료** — M 지적 전부 해결
+3. **pytest 회귀 0건 사전 확인** — 기존 알람 테스트 GREEN
+
+### 🛠 Phase D — 버전 관리 + 공지 (CLAUDE.md L1376 준수)
+
+> ⚠️ **소급 적용**: 2026-04-22 하루에 쏟아진 HOTFIX 4종 (PHASE1.5 로깅 / SCHEMA-RESTORE / DUP / DELIVERY) 의 버전 누락을 본 Sprint 완료 시 일괄 정리. **v2.9.10 → v2.9.11** PATCH bump.
+
+#### D.1 버전 파일 업데이트 (동시에)
+
+**`backend/version.py`**:
+```python
+VERSION = "2.9.11"
+BUILD_DATE = "2026-04-22"
+```
+
+**`frontend/lib/utils/app_version.dart`**:
+```dart
+class AppVersion {
+  static const String version = "2.9.11";
+  static const String buildDate = "2026-04-22";
+}
+```
+
+> CLAUDE.md L1392: "두 파일의 VERSION 값이 반드시 동일해야 함"
+
+#### D.2 CHANGELOG.md 업데이트 (파일 존재 확인 후 — 없으면 신규 생성)
+
+```markdown
+## [2.9.11] - 2026-04-22
+
+### Fixed
+- Scheduler 중복 실행 제거 (HOTFIX-SCHEDULER-DUP) — fcntl file lock 기반
+- Alert delivery 복구 (HOTFIX-ALERT-SCHEDULER-DELIVERY) — 3곳 target_worker_id 표준 패턴 적용
+- `app_alert_logs` 스키마 복구 (HOTFIX-ALERT-SCHEMA-RESTORE) — migration 049 수동 적용
+
+### Added
+- Alert silent fail ERROR 로깅 (HOTFIX-SCHEDULER-PHASE1.5)
+
+### Infrastructure
+- 2026-04-17 ~ 04-22 5일간 알람 장애 (`app_alert_logs` 0건) 근본 원인 확정·복구
+```
+
+#### D.3 `notices` 테이블 공지 INSERT (CLAUDE.md L1410-1436)
+
+> 플레인 텍스트 + 이모지. 마크다운 금지.
+
+```sql
+-- 기존 pinned 해제
+UPDATE notices SET is_pinned = FALSE WHERE is_pinned = TRUE;
+
+-- 신규 공지
+INSERT INTO notices (title, content, version, is_pinned, created_by)
+VALUES (
+  '📱 OPS v2.9.11 업데이트 안내',
+  '📱 OPS v2.9.11 업데이트 안내
+
+🔧 알람 시스템 복구
+ - 5일간 알람 미발송 장애 해소 (4/17~22)
+ - 알람 중복 발송 제거 (시간당 2~3회 → 1회)
+ - TMS 업체 관리자 알람 수신 복구
+ - 릴레이 미완료 알람 정상 전달
+
+⚙️ 인프라
+ - DB 스키마 정합성 복구 (migration 049 수동 적용)
+ - 스케줄러 단일 실행 보장 (파일 lock 기반)
+ - Alert silent fail ERROR 로깅 추가',
+  '2.9.11',
+  TRUE,
+  1
+);
+```
+
+#### D.4 git tag 생성 (CLAUDE.md L1374)
+
+```bash
+git tag v2.9.11 -m "HOTFIX-ALERT-* 4종 통합 + Scheduler 복구"
+git push origin v2.9.11
+```
+
+#### D.5 FE 배포 처리 (BE only HOTFIX)
+
+- `frontend/lib/utils/app_version.dart` 파일만 수정 (코드 로직 변경 0)
+- **Netlify 배포**: skip (FE 코드 변경 없음)
+- 단, 다음 FE 배포 (FE-ALERT-BADGE-SYNC 등) 시 v2.9.11 자동 반영됨
+- 홈 스플래시의 `AppVersion.display` 는 앱 재빌드 시 갱신
+
+### ✅ 완료 조건 (Done Definition)
+
+- [ ] AI 검증 워크플로우 ③ Codex 독립 검증 완료 (M 해결)
+- [ ] 배포 전 Gate 15개 전부 통과
+- [ ] pytest 관련 테스트 전체 GREEN (회귀 0건)
+- [ ] 배포 후 A/B/C/D/E 관찰 GREEN
+- [ ] F (TMS(M) 관리자 실기기 수신) 확인
+- [ ] Phase D 버전 관리 5단계 전부 수행 (version 파일 + CHANGELOG + notices + git tag + FE 파일)
+- [ ] `ALERT_SCHEDULER_DIAGNOSIS.md` §11.14.7-D 에 결과 기록
+- [ ] `BACKLOG.md` 에 `HOTFIX-ALERT-SCHEDULER-DELIVERY-20260422` 🟢 COMPLETED 등록
+- [ ] `handoff.md` 버전 이력 + 현재 버전 갱신 (v2.9.10 → v2.9.11)
+- [ ] CLAUDE.md 버전 이력 테이블 업데이트
+- [ ] 후속 4개 BACKLOG 항목 등록 (OBSERV-RAILWAY-LOG-LEVEL, FIX-LEGACY-ALERT-TMS, OBSERV-QI-MANAGER-USAGE, POST-REVIEW-SPRINT-ALERT-DELIVERY)
+- [ ] **POST-REVIEW-HOTFIX-ALERT-SCHEDULER-DELIVERY-20260422** BACKLOG 등록 (S2 조항 L160 — 7일 이내 Codex 사후 검토)
+
+### 📝 Opus 1차 리뷰 기록 (AI 검증 워크플로우 ② 단계)
+
+**Claude 원안 약점** (맹목 동조 방지 trail):
+- 초안에서 Phase D (버전 관리) 누락 → 사용자 지적으로 보완
+- 초안에서 `notices` INSERT 누락 → 보완
+- 초안 S2 사후 검토 기한 "24h" 표기 → CLAUDE.md L160 "7일 이내" 로 정정
+- **[M2 critical — Codex 지적]** 초안에서 `scheduler_service.py` 3곳의 dedupe 쿼리 (L861/L945/L1024) 를 scope 내 검토 안 함. "new INSERT 경로만 교체하면 충분" 으로 가정. Codex 가 **dedupe 쿼리가 `target_worker_id` 구분 없이 any alert 기준으로 skip 한다**는 점을 독립 발견 → legacy 69건이 window 내 존재하는 한 수정 배포 후에도 skip 지속되는 **2차 실패 시나리오** 포착. 맹목 수용 아닌 실제 코드 확인 후 M2 수용 확정 + Phase B 에 배치 dedupe 패턴 추가.
+
+**Codex 이관 체크리스트 (L127)**:
+- [ ] DB 스키마 변경 — 아니요
+- [ ] API 응답 계약 변경 — 아니요 (알람 생성 방식 내부 변경, FE 스펙 무영향)
+- [ ] FK/PK/인덱스 변경 — 아니요
+- [ ] 인증·권한 로직 변경 — 아니요
+- [ ] 클린 코어 데이터 원칙 영향 — 아니요 (force_close / wsl / wcl / duration_sec 무관)
+- [x] **3개 이상 파일 touch** — ✅ scheduler_service.py + version.py + app_version.dart + CHANGELOG.md + handoff.md + BACKLOG.md = 6 파일
+
+→ **자동 Codex 이관 대상** (L140 "의심 시 포함").
+
+### 🤝 Codex 합의 기록 (AI 검증 워크플로우 ③~⑤ 단계, 2026-04-22 15:20 KST)
+
+| 항목 | Codex 라벨 | 결정 | 조치 |
+|---|---|---|---|
+| 1 과도 broadcast (1:N) | A | 수용 — 표준 패턴 유지 | runbook 에 `N = orphan_count × manager_count` 기록 |
+| **2 Legacy dedupe 간섭** | **🔴 M** | **수용 — 배포 블로커 해결 필수** | **Phase B 에 배치 dedupe 패턴 추가 (+12~15 LOC)** |
+| 3 PI/QI/SI 엣지 | A | 수용 | BACKLOG `TEST-SCHEDULER-EMPTY-MANAGERS` 등록 |
+| 4 scheduler 크기 | A | 수용 | BACKLOG `REFACTOR-SCHEDULER-SPLIT` 등록 |
+| 5 Sentry 로깅 | A | 수용 | 배포 후 smoke run 1회 로깅 경로 확인 |
+| 6 E2E 테스트 | A | 수용 | BACKLOG `TEST-ALERT-DELIVERY-E2E` 등록 |
+| 7 v2.9.11 PATCH | A | 수용 + 주의사항 반영 | HOTFIX ID별 배포 SHA 별도 기록 (handoff.md) + FE version skew 명시 |
+
+**Codex 추가 발견 (목록 외)**:
+- Legacy 범위 재정의: TMS 52건 → **`target_worker_id IS NULL AND created_at >= '2026-04-17'` 전체 (69건 추정)** 로 확장. 본 Sprint 에선 legacy 복구 안 하고 dedupe 배제로 우회.
+- Phase D 감사 추적 약화: BE 코드 + 수동 SQL + 미배포 FE 를 단일 PATCH 로 묶으면 롤백 어려움 → `handoff.md` 에 **HOTFIX ID별 배포 SHA 기록 테이블** 추가
+
+**1라운드 상한 적용**: 본 합의는 Codex 1차 응답 + Claude 수용으로 1 라운드 내 종결. 추가 라운드 없음.
+
+### 🛠 Phase B 보완 — 배치 dedupe 패턴 (M2 수용 반영)
+
+**변경 이유**: Codex M2 — 기존 dedupe 쿼리가 `target_worker_id` 구분 없이 any row 체크 → legacy 69건 존재 시 신규 INSERT 도 skip 됨.
+
+**3곳 공통 패턴** (각 job 루프 시작 직전 삽입):
+
+```python
+# 1) 배치 dedupe: 이 task 에 대해 이미 알림 받은 manager_id SET 수집
+#    legacy (target_worker_id IS NULL) 는 제외 — 본 HOTFIX 이후 target_worker_id 지정된 것만 고려
+cur.execute("""
+    SELECT DISTINCT target_worker_id FROM app_alert_logs
+    WHERE alert_type = <alert_type>
+      AND serial_number = %s
+      AND target_worker_id IS NOT NULL   -- 🆕 legacy 제외 (M2 수용)
+      AND <기존 window + 기타 조건 유지>
+""", (sn, ...))
+already_sent = {row['target_worker_id'] for row in cur.fetchall()}
+
+# 2) managers 조회 → 미발송자에게만 INSERT
+managers = _resolve_managers_for_category(sn, category)
+for manager_id in managers:
+    if manager_id in already_sent:
+        continue
+    create_and_broadcast_alert({..., 'target_worker_id': manager_id})
+    alert_count += 1
+```
+
+#### Phase B.1 (L884 RELAY_ORPHAN) — window 24h
+```sql
+WHERE alert_type = 'RELAY_ORPHAN'
+  AND serial_number = %s
+  AND target_worker_id IS NOT NULL
+  AND message LIKE %s  -- 기존 task_name 패턴 유지
+  AND created_at > NOW() - INTERVAL '24 hours'
+```
+
+#### Phase B.2 (L967 TASK_NOT_STARTED) — window 7d
+```sql
+WHERE alert_type = 'TASK_NOT_STARTED'
+  AND serial_number = %s
+  AND task_detail_id = %s
+  AND target_worker_id IS NOT NULL
+  AND created_at > NOW() - INTERVAL '7 days'
+```
+
+#### Phase B.3 (L1024 CHECKLIST_DONE_TASK_OPEN) — window 3d
+```sql
+WHERE alert_type = 'CHECKLIST_DONE_TASK_OPEN'
+  AND serial_number = %s
+  AND target_worker_id IS NOT NULL
+  AND created_at > NOW() - INTERVAL '3 days'
+```
+
+### 📏 LOC 재평가
+
+| 항목 | 기존 예상 | M2 반영 후 |
+|---|---|---|
+| Phase A 헬퍼 | +12 | +12 |
+| Phase B.1 RELAY_ORPHAN | +3 | **+10** (배치 dedupe + for) |
+| Phase B.2 TASK_NOT_STARTED | +3 | **+10** |
+| Phase B.3 CHECKLIST_DONE_TASK_OPEN | +3 | **+10** |
+| 삭제 (기존 single INSERT) | -3 | -3 |
+| **합계** | +18 / -3 | **+42 / -3** |
+
+> 업데이트 Gate #2 "변경 라인 수 ±40 LOC" → **±50 LOC 로 완화**. M2 수용으로 불가피한 증가. 코드 크기 원칙 (파일당 800) 에는 영향 없음 (~1050 → ~1090 LOC, 임계 유지).
