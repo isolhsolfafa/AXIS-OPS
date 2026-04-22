@@ -1,23 +1,117 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-04-20
+> 마지막 업데이트: 2026-04-22
+
+---
+
+## 🔧 2026-04-21~22 세션 요약 (문서 개정 only — 코드 배포 없음)
+
+> ⚠️ 마이그레이션으로 로컬 Cowork 초기화 → 컨텍스트 전수 재정리 + 규칙·워크플로우 대폭 개정
+> ⚠️ 알람 시스템 장애 발견 — 4-17 이후 `app_alert_logs` 0건 (진단 완료, 확정 대기)
+
+### 문서 개정 내역 (BE/FE 코드 변경 0)
+
+1. **CLAUDE.md 대폭 개정** (OPS + VIEW 동시):
+   - 📏 **코드 크기 원칙** 신설 — 1단계 500/800/1200 (파일당 LOC) + 함수 60줄 + 클래스 200줄 + 순환 복잡도 ≤10
+   - 🔄 **DRY 재활용 원칙** 신설 — Rule of Three + grep 선행 + 승격 위치 명시
+   - 🛡️ **리팩토링 안전 7원칙** 신설 — 테스트 커버리지 선행 + `[REFACTOR]` prefix + Before/After GREEN 증명 + git 태그 + DB migration 금지
+   - 🤝 **AI 검증 워크플로우 v2** 전면 교체 — 8단계 파이프라인 + 3주체 용어(Cowork/Code/Codex) + Opus 1차 리뷰 + ② Codex 이관 체크리스트 6종 + 침묵 승인 거부 + 1라운드 상한 + 합의 실패 정의
+   - 🚨 **긴급 HOTFIX 예외 조항** 신설 — S1/S2 Severity 구분 + 사후 Codex 검토 24h 규칙
+   - 📦 **버전 번호 규칙** 재정의 — MAJOR(아키텍처/사내서버/SAP) / MINOR(Sprint 기능) / PATCH(HOTFIX·용어·데드 코드)
+   - 🤖 **모델 버전 관리 규칙** 신설 — `claude-opus-4-7` (Lead) / `claude-sonnet-4-6` (Workers) — 신모델 출시 시 즉시 갱신
+
+2. **BACKLOG.md 리팩토링 Sprint 계획 등록**:
+   - OPS: **22 Sprint** (BE 17 + FE 5) — REF-00-TEST(테스트 선행) → admin.py 2,546줄 6단계 분할 → task_service.py 3단계 → work.py 2단계 → checklist/auth/scheduler → 경고 파일 → FE God File (admin_options_screen 2,593줄 등)
+   - VIEW: **7 Sprint** — REF-V-00-UTIL(formatDate 공통화) → ProductionPerformancePage 895줄 → QrManagementPage 814줄 → Sidebar/ProductionPlan/FactoryDashboard 등
+
+3. **리뷰 보완 4건 반영** (FE 회귀 블록 + 재질문 라운드 제외 + 합의 실패 정의 + 번들 크기 차등 ±10%/±5%)
+
+### 🟡 다음 세션 최우선 — Phase 2 판정 (Phase 1·1.5 완료 상태)
+
+> **ALERT_SCHEDULER_DIAGNOSIS.md §9~§11.14 진단 완료**. Phase 1.5 (HOTFIX-SCHEDULER-PHASE1.5) 배포 후 1~2시간 관찰 후 가능성 1/2/3 확정 → 다음 Sprint 착수.
+
+**Phase 1 진행 완료** (Railway 로그 실증거 §11.1 수집):
+- 후보 E (Gunicorn duplicate execution) = 🔴 **확정** (매 정각 job 2회 중복 실행 로그)
+- 후보 F (DB pool 고갈) = 🟡 **일시 증상으로 강등** (15:55 UTC 1회 이벤트, 22:51~23:00 정상)
+- 후보 G (SELECT 0건 or silent fail) = 🔴 **신규 확정** (executed successfully + INSERT 0건 조합)
+- 후보 A/C/D = 🟢 완전 기각
+
+**Phase 1.5 진행 완료** (commit `4a6caf8`):
+- `alert_service.py` + `alert_log.py` ERROR 로깅 prefix 추가
+- pytest 47 passed / 회귀 0건
+- Railway 자동 배포 완료
+
+**다음 세션 즉시 실행** — Phase 2 판정 (5~10분):
+1. **pgAdmin Q6-HIST 실행** (ALERT_SCHEDULER_DIAGNOSIS.md §3 참조) — 4-17 00:00 KST ~ 현재까지 매 정각 시점의 orphan task 복원. 결과 비어있음/다수 판정
+2. **Railway Logs grep** — `[alert_silent_fail]` / `[alert_create_none]` / `[alert_insert_fail]` 포착 여부
+3. **판정 매트릭스** (§11.14.5 참조) — Q6-HIST × Sentry 포착 교차로 G.1/G.2/G.3 확정
+4. **다음 Sprint 착수** (🚨 S2 HOTFIX 예외 조항 적용):
+   - G.1 확정 → `HOTFIX-SCHEDULER-DUP-20260422` (Option 2 파일 lock + Option 3 status/restart 엔드포인트)
+   - G.2 확정 → `HOTFIX-SCHEDULER-QUERY-FIX-20260422` (Option 6 쿼리 diff 리뷰 + 2 + 3)
+   - G.3 확정 → `HOTFIX-SCHEDULER-SILENT-FIX-20260422` (Phase 1.5 고도화 — 예외 경로 수정 + 2 + 3)
+5. **Phase 3 (1~2주, 별도 Sprint)** — Option 5 Railway Cron Jobs 이관 장기 구조 전환
+
+**Q6-HIST 쿼리 + 키워드 상세**: `ALERT_SCHEDULER_DIAGNOSIS.md` §3 Q6-HIST + §11.14.5 / §11.14.6 참조
+
+### 📌 신규 세션(4.7) 시작 시 참조 순서
+
+1. `~/Desktop/GST/AXIS-OPS/CLAUDE.md` (규칙·워크플로우 전문)
+2. `~/Desktop/GST/AXIS-VIEW/CLAUDE.md` (VIEW 버전)
+3. `~/Desktop/GST/AXIS-OPS/handoff.md` (이 파일 — 최신 상태)
+4. `~/Desktop/GST/AXIS-VIEW/handoff.md` (VIEW 상태)
+5. `~/Desktop/GST/AXIS-OPS/ALERT_SCHEDULER_DIAGNOSIS.md` (알람 장애 진단 최신)
+6. `~/Desktop/GST/AXIS-OPS/BACKLOG.md` / `~/Desktop/GST/AXIS-VIEW/BACKLOG.md` (리팩토링 Sprint 계획)
 
 ---
 
 ## 현재 버전
 
-- **OPS BE**: v2.9.10
-- **OPS FE (Flutter PWA)**: v2.9.10 (version 파일만 bump, OPS FE 코드 변경 0 — Netlify 배포 skip 가능)
-- **최근 Sprint**: FIX-25 v4 (progress API에 partner/line 4필드 노출) — ✅ BE 구현 완료, VIEW FE-20/FE-21 착수 대기
-- **최근 완료 Sprint**: FIX-25 v4, FIX-24, HOTFIX-04, HOTFIX-05, HOTFIX-03, HOTFIX-02, BUG-45, 61-BE-B, 61-BE, BUG-43/44, HOTFIX-01, 60-BE, 59-BE, 58-BE
+- **OPS BE**: v2.9.10 (commit `4a6caf8` — HOTFIX-SCHEDULER-PHASE1.5 배포, v2.9.10 유지)
+- **OPS FE (Flutter PWA)**: v2.9.10 (version 파일만 bump, OPS FE 코드 변경 0 — Netlify 배포 skip)
+- **최근 Sprint**: HOTFIX-SCHEDULER-PHASE1.5 (알람 silent fail ERROR 로깅 추가) — ✅ BE 배포 완료 (2026-04-22), 1~2시간 관찰 대기
+- **최근 완료 Sprint**: HOTFIX-SCHEDULER-PHASE1.5, FIX-25 v4, FIX-24, HOTFIX-04, HOTFIX-05, HOTFIX-03, HOTFIX-02, BUG-45, 61-BE-B, 61-BE, BUG-43/44, HOTFIX-01, 60-BE, 59-BE, 58-BE
 - **최근 Migration**: 049 (alert_escalation_expansion)
 - **체크리스트 현황**: TM 완료 (SINGLE/DUAL qr_doc_id 정규화) / ELEC 완료 (Phase 1+2, 마스터 정규화) / MECH 미구현
 - **RULE-01**: Sprint 완료 시 FE flutter build web + Netlify 배포 필수
 
 ---
 
-## 직전 세션 작업 내용 (2026-04-20)
+## 직전 세션 작업 내용 (2026-04-22)
+
+> **HOTFIX-SCHEDULER-PHASE1.5 배포** + **ALERT_SCHEDULER_DIAGNOSIS.md §9~§11.14 심층 진단 완료** + **Mac 마이그레이션 후 환경 복구**
+
+1. **HOTFIX-SCHEDULER-PHASE1.5 (commit `4a6caf8`)**: `backend/app/services/alert_service.py` + `backend/app/models/alert_log.py` 2 파일 — `[alert_silent_fail]` / `[alert_create_none]` / `[alert_insert_fail]` prefix 로깅 추가. Sentry SDK 선택적 import 가드. 기존 `return None` 동작 유지. +80 / -37 LOC. `ALERT_SCHEDULER_DIAGNOSIS.md §11.3.4` **가능성 3 / G.3 silent fail 포착용**.
+2. **pytest 검증**: `test_alert_service.py` 11 passed + `test_alert_all20_verify.py` 36 passed (2 skipped 기존) = **47 passed / 회귀 0건**. 테스트 DB(`centerbeam`)에서 migration 049 신규 enum 3종(`TASK_NOT_STARTED` / `CHECKLIST_DONE_TASK_OPEN` / `ORPHAN_ON_FINAL`) 정상 확인 → **후보 A 완전 기각**.
+3. **ALERT_SCHEDULER_DIAGNOSIS.md §9~§11 심층 진단** (13 섹션):
+   - §9 ~ §10: 1차 진단 (후보 A~D)
+   - §11 실증 증거 기반 2차 재평가 — 후보 F 강등 (일시 증상) / 후보 E 메커니즘 정정 (oneshot skip → **duplicate execution**) / 🆕 **후보 G 신규 확정** (SELECT 0건 or silent fail)
+   - §11.3.4 가능성 1(G.1) / 2(G.2) / **🆕 3(G.3) Codex 교차검증 반영** 3 세부 분기
+   - §11.8 Phase 1 / 1.5 / 2 / 3 복구 순서 + Q6-HIST 쿼리 (4-17 이후 5일간 매시 정각 orphan 복원)
+   - §11.14 HOTFIX 배포 기록 + 관찰 매트릭스
+4. **Mac 마이그레이션 후 환경 복구**:
+   - Xcode Command Line Tools 재설치 + `sudo xcodebuild -license accept`
+   - `.git/objects/` 일부 손상 (SPRINT_13_PLAN.md blob `62c3bdbd…`) → `git hash-object -w` 로 복구
+   - Python venv 재생성 (`backend/.venv`) + requirements + pytest + flake8 설치
+   - Claude Code Desktop/Documents 접근 차단 인지 (macOS TCC 강화) — FSA 등록 추후 조치
+5. **보안 민감 md 2개 `.gitignore` 추가**: `/SECURITY_REVIEW.md`(L184/L228 평문 DB creds 포함) + `/DB_ROTATION_PLAN.md`(복구 절차·ETL 위치 등 공격 표면 정보). 로컬 전용 보관.
+6. **FE-ALERT-BADGE-SYNC BACKLOG 등록**: `home_screen.dart` 알림 배지 `/alerts` 복귀 시 동기화 변경 미커밋 — 재검토 후 별도 Sprint 진행 (배지 장애 복구 후 배포).
+
+### 🟡 관찰 대기 중 (Phase 2 판정 — 배포 후 1~2시간)
+
+**Railway 로그 + pgAdmin 병행 확인** → 가능성 1/2/3 중 하나 확정:
+
+| Q6-HIST (pgAdmin) | Sentry `[alert_*]` 포착 (Railway) | 확정 판정 | 다음 Sprint 명칭 |
+|---|---|---|---|
+| 비어있음 (모든 시점 0건) | 미포착 | **G.1** — 장애 아님 | `HOTFIX-SCHEDULER-DUP-20260422` (Option 2 + 3) |
+| 다수 시점 존재 | 미포착 | **G.2** — 쿼리 버그 | `HOTFIX-SCHEDULER-QUERY-FIX-20260422` (Option 6 + 2 + 3) |
+| 다수 시점 존재 | 포착됨 | **G.3** — silent fail | `HOTFIX-SCHEDULER-SILENT-FIX-20260422` (예외 경로 수정 + 2 + 3) |
+
+**관찰 키워드**: `[alert_silent_fail]` / `[alert_create_none]` / `[alert_insert_fail]` (ALERT_SCHEDULER_DIAGNOSIS.md §11.14.5 참조)
+
+---
+
+## 이전 세션 작업 내용 (2026-04-20)
 
 1. **FIX-25 v4 (v2.9.10)**: progress API(`/api/app/product/progress`) 응답에 `mech_partner`/`elec_partner`/`module_outsourcing`/`line` 4필드 노출. `progress_service.py` 단일 파일 — sn_list CTE + 메인 SELECT에 `pi.line` 추가 + `_aggregate_products` dict `'line'` 추가 + L296~299 `sn_data.pop(...)` 3줄 제거. touch 6줄 / net 0줄 (+3/-3).
 2. **설계 진화 v1→v4**: v1(거미줄 JOIN 3곳) → v2(production CTE 집계) → v3(tasks API dict 주입, Codex M1 breaking) → **v4 채택**(progress API 단일 확장, tasks API 무변경).
