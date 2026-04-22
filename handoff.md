@@ -27,32 +27,15 @@
 
 3. **리뷰 보완 4건 반영** (FE 회귀 블록 + 재질문 라운드 제외 + 합의 실패 정의 + 번들 크기 차등 ±10%/±5%)
 
-### 🟡 다음 세션 최우선 — Phase 2 판정 (Phase 1·1.5 완료 상태)
+### ✅ 완료 요약 (Phase 1·1.5·2 전부)
 
-> **ALERT_SCHEDULER_DIAGNOSIS.md §9~§11.14 진단 완료**. Phase 1.5 (HOTFIX-SCHEDULER-PHASE1.5) 배포 후 1~2시간 관찰 후 가능성 1/2/3 확정 → 다음 Sprint 착수.
-
-**Phase 1 진행 완료** (Railway 로그 실증거 §11.1 수집):
-- 후보 E (Gunicorn duplicate execution) = 🔴 **확정** (매 정각 job 2회 중복 실행 로그)
-- 후보 F (DB pool 고갈) = 🟡 **일시 증상으로 강등** (15:55 UTC 1회 이벤트, 22:51~23:00 정상)
-- 후보 G (SELECT 0건 or silent fail) = 🔴 **신규 확정** (executed successfully + INSERT 0건 조합)
-- 후보 A/C/D = 🟢 완전 기각
-
-**Phase 1.5 진행 완료** (commit `4a6caf8`):
-- `alert_service.py` + `alert_log.py` ERROR 로깅 prefix 추가
-- pytest 47 passed / 회귀 0건
-- Railway 자동 배포 완료
-
-**다음 세션 즉시 실행** — Phase 2 판정 (5~10분):
-1. **pgAdmin Q6-HIST 실행** (ALERT_SCHEDULER_DIAGNOSIS.md §3 참조) — 4-17 00:00 KST ~ 현재까지 매 정각 시점의 orphan task 복원. 결과 비어있음/다수 판정
-2. **Railway Logs grep** — `[alert_silent_fail]` / `[alert_create_none]` / `[alert_insert_fail]` 포착 여부
-3. **판정 매트릭스** (§11.14.5 참조) — Q6-HIST × Sentry 포착 교차로 G.1/G.2/G.3 확정
-4. **다음 Sprint 착수** (🚨 S2 HOTFIX 예외 조항 적용):
-   - G.1 확정 → `HOTFIX-SCHEDULER-DUP-20260422` (Option 2 파일 lock + Option 3 status/restart 엔드포인트)
-   - G.2 확정 → `HOTFIX-SCHEDULER-QUERY-FIX-20260422` (Option 6 쿼리 diff 리뷰 + 2 + 3)
-   - G.3 확정 → `HOTFIX-SCHEDULER-SILENT-FIX-20260422` (Phase 1.5 고도화 — 예외 경로 수정 + 2 + 3)
-5. **Phase 3 (1~2주, 별도 Sprint)** — Option 5 Railway Cron Jobs 이관 장기 구조 전환
-
-**Q6-HIST 쿼리 + 키워드 상세**: `ALERT_SCHEDULER_DIAGNOSIS.md` §3 Q6-HIST + §11.14.5 / §11.14.6 참조
+| Phase | 시각 | 결과 |
+|---|---|---|
+| Phase 1 (진단) | 4-21 | 후보 E duplicate 확정 + G 신규 확정 + A/C/D 기각 |
+| Phase 1.5 (ERROR 로깅) | 4-22 10:47 | commit `4a6caf8` 배포, 47 pytest GREEN |
+| **Phase 2 (근본 원인 확정)** | 4-22 11:00 | `column task_detail_id does not exist` 4건 포착 → **G.3 + A 부활 확정** |
+| **Phase 2a (Schema Restore)** | 4-22 11:25 | pgAdmin SQL 5 블록 실행, 16건 신규 INSERT 성공 (§12.6) |
+| Phase 2b (DUP 발견) | 4-22 12:40 | R1 쿼리 중복율 37.5%, Worker ≥3, DUP Sprint 작성 완료 |
 
 ### 📌 신규 세션(4.7) 시작 시 참조 순서
 
@@ -67,11 +50,11 @@
 
 ## 현재 버전
 
-- **OPS BE**: v2.9.10 (commit `4a6caf8` — HOTFIX-SCHEDULER-PHASE1.5 배포, v2.9.10 유지)
+- **OPS BE**: v2.9.10 (commit `4a6caf8` + pgAdmin 수동 SQL 047 블록 — HOTFIX-ALERT-SCHEMA-RESTORE 완료, v2.9.10 유지)
 - **OPS FE (Flutter PWA)**: v2.9.10 (version 파일만 bump, OPS FE 코드 변경 0 — Netlify 배포 skip)
-- **최근 Sprint**: HOTFIX-SCHEDULER-PHASE1.5 (알람 silent fail ERROR 로깅 추가) — ✅ BE 배포 완료 (2026-04-22), 1~2시간 관찰 대기
-- **최근 완료 Sprint**: HOTFIX-SCHEDULER-PHASE1.5, FIX-25 v4, FIX-24, HOTFIX-04, HOTFIX-05, HOTFIX-03, HOTFIX-02, BUG-45, 61-BE-B, 61-BE, BUG-43/44, HOTFIX-01, 60-BE, 59-BE, 58-BE
-- **최근 Migration**: 049 (alert_escalation_expansion)
+- **최근 Sprint**: HOTFIX-ALERT-SCHEMA-RESTORE-20260422 (migration 049 수동 복구) — ✅ 완료 (2026-04-22 11:25 KST), 12:00 tick 16건 INSERT 확인
+- **최근 완료 Sprint**: HOTFIX-ALERT-SCHEMA-RESTORE-20260422, HOTFIX-SCHEDULER-PHASE1.5, FIX-25 v4, FIX-24, HOTFIX-04, HOTFIX-05, HOTFIX-03, HOTFIX-02, BUG-45, 61-BE-B, 61-BE, BUG-43/44, HOTFIX-01, 60-BE, 59-BE, 58-BE
+- **Migration 049**: Railway prod DB 에 migration_runner 미실행 → 2026-04-22 11:25 수동 SQL 복구 (id=37 기록)
 - **체크리스트 현황**: TM 완료 (SINGLE/DUAL qr_doc_id 정규화) / ELEC 완료 (Phase 1+2, 마스터 정규화) / MECH 미구현
 - **RULE-01**: Sprint 완료 시 FE flutter build web + Netlify 배포 필수
 
@@ -79,35 +62,77 @@
 
 ## 직전 세션 작업 내용 (2026-04-22)
 
-> **HOTFIX-SCHEDULER-PHASE1.5 배포** + **ALERT_SCHEDULER_DIAGNOSIS.md §9~§11.14 심층 진단 완료** + **Mac 마이그레이션 후 환경 복구**
+> **🔴 5일 알람 장애 root cause 확정 + 🟢 복구 완료 + 🆕 중복 실행 신규 이슈 발견** — Phase 1.5 ERROR 로깅 배포 → 10분만에 근본 원인 포착 → pgAdmin SQL 수동 복구 → 12:00 tick 정상 INSERT 16건 → R1 쿼리로 중복 실행 37.5% 확정
 
-1. **HOTFIX-SCHEDULER-PHASE1.5 (commit `4a6caf8`)**: `backend/app/services/alert_service.py` + `backend/app/models/alert_log.py` 2 파일 — `[alert_silent_fail]` / `[alert_create_none]` / `[alert_insert_fail]` prefix 로깅 추가. Sentry SDK 선택적 import 가드. 기존 `return None` 동작 유지. +80 / -37 LOC. `ALERT_SCHEDULER_DIAGNOSIS.md §11.3.4` **가능성 3 / G.3 silent fail 포착용**.
-2. **pytest 검증**: `test_alert_service.py` 11 passed + `test_alert_all20_verify.py` 36 passed (2 skipped 기존) = **47 passed / 회귀 0건**. 테스트 DB(`centerbeam`)에서 migration 049 신규 enum 3종(`TASK_NOT_STARTED` / `CHECKLIST_DONE_TASK_OPEN` / `ORPHAN_ON_FINAL`) 정상 확인 → **후보 A 완전 기각**.
-3. **ALERT_SCHEDULER_DIAGNOSIS.md §9~§11 심층 진단** (13 섹션):
-   - §9 ~ §10: 1차 진단 (후보 A~D)
-   - §11 실증 증거 기반 2차 재평가 — 후보 F 강등 (일시 증상) / 후보 E 메커니즘 정정 (oneshot skip → **duplicate execution**) / 🆕 **후보 G 신규 확정** (SELECT 0건 or silent fail)
-   - §11.3.4 가능성 1(G.1) / 2(G.2) / **🆕 3(G.3) Codex 교차검증 반영** 3 세부 분기
-   - §11.8 Phase 1 / 1.5 / 2 / 3 복구 순서 + Q6-HIST 쿼리 (4-17 이후 5일간 매시 정각 orphan 복원)
-   - §11.14 HOTFIX 배포 기록 + 관찰 매트릭스
-4. **Mac 마이그레이션 후 환경 복구**:
-   - Xcode Command Line Tools 재설치 + `sudo xcodebuild -license accept`
-   - `.git/objects/` 일부 손상 (SPRINT_13_PLAN.md blob `62c3bdbd…`) → `git hash-object -w` 로 복구
-   - Python venv 재생성 (`backend/.venv`) + requirements + pytest + flake8 설치
-   - Claude Code Desktop/Documents 접근 차단 인지 (macOS TCC 강화) — FSA 등록 추후 조치
-5. **보안 민감 md 2개 `.gitignore` 추가**: `/SECURITY_REVIEW.md`(L184/L228 평문 DB creds 포함) + `/DB_ROTATION_PLAN.md`(복구 절차·ETL 위치 등 공격 표면 정보). 로컬 전용 보관.
-6. **FE-ALERT-BADGE-SYNC BACKLOG 등록**: `home_screen.dart` 알림 배지 `/alerts` 복귀 시 동기화 변경 미커밋 — 재검토 후 별도 Sprint 진행 (배지 장애 복구 후 배포).
+### 🟢 Phase 1: HOTFIX-SCHEDULER-PHASE1.5 배포 (commit `4a6caf8`, 10:47 KST)
 
-### 🟡 관찰 대기 중 (Phase 2 판정 — 배포 후 1~2시간)
+- `alert_service.py` + `alert_log.py` 2 파일 — `[alert_silent_fail]` / `[alert_create_none]` / `[alert_insert_fail]` prefix ERROR 로깅 추가. Sentry SDK 선택적 import 가드. 기존 `return None` 동작 유지. +80 / -37 LOC
+- pytest 검증: `test_alert_service.py` 11 + `test_alert_all20_verify.py` 36 = **47 passed / 회귀 0건**
 
-**Railway 로그 + pgAdmin 병행 확인** → 가능성 1/2/3 중 하나 확정:
+### 🔴 Phase 1.5: 근본 원인 확정 (11:00 KST, 02:00 UTC tick)
 
-| Q6-HIST (pgAdmin) | Sentry `[alert_*]` 포착 (Railway) | 확정 판정 | 다음 Sprint 명칭 |
-|---|---|---|---|
-| 비어있음 (모든 시점 0건) | 미포착 | **G.1** — 장애 아님 | `HOTFIX-SCHEDULER-DUP-20260422` (Option 2 + 3) |
-| 다수 시점 존재 | 미포착 | **G.2** — 쿼리 버그 | `HOTFIX-SCHEDULER-QUERY-FIX-20260422` (Option 6 + 2 + 3) |
-| 다수 시점 존재 | 포착됨 | **G.3** — silent fail | `HOTFIX-SCHEDULER-SILENT-FIX-20260422` (예외 경로 수정 + 2 + 3) |
+**결정적 로그** (단일 hourly tick 에서 4건 포착):
+```
+ERROR [alert_insert_fail] INSERT failed:
+  error=column "task_detail_id" of relation "app_alert_logs" does not exist
+```
 
-**관찰 키워드**: `[alert_silent_fail]` / `[alert_create_none]` / `[alert_insert_fail]` (ALERT_SCHEDULER_DIAGNOSIS.md §11.14.5 참조)
+**3-증거 삼각 검증** (ALERT_SCHEDULER_DIAGNOSIS.md §12.2):
+- Q1 `migration_history` → max id=36, 049 기록 없음
+- Q5 `app_alert_logs` → 12 컬럼, `task_detail_id` 부재
+- Railway 로그 → `column ... does not exist` 4건
+
+**최종 원인 (§12.1)**: _"Railway 운영 DB 의 `app_alert_logs` 에 `task_detail_id` 컬럼이 존재하지 않아, Sprint 61-BE(4-17) 배포 이후 8-컬럼 INSERT 가 100% PsycopgError 로 실패하고 try/except 가 삼켜 return None 반환 → 5일 연속 0건"_
+
+### 🟢 Phase 2: HOTFIX-ALERT-SCHEMA-RESTORE-20260422 실행 (11:25 KST)
+
+pgAdmin prod 에서 5 블록 autocommit SQL 실행 (migration 049 수동 재현):
+1. enum 3종 추가 (`TASK_NOT_STARTED` / `CHECKLIST_DONE_TASK_OPEN` / `ORPHAN_ON_FINAL`)
+2. `app_alert_logs.task_detail_id` 컬럼 추가 ← **핵심 복구**
+3. `idx_alert_logs_dedupe` 인덱스
+4. `admin_settings` 5 키 INSERT
+5. `migration_history` id=37 수동 기록
+
+**검증 A/B/C 3종 PASS** → 12:00 KST tick (03:00 UTC) 에서 **신규 INSERT 16건 성공** (id 657 → 673, RELAY_ORPHAN). 5일 장애 완전 해소.
+
+### 🆕 Phase 3: HOTFIX-SCHEDULER-DUP-20260422 신규 발견 (12:40 KST, R1 쿼리)
+
+복구 직후 R1 쿼리로 중복 실행 확정:
+| serial_number | cnt | gap_ms |
+|---|---|---|
+| GBWS-6980 | 2 | 59.77 |
+| GBWS-7017 | 2 | 18.87 |
+| GBWS-7024 | 2 | 31.50 |
+| GBWS-7038 | 2 | 73.15 |
+| **GPWS-0773** | **3** | **86.37** |
+
+- 중복율 **37.5%** (6/16)
+- Worker ≥ **3** (GPWS-0773 triple)
+- gap_ms 18~86ms 범위 → race condition 확정
+- **해결책**: `app/__init__.py` 에 `fcntl.flock LOCK_EX | LOCK_NB` 기반 `/tmp/axis_ops_scheduler.lock` 파일 락 도입 — Sprint `HOTFIX-SCHEDULER-DUP-20260422` 작성 완료 (`AGENT_TEAM_LAUNCH.md` L29644~)
+
+### 📋 세션 부수 작업
+
+1. **Mac 마이그레이션 후 환경 복구**: Xcode license 재수락, `.git/objects/` 손상 blob 복구, Python venv 재생성, Claude Code FSA 이슈 인지
+2. **보안 민감 md `.gitignore` 추가**: `/SECURITY_REVIEW.md` + `/DB_ROTATION_PLAN.md` (public repo 금지)
+3. **FE-ALERT-BADGE-SYNC BACKLOG 등록**: `home_screen.dart` 미커밋 변경 재검토 후 별도 Sprint
+4. **3 커밋 push 완료**: `a569dc0` (gitignore) + `41d9db2` (scheduler 진단 docs) + `ea55edb` (네이밍 규칙 + HOTFIX 프롬프트 + BACKLOG)
+5. **ALERT_SCHEDULER_DIAGNOSIS.md §12 신설** + §11.14.3 반증 주석 + §12.3 "베타 설비 3→20대 확장" 컨텍스트 메모 추가
+
+### 🔴 다음 세션 최우선 — HOTFIX-SCHEDULER-DUP-20260422 즉시 착수
+
+**Sprint 프롬프트**: `AGENT_TEAM_LAUNCH.md` L29644~ 참조
+**예상 소요**: 45~90분 (코드 15~25 + 검증 15~20 + 배포 관찰 30~60)
+**영향 방지**: 현재 중복 기록 37.5% 발생 중, 설비 확장기 알람 품질 저하
+
+**병행 관찰**:
+- 매시 정각 Railway 로그: `Running` / `executed successfully` 2회 중복 여전 확인
+- `app_alert_logs` 일간 건수 추이 (복구 후 4-16 수준 회복 검증, §12.3 환경 컨텍스트 참조)
+
+**후속 장기 Sprint** (§12.9 BACKLOG 등록 완료):
+- `POST-REVIEW-MIGRATION-049-NOT-APPLIED` (S3 조사) — DUP 배포 후
+- `OBSERV-ALERT-SILENT-FAIL` (Sentry 정식 연동) — 재발 방지 필수
+- `OBSERV-MIGRATION-HISTORY-SCHEMA` + `OBSERV-MIGRATION-RUNNER-STARTUP-ASSERTION` — 본 장애 근본 재발 방지책
 
 ---
 

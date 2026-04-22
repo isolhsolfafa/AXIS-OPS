@@ -1054,6 +1054,8 @@ except BlockingIOError:
 - **§11.3.5 후보 A (migration 049 silent fail) 추가 기각 근거** — §3 Q2 쿼리 사전 답변 효과
 - Q1/Q2/Q5 는 사실상 실행 불필요 (A 기각 확정), Q6-HIST/Q7/Q8 만 Phase 1 에서 집중 실행
 
+> 🔴 **2026-04-22 정정 (§12 참조)**: 위 추정 "운영 DB도 같은 상태일 확률 극도로 높음" 은 **Phase 1.5 배포 후 Railway 로그 + pgAdmin 실측으로 반증**됨. 운영 DB 에 migration 049 미적용 확정 (`task_detail_id` 컬럼 부재 + `migration_history` 에 049 기록 없음, max id=36=048). 테스트 DB 와 운영 DB 가 drift 상태. 후보 A 는 **부활·확정**. 세부는 §12 참조.
+
 ### 11.14.4 Mac 마이그레이션 부수 이슈 (별건, 본 HOTFIX 와 무관)
 
 1. **Xcode license 재수락 필요** — `sudo xcodebuild -license accept` 1회 실행으로 해소
@@ -1084,21 +1086,377 @@ except BlockingIOError:
 | 다수 시점 존재 | 미포착 | **G.2** — 쿼리 버그 | `HOTFIX-SCHEDULER-QUERY-FIX-20260422` (Option 6 + 2 + 3) |
 | 다수 시점 존재 | 포착됨 | **G.3** — silent fail | `HOTFIX-SCHEDULER-SILENT-FIX-20260422` (예외 경로 수정 + 2 + 3) |
 
-### 11.14.6 관찰 결과 기록 (배포 후 기록 예정)
-
-> 배포 후 1~2시간 관찰 완료 시 아래 항목 업데이트.
+### 11.14.6 관찰 결과 기록 (2026-04-22 02:00:00 UTC = 11:00 KST 정각 tick)
 
 | 항목 | 기록 |
 |---|---|
-| 배포 성공 시각 | [관찰 후 기록] |
-| `/api/health` 응답 | [200 OK 확인 후 기록] |
-| 배포 후 `Scheduler initialized with 11 jobs` 로그 횟수 | [기록 예정] |
-| `[alert_silent_fail]` 포착 건수 | [기록 예정] |
-| `[alert_create_none]` 포착 건수 | [기록 예정] |
-| `[alert_insert_fail]` 포착 건수 | [기록 예정] |
-| Q6-HIST 실행 결과 | [행 수 + 샘플 기록] |
-| Q7 실행 결과 | [active_count 기록] |
-| Q8 실행 결과 | [worker_id NULL 분포 기록] |
-| 신규 app_alert_logs INSERT 발생 | [MAX(id), MAX(created_at) 기록] |
-| **최종 확정 판정** | [G.1 / G.2 / G.3 중 선택] |
-| **다음 Sprint 명칭** | [위 매트릭스에서 확정] |
+| 배포 성공 시각 | 2026-04-22 10:47 KST (deployment `3907b7d0 Active`) |
+| `/api/health` 응답 | 200 OK |
+| 배포 후 `Scheduler initialized with 11 jobs` 로그 횟수 | 2회 (중복 실행 여전 — 후보 E 유지) |
+| `[alert_insert_fail]` 포착 건수 | **4건 (02:00:00 UTC tick 단일 1분 내)** — GPWS-0773, GBWS-7038, GBWS-7051, GBWS-7038(중복) |
+| `[alert_create_none]` 포착 건수 | **4건** (alert_insert_fail 과 1:1 대응) |
+| `[alert_silent_fail]` 포착 건수 | 0건 (최상위 create_and_broadcast_alert 단계는 예외 전파 없음 — INSERT 레벨에서 이미 포착) |
+| 공통 에러 메시지 | **`column "task_detail_id" of relation "app_alert_logs" does not exist`** (모든 INSERT 동일) |
+| Q1 migration_history 스키마 | 3 컬럼: `id`, `filename`, `executed_at` (success/error_message 없음) |
+| Q1 migration_history 내용 | **max id=36, `048_elec_master_normalization.sql` 까지** — **049 기록 없음** |
+| Q5 app_alert_logs 컬럼 | 12 컬럼: id, alert_type, serial_number, qr_doc_id, triggered_by_worker_id, target_worker_id, target_role, message, is_read, read_at, created_at, updated_at — **`task_detail_id` 부재** |
+| 신규 app_alert_logs INSERT 발생 | **0건** (INSERT 시도 자체가 실패, id 657 이후 증가 없음) |
+| GBWS-7038 중복 INSERT 간격 | 02:00:00.846 / 02:00:00.941 (≈95ms) — **후보 E 중복 실행 재확인** |
+| **최종 확정 판정** | **🔴 G.3 silent fail (DB schema drift) + 후보 A 부활 동시 확정** |
+| **다음 Sprint 명칭** | **`HOTFIX-ALERT-SCHEMA-RESTORE-20260422`** (SQL 수동 복구 1회성) + `HOTFIX-SCHEDULER-DUP-20260422` (중복 실행 별도) |
+
+**증거 원문 (Railway Deploy Logs)**:
+
+```
+2026-04-22 02:00:00,822 - app.models.alert_log - ERROR - [alert_insert_fail] INSERT failed:
+  alert_type=RELAY_ORPHAN, serial_number=GPWS-0773, qr_doc_id=DOC_GPWS-0773,
+  task_detail_id=None, target_role=TMS, target_worker_id=None,
+  message='[릴레이 미완료] [GPWS-0773 | O/N: 6690] 가압검사 ...',
+  error=column "task_detail_id" of relation "app_alert_logs" does not exist
+
+2026-04-22 02:00:00,822 - app.services.alert_service - ERROR - [alert_create_none]
+  create_alert returned None: alert_data={'alert_type': 'RELAY_ORPHAN', ...
+  'serial_number': 'GPWS-0773', 'qr_doc_id': 'DOC_GPWS-0773', 'target_role': 'TMS'}
+
+[GBWS-7038 02:00:00.846 동일 패턴]
+[GBWS-7051 02:00:00.887 동일 패턴]
+[GBWS-7038 02:00:00.940~941 중복 execution 동일 패턴]
+```
+
+> 이 로그로 G.3 서브타입 = **"DB schema drift (컬럼 부재)"** 로 세분화 확정. 이어서 §12 에 근본 원인 + 복구 플랜 정리.
+
+---
+
+### 11.14.7 복구 실행 후 관찰 결과 (2026-04-22 03:00 UTC = 12:00 KST tick) — 🟢 복구 완료
+
+> §12.6 복구 SQL 을 `11:25:17 KST` pgAdmin prod 에서 수동 실행. 35분 대기 후 다음 정각 tick 에서 관찰한 결과.
+
+| 검증 항목 | 기대값 | 실측 | 결과 |
+|---|---|---|---|
+| A. `task_detail_id` 컬럼 존재 | YES integer nullable | `integer / YES` | 🟢 PASS |
+| B. `migration_history` 049 기록 | `id=37, filename='049_alert_escalation_expansion.sql'` | `id=37, executed_at=2026-04-22 11:25:17.863357+09` | 🟢 PASS |
+| C. enum 3종 등록 | 3 rows | `TASK_NOT_STARTED`, `CHECKLIST_DONE_TASK_OPEN`, `ORPHAN_ON_FINAL` 3건 | 🟢 PASS |
+| D. `[alert_insert_fail]` 신규 발생 | 0건 | **0건** (03:00~03:01 UTC) | 🟢 PASS |
+| E. `[alert_create_none]` 신규 발생 | 0건 | **0건** | 🟢 PASS |
+| F. `[alert_silent_fail]` 신규 발생 | 0건 | **0건** | 🟢 PASS |
+| G. `Alert created: id=... type=RELAY_ORPHAN` | ≥1건 | **16건** (id=658~673) | 🟢 PASS |
+| H. scheduler job executed successfully | ≥3종 | `릴레이 미완료 task 감지`, `작업자 리마인더`, `휴게시간 자동 일시정지`, `Access Log 정리` 모두 정상 완료 | 🟢 PASS |
+| I. 후보 E (duplicate scheduler) 잔존 여부 | 2회 실행 (Option 2 전까지 예상) | `작업자 리마인더` 03:00:00,002 + 03:00:00,003 (1ms 간격) 등록, executed_successfully 2회 | ⚠️ **잔존 확정** — Option 2 Sprint 필요 |
+
+**증거 원문 (12:00 KST tick)**
+
+```
+2026-04-22 03:00:00,001 - app.services.scheduler_service - INFO - Running check_orphan_relay_tasks_job
+2026-04-22 03:00:00,002 - apscheduler.executors.default - INFO - Running job "작업자 리마인더 (매 1시간)..."
+2026-04-22 03:00:00,003 - apscheduler.executors.default - INFO - Running job "작업자 리마인더 (매 1시간)..."   ← 후보 E 증거 (1ms 뒤 재등록)
+2026-04-22 03:00:00,060 - app.models.alert_log - INFO - Alert created: id=658, type=RELAY_ORPHAN, target_role=MECH
+2026-04-22 03:00:00,096 - app.models.alert_log - INFO - Alert created: id=659, type=RELAY_ORPHAN, target_role=MECH
+2026-04-22 03:00:00,132 - app.models.alert_log - INFO - Alert created: id=660, type=RELAY_ORPHAN, target_role=TMS
+2026-04-22 03:00:00,162 - app.models.alert_log - INFO - Alert created: id=661, type=RELAY_ORPHAN, target_role=MECH
+...
+2026-04-22 03:00:00,526 - app.models.alert_log - INFO - Alert created: id=673, type=RELAY_ORPHAN, target_role=ELEC
+2026-04-22 03:00:00,446 - apscheduler.executors.default - INFO - Job "릴레이 미완료 task 감지" executed successfully
+```
+
+**알람 16건 분포 분석 (2026-04-22 R1 쿼리 결과 + 사용자 피드백 반영 최종)**
+
+- target_role=MECH: 3건 (id=658, 659, 661)
+- target_role=TMS: 10건
+- target_role=ELEC: 3건
+- **총 16건 = 10 unique orphan × 1 + 중복 6건 (5 unique × 2x~3x)**
+
+**R1 쿼리 결과 (실측)**
+
+| serial_number | cnt | ids | gap_ms |
+|---|---|---|---|
+| GBWS-6980 | 2 | 659, 661 | 59.77 |
+| GBWS-7017 | 2 | 663, 665 | 18.87 |
+| GBWS-7024 | 2 | 666, 667 | 31.50 |
+| GBWS-7038 | 2 | 672, 673 | 73.15 |
+| **GPWS-0773** | **3** | **668, 669, 671** | **86.37** |
+
+- Unique orphan 수 = **10개** (베타 설비 3대 → 20대+ 확장으로 자연 증가)
+- 중복된 orphan 수 = **5개**
+- 초과 기록 = **6건** (4×1 + 1×2)
+- 중복율 = **6/16 = 37.5%**
+- gap_ms 일관된 18~86ms 분포 → **동시 실행 race condition** 의 전형
+
+> **🔴 정정 기록 (2단계)**: 
+>
+> **1차 정정** — 초안의 "16 = 8×2" 해석 오류 철회. 사용자 피드백으로 beta 설비 확장(3대→20대+) 가설 제시.
+>
+> **2차 정정 (R1 쿼리 후 최종 확정)** — "`task_reminder_job` 만 영향" 추정도 오류. R1 결과 5건 중복 + GPWS-0773 3중복 관찰로 **`check_orphan_relay_tasks_job` 도 최소 3 worker 에서 동시 실행** 되고 있음이 확정. Railway 로그 공유분에 일부 INFO 가 누락됐던 것이 이전 착시의 원인.
+
+**Candidate E 최종 정의 (2026-04-22 확정)**
+
+| 구분 | 최종 확정 |
+|---|---|
+| 영향 범위 | **전 scheduler job** (최소 `task_reminder_job` + `check_orphan_relay_tasks_job` 2종 확인. 다른 9종 추정) |
+| Worker 수 추정 | **≥3** (GPWS-0773 3중복 근거) |
+| RELAY_ORPHAN 중복율 | **37.5% (6/16)** |
+| Sprint 우선순위 | 🔴 **S2 — 즉시 착수** |
+| 해결책 | Option 2 (fcntl file lock) — GPWS-0773 triple 케이스 고려 시 Option 3 (Redis distributed lock) 까지 병행 검토 권고 |
+
+**베타 설비 확장 영향**
+- 확장 전: 3대 → 일간 12~23건 알람
+- 4-16: 60건 (확장 진행 중 이상치)
+- 확장 후: 20대+ → tick 당 10 unique 예상 → 일간 ~80~160건 (orphan 특성상 매시간 반복 아님)
+
+**pgAdmin 교차검증 (12:00 KST tick 직후)**
+
+```sql
+SELECT MAX(id) FROM app_alert_logs;
+-- 결과: 673  (복구 직전 max=657, Δ=+16)
+```
+
+| 구분 | 복구 직전 | 03:00 UTC tick 직후 | 증감 |
+|---|---|---|---|
+| `MAX(app_alert_logs.id)` | 657 (5일간 stuck) | **673** | **+16** |
+
+→ Railway INFO 로그의 `id=658~673` 범위와 pgAdmin `MAX(id)=673` 일치. **알람 파이프라인 전구간 (스케줄러 → create_alert → INSERT → DB commit) 정상화 확증**.
+
+**일자별 집계로 장애 기간 DB 레벨 확증**
+
+```sql
+SELECT DATE(created_at AT TIME ZONE 'Asia/Seoul') AS day,
+       COUNT(*), COUNT(DISTINCT alert_type) AS types
+FROM app_alert_logs
+WHERE created_at >= '2026-04-10'
+GROUP BY day ORDER BY day;
+```
+
+| day | count | types | 해석 |
+|---|---|---|---|
+| 2026-04-10 | 17 | 4 | 정상 |
+| 2026-04-11 | 12 | 2 | 정상 |
+| 2026-04-12 | 13 | 2 | 정상 |
+| 2026-04-13 | 15 | 3 | 정상 |
+| 2026-04-14 | 23 | 4 | 정상 |
+| 2026-04-15 | 17 | 3 | 정상 |
+| 2026-04-16 | 60 | 3 | **정상 (장애 직전일, 이상치 — 별건 확인 대상)** |
+| **(4-17 ~ 4-21)** | **⛔ 결과에 없음** | **⛔** | **🔴 5일 장애 구간 — DB 에 0건 기록 공식 확정** |
+| **2026-04-22** | **16** | **1** | **🟢 복구 후 첫 tick (RELAY_ORPHAN 만). 다음 tick 에서 types 자연 증가 예상** |
+
+→ §9 의 "5일 장애" 추정이 **DB GROUP BY 결과에서 row 자체가 존재하지 않음** 으로 공식 확정. 4-17 ~ 4-21 기간 중 단 1건의 app_alert_logs INSERT 도 성공하지 않았음. 4-22 의 16건은 복구 직후 증가분 Δ=+16 과 완전 일치.
+
+**결론**: G.3+A 스키마 drift 는 🟢 완전 해소. 이제 원본 장애 (알람 0건) → 새로운 문제 (2배 기록 축적) 로 전이. **후보 E (Option 2 file lock) Sprint 가 🔴 S2 즉시 우선순위**.
+
+---
+
+## 12. 근본 원인 최종 확정 + 복구 플랜 (2026-04-22 11:00 KST)
+
+> §11.14.6 실측 결과 기반. 5일 알람 장애의 단일 근본 원인이 **"Railway 운영 DB 에 migration 049 미적용"** 으로 확정됨. 후보 A 부활 + G.3 서브타입 구체화. 복구는 SQL 수동 1회 실행으로 가능.
+
+### 12.1 확정된 근본 원인 (단 한 문장)
+
+**Railway 운영 DB 의 `app_alert_logs` 테이블에 `task_detail_id` 컬럼이 존재하지 않아, Sprint 61-BE 배포 이후(4-17~) `alert_log.create_alert()` 의 8-컬럼 INSERT 가 100% PsycopgError 로 실패하고 `try/except` 가 이를 삼켜 `return None` 반환 → `app_alert_logs` 에 5일 연속 0건 기록.**
+
+### 12.2 3-증거 종합
+
+| # | 증거 | 값 | 의미 |
+|---|---|---|---|
+| 1 | Railway 로그 (Phase 1.5 ERROR 로깅) | `column "task_detail_id" of relation "app_alert_logs" does not exist` × 4건 (02:00 UTC 단일 tick) | DB 레벨 실패 직접 확인 |
+| 2 | Q5 `information_schema.columns` | app_alert_logs 12 컬럼, **task_detail_id 부재** | 컬럼 부재 직접 확인 |
+| 3 | Q1 `migration_history` | max id=36 (`048_elec_master_normalization.sql`), **049 기록 없음** | migration 049 미실행 직접 확인 |
+
+세 증거 모두 **독립적으로 동일 결론**을 가리킴 — 삼각 검증 완료.
+
+### 12.3 타임라인 복원 (2026-04-16 성공 / 2026-04-17 실패 전환점)
+
+> **🏭 환경 컨텍스트 (2026-04-22 추가 메모)**: 본 장애는 베타 운영 기간 중 발생. **설비 대수 3대 → 20대+ 확장** 과정과 겹침.
+> - 4-10~4-15 평균 12~23건/일 = 소수 설비(3대 베타) 기준 기저치
+> - 4-16 급증 60건 = 설비 확장 초기 orphan 빈발 구간 + `check_orphan_relay_tasks_job` 4시간 threshold 에 일괄 도달
+> - 4-22 복구 후 12:00 tick 16건 = 확장 후 정상 수준(이전 기저치 × 3~7배)
+> - **교훈**: 관찰성 지표는 **절대값**(건수) + **상대값**(설비당 건수·일간 편차) 양쪽 모두 확인해야 "갑자기 0건 = 장애" 판정 가능. 포스트모템 시 알람 대시보드에 설비수·활성 task 수 상호 비교 지표 추가 검토.
+
+```
+~ 2026-04-16 21:00 KST (id 657, RELAY_ORPHAN)
+  alert_log.py INSERT = 7 컬럼 (task_detail_id 명시 없음, 구 코드)
+  Railway prod app_alert_logs = 12 컬럼 (task_detail_id 없음)
+  → 정상 INSERT 성공 → 4-16 60건 + 누적 657건
+
+2026-04-17 (Sprint 61-BE + 61-BE-B + HOTFIX 01~05 배포)
+  alert_log.py 가 8 컬럼 INSERT 로 변경 (task_detail_id 추가)
+  backend/migrations/049_alert_escalation_expansion.sql 파일 신규 커밋
+  ⚠️ Railway prod 배포: 코드는 반영, migration 049 는 실행 안 됨
+  → app_alert_logs 여전히 12 컬럼, 코드는 task_detail_id 참조
+  → 모든 INSERT PsycopgError
+  → create_alert() try/except → return None
+  → create_and_broadcast_alert() → INSERT 재시도 없이 None 반환
+  → app_alert_logs 기록 0건
+
+2026-04-17 ~ 2026-04-22 (5일 5시간 — 무증상 outage)
+  설비 확장으로 orphan 감지량 증가 + INSERT 전부 실패 조합
+  매시 정각 check_orphan_relay_tasks_job + task_reminder_job
+  → 수백 건 INSERT 시도 → 전부 silent fail
+  → 알람 0건 지속 (일자별 집계에서 4-17~21 row 자체 부재로 DB 레벨 확정)
+
+2026-04-22 10:47 KST (Phase 1.5 HOTFIX 배포, deployment 3907b7d0)
+  alert_service.py / alert_log.py ERROR 로깅 추가
+  → 이후 모든 INSERT 실패가 ERROR 레벨로 Railway 로그에 기록
+
+2026-04-22 11:00:00 KST (02:00 UTC 정각 tick, 배포 후 최초 hourly)
+  check_orphan_relay_tasks_job 중복 실행 (후보 E)
+  3개 orphan 감지: GPWS-0773, GBWS-7038, GBWS-7051
+  INSERT 시도 4회 (GBWS-7038 중복 2회 포함) → 전부 실패
+  → [alert_insert_fail] × 4 + [alert_create_none] × 4 로 근본 원인 포착
+
+2026-04-22 11:25:17 KST (pgAdmin 수동 복구 SQL 실행)
+  enum 3종 ADD + task_detail_id 컬럼 ADD + idx_alert_logs_dedupe + admin_settings
+  migration_history id=37 (049_alert_escalation_expansion.sql) 수동 기록
+  → 검증 A/B/C 3종 PASS (§11.14.7)
+
+2026-04-22 12:00:00 KST (03:00 UTC 정각 tick, 복구 후 최초 hourly)
+  check_orphan_relay_tasks_job 실제 3 worker 동시 실행 (후보 E 정량 확정)
+  10 unique orphan + 5 중복 (GPWS-0773 3중복 포함) = 총 16건 INSERT 성공
+  → id=658~673, 에러 0건
+  → 3중 확증 (Railway 로그 + MAX(id)=673 + 일자별 집계 `4-22 count=16 types=1`)
+
+2026-04-22 12:40 KST (R1 중복 쿼리 실행)
+  RELAY_ORPHAN 5 serial_number 에서 중복 발견 — GBWS-6980/7017/7024/7038 각 2중복
+  GPWS-0773 3중복, gap_ms 18~86ms (동시 실행 race condition)
+  → 중복율 37.5% (6/16)
+  → Worker ≥3 추정 (3중복 근거)
+  → HOTFIX-SCHEDULER-DUP-20260422 🔴 S2 우선순위 확정
+```
+
+### 12.4 후보 평가 최종 정정 (§9.3 / §11.6 / §11.14.3 반영)
+
+| 후보 | 이전 평가 | **최종 평가** | 근거 |
+|---|---|---|---|
+| **A** migration 049 silent fail | 🟢 기각 (§11.6) | 🔴 **부활·확정** | Q1: migration_history max id=36, 049 기록 없음 |
+| **B** 쿼리 0건 반환 | 🟡 → G 로 재등장 | 🟢 **완전 기각** | orphan 쿼리가 실제로 3건 감지 |
+| **C** 스케줄러 부팅 실패 | 🟢 완전 기각 | 🟢 완전 기각 유지 | §11.6 과 동일 |
+| **D** misfire + Railway sleep | 🟢 완전 기각 | 🟢 완전 기각 유지 | §11.6 과 동일 |
+| **E** Gunicorn duplicate | 🔴 유지 | 🔴 **유지** (독립 문제) | GBWS-7038 95ms 간격 중복 INSERT 시도 로그로 재확인 |
+| **F** DB pool 고갈 | 🟡 일시 증상 | 🟡 일시 증상 유지 | 본 장애 주원인 아님 확정 |
+| **G.1** 실제 0건 | 🔴 가능성 중 하나 | 🟢 **명확히 기각** | orphan task 실재 (GPWS-0773 등) |
+| **G.2** 쿼리 버그 | 🔴 가능성 중 하나 | 🟢 **명확히 기각** | 쿼리가 정확히 orphan 찾음 |
+| **G.3** silent fail | 🔴 신규 확정 | 🔴 **구체 확정** — DB schema drift (컬럼 부재) | §12.2 3-증거 전부 |
+
+**결론**: 본 장애의 근본 원인은 **A = G.3 (A 의 새로운 관점 + G.3 의 새로운 서브타입)** 으로 통합 확정.
+
+### 12.5 왜 migration 049 가 Railway 운영 DB 에 실행 안 됐나 — 가능성 4 (복구 후 조사 대상)
+
+1. **Railway 배포 스크립트에서 migration_runner 호출 누락** — start-up hook 에서 누락됐을 가능성
+2. **`.dockerignore` / `.railwayignore` 또는 build 설정으로 049.sql 이 이미지에 포함 안 됨** — 파일이 배포 이미지에 없으면 runner 가 찾을 수 없음
+3. **migration_runner 가 049 실행 시도했으나 오류로 중단 + history 미기록** — 현재 migration_history 에 `success`/`error_message` 컬럼이 없어서 실패 이력 추적 불가 (관찰성 부족)
+4. **runner 의 파일 스캔·정렬 로직 버그** — 048 이후 파일을 찾지 못하는 엣지 케이스 (예: 파일명 prefix sort, 특정 길이 filter 등)
+
+**구분 진단** (복구 배포 후 실행):
+- test DB 에는 049 enum 3종 등록됨 (§11.14.3) → test 환경에서는 runner 정상 동작
+- prod DB 에는 049 미기록 → prod 환경 한정 문제
+- 따라서 가능성 **1 또는 2** 가 유력. 가능성 3/4 는 test 도 동일하게 실패해야 하는데 그렇지 않음.
+
+### 12.6 즉시 복구 SQL (Option A — Railway prod pgAdmin 수동 실행)
+
+> **실행 위치**: Railway PostgreSQL prod → pgAdmin Query Tool (autocommit 기본값)
+> **예상 소요**: ~10초
+> **주의**: `BEGIN`/`COMMIT` 으로 감싸지 말 것. `ALTER TYPE ADD VALUE` 는 PostgreSQL 에서 transaction block 안에서 실행 불가.
+
+```sql
+-- 049_alert_escalation_expansion.sql 본문을 수동 재실행
+
+-- (1) alert_type_enum 3종 추가
+ALTER TYPE alert_type_enum ADD VALUE IF NOT EXISTS 'TASK_NOT_STARTED';
+ALTER TYPE alert_type_enum ADD VALUE IF NOT EXISTS 'CHECKLIST_DONE_TASK_OPEN';
+ALTER TYPE alert_type_enum ADD VALUE IF NOT EXISTS 'ORPHAN_ON_FINAL';
+
+-- (2) app_alert_logs.task_detail_id 컬럼 추가 (🔴 핵심 — 이것만으로 INSERT 실패 중단)
+ALTER TABLE app_alert_logs ADD COLUMN IF NOT EXISTS task_detail_id INTEGER NULL;
+
+-- (3) dedupe 인덱스
+CREATE INDEX IF NOT EXISTS idx_alert_logs_dedupe
+  ON app_alert_logs (alert_type, serial_number, task_detail_id)
+  WHERE task_detail_id IS NOT NULL;
+
+-- (4) admin_settings 4종
+INSERT INTO admin_settings (setting_key, setting_value) VALUES
+  ('alert_task_not_started_enabled', 'true'),
+  ('alert_checklist_done_task_open_enabled', 'true'),
+  ('alert_orphan_on_final_enabled', 'true'),
+  ('task_not_started_threshold_days', '2')
+ON CONFLICT (setting_key) DO NOTHING;
+
+-- (5) migration_history 수동 기록 (이후 runner 재시도 방지)
+INSERT INTO migration_history (filename, executed_at)
+VALUES ('049_alert_escalation_expansion.sql', NOW());
+```
+
+### 12.7 복구 후 즉시 검증 쿼리 (3-step)
+
+```sql
+-- (A) task_detail_id 컬럼 추가 확인
+SELECT column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_name='app_alert_logs' AND column_name='task_detail_id';
+-- 기대: 1 row (integer, YES)
+
+-- (B) migration_history 049 기록 확인
+SELECT id, filename, executed_at
+FROM migration_history
+WHERE filename LIKE '%049%';
+-- 기대: 1 row (id=37, 049_alert_escalation_expansion.sql, NOW())
+
+-- (C) enum 3종 등록 확인
+SELECT enumlabel
+FROM pg_enum
+WHERE enumtypid=(SELECT oid FROM pg_type WHERE typname='alert_type_enum')
+  AND enumlabel IN ('TASK_NOT_STARTED','CHECKLIST_DONE_TASK_OPEN','ORPHAN_ON_FINAL');
+-- 기대: 3 rows
+```
+
+### 12.8 복구 후 관찰 (다음 hourly tick 이후)
+
+| 시각 (KST) | 관찰 항목 | 기대값 |
+|---|---|---|
+| 복구 실행 직후 | Railway 로그 — `[alert_insert_fail]` / `[alert_create_none]` | 신규 발생 **중단** |
+| 다음 정각 (예: 12:00 KST = 03:00 UTC) | check_orphan_relay_tasks_job 실행 + INSERT 성공 | `SELECT MAX(id) FROM app_alert_logs` → id 658 이상 |
+| 다음 정각 | Railway 로그 — `Job ... executed successfully` | 여전히 표시 (정상) |
+| 다음 정각 | Railway 로그 — `Running ... job` 중복 2회 | **여전히 2회** (후보 E 미해결, 정상) |
+| 다음 정각 | app_alert_logs 신규 INSERT 건수 | 1건당 **2배 기록** 가능 (후보 E 영향 — Option 2 file lock 전까지) |
+| 24시간 관찰 | 일간 알람 수 | 4-16 수준 (17~60건/일) 회복 |
+
+### 12.9 후속 BACKLOG 재조정 (2026-04-22 확정)
+
+| 항목 | 상태 | 범위 / 비고 |
+|---|---|---|
+| `HOTFIX-ALERT-SCHEMA-RESTORE-20260422` | 🔴 **OPEN → 🟢 COMPLETED (SQL 실행 + 검증 통과 시)** | §12.6 SQL 수동 실행 + §12.7 검증 통과 |
+| `HOTFIX-SCHEDULER-DUP-20260422` | 🔴 OPEN | Option 2 (file lock) — 중복 INSERT 2배 기록 방지. Phase 1.5 완료 후 별도 Sprint |
+| `POST-REVIEW-MIGRATION-049-NOT-APPLIED` | 🔴 OPEN | §12.5 가능성 4 중 어느 것인지 조사. Railway 배포 스크립트 + Dockerfile + migration_runner 로직 교차 검증 |
+| `OBSERV-MIGRATION-HISTORY-SCHEMA` | 🟡 OPEN | `migration_history` 에 `success BOOLEAN`, `error_message TEXT`, `checksum VARCHAR` 컬럼 추가. 다음 실패를 즉시 포착 |
+| `OBSERV-MIGRATION-RUNNER-STARTUP-ASSERTION` | 🟡 OPEN | 앱 부팅 시 migrations/ 디렉토리 max filename vs migration_history max id 비교 → 불일치 시 배포 중단 / Sentry 알림 |
+| `OBSERV-ALERT-SILENT-FAIL` | 🔴 OPEN | Phase 1.5 임시 ERROR 로깅 → 영구 반영 + Sentry 정식 연동 Sprint 승격 |
+| `HOTFIX-SCHEDULER-PHASE1.5-LOGGING` | 🟢 COMPLETED (배포 + 포착 완료) | 본 진단의 결정적 도구. 포스트모템 기록 대상 |
+| `POST-REVIEW-HOTFIX-PHASE1.5-20260422` | 🔴 OPEN | 긴급 HOTFIX 예외 조항 #24h 이내 Codex 사후 검토 |
+| `INFRA-COLLATION-REFRESH` | 🟡 MEDIUM 유지 | 별건, Sprint 62 이후 처리 |
+
+### 12.10 AGENT_TEAM_LAUNCH.md Sprint 재조정
+
+- `HOTFIX-SCHEDULER-PHASE1.5` (작성 완료, 배포 완료) — 포스트모템만 남음
+- **`HOTFIX-ALERT-SCHEMA-RESTORE-20260422`** (신설 필요) — pgAdmin SQL 수동 실행 절차 + 검증 체크리스트. 팀 에이전트 불필요, Twin파파 단독 작업
+- `HOTFIX-SCHEDULER-DUP-20260422` (신설 예정) — Option 2 file lock. BE teammate 1명. 복구 확인 후 별도 Sprint 로 진행
+
+### 12.11 다음 세션 실행 순서 (체크리스트)
+
+1. ✅ §12.6 복구 SQL 을 pgAdmin prod 에서 실행 — **완료 (2026-04-22 11:25:17 KST)**
+2. ✅ §12.7 검증 쿼리 A/B/C 실행 — 모든 기대값 일치 확인 (§11.14.7 A/B/C 3종 PASS)
+3. ✅ 다음 정각 tick (12:00 KST = 03:00 UTC) 대기 — **완료**
+4. ✅ Railway 로그: `[alert_insert_fail]` / `[alert_create_none]` 신규 발생 중단 확인 — **0건 확정**
+5. ✅ `SELECT MAX(id) FROM app_alert_logs` — 신규 INSERT 확인 → **657 → 673 (+16)**
+6. ✅ 중복 INSERT 건수 확인 — **R1 쿼리 실행 완료. 최종 확정: 10 unique orphan + 5 duplicate (그중 GPWS-0773 3중복). Candidate E 가 RELAY_ORPHAN 에도 영향, 최소 3 worker 동시 실행. Sprint 🔴 S2 승격 확정**
+7. ✅ §11.14.6 판정 row → §11.14.7 신설로 "🟢 복구 완료" 섹션 기록
+8. ☐ `AGENT_TEAM_LAUNCH.md` 에 `HOTFIX-ALERT-SCHEMA-RESTORE-20260422` 신설 항목 추가 ← **다음 작업**
+9. ☐ `AGENT_TEAM_LAUNCH.md` 에 `HOTFIX-SCHEDULER-DUP-20260422` 신설 항목 추가 (🔴 S2, Option 2 file lock)
+10. ☐ `BACKLOG.md` 에 §12.9 표의 9개 항목 등록
+11. ☐ `handoff.md` 에 "2026-04-22 알람 장애 root cause 확정 + 복구" 섹션 추가
+12. ☐ 24시간 후 일간 알람 수 회복 여부 확인 (4-16 수준 기대) — 내일 확인
+13. ☐ `POST-REVIEW-MIGRATION-049-NOT-APPLIED` 조사 착수 — Railway 배포 스크립트 / Dockerfile / migration_runner 3개 파일 교차 검토
+
+### 12.12 본 장애의 핵심 교훈 (포스트모템 초안)
+
+1. **migration_history 의 관찰성 부재가 5일 장애의 결정적 지연 요인** — `success` / `error_message` 컬럼이 있었으면 4-17 배포 직후 즉시 포착 가능했음
+2. **Phase 1.5 ERROR 로깅이 근본 원인을 5분 만에 포착** — §9 ~ §11 의 5일간 지적 추론보다 실로그 1회가 결정적. **"관찰성 우선"** 원칙 재확인
+3. **test DB 와 prod DB 가 drift 상태로 잠복** — test 에서 통과한 migration 이 prod 에 적용되지 않아도 알림 없음. `OBSERV-MIGRATION-RUNNER-STARTUP-ASSERTION` 으로 부팅 시 차이 감지 필요
+4. **silent fail 패턴의 위험성** — `try/except ... return None` 구조가 장애를 infinite queue 로 저장. CLAUDE.md 에 "예외 삼킴 금지, 최소 ERROR 레벨 로깅 의무화" 원칙 추가 고려
+5. **중복 실행 (후보 E) 이 복구 후 새 문제로 전이** — 컬럼 복구 후 같은 알람 2배 기록 우려. Option 2 file lock 이 후속 필수

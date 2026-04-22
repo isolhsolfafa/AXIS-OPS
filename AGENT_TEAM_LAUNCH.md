@@ -29534,3 +29534,502 @@ CLAUDE.md 를 처음부터 끝까지 다시 읽고, AXIS-OPS/ALERT_SCHEDULER_DIA
 | **합계** | **1.5~3시간** |
 
 본 HOTFIX 완료 후 확정된 가능성에 따라 본 Sprint (`HOTFIX-SCHEDULER-DUP/QUERY-FIX/SILENT-FIX-20260422`) 프롬프트 작성 착수.
+
+---
+
+## 🔧 HOTFIX-ALERT-SCHEMA-RESTORE-20260422 프롬프트 — Railway 운영 DB 스키마 복구 (🟢 COMPLETED, 사후 기록)
+
+> **등록일**: 2026-04-22 11:25 KST  
+> **우선순위**: 🔴 S1 (5일 알람 장애 복구 — Phase 1.5 로깅으로 근본 원인 확정 후 즉시 실행)  
+> **상태**: 🟢 **COMPLETED** (2026-04-22 11:25:17 KST pgAdmin 수동 실행 → 12:00 KST tick 에서 정상 INSERT 16건 확인)  
+> **수행자**: Twin파파 단독 (팀 에이전트 불필요, pgAdmin SQL 수동 1회성)  
+> **트리거 근거**: `ALERT_SCHEDULER_DIAGNOSIS.md` §11.14.6 + §12.6 실측 확정  
+> **연계 문서**: 본 항목은 사후 기록이며, 재발 시 복구 절차 참고용
+
+### 🎯 목적
+
+Phase 1.5 로깅으로 5일 알람 장애의 단일 근본 원인이 **"Railway 운영 DB 의 `app_alert_logs` 테이블에 `task_detail_id` 컬럼 부재 + enum 3종 미등록 + migration 049 미기록"** 으로 확정됨. 테스트 DB 와 prod DB 의 schema drift 를 수동 SQL 로 해소.
+
+### 📋 배경 (§11.14.6 발췌)
+
+```
+2026-04-22 02:00:00,822 - app.models.alert_log - ERROR - [alert_insert_fail] INSERT failed:
+  error=column "task_detail_id" of relation "app_alert_logs" does not exist
+```
+
+- Q1 `migration_history` → max id=36, `048_elec_master_normalization.sql` 까지. **049 기록 없음**.
+- Q5 `app_alert_logs` → 12 컬럼, `task_detail_id` 부재.
+- Q(C) `pg_enum` → `TASK_NOT_STARTED`, `CHECKLIST_DONE_TASK_OPEN`, `ORPHAN_ON_FINAL` 미등록.
+
+### 🛠 복구 SQL (pgAdmin prod 에서 autocommit 으로 5개 블록 순차 실행)
+
+```sql
+-- Block 1: enum 3종 추가
+ALTER TYPE alert_type_enum ADD VALUE IF NOT EXISTS 'TASK_NOT_STARTED';
+ALTER TYPE alert_type_enum ADD VALUE IF NOT EXISTS 'CHECKLIST_DONE_TASK_OPEN';
+ALTER TYPE alert_type_enum ADD VALUE IF NOT EXISTS 'ORPHAN_ON_FINAL';
+
+-- Block 2: task_detail_id 컬럼 추가
+ALTER TABLE app_alert_logs
+  ADD COLUMN IF NOT EXISTS task_detail_id INTEGER NULL;
+
+-- Block 3: 중복 방지 부분 인덱스
+CREATE INDEX IF NOT EXISTS idx_alert_logs_dedupe
+  ON app_alert_logs (alert_type, serial_number, task_detail_id)
+  WHERE task_detail_id IS NOT NULL;
+
+-- Block 4: admin_settings flag 초기값
+INSERT INTO admin_settings (setting_key, setting_value) VALUES
+  ('alert_task_not_started_enabled', 'true'),
+  ('alert_checklist_done_task_open_enabled', 'true'),
+  ('alert_orphan_on_final_enabled', 'true'),
+  ('alert_task_not_started_minutes', '30'),
+  ('alert_checklist_done_task_open_minutes', '60')
+ON CONFLICT (setting_key) DO NOTHING;
+
+-- Block 5: migration_history 에 049 기록 추가
+INSERT INTO migration_history (filename, executed_at)
+VALUES ('049_alert_escalation_expansion.sql', NOW());
+```
+
+### ✅ 검증 쿼리 (A/B/C 3종)
+
+```sql
+-- A: task_detail_id 컬럼 존재 확인
+SELECT column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_name='app_alert_logs' AND column_name='task_detail_id';
+-- 기대: 1 row (integer / YES)
+
+-- B: migration_history 049 기록 확인
+SELECT id, filename, executed_at FROM migration_history
+WHERE filename LIKE '049%';
+-- 기대: 1 row
+
+-- C: enum 3종 등록 확인
+SELECT enumlabel FROM pg_enum
+WHERE enumtypid=(SELECT oid FROM pg_type WHERE typname='alert_type_enum')
+  AND enumlabel IN ('TASK_NOT_STARTED','CHECKLIST_DONE_TASK_OPEN','ORPHAN_ON_FINAL');
+-- 기대: 3 rows
+```
+
+### 🟢 실제 수행 결과 (2026-04-22)
+
+| 항목 | 결과 |
+|---|---|
+| 실행 시각 | 2026-04-22 11:25:17 KST (pgAdmin prod) |
+| A 검증 | 🟢 PASS — `task_detail_id integer / YES nullable` |
+| B 검증 | 🟢 PASS — `id=37, executed_at=2026-04-22 11:25:17.863357+09` |
+| C 검증 | 🟢 PASS — enum 3종 모두 확인 |
+| 12:00 KST tick 관찰 | 🟢 `[alert_insert_fail]` / `[alert_create_none]` / `[alert_silent_fail]` 0건 |
+| 신규 INSERT | 🟢 16건 (`id=658~673`, 모두 `RELAY_ORPHAN`) |
+| `MAX(app_alert_logs.id)` | 🟢 657 → 673 (Δ=+16) |
+| 일자별 집계 | 🟢 `4-17~21` row 부재 확정, `4-22 count=16 types=1` |
+
+### 🔗 연계 문서
+
+- `AXIS-OPS/ALERT_SCHEDULER_DIAGNOSIS.md` §11.14.6 / §11.14.7 / §12 (진단·복구·관찰)
+- `AXIS-OPS/migrations/049_alert_escalation_expansion.sql` (원본 migration 파일)
+- `POST-REVIEW-MIGRATION-049-NOT-APPLIED` (후속 조사 — 왜 prod 에 049 가 적용되지 않았는가)
+
+### 📌 후속 조치 (별건 Sprint 로 분리)
+
+1. **`HOTFIX-SCHEDULER-DUP-20260422`** (🔴 S2) — 후보 E 중복 실행이 복구 후 2배 INSERT 증폭 유발. Option 2 (file lock) 로 제거.
+2. **`POST-REVIEW-MIGRATION-049-NOT-APPLIED`** (🔴 S3 조사) — Railway 배포 스크립트 / Dockerfile / migration_runner.py 3자 교차 검토.
+3. **`OBSERV-MIGRATION-HISTORY-SCHEMA`** (🟡 P2) — migration_history 에 `success BOOLEAN`, `error_message TEXT`, `checksum VARCHAR` 컬럼 추가.
+4. **`OBSERV-MIGRATION-RUNNER-STARTUP-ASSERTION`** (🟡 P2) — 앱 부팅 시 `migrations/` 디렉토리 max filename vs `migration_history.MAX(id)` 비교, drift 감지 시 배포 중단.
+
+---
+
+## 🔧 HOTFIX-SCHEDULER-DUP-20260422 프롬프트 — APScheduler 중복 실행 방지 (Option 2 file lock, 🔴 S2)
+
+> **등록일**: 2026-04-22 12:10 KST (12:40 KST R1 쿼리 결과로 🔴 S2 확정)  
+> **우선순위**: 🔴 S2 (긴급 HOTFIX 예외 조항 적용)  
+> **상태**: 🔴 OPEN (즉시 착수)  
+> **예상 소요**: 45~90분 (코드 추가 15~25분 + 배포 전 검증 15~20분 + 배포 후 관찰 30~60분)  
+> **트리거 근거**: `ALERT_SCHEDULER_DIAGNOSIS.md` §11.14.7 — R1 쿼리에서 RELAY_ORPHAN 5건 중복 (GPWS-0773 3중복 포함) 관찰, gap_ms 18~86ms. Worker ≥3 에서 `check_orphan_relay_tasks_job` 동시 실행 확정  
+> **담당**: BE teammate 1명 (Opus 리뷰 후 배포 → 24h 이내 Codex 사후 검토)
+
+### 🎯 목적
+
+Candidate E (duplicate APScheduler execution) 가 **전 scheduler job 에 영향** 하고 있음이 R1 쿼리로 확정됨. Gunicorn multi-worker 환경에서 Python fork 이후 `_SCHEDULER_STARTED` 환경변수 가드가 무력화되는 구조적 문제를 file lock (fcntl) 으로 해결.
+
+**영향 범위 (2026-04-22 12:40 KST R1 결과 최종)**:
+- ✅ `task_reminder_job` — 중복 등록/실행 확정 (로그 1ms 간격)
+- ✅ `check_orphan_relay_tasks_job` — **R1 쿼리에서 DB 중복 5건 확정** (GBWS-6980, GBWS-7017, GBWS-7024, GBWS-7038 각 2중복 + **GPWS-0773 3중복**)
+- ❗ Worker 수 ≥ 3 (GPWS-0773 triple 근거)
+- ❓ 기타 9개 job — 동일 구조이므로 영향 확실시, Option 2 로 일괄 해소
+
+### 🧪 선행 쿼리 결과 (이미 실행됨 — 2026-04-22 12:40 KST)
+
+```sql
+SELECT alert_type, serial_number, task_detail_id, COUNT(*) AS cnt,
+       STRING_AGG(id::text, ', ' ORDER BY id) AS ids,
+       EXTRACT(EPOCH FROM (MAX(created_at) - MIN(created_at))) * 1000 AS gap_ms
+FROM app_alert_logs
+WHERE created_at >= '2026-04-22 03:00:00+00'
+  AND created_at < '2026-04-22 04:00:00+00'
+GROUP BY alert_type, serial_number, task_detail_id
+HAVING COUNT(*) > 1;
+```
+
+| serial_number | cnt | ids | gap_ms |
+|---|---|---|---|
+| GBWS-6980 | 2 | 659, 661 | 59.77 |
+| GBWS-7017 | 2 | 663, 665 | 18.87 |
+| GBWS-7024 | 2 | 666, 667 | 31.50 |
+| GBWS-7038 | 2 | 672, 673 | 73.15 |
+| **GPWS-0773** | **3** | **668, 669, 671** | **86.37** |
+
+- 중복율: 6/16 = **37.5%**
+- gap_ms 18~86ms 범위 → 동시 실행 race condition 확정
+- GPWS-0773 3중복 → **Worker ≥ 3** (file lock 시 fcntl 단일 프로세스 보장으로 해소 가능)
+
+### 📋 Candidate E 가 관찰된 실증거 (Railway Deploy Logs 12:00 KST tick)
+
+```
+2026-04-22 03:00:00,002 - apscheduler.executors.default - INFO - Running job "작업자 리마인더 (매 1시간)..."
+2026-04-22 03:00:00,003 - apscheduler.executors.default - INFO - Running job "작업자 리마인더 (매 1시간)..."   ← 1ms 뒤 재등록
+2026-04-22 03:00:00,003 - app.services.scheduler_service - INFO - Running task_reminder_job
+2026-04-22 03:00:00,003 - app.services.scheduler_service - INFO - Running task_reminder_job                 ← INFO 도 2회
+2026-04-22 03:00:00,021 - apscheduler.executors.default - INFO - Job "작업자 리마인더..." executed successfully
+2026-04-22 03:00:00,125 - apscheduler.executors.default - INFO - Job "작업자 리마인더..." executed successfully   ← 두 번 완료
+```
+
+> 주의: 로그 공유분에서 `check_orphan_relay_tasks_job` 은 1회만 찍혀있었으나, R1 DB 결과에서 3중복이 관찰되므로 **실제로는 3회 실행됨**. Railway 로그 공유분에 일부 INFO 가 누락됐거나, worker 별 로그 병합 이슈 추정.
+
+### 🧩 수정 범위
+
+**대상 파일**: `axis-ops-api/app/__init__.py` (또는 scheduler 초기화 위치 — `app/services/scheduler_service.py` 에 `start_scheduler()` 있을 시 그쪽)
+
+**현재 패턴 (추정)**:
+```python
+if os.getenv("_SCHEDULER_STARTED") != "1":
+    scheduler.start()
+    os.environ["_SCHEDULER_STARTED"] = "1"
+```
+
+**문제**: Gunicorn 의 `--preload` 미사용 시, master → worker fork 과정에서 각 worker 가 독립 환경변수 공간을 가질 가능성 + worker 간 race condition. 실측 1ms 내 중복 등록 포착됨.
+
+### 🛠 Phase A — 코드 변경 (file lock 도입)
+
+```python
+# app/__init__.py (또는 scheduler init 위치)
+import fcntl
+import os
+import atexit
+from pathlib import Path
+
+SCHEDULER_LOCK_PATH = Path("/tmp/axis_ops_scheduler.lock")
+_scheduler_lock_fd = None
+
+def _try_acquire_scheduler_lock() -> bool:
+    """
+    파일 락으로 scheduler 단일 실행 보장.
+    LOCK_EX | LOCK_NB 로 비차단 독점 락 획득 시도.
+    - 성공: True 반환, 프로세스 생존 기간 동안 락 유지
+    - 실패: False (다른 worker 가 이미 획득) — scheduler 시작 생략
+    """
+    global _scheduler_lock_fd
+    try:
+        _scheduler_lock_fd = os.open(
+            str(SCHEDULER_LOCK_PATH),
+            os.O_CREAT | os.O_RDWR,
+            0o644,
+        )
+        fcntl.flock(_scheduler_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # PID 기록 (디버깅용)
+        os.ftruncate(_scheduler_lock_fd, 0)
+        os.write(_scheduler_lock_fd, str(os.getpid()).encode())
+
+        def _release():
+            try:
+                if _scheduler_lock_fd is not None:
+                    fcntl.flock(_scheduler_lock_fd, fcntl.LOCK_UN)
+                    os.close(_scheduler_lock_fd)
+            except Exception:
+                pass
+
+        atexit.register(_release)
+        return True
+    except (BlockingIOError, OSError) as e:
+        # 이미 다른 worker 가 락 보유 중
+        if _scheduler_lock_fd is not None:
+            try:
+                os.close(_scheduler_lock_fd)
+            except Exception:
+                pass
+            _scheduler_lock_fd = None
+        return False
+
+
+def init_scheduler(app):
+    if not _try_acquire_scheduler_lock():
+        app.logger.info(
+            "[scheduler_lock] Scheduler start skipped — "
+            f"another worker holds the lock (pid={os.getpid()})"
+        )
+        return
+
+    app.logger.info(
+        f"[scheduler_lock] Scheduler lock acquired by pid={os.getpid()}"
+    )
+    # 기존 scheduler 시작 로직
+    scheduler.start()
+    app.logger.info("Scheduler initialized with 11 jobs")
+```
+
+**주의**:
+- Railway 의 `/tmp` 는 컨테이너 재시작 시 초기화되므로 lock 파일 잔존 문제 없음.
+- 기존 `_SCHEDULER_STARTED` env 가드는 **제거하지 말고 보조 방어선으로 유지** (이중 가드).
+- `atexit.register(_release)` 는 graceful shutdown 에만 동작. SIGKILL 시 OS 가 자동 정리.
+
+### ✅ Phase B — 배포 전 자체 검증 (BE teammate 수행)
+
+1. **로컬 동시 2 worker 기동 테스트**
+   ```bash
+   gunicorn -w 2 -b 127.0.0.1:8000 app:create_app\(\) --access-logfile -
+   ```
+   → 로그에서 `[scheduler_lock] Scheduler lock acquired` 는 **1회만**, `[scheduler_lock] Scheduler start skipped` 는 **1회** 찍혀야 함.
+
+2. **lock 파일 PID 확인**
+   ```bash
+   cat /tmp/axis_ops_scheduler.lock
+   ps aux | grep <pid>
+   ```
+   → PID 가 실제 동작 중인 worker 프로세스와 일치 확인.
+
+3. **강제 kill → 재시작 테스트**
+   ```bash
+   kill -9 <lock holder pid>
+   # 다른 worker 에서 다음 tick 에 lock 획득 성공 확인
+   ```
+
+4. **pytest 기존 scheduler 테스트 통과 확인**
+   ```bash
+   cd axis-ops-api && pytest tests/test_scheduler.py -v
+   ```
+
+### 🚦 배포 전 Gate (15개)
+
+1. ☐ Phase A 코드가 `app/__init__.py` (또는 `scheduler_service.py`) 에 적용됨
+2. ☐ `fcntl`, `atexit`, `pathlib` import 확인 (Linux 전용 — macOS 개발환경 호환 확인)
+3. ☐ 기존 `_SCHEDULER_STARTED` env 가드 보조 유지 (삭제 금지)
+4. ☐ lock 파일 경로 `/tmp/axis_ops_scheduler.lock` 확정 + Railway 컨테이너 /tmp 쓰기 권한 확인
+5. ☐ `atexit.register(_release)` 등록 확인
+6. ☐ lock 실패 시 scheduler 시작 생략 로직 확인 (`return` 으로 종료)
+7. ☐ 로컬 `gunicorn -w 2` 테스트 통과 (위 Phase B.1)
+8. ☐ 로컬 강제 kill → 재획득 테스트 통과 (위 Phase B.3)
+9. ☐ `pytest tests/` 기존 모든 테스트 통과
+10. ☐ `app.logger.info("[scheduler_lock] ...")` 로그 2종 (acquired / skipped) 확인
+11. ☐ 커밋 메시지: `HOTFIX-SCHEDULER-DUP-20260422: APScheduler 단일 실행 보장 (file lock)`
+12. ☐ Railway 배포 후 `/api/health` 200 OK 확인
+13. ☐ 배포 후 Deploy Logs 에서 `[scheduler_lock] Scheduler lock acquired` **1회만** 등장
+14. ☐ 배포 후 Deploy Logs 에서 `[scheduler_lock] Scheduler start skipped` 등장 (worker 수 - 1 회)
+15. ☐ 배포 후 다음 hourly tick 에서 `Running job "릴레이 미완료 task 감지"` **1회만** 등장
+
+### 📊 배포 후 관찰 체크리스트 (1시간)
+
+| 항목 | 기대 |
+|---|---|
+| A. `Running job "릴레이 미완료 task 감지"` 등장 횟수 | **1회** (기존 2회 → 1회) |
+| B. `Running job "작업자 리마인더"` 등장 횟수 | **1회** |
+| C. `Job ... executed successfully` | 1회 (기존 2회) |
+| D. `[scheduler_lock] Scheduler lock acquired` | 1회 (전체 배포본 기준) |
+| E. `[scheduler_lock] Scheduler start skipped` | `(worker 수 - 1)` 회 |
+| F. `app_alert_logs` 신규 INSERT 중복 비율 | 0% (다음 tick 에서 같은 `(alert_type, serial_number, task_detail_id)` 2건 이상 **없음**) |
+| G. 1시간 누적 INSERT 건수 | 이전 대비 **정확히 50%** 수준 (예: 16 → 8) |
+
+**판정**:
+- A/B/C 모두 1회, F 중복 0, G 50% 감소 → 🟢 **Candidate E 완전 해소**
+- A/B/C 여전히 2회 → 🔴 **file lock 무효, Option 3 (Redis distributed lock) 검토 필요**
+- F 여전히 중복 발생 → 🔴 다른 중복 경로 존재 (예: coalesce=False 설정 문제) → §11.7.4 Option 6 검토
+
+### ✅ Done Definition
+
+- ✅ Phase A 코드 배포 완료
+- ✅ 배포 전 Gate 15개 전부 통과
+- ✅ 1시간 이상 관찰 완료 + A~G 결과 기록
+- ✅ 중복 INSERT 0% 달성 확인 (pgAdmin 쿼리 §11.14.7 2) 번 결과)
+- ✅ `ALERT_SCHEDULER_DIAGNOSIS.md` §12.11 #9 ☑ 체크
+- ✅ `BACKLOG.md` `HOTFIX-SCHEDULER-DUP-20260422` 상태 🔴 → 🟢
+- ✅ `POST-REVIEW-HOTFIX-DUP-20260422` 초안 생성 (24h 이내 Codex 사후 검토)
+
+### 🔗 연계 문서
+
+- `AXIS-OPS/ALERT_SCHEDULER_DIAGNOSIS.md` §11.7.4 Option 2 (file lock 설계 원본)
+- `AXIS-OPS/ALERT_SCHEDULER_DIAGNOSIS.md` §11.14.7 (후보 E 재확인 증거)
+- `AXIS-OPS/CLAUDE.md` § 🚨 긴급 HOTFIX 예외 조항 S2
+- `AXIS-OPS/CLAUDE.md` § AI 검증 워크플로우 v2
+
+### ⏱ 예상 소요 시간
+
+| 단계 | 소요 |
+|---|---|
+| BE teammate 코드 추가 (Phase A) | 15~25분 |
+| 로컬 자체 검증 (Phase B) | 10~15분 |
+| 배포 전 Gate 15개 체크 + 배포 | 10~15분 |
+| 배포 후 1시간 관찰 | 60분 |
+| 결과 기록 + BACKLOG 갱신 | 10분 |
+| **합계** | **105~125분 (약 2시간)** |
+
+본 Sprint 완료 후 Candidate E 해소 확정 → `POST-REVIEW-MIGRATION-049-NOT-APPLIED` 조사 착수.
+
+---
+
+## 🔍 POST-REVIEW-MIGRATION-049-NOT-APPLIED 조사 계획서 (🔴 S3 조사, HOTFIX-DUP 배포 후 착수)
+
+> **등록일**: 2026-04-22 (HOTFIX-ALERT-SCHEMA-RESTORE 완료 직후)
+> **우선순위**: 🔴 S3 (구조적 재발 방지 — 동일 원인 장애 다시 발생 시 또 5일 outage 가능)
+> **상태**: 🔴 OPEN (HOTFIX-SCHEDULER-DUP-20260422 배포 완료 후 착수)
+> **예상 소요**: 1~2시간 (조사 60분 + 보고서 30~60분)
+> **트리거 근거**: ALERT_SCHEDULER_DIAGNOSIS.md §12.5
+> **담당**: Twin파파 단독 또는 BE teammate + Opus 리뷰
+> **산출물**: `AXIS-OPS/POST_MORTEM_MIGRATION_049.md` 또는 `ALERT_SCHEDULER_DIAGNOSIS.md` §13 신설
+
+### 🎯 조사 목표
+
+**단일 질문**: "왜 Railway 운영 DB 에 migration 049 가 적용되지 않았는가?"
+
+테스트 DB(`centerbeam`) 에는 적용됐고 운영 DB(`maglev`) 에는 적용되지 않은 **drift** 가 발생. 원인 미해결 시 migration 050+ 에서도 동일 문제 재발 가능. 근본 원인 + 재발 방지책 도출이 목표.
+
+### 📚 §12.5 가능성 4종 재확인
+
+| # | 가설 | 확률 | 확인 방법 |
+|---|---|---|---|
+| 1 | Railway 배포 스크립트에서 `migration_runner` 호출 누락 | 중 | Procfile / release command / start hook 확인 |
+| 2 | `.dockerignore` / `.railwayignore` / build 설정으로 049.sql 이미지에 포함 안 됨 | **높음** | 배포 이미지 내 migrations/ 디렉토리 파일 목록 확인 |
+| 3 | migration_runner 가 049 실행 시도 + 오류 + history 미기록 (관찰성 부재) | 낮음 | Railway deploy 로그 archive 검색 — 4-17 배포 시점 migration 관련 에러 |
+| 4 | runner 의 파일 스캔·정렬 로직 버그 (048 이후 skip) | 낮음 | `migration_runner.py` 코드 리뷰 + 로컬 재현 시도 |
+
+**추가 가설** (조사 중 발견 시):
+- 5. Railway build cache 이슈 — git push 됐으나 이전 commit SHA 에서 빌드 (배포 SHA 로그 확인)
+- 6. 배포 타이밍 — 049 커밋이 4-17 배포 **이후** 에 push 됐을 가능성 (커밋 타임라인 vs Railway deploy 타임라인 비교)
+
+### 🔬 교차 검토 대상 4개 소스
+
+#### 1. Railway 배포 설정 (🔴 최우선)
+**확인 대상**:
+- `Procfile` (프로젝트 루트) — `release` 명령에 migration_runner 호출 여부
+- `railway.toml` (있는 경우) — `[build]` / `[deploy]` 섹션
+- Railway 대시보드 → Service → Settings → Deploy → "Custom Start Command" / "Pre-deploy Command"
+
+**검증 커맨드**:
+```bash
+# 로컬 검증
+cat Procfile
+cat railway.toml 2>/dev/null
+cat nixpacks.toml 2>/dev/null
+
+# Railway 배포 이력
+railway logs --service axis-ops-api | grep -iE "migration|049|runner" | head -30
+```
+
+**가설 확정 조건**: release 명령에 `python -m migration_runner` 또는 `python -c "from app.migration_runner import run_all; run_all()"` 같은 호출이 **없음** → 가능성 1 확정
+
+#### 2. Dockerfile + .railwayignore (🔴 높음)
+**확인 대상**:
+- `Dockerfile` (있는 경우) — `COPY migrations/` 라인 존재 여부
+- `.dockerignore` — `migrations/` 또는 `*.sql` 패턴 존재 여부
+- `.railwayignore` — 동일
+
+**검증 커맨드**:
+```bash
+cat Dockerfile 2>/dev/null | grep -i migration
+cat .dockerignore 2>/dev/null
+cat .railwayignore 2>/dev/null
+
+# Railway 배포 이미지에서 파일 직접 확인 (SSH 접근 가능하면)
+railway shell --service axis-ops-api
+> ls -la /app/backend/migrations/ | grep 049
+```
+
+**가설 확정 조건**: 049 파일이 배포 이미지에 **존재하지 않음** → 가능성 2 확정
+
+#### 3. migration_runner.py 코드 리뷰 (🟡 중간)
+**확인 대상**: `backend/app/migration_runner.py` (Sprint 45 INFRA-1 산출물)
+
+**검토 포인트**:
+- 파일 스캔 로직 — glob 패턴이 `*.sql` 인지, 숫자 prefix sort 가 올바른지
+- 실행 순서 — `migration_history.MAX(id)` 이후 파일만 실행하는지
+- 에러 처리 — migration 실패 시 `migration_history` 에 기록하는지 (현 스키마에 `success` 컬럼 없어서 실패 이력 누락 가능)
+- idempotency — 이미 실행된 migration 재실행 방지 로직
+- 트랜잭션 처리 — `ALTER TYPE ADD VALUE` 는 transaction block 밖에서 실행되어야 함 (autocommit 필요)
+
+**검증 커맨드**:
+```bash
+# 로컬에서 test DB 로 migration_runner 실행 시도
+TEST_DATABASE_URL=<centerbeam> python -c "
+from backend.app.migration_runner import scan_pending, run_all
+print('Pending:', scan_pending())
+"
+
+# 047/048/049 수동 실행 시나리오 재현
+```
+
+**가설 확정 조건**: 코드에서 049 skip 로직 또는 버그 발견 → 가능성 3/4 확정
+
+#### 4. 배포 타임라인 교차 검증 (🟡 중간)
+**확인 대상**:
+- `git log --oneline backend/migrations/049*.sql` → 049 커밋 시각
+- Railway 대시보드 → Deployments → 4-17 배포 목록의 commit SHA 와 시각
+- 두 시각 비교
+
+**검증 커맨드**:
+```bash
+# 049 파일 최초 커밋 SHA + 시각
+git log --diff-filter=A --oneline backend/migrations/049_alert_escalation_expansion.sql
+
+# 049 파일이 master 에 merge 된 커밋 + 시각
+git log --all --oneline -- backend/migrations/049_alert_escalation_expansion.sql | head -5
+
+# Railway deploy history (CLI 또는 대시보드)
+railway deployments --service axis-ops-api
+```
+
+**가설 확정 조건**: 049 커밋이 4-17 배포 **이후** 에 push 됐거나, 4-17 배포 SHA 가 049 커밋 이전 → 가능성 5/6 확정
+
+### 📝 조사 절차 (순차 실행, 각 단계에 15분)
+
+1. **Step 1 (15분)** — Railway 배포 설정 (Procfile/railway.toml) 확인 → 가능성 1 검증
+2. **Step 2 (15분)** — Dockerfile + .dockerignore + .railwayignore 확인 → 가능성 2 검증
+3. **Step 3 (15분)** — Railway 4-17 배포 이미지에 049.sql 존재 확인 (shell 접근)
+4. **Step 4 (15분)** — migration_runner.py 코드 리뷰 (가능성 3/4)
+5. **Step 5 (15분)** — git log + Railway deploy history 비교 (가능성 5/6)
+6. **Step 6 (30분)** — 산출물 작성 (`POST_MORTEM_MIGRATION_049.md` 또는 §13 신설)
+
+### 📊 산출물 구성
+
+**파일명**: `AXIS-OPS/POST_MORTEM_MIGRATION_049.md` (또는 `ALERT_SCHEDULER_DIAGNOSIS.md` §13 신설)
+
+**섹션 구조**:
+1. Executive Summary (1줄 결론)
+2. Background (4-17 장애 ~ 4-22 복구 타임라인 요약)
+3. Investigation (§12.5 가능성 4종 + 추가 2종 각각의 조사 결과)
+4. Root Cause (확정 원인 1문장 + 3-증거 삼각 검증)
+5. Impact Analysis (영향 범위 — 향후 migration 050+ 전부 동일 위험)
+6. Prevention Measures (§12.9 OBSERV-MIGRATION-* 2종 상세 설계)
+7. Action Items (후속 BACKLOG 연계)
+
+### ✅ 완료 조건 (Done Definition)
+
+- 가능성 1~6 모두 확인 완료 (각각 확정/기각)
+- 근본 원인 1개 확정 (또는 복합 원인 명시)
+- 재발 방지 조치 2개 설계 완료:
+  - `OBSERV-MIGRATION-HISTORY-SCHEMA` — success/error_message/checksum 컬럼 추가 설계
+  - `OBSERV-MIGRATION-RUNNER-STARTUP-ASSERTION` — 부팅 시 filename vs history 비교 + 배포 중단 메커니즘
+- 산출 문서에 복구 procedure (`HOTFIX-ALERT-SCHEMA-RESTORE-20260422` 절차) 를 재사용 가능한 템플릿으로 정리
+- `handoff.md` + `BACKLOG.md` 양쪽에 결과 반영
+
+### 🔗 연계 문서
+
+- `AXIS-OPS/ALERT_SCHEDULER_DIAGNOSIS.md` §12.5 (4가지 가능성 원안)
+- `AXIS-OPS/ALERT_SCHEDULER_DIAGNOSIS.md` §12.6 (복구 SQL — 재발 시 재사용)
+- `AXIS-OPS/ALERT_SCHEDULER_DIAGNOSIS.md` §12.12 (5가지 포스트모템 교훈)
+- `AXIS-OPS/BACKLOG.md` — `POST-REVIEW-MIGRATION-049-NOT-APPLIED` + `OBSERV-MIGRATION-*` 2종
+
+### 🚫 착수 전제 조건
+
+1. **HOTFIX-SCHEDULER-DUP-20260422 배포 완료** — 중복 실행 해소 확인 후 착수 (조사 중 중복 알람 재발로 오염 방지)
+2. **24h 이상 알람 시스템 안정 관찰** — 복구 직후 혼란기 회피
+3. **Twin파파 / Opus 합의** — 조사 범위·산출 형식 사전 동의
