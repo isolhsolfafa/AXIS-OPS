@@ -2544,3 +2544,42 @@ def update_worker_status() -> Tuple[Dict[str, Any], int]:
         'worker_id': worker_id,
         'action': action,
     }), 200
+
+
+@admin_bp.route("/_debug/topology", methods=["GET"])
+@jwt_required
+@admin_required
+def debug_topology() -> Tuple[Dict[str, Any], int]:
+    """
+    Railway 배포 구조 진단용 임시 endpoint (HOTFIX-SCHEDULER-DUP Phase 0 Pre-flight Check).
+
+    목적: multi-replica / multi-container 배포 여부 확인 → Option 2 (fcntl) vs Option 3 (Redis) 결정.
+
+    여러 번 호출하여 hostname / pid / replica_id 분포 확인:
+    - 모든 호출에서 같은 hostname → 단일 컨테이너 → Option 2 유효
+    - 다른 hostname 존재 → multi-replica → Option 3 (Redis lock) 필수
+
+    Returns:
+        200: {
+            "hostname": str,
+            "pid": int,
+            "ppid": int,
+            "railway_replica_id": str,
+            "railway_deployment_id": str,
+            "scheduler_started": str,
+            "gunicorn_workers": str
+        }
+    """
+    import os
+    import socket
+
+    return jsonify({
+        'hostname': socket.gethostname(),
+        'pid': os.getpid(),
+        'ppid': os.getppid(),
+        'railway_replica_id': os.environ.get('RAILWAY_REPLICA_ID', 'none'),
+        'railway_deployment_id': os.environ.get('RAILWAY_DEPLOYMENT_ID', 'none'),
+        'railway_service_id': os.environ.get('RAILWAY_SERVICE_ID', 'none'),
+        'scheduler_started': os.environ.get('_SCHEDULER_STARTED', 'none'),
+        'gunicorn_workers': os.environ.get('WEB_CONCURRENCY', os.environ.get('GUNICORN_WORKERS', 'none')),
+    }), 200
