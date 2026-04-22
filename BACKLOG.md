@@ -1,8 +1,158 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-04-20 (클린 코어 데이터 원칙 등록)
+> 마지막 업데이트: 2026-04-21 (코드 크기 원칙 + 리팩토링 Sprint 계획 등록)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
+
+---
+
+## 🔧 리팩토링 Sprint 계획 (2026-04-21 등록)
+
+> **근거**: CLAUDE.md § 📏 코드 크기 원칙 + 🛡️ 리팩토링 안전 규칙 7원칙
+> **트리거**: 2026-03-22 AXIS SYSTEM 점검 보고서 지적 사항 미해결 + 감사 이후 파일 크기 오히려 증가
+> **실측 기준일**: 2026-04-21
+
+### 📊 현재 위반 현황 (1단계 기준: 🟡 500 / 🔴 800 / ⛔ 1200)
+
+#### OPS BE
+
+| 파일 | LOC | 감사 시점 | 증감 | 등급 |
+|---|---|---|---|---|
+| `routes/admin.py` | 2,546 | 2,070 | +476 | ⛔ God File |
+| `services/task_service.py` | 1,478 | 1,018 | +460 | ⛔ God File |
+| `routes/work.py` | 1,343 | 921 | +422 | ⛔ God File |
+| `routes/checklist.py` | 1,192 | — | 신규 | 🔴 필수 분할 |
+| `services/auth_service.py` | 1,108 | 1,097 | +11 | 🔴 필수 분할 |
+| `services/checklist_service.py` | 1,085 | — | 신규 | 🔴 필수 분할 |
+| `services/scheduler_service.py` | 1,074 | — | 신규 | 🔴 필수 분할 |
+| `routes/production.py` | 875 | 496 | +379 | 🔴 필수 분할 |
+| `routes/auth.py` | 860 | — | — | 🔴 필수 분할 |
+| `services/task_seed.py` | 660 | — | — | 🟡 경고 |
+
+#### OPS FE (Flutter)
+
+| 파일 | LOC | 등급 |
+|---|---|---|
+| `screens/admin/admin_options_screen.dart` | 2,593 | ⛔ God File |
+| `screens/task/task_detail_screen.dart` | 1,082 | 🔴 필수 분할 |
+| `screens/checklist/elec_checklist_screen.dart` | 1,076 | 🔴 필수 분할 |
+| `screens/qr/qr_scan_screen.dart` | 943 | 🔴 필수 분할 |
+| `screens/task/task_management_screen.dart` | 905 | 🔴 필수 분할 |
+| `screens/checklist/tm_checklist_screen.dart` | 808 | 🔴 필수 분할 |
+| `screens/settings/profile_screen.dart` | 727 | 🟡 경고 |
+
+---
+
+### 📋 리팩토링 Sprint 전체 로드맵
+
+> **총 12개 Sprint (BE 7 + FE 5), 각 1주 전후 예상 + 1~2일 배포 관찰**
+> **원칙**: Sprint 간 독립 배포 가능. 중간에 기능 Sprint 끼워넣기 허용.
+
+#### Phase 1 — 테스트 기반 확보 (선행 필수)
+
+| Sprint ID | 대상 | 작업 | 우선순위 |
+|---|---|---|---|
+| **REF-00-TEST** | 전 대상 파일 | pytest 커버리지 측정 + 미비 영역 테스트 추가 (목표 80%+) | 🔴 HIGH |
+
+**Why**: 리팩토링 7원칙 #1(테스트 커버리지 선행) 준수. 테스트 없이 분할 시 Regression 탐지 불가.
+
+#### Phase 2 — BE God File 분할 (admin.py 우선)
+
+##### REF-BE-01 ~ 06: admin.py 2,546줄 → 분할 (6 Sprint)
+
+| Sprint ID | 작업 | 이동 LOC | 결과 admin.py |
+|---|---|---|---|
+| **REF-BE-01** | `routes/admin_settings.py` 분리 (settings + admin_settings CRUD) | ~400줄 | 2,546 → 2,146 |
+| **REF-BE-02** | `routes/admin_attendance.py` 분리 (출퇴근 조회·수정) | ~500줄 | 2,146 → 1,646 |
+| **REF-BE-03** | `routes/admin_worker.py` 분리 (worker 승인·관리자 지정·비활성화) | ~600줄 | 1,646 → 1,046 |
+| **REF-BE-04** | `routes/admin_kpi.py` 분리 (KPI·대시보드 집계) | ~400줄 | 1,046 → 646 |
+| **REF-BE-05** | `routes/admin_task.py` 분리 (강제종료·task 관리) | ~300줄 | 646 → ~346 |
+| **REF-BE-06** | 잔여 정리 + 도메인 entity 도입 (`Worker`, `Task` dataclass 확장) | — | 🟢 OK 진입 |
+
+**분할 전략**: `admin.py` 블루프린트 유지 + 모듈별 register 방식 (기존 URL 경로 100% 유지 — BE API 계약 변경 0)
+**테스트**: 기존 admin API 테스트 전부 GREEN 유지. 분할 이후에도 URL·응답 스키마 동일 검증.
+
+##### REF-BE-07 ~ 09: task_service.py 1,478줄 → 분할 (3 Sprint)
+
+| Sprint ID | 작업 | 이동 LOC |
+|---|---|---|
+| **REF-BE-07** | `services/task_state_service.py` 분리 (시작/완료/일시정지) | ~500줄 |
+| **REF-BE-08** | `services/task_validation_service.py` 분리 (공정 검증 + duration 검증) | ~400줄 |
+| **REF-BE-09** | `services/task_alert_service.py` 분리 (완료 알림 + 트리거) | ~400줄 |
+
+**분할 근거**: ADR-010(partner→company 매핑)·ADR-015(worker별 pause) 등 책임 3개 혼재
+**최종**: task_service.py → ~200줄 (공통 helper만)
+
+##### REF-BE-10 ~ 11: work.py 1,343줄 → 분할 (2 Sprint)
+
+| Sprint ID | 작업 | 이동 LOC |
+|---|---|---|
+| **REF-BE-10** | `routes/work_lifecycle.py` 분리 (start/complete/resume) | ~700줄 |
+| **REF-BE-11** | `routes/work_relay.py` 분리 (릴레이 + 재활성화) | ~400줄 |
+
+##### REF-BE-12 ~ 14: 나머지 God/필수 분할
+
+| Sprint ID | 대상 | 작업 |
+|---|---|---|
+| **REF-BE-12** | `checklist.py` + `checklist_service.py` | 카테고리별 분리 (TM / ELEC / MECH) |
+| **REF-BE-13** | `auth_service.py` 1,108 | `auth_core.py`(로그인/회원가입) + `auth_email.py`(SMTP/인증) + `auth_token.py`(JWT/refresh) |
+| **REF-BE-14** | `scheduler_service.py` 1,074 | 알림 유형별 분리 (`scheduler_task_alert`, `scheduler_escalation`, `scheduler_shift_end`) |
+
+#### Phase 3 — BE 경고 파일 정리 (🟡 500~800줄)
+
+| Sprint ID | 대상 | 우선순위 |
+|---|---|---|
+| **REF-BE-15** | `production.py` 875 → 분할 | 🟡 MEDIUM |
+| **REF-BE-16** | `auth.py` 860 → 분할 | 🟡 MEDIUM |
+| **REF-BE-17** | `task_seed.py` 660 → 분할 (MECH/ELEC/TMS seed 분리) | 🟢 LOW |
+
+#### Phase 4 — FE 리팩토링 (OPS Flutter)
+
+| Sprint ID | 대상 | 작업 |
+|---|---|---|
+| **REF-FE-01** | `admin_options_screen.dart` 2,593 | 섹션별 위젯 분리 (설정·출퇴근·미종료·매니저·체크리스트 → 5 파일) |
+| **REF-FE-02** | `task_detail_screen.dart` 1,082 | `widgets/task_detail/*` (헤더·workers·actions·tooltip 분리) |
+| **REF-FE-03** | `elec_checklist_screen.dart` 1,076 + `tm_checklist_screen.dart` 808 | 공통 `widgets/checklist/*` 추출 (CheckItemRow, PhaseSelector 등) — 재활용 원칙 Rule of Three |
+| **REF-FE-04** | `qr_scan_screen.dart` 943 | 카메라 로직 → `services/qr_scanner_web.dart` 강화 + UI 분리 |
+| **REF-FE-05** | `task_management_screen.dart` 905 | 필터·리스트·액션 시트 각각 위젯으로 추출 |
+
+---
+
+### 🛡️ 공통 안전장치 (모든 REFACTOR Sprint 적용)
+
+1. Sprint 시작 전 `git tag pre-refactor-{sprint-id}` 생성
+2. pytest 결과 스냅샷 저장 (`tests/snapshots/{sprint-id}_before.txt`)
+3. `[REFACTOR]` 커밋 prefix
+4. Railway staging 먼저 → 1~2일 현장 관찰 → prod
+5. DB migration 포함 금지 (리팩토링 Sprint에는 ALTER/CREATE 0)
+6. Codex 교차검증 M 전부 해결
+7. 한 Sprint 이동 LOC 상한 500줄
+
+### 📈 진행 추적
+
+| 항목 | 시작 LOC | 목표 LOC | 현재 LOC | 상태 |
+|---|---|---|---|---|
+| admin.py | 2,546 | ≤ 500 | 2,546 | 🔴 미착수 |
+| task_service.py | 1,478 | ≤ 500 | 1,478 | 🔴 미착수 |
+| work.py | 1,343 | ≤ 500 | 1,343 | 🔴 미착수 |
+| checklist.py | 1,192 | ≤ 500 | 1,192 | 🔴 미착수 |
+| auth_service.py | 1,108 | ≤ 500 | 1,108 | 🔴 미착수 |
+| checklist_service.py | 1,085 | ≤ 500 | 1,085 | 🔴 미착수 |
+| scheduler_service.py | 1,074 | ≤ 500 | 1,074 | 🔴 미착수 |
+| admin_options_screen.dart | 2,593 | ≤ 500 | 2,593 | 🔴 미착수 |
+| task_detail_screen.dart | 1,082 | ≤ 500 | 1,082 | 🔴 미착수 |
+| elec_checklist_screen.dart | 1,076 | ≤ 500 | 1,076 | 🔴 미착수 |
+
+### 🚧 리팩토링 Sprint 우선순위 (권장 순서)
+
+1. **REF-00-TEST** (테스트 기반 확보 — 필수 선행)
+2. **REF-BE-01 ~ 06** (admin.py — 감사서 #2 우선순위)
+3. **REF-FE-01** (admin_options_screen.dart — 2,593줄, FE 최대 God File)
+4. **REF-BE-07 ~ 09** (task_service.py — 알림 트리거 안정화 겸)
+5. **REF-BE-10 ~ 11** (work.py — 릴레이/재활성화 로직 분리)
+6. **REF-FE-02 ~ 05** (FE 병행 가능)
+7. **REF-BE-12 ~ 14** (checklist/auth/scheduler)
+8. **REF-BE-15 ~ 17** (경고 파일 정리)
 
 ---
 
@@ -97,6 +247,7 @@
 | 61-BE-B | BUG-44 보완 + #60 company / #61 force_closed 필드 | ✅ 완료 (2026-04-17, v2.9.5) | admin.py + work.py 7개 포인트 반영. VIEW Sprint 33 FE-15 선행 조건 해소 |
 | FEAT-1 | 사용자 행위 트래킹 + 분석 대시보드 | ✅ BE Sprint 32 완료 (2026-03-19) | `app_access_log` 테이블 + analytics API 4개 + 30일 정리 스케줄러. VIEW 분석 대시보드는 별도 Sprint |
 | BUG-41 | PWA 업데이트 시 PIN 초기화 + 이메일 재입력 요구 | 🟡 BACKLOG (우선순위 보류) | Chrome PWA 환경에서 업데이트 후 PIN 로그인 화면 대신 초기 이메일 로그인 화면으로 진입, 이메일 전체 재입력 필요. 변경 범위/regression 리스크 대비 우선순위 낮음 — 아래 "BUG-41 상세" 섹션 참조 |
+| SEC-01 | 인프라 시크릿/CORS 정리 (H-04 + H-05) | 🟡 BACKLOG (리팩토링 후 착수) | SECURITY_REVIEW.md H-04(CORS `origins="*"`) + H-05(JWT/DB/Refresh fallback 하드코딩). 코드 LOC 과대 → REF-BE-13(auth_service.py 분할) 이후 착수 권장. 아래 "SEC-01 상세" 섹션 참조 |
 | BUG-42 | 명판 소형 QR 접사 인식 실패 | 🔴 OPEN | 기본 카메라로는 문자열 정상 읽힘 / OPS 앱 스캐너(html5-qrcode)는 미인식. 명판 QR 이미지 크기가 스티커 대비 작아 매크로 포커스 + 고해상도 + 줌 필요. 아래 "BUG-42 상세" 섹션 참조 |
 | BUG-43 | 분석 대시보드 기능별 사용량 한글 라벨 누락 (24건) | ✅ 수정 완료 (2026-04-17) | Sprint 52+ 체크리스트/성적서/ELEC 엔드포인트 등 24개 `_ENDPOINT_LABELS` 미등록 → 전수 등록. 기존 111키 → 135키 (유니크 108 라우트 커버) |
 | BUG-44 | OPS 미종료 작업 목록 0건 반환 (Admin/Manager 양쪽) | ✅ 수정 완료 (2026-04-17) | `get_pending_tasks()` INNER JOIN → LATERAL JOIN (work_start_log FK). Claude×Codex 교차 검증 합의. 29/29 passed |
@@ -112,6 +263,7 @@
 | TECH-REFACTOR-FMT-01 | VIEW 날짜 포맷 함수 중앙 유틸 통합 (format.ts) | 🟡 BACKLOG (부분 진행 — 1/3 선승격 완료, 2건 대기) | **VIEW FE only — 기술 부채 정리**. **진행 상황 (2026-04-17)**: FE-19(HOTFIX-04 연계) 착수 전제로 `formatDateTime` 1건 **선승격 완료** — `ChecklistReportView.tsx` L25 로컬 함수 → `utils/format.ts`로 이관 + import 교체 (Codex 지적 #1 옵션 A 채택). **남은 2건 (여전히 BACKLOG)**: ① `QrManagementPage.tsx` L52 `formatDate` / ② `InactiveWorkersPage.tsx` L33 `formatDate`. 두 `formatDate`는 출력 포맷(`YYYY-MM-DD`) 동일하나 **null fallback 상이** (`'—'` vs `'없음'`) → 중앙 유틸에 `fallback` 옵션 인자 설계 필요(`formatDate(iso, fallback = '—')` 시그니처). 추가로 invalid Date 가드(`isNaN(d.getTime())`) + 단위 테스트 신설이 본 BACKLOG 핵심. 마이그레이션 前 여유 스프린트에 일괄 처리. 회귀 위험 낮음(순수 함수). 최초 등록: 2026-04-17 / 부분 진행: 2026-04-17 (formatDateTime 1건) / 우선순위: 중간 |
 | TEST-CLEAN-CORE-01 | 강제종료 시 실행 측정값 미생성 회귀 가드 pytest | 🔴 OPEN (2026-04-20 신규 등록, 우선순위: 중간-상) | **BE 회귀 테스트 only — 클린 코어 데이터 원칙 자동화**. 목적: `PUT /admin/tasks/<id>/force-close` 호출 후 `work_start_log` + `work_completion_log` 두 테이블에 **row가 추가되지 않음**을 CI 단계에서 자동 검증. 인수 기준: ① 호출 전 wsl/wcl count 스냅샷 → 호출 후 count 동일 (delta=0) ② `app_task_details.completed_at` + `force_closed=TRUE` + `close_reason` + `closed_by` 4필드만 세팅 확인 ③ `duration_sec` NULL 유지 확인 ④ Case 1(Orphan wsl 기존 존재) 시 기존 wsl 보존·wcl는 여전히 0건 확인. 테스트 파일: `tests/backend/api/test_force_close_clean_core.py` 신규. 예상 TC 5개(정상 task / Case 1 orphan / Case 2 미시작 / 이미 종료된 task 재호출 / legacy closed_by IS NULL). 회귀 영향: 기존 force-close 동작 변경 없음, 순수 검증 추가. **Why (긴급도)**: 원칙은 문서에 있어도 미래에 "UI 편의상 wsl에 dummy row 추가" 같은 PR이 들어오면 리뷰어가 놓칠 수 있음 → pytest가 자동 차단. APS-Lite 데이터 무결성 1차 방어선. 연계: `BACKLOG.md` 상단 📐 설계 원칙 — 클린 코어 데이터 / `AGENT_TEAM_LAUNCH.md` HOTFIX-04 📐 설계 원칙 블록. 작업 주체: VSCode 터미널 (Claude + Codex 교차검증). 예상 소요: 구현 25분 + 교차검증 15분 = 40분. 최초 등록: 2026-04-20 |
 | FIX-25 | VIEW 상세뷰·O/N 리스트에 협력사명 + line 노출 (progress API 단일 확장, v4 Codex M1 반영) | ✅ BE 구현 완료 (2026-04-20, v2.9.10 — progress_service.py touch 6줄/net 0, pytest 42/42 GREEN), VIEW FE-20/FE-21 착수 대기 | **BE + VIEW FE 연계 건 — progress API 단일 확장 기반 v4 (Codex M1 breaking change 지적 반영)** (Twin파파 2026-04-20 "BE 코드 클린 코어" 원칙 적용 사례). **요구**: (1) 상세뷰 MECH/ELEC/TMS 카테고리 헤더에 담당 회사명 동반 표시 (PI/QI/SI는 GST 자체검사 고정, 라벨 없음). (2) 생산현황 O/N 카드·S/N 상세뷰 헤더에 `plan.product_info.line` 노출 (혼재 시 "F16 외 N" 표기 — **FE 계산**). **⚠️ v1~v3 폐기 이력**: v1(task_detail 2쿼리 + production 거미줄 LEFT JOIN, 모델 무시) → v2(CTE 집계, BE·FE 집계 중복) → v3(`work.py` tasks 응답을 List→Dict 래핑 + production LEFT JOIN) 단계적 개선. **v3 치명적 결함 (Codex M1)**: 설계서 예시 `response = {'tasks': [...], 'product_info': {...}}` 가 실제 `work.py:718` `return jsonify(task_list), 200` **리스트 응답과 불일치** → 구현 시 VIEW `snStatus.ts getSNTasks()` (`Array.isArray(data)` 체크) + OPS `task_service.dart:102~112` (List/Map 양면 파서) 모두 동시 breaking. **v4 전환 결정적 발견 (실측 재조사)**: `progress_service.py` L65~67에 이미 `pi.mech_partner` / `elec_partner` / `module_outsourcing` **3필드 SELECT 중** + L296~299 `sn_data.pop(...)` 으로 응답에서만 제거 중 (주석 원문 "응답에서 partner 필드 제거 (내부용)"). 권한 숨김 목적이 아닌 my_category 계산용으로만 쓰고 버리는 상태. **v4 채택안 (progress API 단일 확장)**: ① `progress_service.py` **1파일만 수정**. ② CTE + 메인 SELECT 에 `pi.line` 1줄씩 추가(2줄). ③ `_aggregate_products()` dict 조립에 `'line': row['line']` 1줄 추가. ④ L296~299 pop 3줄 **제거**. → touch 6줄 / **net 0줄(+3 -3)**. ⑤ tasks API(`work.py`) / production.py / `models/product_info.py` **전부 무변경** → v3 breaking 원천 차단. OPS FE 영향 0건(`sn_progress_screen.dart:44` progress API 사용 중이나 `Map<String, dynamic>.from(e)` 방식이라 신규 키 4개 추가 파싱 무영향). **FE (별도 세션 — 터미널 Codex 교차검증 후)**: `SNProduct` 인터페이스 4필드 확장 + `SNDetailPanel` 카테고리 헤더 JSX + `SNStatusPage` `groupedByON` useMemo 로 per-O/N `line` 최빈값 집계. `ProcessStepCard.tsx` switch key 는 `'TMS'` (DB 실측). **변경 요약**: v1 ~150줄 → v2 ~60줄 → v3 ~40줄 → **v4 6 touch줄 / net 0줄**. 거미줄 지수 🔴 → 🟡 → 🟢 → **🟢 (JOIN 증가 0)**. Breaking 위험 🔴 → 🟡 → 🔴(v3 M1) → **🟢 (tasks API 무변경)**. **하위 호환**: `/api/app/product/progress` products 요소에 4키 추가만, 기존 필드 변경 0건. 마이그레이션 0건. 모델 수정 0줄. **NULL 처리 (클린 코어 원칙)**: NULL·빈 문자열 → FE에서 생략 렌더, placeholder 주입 금지. **Twin파파 확정사항**: ① module_outsourcing 실질 고정값 "TMS" ② S/N 채번 시 협력사 배정 완료 → NULL 사실상 없으나 방어 코드 유지 ③ line 변경 이력 추적 불요. **테스트 (TC 6개, `test_progress_service.py`)**: TC-PROGRESS-PI-01(일반) / -02(4필드 NULL) / -03(GST 자체생산) / -04(Admin 전체) / -05(company_override 협력사 필터) / -06(O/N 혼재 per-S/N line — BE는 per-S/N만, 집계는 FE-21 스테이징). 회귀: SELECT 컬럼 추가 + pop 제거뿐이라 row 수·다른 필드 무변경. **검증 API 경로**: `curl /api/app/product/progress | jq '.products[0] | {mech_partner, elec_partner, module_outsourcing, line}'` + `curl /api/app/tasks/<sn>?all=true | jq 'type'` 로 여전히 `"array"` 확인 (v3 breaking 방지). 설계 상세: `AGENT_TEAM_LAUNCH.md` FIX-25 섹션 (v4 전환 근거 + 4-way 비교표 포함) / VIEW FE 상세: `AXIS-VIEW/VIEW_FE_Request.md` FE-20 + FE-21 (**v4 대응 수정은 터미널 Codex 교차검증 완료 후 별도 커밋**). 작업 주체: VSCode 터미널 (Claude + Codex 교차검증, breaking change 완전 철회 확인도 Codex 재검증). 예상 소요 (v4 기준): BE 구현 15min + 테스트 45min + 검증 30min + Codex 재검증 30min = **약 2시간** (v3와 큰 차이 없으나 breaking 위험 0 + OPS FE 파싱 회귀 부담 제거(사용 중이나 추가 전용 변경)로 실측 위험가중 소요 감소). 최초 등록: 2026-04-20 / v2 재설계: 2026-04-20 / v3 Codex 교차검증: 2026-04-20 / v4 Codex M1(tasks breaking) 반영: 2026-04-20 |
+| FE-ALERT-BADGE-SYNC | 홈 화면 알림 배지 카운트 `/alerts` 복귀 시 즉시 동기화 (UX 개선) | 🟡 BACKLOG (재검토 후 진행, 2026-04-22 등록) | **OPS FE only — `frontend/lib/screens/home/home_screen.dart` 2곳 수정**. 현재 diff(미커밋 working copy): AppBar 알림 아이콘(L587~593) + 메뉴 리스트 '알림' 항목(L760~770) 의 `onPressed`/`onTap` 을 `async` 로 변경 + `await Navigator.pushNamed` 후 `ref.read(alertProvider.notifier).refreshUnreadCount()` 호출 추가. 목적: `/alerts` 화면에서 읽음 처리 후 홈 복귀 시 배지 카운트 즉시 갱신 (기존에는 stale). 초기 진입 시에는 이미 `initState → _initializeAlerts → refreshUnreadCount` 호출됨(L70)으로 이번 변경은 "다녀온 뒤 재갱신"만 보완. **⚠️ 현재 "메인에 배지 없음" 증상은 이 변경과 무관**: `app_alert_logs` 4-17 이후 0건 장애의 결과 (`unreadCount = 0` 이라 배지 정상적으로 미표시). Scheduler 알람 복구(`HOTFIX-SCHEDULER-DUP-20260422` 계열) 후 배지 자연 복귀 예정. **재검토 사항**: ① 변경 완결성 — `refreshUnreadCount()` 외 `fetchAlerts()` 도 필요한가? ② 회귀 — 빠른 연속 탭 시 race condition 가능성 ③ WebSocket push 와 중복 호출 가능성. **배포 조건**: (a) Scheduler 장애 복구 완료 후 배지 정상 복귀 확인 → (b) 실기기 QA (iOS/Android/데스크톱 PWA) → (c) flutter build web + Netlify 배포. 작업 소요: 재검토 15분 + 배포 30분 = 45분. 최초 발견: 2026-04-22 HOTFIX-SCHEDULER-PHASE1.5 세션 중 미커밋 working copy 로 확인 |
 
 ---
 
@@ -609,6 +761,57 @@ VIEW: 마스터 CRUD (CHECK/INPUT 항목 관리)
 - IF_2: → FINAL (ELEC 닫기 트리거)
 - 닫기 조건: 체크리스트 완료(GST 제외) + IF_2 완료
 - **TM과 공통 패턴**: `checklist_ready` + `checklist_category` 응답
+
+---
+
+## 🟡 SEC-01 상세: 인프라 시크릿/CORS 정리 (H-04 + H-05)
+
+> **상태**: BACKLOG (리팩토링 후 착수, 2026-04-21 등록)
+> **출처**: `SECURITY_REVIEW.md` H-04 / H-05 (Phase 2 점검)
+> **착수 시점**: REF-BE-13 (auth_service.py 1,108 LOC 분할) 완료 직후 권장
+> **이유**: JWT 시크릿 참조가 auth_service.py / jwt_auth.py / config.py 에 얽혀있음. God File 분할 전 수정 시 regression 리스크 가중
+
+### 착수 이유 / 리팩토링 선행 근거
+
+- H-05 JWT 시크릿 교체는 `auth_service.py:144/172/189` 와 `jwt_auth.py:71/126/141` 에 걸쳐 6곳 참조. `auth_service.py` 가 1,108 LOC God File 상태라 수정 시 로그인·refresh·소켓 인증 전반의 회귀 테스트 범위가 큼.
+- REF-BE-13 이후 `auth_core.py` / `auth_token.py` / `auth_email.py` 로 분리되면 시크릿 참조가 `auth_token.py` 한 곳으로 응집 → H-05 수정 diff 가 작고 리뷰 용이.
+- H-04 CORS 는 `__init__.py` 단독 수정이라 리팩토링과 독립 가능하나, env 주입/배포 타이밍을 맞추기 위해 H-05 와 같은 Sprint 로 묶는 것이 효율적.
+
+### 수정 대상
+
+| 항목 | 위치 | 규모 |
+|---|---|---|
+| H-04 CORS allowlist | `backend/app/__init__.py:40-45` | +10/-4 줄 |
+| H-05a JWT secrets | `backend/app/config.py:27-35` | +6/-10 줄 |
+| H-05b DATABASE_URL | `backend/app/config.py:21-24` | +2/-4 줄 |
+| H-05 공통 helper | `backend/app/config.py` 상단 | +5줄 (`_require_env`) |
+| Railway env 세팅 | Railway 대시보드 | 4개 변수 추가/갱신 |
+
+### 병행 조치 (코드 외)
+
+1. **Railway DB 비밀번호 rotation**: `config.py:23` 에 fallback 으로 박혀있는 자격증명 (`maglev.proxy.rlwy.net:38813` 접근 키) 은 git 에 노출된 상태 → 무효화 필요
+2. **CORE-ETL / AXIS-VIEW-ETL env 동기화**: 같은 DB 를 쓰므로 password 교체 시 연쇄 업데이트
+3. **git 히스토리 스캔**: `git log -S "aemQKKvZ..."` 로 커밋 이력 확인 → 필요 시 `git filter-repo` 로 삭제 (선택)
+
+### 배포 타이밍 리스크
+
+- JWT_SECRET_KEY 가 바뀌면 **기존 refresh_token(30일) 전부 무효** → 현장 작업자 전원 재로그인
+- 점심시간·새벽 배포 권장 + 사내 공지 선행
+- Railway env 선주입 → 코드 배포 → 자동 재시작 → 실패 시 이전 커밋 revert 가능 상태로 진행
+
+### 사용자 확인 필요 (착수 전)
+
+1. CORS allowlist 에 넣을 운영 도메인 목록 (VIEW Netlify URL, OPS Flutter PWA URL, 자사 도메인)
+2. Railway env 에 JWT_SECRET_KEY / JWT_REFRESH_SECRET_KEY 가 현재 실제 세팅돼 있는지 (세팅돼 있으면 그 값 유지, 없으면 신규 생성)
+3. DB password rotation 가능한 시간대
+4. CORE-ETL / VIEW-ETL DATABASE_URL 저장 위치 (로컬 .env / GitHub Actions Secret / Railway)
+5. 외부 모니터링이 `/health` 호출 중인지
+
+### 참조
+
+- `SECURITY_REVIEW.md` H-04 / H-05 상세 + 권장 수정 코드
+- CLAUDE.md § 🛡️ 리팩토링 안전 규칙 7원칙
+- REF-BE-13 (auth_service.py 분할) 완료 후 본 Sprint 착수
 
 ---
 
