@@ -1451,6 +1451,32 @@ VALUES ('📱 OPS v2.2.1 업데이트 안내', '본문...', '2.2.1', TRUE, {admi
 -- ⚠️ 신규 공지는 is_pinned=TRUE, 기존 pinned는 FALSE로 해제
 ```
 
+### ⚠️ OPS / VIEW 공지 구분 규칙 (2026-04-22 추가 — 실수 사례 반영)
+
+> `notices` 테이블은 OPS / VIEW 공지를 **단일 테이블에 섞어 저장**. 해제(UPDATE)할 때 반드시 version prefix 로 시스템 구분 필요.
+
+**version prefix 관례** (FE 구분 기준):
+- `2.x.x` → **OPS** 공지 (`📱 OPS v{X.Y.Z} 업데이트 안내`)
+- `1.x.x` → **VIEW** 공지 (`🖥️ VIEW v{X.Y.Z} 업데이트 안내`)
+
+**공지 bump 시 권장 절차**:
+```sql
+-- ❌ WRONG — OPS/VIEW 모두 해제됨 (타 시스템 공지 실수로 숨김 사고 발생 이력 있음)
+UPDATE notices SET is_pinned = FALSE WHERE is_pinned = TRUE;
+
+-- ✅ OPS 공지 bump 시 — OPS 공지 (v2.x.x) 만 해제
+UPDATE notices SET is_pinned = FALSE
+WHERE is_pinned = TRUE AND version LIKE '2.%';
+
+-- ✅ VIEW 공지 bump 시 — VIEW 공지 (v1.x.x) 만 해제
+UPDATE notices SET is_pinned = FALSE
+WHERE is_pinned = TRUE AND version LIKE '1.%';
+
+-- 이후 신규 공지 INSERT (is_pinned=TRUE) — 다른 시스템 공지는 그대로 유지
+```
+
+**사고 이력**: 2026-04-22 OPS v2.9.11 공지 INSERT 시 `WHERE is_pinned = TRUE` 만으로 해제 → VIEW v1.32.3 공지도 함께 해제됨. 즉시 `UPDATE notices SET is_pinned = TRUE WHERE id = 100` 으로 복원. 본 규칙은 동일 사고 재발 방지용.
+
 ### 버전 이력
 
 | 버전 | 날짜 | 스프린트 | 주요 변경 |
