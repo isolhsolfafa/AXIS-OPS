@@ -62,9 +62,10 @@
 | HOTFIX-SCHEDULER-PHASE1.5 | `4a6caf8` | ERROR 로깅 prefix 추가 (관찰용) | 2026-04-22 10:47 |
 | HOTFIX-ALERT-SCHEMA-RESTORE | (pgAdmin SQL) | migration 049 수동 복구 (task_detail_id 컬럼 + enum 3종) | 2026-04-22 11:25 |
 | HOTFIX-SCHEDULER-DUP | `f1af8a4` | fcntl file lock — scheduler 단일 실행 | 2026-04-22 13:24 |
-| HOTFIX-ALERT-SCHEDULER-DELIVERY | `(this commit)` | scheduler 3곳 target_worker_id 표준 패턴 + 배치 dedupe | 2026-04-22 (예정) |
+| HOTFIX-ALERT-SCHEDULER-DELIVERY | `d946532` | scheduler 3곳 target_worker_id 표준 패턴 + 배치 dedupe | 2026-04-22 |
+| FE Netlify 배포 | `69e8a677ca4e8352ce4678b6` | flutter build web + netlify-cli deploy --prod | 2026-04-22 19:45 KST |
 
-⚠️ FE version skew 주의: 저장소 v2.9.11 vs Netlify 배포 v2.9.10 (FE 코드 변경 0, 다음 FE 배포 시 자동 반영)
+✅ FE version skew 해소: 저장소 v2.9.11 + Netlify 배포 v2.9.11 동기화 완료 (gaxis-ops.netlify.app)
 - **Migration 049**: Railway prod DB 에 migration_runner 미실행 → 2026-04-22 11:25 수동 SQL 복구 (id=37 기록)
 - **체크리스트 현황**: TM 완료 (SINGLE/DUAL qr_doc_id 정규화) / ELEC 완료 (Phase 1+2, 마스터 정규화) / MECH 미구현
 - **RULE-01**: Sprint 완료 시 FE flutter build web + Netlify 배포 필수
