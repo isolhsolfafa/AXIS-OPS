@@ -1211,6 +1211,62 @@ except BlockingIOError:
 >
 > **보수적 기본값**: 실측 생략 시 **Option 3 (Redis lock) 기본 선택** — R1 3중복 이미 multi-instance 가능성 시사.
 
+#### 11.14.7-A Phase 0 Pre-flight Check 실측 결과 (2026-04-22, Option 2 확정)
+
+> **방법 A (diagnostic endpoint) 실행** — `/api/admin/_debug/topology` 에 commit `1d854f5` 로 임시 배포 후 30회 반복 호출, hostname/pid/replica 분포 수집.
+
+**실측 결과 (30회 호출, 2026-04-22 시행)**:
+
+| 항목 | 값 | 해석 |
+|---|---|---|
+| **Hostname** | `2e250e58304c` 단 1개 | ✅ **단일 컨테이너** |
+| Railway replica ID | `010a6134-d94d-49e6-b95c-4d368b4eaa2d` 단 1개 | ✅ 단일 replica |
+| Railway deployment ID | 단 1개 (`efe85095-f442-...`) | 배포 이력 단일 |
+| PID | `2`, `3` (두 값만) | gunicorn workers 2 개 — Procfile `-w 2` 일치 |
+| ppid | `1` (모든 호출 공통) | gunicorn master 1개 |
+| `_SCHEDULER_STARTED` | `1` | env guard 이미 set — 하지만 중복 발생 (§11.14.7 R1 결과 참조) |
+| `WEB_CONCURRENCY` / `GUNICORN_WORKERS` | `none` | env 미설정, Procfile `-w 2` 로만 제어 |
+
+**판정**: 🟢 **단일 컨테이너 확정 → Option 2 (fcntl file lock) 유효**
+
+- 2 workers 가 **같은 `/tmp` filesystem 공유** → `fcntl.flock('/tmp/axis_ops_scheduler.lock')` 으로 상호 배제 가능
+- Railway Redis plugin 추가 **불필요** (비용 $5/월 절약 + Redis 장애 격리 문제 회피)
+
+#### 11.14.7-B GPWS-0773 3중복 재해석 (단일 컨테이너 컨텍스트)
+
+Phase 0 실측으로 **multi-container 가설 배제**되었으나 R1 의 3중복 은 여전히 사실. 단일 컨테이너 내에서 3중복이 가능한 경로:
+
+1. **env guard `_SCHEDULER_STARTED` 의 fork semantics 한계** (가장 유력):
+   - Python gunicorn fork 이후 각 worker 의 `os.environ` 은 **COW (copy-on-write)** — master 의 초기값만 상속, 이후 변경은 worker 간 전파되지 않음
+   - worker 1 이 `os.environ['_SCHEDULER_STARTED'] = '1'` 설정해도 worker 2 에 반영 안 됨
+   - 2 workers × 1 scheduler = 2 schedulers 정상 동작 + APScheduler 내부 race 로 추가 1회 중복 → 3중복
+2. **재시작 타이밍 겹침** (보조 요인):
+   - zero-downtime 배포 중 기존 workers 2 개 + 새 workers 2 개 = 최대 4 workers 일시 공존
+   - 이 순간 정각 tick 발생 시 최대 4중복 가능. 평균 3중복 설명 가능
+3. **APScheduler `replace_existing=True` race** (가능성 낮음):
+   - 같은 job ID 가 여러 번 add_job 호출되는 race. 현재 코드상 `replace_existing=True` 가 있어 정상 동작해야 함
+
+**Option 2 (fcntl file lock) 로 해결 가능한 이유**:
+- 1 worker 만 scheduler 시작 허용 → 나머지 workers 는 `BlockingIOError` catch → skip
+- env guard 의 COW 한계를 OS 레벨 lock 으로 우회
+- 단일 컨테이너 전제라 `/tmp` 공유 성립 → flock 정상 동작
+- 재시작 시 이전 worker 종료와 함께 lock 자동 release (fcntl.flock 의 process 종료 시 자동 해제 특성)
+
+#### 11.14.7-C Option 2 최종 확정 + 다음 단계
+
+**확정**: Option 2 (fcntl file lock) + Option 3 (`/api/admin/scheduler/restart` + `/status` endpoints) 병행 배포
+
+**예상 소요**: 45~90분
+- `backend/app/__init__.py` scheduler init 경로 수정 (+25~35 LOC)
+- 테스트 + 검증 + Railway 배포 + 다음 hourly tick 관찰
+
+**Redis plugin 추가**: **skip** (Phase 0 실측으로 불필요 확정)
+
+**후속**:
+- Phase 0 diagnostic endpoint (`/_debug/topology`) 는 역할 완료 → 본 commit 과 함께 제거
+- 배포 후 **다음 정각 tick** 에서 중복 0 확인 → Sprint 완료
+- 만약 배포 후에도 중복 재현 시 → §11.14.7-B 2번 "재시작 겹침" 가설 or 3번 race 재조사 필요
+
 **베타 설비 확장 영향**
 - 확장 전: 3대 → 일간 12~23건 알람
 - 4-16: 60건 (확장 진행 중 이상치)

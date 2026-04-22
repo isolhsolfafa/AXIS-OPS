@@ -65,17 +65,34 @@ def create_app(config_class: type = Config) -> Flask:
         atexit.register(close_pool)
 
     # 스케줄러 초기화 및 시작 (Sprint 4) — 테스트 환경에서는 비활성화
-    # Sprint 30-B: Gunicorn multi-worker에서 스케줄러 중복 실행 방지
+    # Sprint 30-B: Gunicorn multi-worker 에서 스케줄러 중복 실행 방지 (env guard)
+    # HOTFIX-SCHEDULER-DUP-20260422: env guard 는 fork 이후 COW semantics 로 worker 간
+    #   전파되지 않아 중복 실행 발생 (R1 실측 37.5% 중복, GPWS-0773 3중복).
+    #   fcntl.flock 기반 OS 레벨 lock 으로 교체 — 1 worker 만 scheduler 시작 허용.
+    #   Phase 0 Pre-flight Check (2026-04-22) 로 단일 컨테이너 확정 → /tmp 공유 전제 성립.
     import os
+    import fcntl
     if not app.config.get('TESTING', False):
-        if not os.environ.get('_SCHEDULER_STARTED'):
-            os.environ['_SCHEDULER_STARTED'] = '1'
+        _lock_path = '/tmp/axis_ops_scheduler.lock'
+        try:
+            _lock_fd = os.open(_lock_path, os.O_CREAT | os.O_WRONLY, 0o644)
+            fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # Lock 획득 성공 — 이 worker 가 scheduler owner
             from app.services.scheduler_service import init_scheduler, start_scheduler
             init_scheduler()
             start_scheduler()
-            logger.info("Scheduler initialized and started")
-        else:
-            logger.info("Scheduler already running in another worker, skipping")
+            # env guard 는 보조 방어로 유지 (같은 worker 내 재진입 방지)
+            os.environ['_SCHEDULER_STARTED'] = '1'
+            # GC 방지 참조 — 모듈 전역으로 프로세스 수명 동안 fd 유지
+            import app.services.scheduler_service as _sched_mod
+            _sched_mod._scheduler_lock_fd = _lock_fd
+            logger.info(f"Scheduler initialized and started (file lock acquired, fd={_lock_fd}, pid={os.getpid()})")
+        except BlockingIOError:
+            # 다른 worker 가 이미 lock 보유 — scheduler 시작 skip
+            logger.info(f"Scheduler already running in another worker (file lock held, pid={os.getpid()})")
+        except Exception as e:
+            # 예상외 예외 (FS 문제 등) — 스케줄러 skip 하되 앱은 기동
+            logger.error(f"Scheduler file lock acquisition failed: {e}", exc_info=True)
 
     # DB 스키마 자동 검증 (BUG-24: migration 누락 방지)
     if not app.config.get('TESTING', False):
