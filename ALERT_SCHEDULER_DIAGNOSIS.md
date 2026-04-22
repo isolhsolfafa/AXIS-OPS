@@ -1197,6 +1197,20 @@ except BlockingIOError:
 | Sprint 우선순위 | 🔴 **S2 — 즉시 착수** |
 | 해결책 | Option 2 (fcntl file lock) — GPWS-0773 triple 케이스 고려 시 Option 3 (Redis distributed lock) 까지 병행 검토 권고 |
 
+> 🔴 **3차 정정 — 결정적 모순 발견 (2026-04-22, Pre-flight Check 필수화 근거)**
+>
+> **모순**: Procfile `gunicorn -w 2` → worker 최대 **2**. 하지만 R1 실측 **3중복** (GPWS-0773) → scheduler 인스턴스 **≥3**. 수학적으로 `-w 2` **단일 컨테이너로는 3을 초과할 수 없음**.
+>
+> **의미**: Railway 가 **multi-replica 또는 multi-container** 로 배포 중일 가능성 매우 높음. 2 workers × 2 replicas = 4 scheduler 또는 zero-downtime 재시작 중 일시적 겹침 시나리오.
+>
+> **Option 2 (fcntl file lock) 의 전제 무효화 위험**:
+> - 각 컨테이너가 독립 `/tmp` filesystem 을 가지면 `fcntl.flock('/tmp/axis_ops_scheduler.lock')` 은 **모든 컨테이너에서 성공 획득** → 상호 배제 실패 → Option 2 **무용지물**
+> - 이 경우 **Option 3 (Redis distributed lock) 필수**
+>
+> **해결**: HOTFIX-SCHEDULER-DUP-20260422 Sprint 에 **Phase 0 Pre-flight Check 섹션 신설** (AGENT_TEAM_LAUNCH.md). 착수 전 반드시 `ps -ef` / `mount` / diagnostic endpoint 로 Railway topology 실측 → 단일 컨테이너 / multi-replica 판정 → Option 2 또는 3 확정 후 구현.
+>
+> **보수적 기본값**: 실측 생략 시 **Option 3 (Redis lock) 기본 선택** — R1 3중복 이미 multi-instance 가능성 시사.
+
 **베타 설비 확장 영향**
 - 확장 전: 3대 → 일간 12~23건 알람
 - 4-16: 60건 (확장 진행 중 이상치)

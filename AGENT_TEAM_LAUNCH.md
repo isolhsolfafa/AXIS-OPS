@@ -29711,7 +29711,146 @@ if os.getenv("_SCHEDULER_STARTED") != "1":
 
 **문제**: Gunicorn 의 `--preload` 미사용 시, master → worker fork 과정에서 각 worker 가 독립 환경변수 공간을 가질 가능성 + worker 간 race condition. 실측 1ms 내 중복 등록 포착됨.
 
+---
+
+### 🚨 Phase 0 — Pre-flight Check (🔴 **Sprint 착수 전 필수**, 2026-04-22 추가)
+
+> **왜 필수인가**: R1 쿼리에서 **GPWS-0773 3중복** 확인 = scheduler 인스턴스 ≥ 3. Procfile `-w 2` 로는 3을 초과할 수 없음 → **Railway multi-replica 또는 multi-container 배포 가능성 매우 높음**. 이 경우 `fcntl.flock` 은 각 컨테이너의 독립 `/tmp` 에 대해 **모두 성공 획득** → 상호 배제 실패 → Option 2 무용지물 → Option 3 (Redis distributed lock) 필수.
+
+#### Phase 0.1 — 실측 방법 3종 (택 1, 권장도 순)
+
+**방법 A (🟢 권장) — Diagnostic Endpoint 임시 배포 후 호출**
+
+```python
+# backend/app/routes/admin.py 임시 추가 (이 HOTFIX Sprint 의 첫 번째 commit)
+@admin_bp.route('/_debug/topology', methods=['GET'])
+@admin_required
+def debug_topology():
+    import os, socket
+    return jsonify({
+        'hostname': socket.gethostname(),
+        'pid': os.getpid(),
+        'ppid': os.getppid(),
+        'railway_replica_id': os.environ.get('RAILWAY_REPLICA_ID', 'none'),
+        'railway_deployment_id': os.environ.get('RAILWAY_DEPLOYMENT_ID', 'none'),
+        'scheduler_started': os.environ.get('_SCHEDULER_STARTED', 'none'),
+        'gunicorn_workers': os.environ.get('GUNICORN_WORKERS', 'none'),
+    })
+```
+
+호출 방법:
+```bash
+# 배포 후 20회 반복 호출 → hostname/pid 분포 수집
+TOKEN=<admin_access_token>
+for i in {1..20}; do
+  curl -s -H "Authorization: Bearer $TOKEN" \
+    https://axis-ops-api.up.railway.app/api/admin/_debug/topology \
+    | jq -c '{h: .hostname, p: .pid, r: .railway_replica_id}'
+  sleep 0.3
+done | sort -u
+```
+
+**판별**:
+- 모든 응답에서 **같은 hostname** + 다른 pid → **단일 컨테이너 다중 worker** → Option 2 (file lock) 유효
+- **다른 hostname** 또는 **다른 `railway_replica_id`** 포함 → **multi-replica** → Option 3 (Redis lock) 필수
+
+> 장점: Railway CLI 설치 불필요, 운영 중 재현 가능, 이후에도 진단 도구로 지속 활용
+
+**방법 B — Railway CLI Shell 직접 접근**
+
+```bash
+# 로컬 Mac 에서 (railway CLI 설치 필요)
+railway login
+railway shell --service axis-ops-api
+
+# 컨테이너 내부에서
+cat /etc/hostname
+ps -ef | grep -E "gunicorn|python" | grep -v grep
+mount | grep -E "/tmp|overlay"
+cat /proc/1/cgroup | head -3
+env | grep -iE "railway_replica|railway_deployment"
+```
+
+**판별**: `ps -ef` 에서 `gunicorn master` PID 1개 + worker children 만 있으면 단일 컨테이너. `/etc/hostname` 이 여러 shell 세션에서 다르면 multi-container.
+
+> 단점: Mac 마이그레이션 후 Railway CLI 미설치 상태 가능성 — 설치 필요 시 `brew install railway` (Xcode license 선결 필요)
+
+**방법 C — R1 로그 데이터 역추론 (실측 없이 추정만, ⚠️ 불완전)**
+
+- 이미 수집된 R1 결과 (GPWS-0773 3중복, `-w 2`)
+- 3 / 2 = 1.5 → 최소 2개 컨테이너 필요
+- **결론**: 직접 실측 없이도 **multi-replica 매우 유력** (방법 A/B 미실시 시 Option 3 우선 구현 권고)
+
+#### Phase 0.2 — 결과별 Sprint 분기
+
+| Phase 0 결과 | 적용 옵션 | 변경 파일 | 추가 인프라 | 예상 소요 |
+|---|---|---|---|---|
+| **단일 컨테이너** (모든 호출 같은 hostname) | Option 2 (fcntl file lock) | `app/__init__.py` | 없음 | 45~90분 |
+| **Multi-replica** (다른 hostname 존재) | **Option 3 (Redis distributed lock)** | `app/services/scheduler_lock.py` 신설 + `app/__init__.py` + `requirements.txt` | **Railway Redis plugin 추가** (~$5/월) | 120~180분 |
+| Hybrid (기본 1 replica, spike 시 scale out) | **Option 3** 권장 | 위와 동일 | 위와 동일 | 120~180분 |
+| **미실측 (방법 A/B 생략)** | **Option 3 기본값** (보수적) | 위와 동일 | 위와 동일 | 120~180분 |
+
+#### Phase 0.3 — Option 3 설계 초안 (Redis lock)
+
+```python
+# backend/app/services/scheduler_lock.py (신규)
+import os, socket
+import redis
+
+_redis = redis.from_url(os.environ['REDIS_URL'])
+_LOCK_KEY = 'axis_ops:scheduler:singleton'
+_TTL = 60  # 초 — heartbeat 로 갱신
+
+def _owner_id() -> str:
+    return f"{socket.gethostname()}:{os.getpid()}"
+
+def try_acquire_scheduler_lock() -> bool:
+    """NX EX 기반 atomic lock 획득. 성공 시 True, 이미 다른 owner 면 False."""
+    acquired = _redis.set(_LOCK_KEY, _owner_id(), nx=True, ex=_TTL)
+    if acquired:
+        return True
+    # 자가 복구: 내 컨테이너+PID 가 이전 owner 였다면 재획득 허용
+    current = _redis.get(_LOCK_KEY)
+    return current and current.decode() == _owner_id()
+
+def refresh_scheduler_lock() -> None:
+    """heartbeat — scheduler 내부 매 30초 호출 (TTL 60초의 절반)"""
+    _redis.set(_LOCK_KEY, _owner_id(), ex=_TTL)
+
+def release_scheduler_lock() -> None:
+    """atexit 에서 atomic CAS-DEL (내 소유일 때만 삭제)"""
+    script = """
+    if redis.call('GET', KEYS[1]) == ARGV[1] then
+        return redis.call('DEL', KEYS[1])
+    end
+    return 0
+    """
+    _redis.eval(script, 1, _LOCK_KEY, _owner_id())
+```
+
+**장점**:
+- multi-container/replica 환경에서 **글로벌 상호 배제** 보장
+- owner 컨테이너 crash/restart 시 TTL 자동 만료 → 다른 replica 가 인수 (self-healing)
+- Atomic CAS-DEL 로 "다른 owner 의 lock 을 실수로 삭제" 방지
+
+**단점**:
+- Redis service 추가 비용 (~$5/월)
+- 네트워크 latency (Railway 내부 private network 사용 시 < 5ms)
+- Redis 자체 장애 시 scheduler 정지 가능 (장애 격리 vs 중복 실행 trade-off)
+
+#### Phase 0.4 — 확정 전제 조건
+
+1. ☐ 방법 A 또는 B 로 실측 완료
+2. ☐ hostname 분포 데이터 수집 (최소 20회 호출)
+3. ☐ 결과 기반 Option 2 vs Option 3 확정
+4. ☐ Option 3 확정 시 Railway Redis plugin 생성 + `REDIS_URL` env 주입 확인
+5. ☐ 확정 결정을 `ALERT_SCHEDULER_DIAGNOSIS.md` §11.14.7 또는 §13 에 기록
+
+---
+
 ### 🛠 Phase A — 코드 변경 (file lock 도입)
+
+> ⚠️ **적용 전제**: Phase 0 결과가 **"단일 컨테이너"** 일 때만 본 Phase 유효. **Multi-replica 확인 시 Phase 0.3 Redis lock 설계로 교체** (해당 경우 본 Phase 전체가 대체되며 상대 수정 범위는 `scheduler_lock.py` 신설 + `__init__.py` import 교체 + `requirements.txt` redis 추가).
 
 ```python
 # app/__init__.py (또는 scheduler init 위치)
