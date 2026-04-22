@@ -6,9 +6,15 @@ __pycache__/
 dist/
 build/
 .env
+.env.test
 .venv/
 venv/
 node_modules/
 .DS_Store
 *.db
 *.xlsx
+
+# Security-sensitive local docs — 평문 DB creds / 복구 절차 / 공격 표면 정보 포함
+# public repo 절대 커밋 금지 (루트 경로만 매치, 아카이브·하위 디렉토리 이동 시 재검토 필요)
+/SECURITY_REVIEW.md
+/DB_ROTATION_PLAN.md
