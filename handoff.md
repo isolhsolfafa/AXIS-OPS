@@ -72,6 +72,36 @@ VIEW 측 재검토 후 1줄 교정 요청 수용:
 - 실측: 이번 주 31→48 (+17, +55%) / 지난 주 30→51 (+21, +70%)
 - 의미: 주간 생산량 = 생산 완료 기준 (라벨 [Planned Finish] 와 일치) — v2.2 에서 "숫자 불변"을 가치로 높게 평가한 것이 실은 의미 정확성보다 덜 중요했음
 - FE 변경 없음 (weekly.production_count 자동 반영)
+- VIEW Sprint 35 Phase 2 (v1.35.0) 와 동기화 완료
+
+### ✅ POST-REVIEW EXPLAIN ANALYZE 실측 완료 (2026-04-23)
+
+Codex 3차 Q3 A 해소용 실측:
+
+| # | 쿼리 | 인덱스 사용 | 실행 시간 |
+|---|---|---|---|
+| ① `_count_shipped('plan')` | ❌ planner가 completion_status Seq Scan + serial_number Nested Loop 선택 (si_completed=TRUE 0건이라 더 효율적) | 0.051 ms |
+| ② `_count_shipped('actual')` | ✅ `idx_product_info_actual_ship_date` (Bitmap Index Scan) | 0.071 ms |
+| ③ `_count_shipped('ops')` | ✅ `idx_app_task_details_completed_at` (기존 인덱스) | 0.092 ms |
+| ④ weekly-kpi 메인 쿼리 | ✅ `idx_product_info_finishing_plan_end` (Bitmap Index Scan) | 0.127 ms |
+
+**판정**: migration 050 partial index 2종 실사용 확인. 전체 sub-ms 대역. Q3 A **완전 해소**.
+
+**잔여 Advisory**:
+- `idx_product_info_ship_plan_date` 현재 미사용이나 si_completed=TRUE 비율 증가 시 자동 활성화 가능. 삭제 불필요 (공간 무시)
+- Q5 (네이밍 부채 `pipeline.shipped` vs `shipped_plan`) — 관찰형 7일 유지, BIZ-KPI-SHIPPING-01 착수 시 final 네이밍 결정
+
+### 🏁 Sprint 62-BE v2.2 전체 종결 (2026-04-23)
+
+- ✅ v2.10.0 배포 (factory.py + migration 050 + 11 TC)
+- ✅ v2.10.1 PATCH 교정 (weekly-kpi WHERE finishing_plan_end)
+- ✅ Notices bump (id=102, v2.10.1)
+- ✅ Netlify FE 배포 2회 (v2.10.0 + v2.10.1)
+- ✅ Migration 050 Railway 적용 + migration_history 기록
+- ✅ POST-REVIEW EXPLAIN ANALYZE Q3 A 해소
+- ⏸ Q5 네이밍 부채 관찰형 7일 유지
+
+**다음 세션 최우선**: 없음. Sprint 62-BE 종결. 다른 Sprint 착수 대기.
 
 ---
 

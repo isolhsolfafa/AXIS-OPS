@@ -1,6 +1,6 @@
 # AXIS-OPS 백로그
 
-> 마지막 업데이트: 2026-04-22 (알람 장애 대응 + Sprint 55 auto-finalize UX 조사 — 5개 BACKLOG 신규 등록)
+> 마지막 업데이트: 2026-04-22 (알람 장애 4 HOTFIX 완료 + Sprint 55 auto-finalize UX 조사 + 우선순위 로드맵 정리)
 > 이 파일은 보류/재검토/계획/아이디어를 한 곳에서 관리합니다.
 > 완료된 항목은 PROGRESS.md로 이동합니다.
 
@@ -173,6 +173,57 @@
 
 ## 🔴 지금 진행 중 / 미해결
 
+### 🗺️ 우선순위 로드맵 (2026-04-22 확정 — 알람 장애 4 HOTFIX 완료 직후)
+
+> **컨텍스트**: 2026-04-17~22 알람 장애 4 HOTFIX (PHASE1.5 / SCHEMA-RESTORE / DUP / DELIVERY) 모두 VIEW + OPS(BE) Sprint 완료. 이 로드맵은 그 직후 "급한 순서" 기준.
+
+**Phase A — 24h 시계 (긴급 HOTFIX 사후 의무)**
+1. `POST-REVIEW-HOTFIX-PHASE1.5-20260422` — 30분
+2. `POST-REVIEW-HOTFIX-SCHEMA-RESTORE-20260422` — 30분
+3. `POST-REVIEW-HOTFIX-DUP-20260422` — 30~40분
+4. `POST-REVIEW-HOTFIX-DELIVERY-20260422` — 30분
+   - 합계 **~2h**. CLAUDE.md 긴급 HOTFIX 예외조항 S2 준수. 배포 후 24h 이내 Codex 사후 검토 의무.
+
+**Phase B — 네가 직접 언급한 미진 사항 (일정 결정 필요)**
+
+5. **Railway DB rotation** — 배포 창구 세워야 함. Twin파파 결정 필요.
+6. **작업 flow 디버깅** — 맥락 재확인 필요. (혹시 오늘 Sprint 55 UTIL_LINE_2 건과 연결? 별건인지?)
+
+**Phase C — 이번 주 내**
+
+7. `OBSERV-ALERT-SILENT-FAIL` — 🔴 P1, Phase 1.5 임시 로깅 → 영구 + Sentry 정식 연동. 3~4h. 재발 방지 필수 방어선.
+8. `UX-SPRINT55-FINALIZE-DIALOG-WARNING` — 🟡 P2, 1.5h. 현장 혼란 즉시 제거 (오늘 신규 등록).
+
+**Phase D — HOTFIX-DUP 배포 24h 안정화 이후 착수**
+
+9. `POST-REVIEW-MIGRATION-049-NOT-APPLIED` — 🔴 S3, 1~2h. 재발 방지의 근본 조사. 산출: `POST_MORTEM_MIGRATION_049.md` 또는 `ALERT_SCHEDULER_DIAGNOSIS.md` §13.
+
+**Phase E — 관찰성 + 인프라 정비 (중기)**
+
+10. `OBSERV-MIGRATION-HISTORY-SCHEMA` — 🟡 P2, 2~3h
+11. `OBSERV-MIGRATION-RUNNER-STARTUP-ASSERTION` — 🟡 P2, 2h (10번 선행)
+12. `OBSERV-ADMIN-ACTION-AUDIT` — 🟡 P2, 2+2h (FEAT-SPRINT55-REACTIVATE-* 배포 전 권고)
+
+**Phase F — Sprint 55 UX 개선 (중기)**
+
+13. `FEAT-SPRINT55-REACTIVATE-HYBRID-ROLE` — 🟡 P2, 반나절
+14. `FEAT-SPRINT55-REACTIVATE-REQUEST-FLOW` — 🟢 P3, 1~1.5일 (13번 선행)
+15. `DOC-AXIS-VIEW-REACTIVATE-BUTTON` — 🟢 P3, 30분
+
+**Phase G — 기타 별건**
+
+16. `INFRA-COLLATION-REFRESH` — 🟡 MEDIUM, Sprint 62 이후 배포 창구
+17. `TEST-CLEAN-CORE-01` — 🔴 OPEN (P 중간-상), 강제종료 회귀 가드, 40분
+18. `FE-ALERT-BADGE-SYNC` — 🟡 BACKLOG 재검토, 45분 (Scheduler 복구 완료로 전제조건 해소됨)
+
+---
+
+**내일 첫 항목**: Phase A #1 (POST-REVIEW-HOTFIX-PHASE1.5) 부터 순차. 4건 모두 Codex 로 돌리면 사실상 프로세스만 기다리면 되니까 오전 중 일괄 처리 가능.
+
+---
+
+
+
 | ID | 항목 | 상태 | 비고 |
 |----|------|------|------|
 | BUG-1 | QR 카메라 권한 팝업 가려짐 | 🔧 수정 중 | DOM 오버레이(z-index:9999)가 브라우저 권한 팝업을 가림. getUserMedia 선행 호출 방식으로 수정 진행 |
@@ -266,9 +317,12 @@
 | FE-ALERT-BADGE-SYNC | 홈 화면 알림 배지 카운트 `/alerts` 복귀 시 즉시 동기화 (UX 개선) | 🟡 BACKLOG (재검토 후 진행, 2026-04-22 등록) | **OPS FE only — `frontend/lib/screens/home/home_screen.dart` 2곳 수정**. 현재 diff(미커밋 working copy): AppBar 알림 아이콘(L587~593) + 메뉴 리스트 '알림' 항목(L760~770) 의 `onPressed`/`onTap` 을 `async` 로 변경 + `await Navigator.pushNamed` 후 `ref.read(alertProvider.notifier).refreshUnreadCount()` 호출 추가. 목적: `/alerts` 화면에서 읽음 처리 후 홈 복귀 시 배지 카운트 즉시 갱신 (기존에는 stale). 초기 진입 시에는 이미 `initState → _initializeAlerts → refreshUnreadCount` 호출됨(L70)으로 이번 변경은 "다녀온 뒤 재갱신"만 보완. **⚠️ 현재 "메인에 배지 없음" 증상은 이 변경과 무관**: `app_alert_logs` 4-17 이후 0건 장애의 결과 (`unreadCount = 0` 이라 배지 정상적으로 미표시). Scheduler 알람 복구(`HOTFIX-SCHEDULER-DUP-20260422` 계열) 후 배지 자연 복귀 예정. **재검토 사항**: ① 변경 완결성 — `refreshUnreadCount()` 외 `fetchAlerts()` 도 필요한가? ② 회귀 — 빠른 연속 탭 시 race condition 가능성 ③ WebSocket push 와 중복 호출 가능성. **배포 조건**: (a) Scheduler 장애 복구 완료 후 배지 정상 복귀 확인 → (b) 실기기 QA (iOS/Android/데스크톱 PWA) → (c) flutter build web + Netlify 배포. 작업 소요: 재검토 15분 + 배포 30분 = 45분. 최초 발견: 2026-04-22 HOTFIX-SCHEDULER-PHASE1.5 세션 중 미커밋 working copy 로 확인 |
 | HOTFIX-SCHEDULER-PHASE1.5-LOGGING | Alert 경로 silent fail ERROR 로깅 + Sentry 임시 연동 (2026-04-22 등록) | ✅ 🟢 COMPLETED (배포 + 결정적 포착 완료, 2026-04-22) | **결정적 성과**: 5일 알람 장애의 근본 원인을 배포 직후 단일 hourly tick (02:00 UTC) 에서 포착. `[alert_insert_fail]` / `[alert_create_none]` 로그 4건 + 공통 에러 `column "task_detail_id" of relation "app_alert_logs" does not exist` 로 G.3 + A 동시 확정. 이후 §11.14.7 / §12 recovery SQL 실행 근거가 됨. 관련: `AXIS-OPS/ALERT_SCHEDULER_DIAGNOSIS.md` §11.14.6 / `AXIS-OPS/AGENT_TEAM_LAUNCH.md` HOTFIX-SCHEDULER-PHASE1.5 섹션 |
 | HOTFIX-ALERT-SCHEMA-RESTORE-20260422 | Railway 운영 DB 스키마 복구 (049 수동 적용) | ✅ 🟢 COMPLETED (2026-04-22 11:25 KST) | Phase 1.5 로 확정된 "migration 049 prod 미적용 + task_detail_id 컬럼 부재 + enum 3종 미등록" 문제 SQL 수동 복구. 5 블록 실행 (enum 3 + column + index + admin_settings + migration_history). 검증 A/B/C 3종 PASS. 12:00 KST tick 에서 신규 INSERT 16건 (id=658~673) 확인. 5일간 0건 장애 완전 해소. 관련: `AXIS-OPS/ALERT_SCHEDULER_DIAGNOSIS.md` §12.6 / `AXIS-OPS/AGENT_TEAM_LAUNCH.md` HOTFIX-ALERT-SCHEMA-RESTORE-20260422 섹션 |
-| HOTFIX-SCHEDULER-DUP-20260422 | APScheduler 중복 실행 방지 — Option 2 fcntl file lock | 🔴 **OPEN (S2, 즉시 착수)** | **R1 쿼리로 확정 (2026-04-22 12:40 KST)**: RELAY_ORPHAN 16건 중 5 unique serial_number 가 중복 기록 (GBWS-6980/7017/7024/7038 각 2중복 + GPWS-0773 3중복). gap_ms 18~86ms 범위로 동시 실행 race condition 확정. Worker ≥3 추정 (GPWS-0773 triple). 중복율 37.5% (6/16). **해결책**: `app/__init__.py` (또는 `scheduler_service.py`) 에 `fcntl.flock LOCK_EX | LOCK_NB` 기반 `/tmp/axis_ops_scheduler.lock` 파일 락 도입. 기존 `_SCHEDULER_STARTED` env 가드는 보조 유지. 예상 소요 1.5~2h. GPWS-0773 3중복 근거로 Option 3 (Redis distributed lock) 병행 검토 권고. 관련: `AXIS-OPS/ALERT_SCHEDULER_DIAGNOSIS.md` §11.7.4 / §11.14.7 / `AXIS-OPS/AGENT_TEAM_LAUNCH.md` HOTFIX-SCHEDULER-DUP-20260422 섹션 |
+| HOTFIX-SCHEDULER-DUP-20260422 | APScheduler 중복 실행 방지 — Option 2 fcntl file lock | ✅ 🟢 COMPLETED (2026-04-22, VIEW/OPS BE Sprint 완료) | **R1 쿼리로 확정 (2026-04-22 12:40 KST)**: RELAY_ORPHAN 16건 중 5 unique serial_number 가 중복 기록 (GBWS-6980/7017/7024/7038 각 2중복 + GPWS-0773 3중복). gap_ms 18~86ms 범위로 동시 실행 race condition 확정. Worker ≥3 추정 (GPWS-0773 triple). 중복율 37.5% (6/16). **해결책**: `app/__init__.py` (또는 `scheduler_service.py`) 에 `fcntl.flock LOCK_EX | LOCK_NB` 기반 `/tmp/axis_ops_scheduler.lock` 파일 락 도입. 기존 `_SCHEDULER_STARTED` env 가드는 보조 유지. GPWS-0773 3중복 근거로 Option 3 (Redis distributed lock) 병행 검토 권고. 관련: `AXIS-OPS/ALERT_SCHEDULER_DIAGNOSIS.md` §11.7.4 / §11.14.7 / `AXIS-OPS/AGENT_TEAM_LAUNCH.md` HOTFIX-SCHEDULER-DUP-20260422 섹션 |
+| HOTFIX-ALERT-SCHEDULER-DELIVERY-20260422 | Scheduler 알람 delivery 복구 — 표준 패턴 + 배치 dedupe | ✅ 🟢 COMPLETED (2026-04-22, VIEW/OPS BE Sprint 완료) | 4 HOTFIX 중 마지막 건. delivery 파이프라인 표준 패턴 통일 + 배치 단위 dedupe 로직 반영. PHASE1.5 (관찰성) + SCHEMA-RESTORE (복구) + DUP (중복 방지) 와 함께 알람 장애 종결의 마지막 축. 관련: `AXIS-OPS/AGENT_TEAM_LAUNCH.md` HOTFIX-ALERT-SCHEDULER-DELIVERY-20260422 섹션 (L30178) |
 | POST-REVIEW-HOTFIX-PHASE1.5-20260422 | 긴급 HOTFIX Phase 1.5 배포 사후 Codex 교차검토 | 🔴 OPEN (24h 이내 완료) | `AXIS-OPS/CLAUDE.md` 긴급 HOTFIX 예외 조항 S2 적용건. Opus 단독 리뷰 후 배포 → Codex 사후 검토 의무. 검토 범위: ① silent fail ERROR 로깅 3지점 (alert_log.create_alert + alert_service + create_and_broadcast_alert) ② Sentry import guard 패턴 안전성 ③ 임시 로깅을 영구 반영 시 고려사항. 예상 소요 30분 |
 | POST-REVIEW-HOTFIX-DUP-20260422 | HOTFIX-SCHEDULER-DUP 배포 사후 Codex 교차검토 | 🔴 OPEN (24h 이내, Sprint 배포 이후) | fcntl file lock 도입 + atexit release 패턴의 corner case 검토 (SIGKILL / OOM kill / Railway graceful shutdown 시 lock 파일 잔존 가능성). 재배포 시 lock 획득 실패 → 1 worker scheduler 시작 못하는 시나리오 확인. Redis distributed lock 병행 도입 필요성 재평가. 예상 소요 30~40분 |
+| POST-REVIEW-HOTFIX-SCHEMA-RESTORE-20260422 | HOTFIX-ALERT-SCHEMA-RESTORE 사후 Codex 교차검토 (2026-04-22 등록) | 🔴 OPEN (24h 이내) | **긴급 HOTFIX 예외조항 S2 적용건 — Codex 사후 검토 의무**. 검토 범위: ① 수동 SQL 복구 5 블록 (enum 3 + column + index + admin_settings + migration_history) 의 idempotency 재확인 ② 실패 시 rollback 가능성 (enum 추가는 롤백 복잡) ③ 검증 A/B/C 3종 외 추가 정합성 검사 필요한지 ④ 운영 DB 수동 SQL 실행 권한/절차의 향후 표준화 권고. 예상 소요 30분 |
+| POST-REVIEW-HOTFIX-DELIVERY-20260422 | HOTFIX-ALERT-SCHEDULER-DELIVERY 사후 Codex 교차검토 (2026-04-22 등록) | 🔴 OPEN (24h 이내) | **긴급 HOTFIX 예외조항 S2 적용건 — Codex 사후 검토 의무**. 검토 범위: ① delivery 표준 패턴 통일 범위 적정성 ② 배치 dedupe 로직의 정확성 + edge case (동시 스케줄러 3개 triple duplicate 시나리오) ③ HOTFIX-SCHEDULER-DUP 와의 계층 중복 여부 (dedupe 레이어 2중) ④ Sentry 정식 연동 (OBSERV-ALERT-SILENT-FAIL) 연계 시 delivery 실패 로깅 경로. 예상 소요 30분 |
 | POST-REVIEW-MIGRATION-049-NOT-APPLIED | 왜 migration 049 가 Railway prod DB 에 적용되지 않았는가 조사 | 🔴 OPEN (S3 조사, HOTFIX-DUP 배포 후 착수) | §12.5 의 4가지 가능성 중 어느 것인지 확정. 교차검토 대상 3파일: (1) Railway Dockerfile / Procfile (2) `migration_runner.py` (Sprint 45 INFRA-1 산출물) (3) 배포 스크립트 + 환경변수. 가설: ① DATABASE_URL 분기 (test vs prod) ② migration_runner 의 idempotent 판정 버그 ③ 047/048 간 runtime 오류로 049 skip ④ Railway volume/layer 캐시. 예상 소요 1~2h. 산출: `AXIS-OPS/POST_MORTEM_MIGRATION_049.md` 또는 `ALERT_SCHEDULER_DIAGNOSIS.md` §13 신설 |
 | OBSERV-ALERT-SILENT-FAIL | Phase 1.5 임시 ERROR 로깅 → 영구 반영 + Sentry 정식 연동 | 🔴 OPEN (P1, HOTFIX-DUP 배포 후 1주 내) | Phase 1.5 의 `try/except + log.error + sentry import guard` 패턴을 ① 영구 코드로 승격 ② `sentry-sdk` requirements 정식 추가 ③ release/environment tag + `contexts={"alert": ...}` 구조화 payload ④ sentry alert rule 설정 (1시간 내 5회 이상 발생 시 paging). 재발 방지 필수 방어선. 예상 소요 3~4h |
 | OBSERV-MIGRATION-HISTORY-SCHEMA | migration_history 에 success/error_message/checksum 컬럼 추가 | 🟡 OPEN (P2, 중간) | 현재 스키마 3컬럼 (id/filename/executed_at) 으로 실패 관찰 불가. 추가: `success BOOLEAN NOT NULL DEFAULT TRUE` + `error_message TEXT NULL` + `checksum VARCHAR(64) NULL`. migration_runner.py 의 INSERT 절도 동반 수정. checksum 은 migration 파일 내용의 SHA-256 → 배포 간 불일치 감지 가능. 예상 소요 2~3h (migration + runner 수정 + 검증) |
@@ -288,7 +342,7 @@
 | BUG-DURATION-VALIDATOR-API-FIELD | `/api/app/work/complete` 응답에 `duration_warnings` 필드 누락 (2026-04-22 등록) | 🟡 OPEN (P2, 독립 Sprint) | **⚠️ Codex 합의 미실행 항목**: pytest 실패 `test_duration_validator.py::TestReverseDuration::test_reverse_completion` 이 HOTFIX-ALERT-SCHEDULER-DELIVERY 세션 중 발견. Claude 단독 "본 HOTFIX 와 무관한 기존 failing" 으로 판단 후 제외 → CLAUDE.md AI 검증 워크플로우 ⑦단계 (실패 → Codex 합의 후 수정) 위반. **착수 전 필수**: Codex `/codex:rescue` 호출해서 (a) "기존 별건" 재확인 (b) M/A 라벨 확정 (c) 본 BUG 의 실제 원인 분석 (HOTFIX-04 옵션 C' 이후 `close_reason/closed_by/closed_by_name` 3필드 추가했지만 `duration_warnings` 누락 가정). 작업 소요: Codex 합의 30분 + 수정 30~60분. 관련: CLAUDE.md ⑦ 강제 절차 (2026-04-22 추가) |
 | POST-REVIEW-HOTFIX-ALERT-SCHEDULER-DELIVERY-20260422 | HOTFIX-ALERT-SCHEDULER-DELIVERY 배포 사후 Codex 교차검토 (2026-04-22 등록) | 🔴 OPEN (S2, 7일 이내 필수) | CLAUDE.md § 🚨 긴급 HOTFIX 예외 조항 S2 적용 — Opus 단독 리뷰 후 배포 → 7일 이내 Codex 사후 검토 의무. 검토 범위: ① `_resolve_managers_for_category` 헬퍼의 정확성 ② 3곳 배치 dedupe 쿼리 index 활용 효율 (`idx_alert_logs_dedupe`) ③ for manager_id 루프의 N+1 query 여부 ④ Codex M1 (Item 2) 해결 완결성 ⑤ 배포 후 48h 관찰 데이터 (실제 delivery 재개 + legacy 69건 수렴 곡선). 예상 소요 30분 |
 | BIZ-KPI-SHIPPING-01 | 경영 대시보드 출하 KPI 설계 (이행률·정합성, 2026-04-23 등록) | 🟢 DRAFT (P3, App 베타 100% 전환 후 착수 검토) | **추상 단계 / 확정 아님 / 정리만 보존**. 배경: OPS App 전환기 (기존 PDA/수기 → App 베타). 이행률·정합성 같은 경영 지표는 App 전환율이 충분히 올라간 뒤 의미 있는 해석 가능. **선행**: Sprint 62-BE v2.2 (데이터 공급 인프라 — `shipped_plan`/`shipped_actual`/`shipped_ops` 3필드 raw) 배포 완료. **검토 필요 항목** (Sprint 착수 시 확정): ① 이행률 정의 — `actual/plan` 단순 vs `actual/(plan 만기도래)` 정교 ② 정합성 지표 공개 범위 — 공장 카드 / Admin 전용 / 임계치 알림 ③ `plan_count` 정의 — si_completed 조건 유무 ④ 경영 대시보드 화면 위치 — 기존 공장 대시보드 확장 vs 별도 Exec 뷰 ⑤ 베타 전환 스케줄 반영 — 어느 모델/협력사부터 단계적 100%. **3계층 데이터 구조**: 계획층(`ship_plan_date` ETL) → 실적층(`actual_ship_date` Teams 수기 + cron) → 앱층(`SI_SHIPMENT.completed_at` OPS 앱 베타). **지표 2종** (추후 확정): `fulfillment_rate = shipped_actual / shipped_plan × 100` (이행률) / `app_coverage_rate = shipped_ops / shipped_actual × 100` (베타 전환 커버리지). **현재 실측 (2026-04-23 기준 이번 주)**: plan=0 / actual=23 / ops=0. **주의**: 자동 UNION 합산(`shipped_union`) 은 폐기 — 3개 소스는 독립 비교용. 관련: `AGENT_TEAM_LAUNCH.md` Sprint 62-BE v2.2 섹션 |
-| POST-REVIEW-SPRINT-62-BE-V2.2-20260423 | Sprint 62-BE v2.2 배포 사후 Codex 교차검토 (2026-04-23 등록) | 🟡 OPEN (P2, 배포 후 7일 이내) | 본 Sprint는 S3 정상 파이프라인(Codex 3차 검증 완료, M=0/A=4 CONDITIONAL 승인)이나 인덱스 migration 050 (`CONCURRENTLY` 3개) 포함으로 사후 관찰 권장. 검토 범위: ① migration 050 Railway 적용 성공 여부 (`pg_indexes` 재확인) ② **[Codex 3차 Q3 A]** `_count_shipped` 3분기 쿼리 EXPLAIN ANALYZE 결과 — partial index `WHERE IS NOT NULL` 이 실제 사용되는지 Railway planner choice 실측 검증. 3 분기 각각에 대해 `EXPLAIN (ANALYZE, BUFFERS)` 실행 후 `Index Scan using idx_product_info_*` 확인 ③ `monthly-kpi` 실사용 빈도 + 4옵션 date_field 응답 시간 ④ 3필드(plan/actual/ops) 값이 FE Sprint 36 토글 기본값 결정에 충분했는지 ⑤ **[Codex 3차 Q5 A]** `pipeline.shipped` vs `shipped_plan` 네이밍 부채 — FE 개발자 혼동 사례 발생 여부 확인 후 BIZ-KPI-SHIPPING-01 착수 시 final 네이밍 결정 ⑥ 이행률/정합성 BACKLOG 이관 적절성 재평가. 예상 소요 45분 (Q3 EXPLAIN 추가분 15분) |
+| POST-REVIEW-SPRINT-62-BE-V2.2-20260423 | Sprint 62-BE v2.2 배포 사후 Codex 교차검토 (2026-04-23 등록) | ✅ **PARTIAL COMPLETED** (Q1/Q3 해소, Q5 관찰형 유지) | **Q1 (migration 050 Railway 적용)**: ✅ 2026-04-23 13:38 KST 수동 적용 + `migration_history` 기록 + `pg_indexes` 3종 확인. **Q3 EXPLAIN ANALYZE 실측 (2026-04-23)**: ✅ ② `idx_product_info_actual_ship_date` 사용 (Bitmap Index Scan 0.071ms) / ④ `idx_product_info_finishing_plan_end` 사용 (Bitmap Index Scan 0.127ms, weekly-kpi 메인 쿼리) / ③ `idx_app_task_details_completed_at` 기존 인덱스 사용 (0.092ms). ① `idx_product_info_ship_plan_date` 는 현 쿼리 패턴에서 planner가 `completion_status` Seq Scan + serial_number Nested Loop 선택 → "never executed" (si_completed=TRUE 0건이라 다른 전략이 더 효율적). **sub-ms 대역** 전체 쿼리 매우 빠름. Q3 A **완전 해소**. **Q5 (네이밍 부채 모니터링)**: ⏸ 관찰형 — `pipeline.shipped` vs `shipped_plan` FE 혼동 사례 7일 관찰 중. BIZ-KPI-SHIPPING-01 착수 시 final 네이밍 결정. **Q3 Advisory**: `idx_product_info_ship_plan_date` 현재 미사용이나 향후 si_completed=TRUE 비율 증가 시 자동 활성화 가능, 삭제 불필요 (공간 무시). **v2.10.1 교정** 포함 (weekly-kpi WHERE ship_plan_date→finishing_plan_end). 관련: `AGENT_TEAM_LAUNCH.md` Sprint 62-BE v2.2 섹션 / handoff.md |
 
 ---
 
