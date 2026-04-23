@@ -369,13 +369,16 @@ def get_weekly_kpi() -> Tuple[Dict[str, Any], int]:
         conn = get_db_connection()
         cur = conn.cursor()
 
+        # v2.10.1 교정 (VIEW 요청 2026-04-23): 주간 생산량은 완료 기준 — ship_plan_date(출하계획일)
+        # → finishing_plan_end(마무리계획일) 로 교정. 라벨 [Planned Finish] 와 의미 일치.
+        # 숫자 변동 예상: ~50-70% 증가 (ship_plan_date 는 출하 시점이라 주간 생산 완료 수를 저평가했음)
         cur.execute(
             """SELECT p.serial_number, p.model, p.ship_plan_date,
                       cs.mech_completed, cs.elec_completed, cs.tm_completed,
                       cs.pi_completed, cs.qi_completed, cs.si_completed
                FROM plan.product_info p
                LEFT JOIN completion_status cs ON p.serial_number = cs.serial_number
-               WHERE p.ship_plan_date >= %s AND p.ship_plan_date <= %s""",
+               WHERE p.finishing_plan_end >= %s AND p.finishing_plan_end <= %s""",
             (week_start, week_end)
         )
         rows = cur.fetchall()

@@ -130,23 +130,41 @@ class TestFactoryKpiV2:
         # 기존 pipeline.shipped 유지 (backward compat)
         assert 'pipeline' in data and 'shipped' in data['pipeline']
 
-    def test_fk02_weekly_kpi_where_ship_plan_date_unchanged(
-        self, client, create_test_admin, get_admin_auth_token
+    def test_fk02_weekly_kpi_where_finishing_plan_end(
+        self, client, create_test_admin, get_admin_auth_token, db_conn, seed_test_data
     ):
-        """TC-FK-02: weekly-kpi WHERE 절 ship_plan_date 유지 (기존 회귀).
-        production_count는 ship_plan_date 기준 COUNT 그대로."""
+        """TC-FK-02: weekly-kpi WHERE 절 `finishing_plan_end` 로 교정 (v2.10.1 VIEW 요청).
+        production_count 는 finishing_plan_end 기준 COUNT — ship_plan_date 기준이 아님."""
+        from datetime import date
+
         admin = create_test_admin
         token = get_admin_auth_token(admin['id'])
 
+        # 11주차 (2026-03-09 ~ 2026-03-15) 응답 가져오기
         resp = client.get(
             '/api/admin/factory/weekly-kpi?week=11&year=2026',
             headers={'Authorization': f'Bearer {token}'}
         )
         assert resp.status_code == 200
         data = resp.get_json()
-        # production_count 타입 + 음수 아님
-        assert isinstance(data['production_count'], int)
-        assert data['production_count'] >= 0
+        production_count = data['production_count']
+        assert isinstance(production_count, int)
+        assert production_count >= 0
+
+        # DB 직접 쿼리로 finishing_plan_end 기준 COUNT 확인
+        week_start = date(2026, 3, 9)   # Monday
+        week_end = date(2026, 3, 15)    # Sunday (closed interval)
+
+        cur = db_conn.cursor()
+        cur.execute(
+            """SELECT COUNT(*) AS cnt FROM plan.product_info
+               WHERE finishing_plan_end >= %s AND finishing_plan_end <= %s""",
+            (week_start, week_end)
+        )
+        row = cur.fetchone()
+        expected = row['cnt'] if isinstance(row, dict) else row[0]
+        assert production_count == expected, \
+            f"production_count({production_count}) != finishing_plan_end COUNT({expected}) — WHERE 절 교정 확인"
 
     def test_fk03_monthly_kpi_default_mech_start(
         self, client, create_test_admin, get_admin_auth_token

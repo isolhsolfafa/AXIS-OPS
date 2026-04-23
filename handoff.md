@@ -58,11 +58,20 @@
 
 ### 다음 세션 시작 시 할 일
 
-1. git commit + push (v2.10.0) → Railway 자동 배포
+1. ~~git commit + push (v2.10.0) → Railway 자동 배포~~ ✅ 완료
 2. Railway 배포 후 Q3 A EXPLAIN ANALYZE 검증 — `_count_shipped` 3분기 쿼리가 partial index 실제 사용하는지
-3. notices INSERT — v2.10.0 공지 (`version LIKE '2.%'` 기존 pinned 해제 후 신규 pinned)
+3. ~~notices INSERT — v2.10.0 공지~~ ✅ 완료 (id=102)
 4. VIEW Sprint 36 (Cursor에서 동시 진행 중) — BE 3필드 배포 후 TEMP-HARDCODE 제거 연동 확인
 5. POST-REVIEW-SPRINT-62-BE-V2.2 (배포 후 7일 내)
+
+### 🔄 v2.10.1 PATCH 보정 (2026-04-23 동일일)
+
+VIEW 측 재검토 후 1줄 교정 요청 수용:
+- `weekly-kpi` L322 WHERE: `ship_plan_date` → `finishing_plan_end`
+- TC-FK-02: "ship_plan_date 회귀" → "finishing_plan_end 교정 검증" 으로 반전
+- 실측: 이번 주 31→48 (+17, +55%) / 지난 주 30→51 (+21, +70%)
+- 의미: 주간 생산량 = 생산 완료 기준 (라벨 [Planned Finish] 와 일치) — v2.2 에서 "숫자 불변"을 가치로 높게 평가한 것이 실은 의미 정확성보다 덜 중요했음
+- FE 변경 없음 (weekly.production_count 자동 반영)
 
 ---
 

@@ -29326,7 +29326,8 @@ tests/backend/test_factory_kpi.py (신규)
 
 ## ⚠️ Sprint 62-BE v2.2 — 데이터 공급 인프라만 (2026-04-23 축소 확정)
 
-> **상태**: 🟢 **구현 + 테스트 완료** (2026-04-23) — 신규 TC 17/17 GREEN + 회귀 36/36 GREEN / Railway 배포 대기
+> **상태**: 🟢 **v2.10.0 배포 완료 + v2.10.1 PATCH 보정 진행 중** (2026-04-23)
+> **v2.10.1 보정**: VIEW 측 재검토 결과 `weekly-kpi` WHERE 절 `ship_plan_date` → `finishing_plan_end` 1줄 교정. 주간 생산량 의미 (완료 기준) 일치. 실측 변동 이번 주 31→48 (+17) / 지난 주 30→51 (+21). CHANGELOG v2.10.1 엔트리 참조.
 > **구현 산출물**:
 >   - `backend/migrations/050_factory_kpi_indexes.sql` (신규, ALTER + partial index 3개)
 >   - `backend/app/routes/factory.py` (+155/-6)
