@@ -26,7 +26,63 @@ logger = logging.getLogger(__name__)
 factory_bp = Blueprint("factory", __name__, url_prefix="/api/admin/factory")
 
 # date_field 화이트리스트 (SQL 인젝션 방지)
-_ALLOWED_DATE_FIELDS = {'pi_start', 'mech_start'}
+# Sprint 62-BE v2.2: monthly-detail 전용 — pi_start 포함 5값 (ProductionPlanPage 토글 호환)
+_ALLOWED_DATE_FIELDS = {
+    'pi_start', 'mech_start', 'finishing_plan_end', 'ship_plan_date', 'actual_ship_date'
+}
+# monthly-kpi 전용 — 출하 기준 date만 (pi_start 제외)
+_ALLOWED_DATE_FIELDS_MONTHLY_KPI = {
+    'mech_start', 'finishing_plan_end', 'ship_plan_date', 'actual_ship_date'
+}
+
+
+def _count_shipped(conn, start, end, basis: str) -> int:
+    """주간/월간 출하 카운트 3분기 헬퍼 (Sprint 62-BE v2.2).
+
+    basis: 'plan' | 'actual' | 'ops'
+
+    3개 소스는 자동 합산되지 않음 — FE 또는 경영 대시보드 레이어에서 비교 분석.
+      - plan   : ship_plan_date + si_completed (계획 기준 완료)
+      - actual : actual_ship_date (Teams 엑셀 수기 → cron)
+      - ops    : SI_SHIPMENT.completed_at (OPS 앱 실시간, 베타 전환 중)
+
+    반개구간 [start, end) 사용 — 경계 중복 제거.
+    경영 KPI (이행률 = actual/plan, 정합성 = ops/actual) 계산은 BACKLOG-BIZ-KPI-SHIPPING-01.
+    """
+    cur = conn.cursor()
+    if basis == 'plan':
+        # Codex 3차 Q2 A 반영: si_completed=TRUE가 null-rejecting이라 INNER JOIN 의도 명시
+        cur.execute(
+            """SELECT COUNT(*) AS cnt
+               FROM plan.product_info p
+               INNER JOIN completion_status cs ON p.serial_number = cs.serial_number
+               WHERE p.ship_plan_date >= %s AND p.ship_plan_date < %s
+                 AND cs.si_completed = TRUE""",
+            (start, end)
+        )
+    elif basis == 'actual':
+        cur.execute(
+            """SELECT COUNT(*) AS cnt FROM plan.product_info
+               WHERE actual_ship_date >= %s AND actual_ship_date < %s""",
+            (start, end)
+        )
+    elif basis == 'ops':
+        cur.execute(
+            """SELECT COUNT(DISTINCT serial_number) AS cnt
+               FROM app_task_details
+               WHERE task_id = 'SI_SHIPMENT'
+                 AND completed_at IS NOT NULL
+                 AND completed_at >= %s AND completed_at < %s
+                 AND force_closed = false""",
+            (start, end)
+        )
+    else:
+        raise ValueError(f"Invalid basis: {basis} (must be 'plan' | 'actual' | 'ops')")
+    row = cur.fetchone()
+    if row is None:
+        return 0
+    # DictCursor/RealDictCursor + 일반 tuple cursor 양쪽 호환
+    return row['cnt'] if isinstance(row, dict) else row[0]
 
 
 def _calc_progress(row: dict) -> float:
@@ -131,7 +187,7 @@ def get_monthly_detail() -> Tuple[Dict[str, Any], int]:
     if date_field not in _ALLOWED_DATE_FIELDS:
         return jsonify({
             'error': 'INVALID_DATE_FIELD',
-            'message': f'date_field는 {", ".join(_ALLOWED_DATE_FIELDS)} 중 하나여야 합니다.'
+            'message': f'date_field는 {", ".join(sorted(_ALLOWED_DATE_FIELDS))} 중 하나여야 합니다.'
         }), 400
 
     # month 파싱 (KST 기준)
@@ -362,6 +418,8 @@ def get_weekly_kpi() -> Tuple[Dict[str, Any], int]:
 
         # pipeline 집계
         # shipped 판정: ship_plan_date(출하 예정일) 기준 — 주간 생산량 관리 기준일.
+        # ⚠️ pipeline.shipped는 `today` 제한 있음 (deprecated, backward compat 유지).
+        # ⚠️ shipped_plan (아래 _count_shipped 'plan' basis)은 today 제한 없음 — 의미 다름.
         pipeline = {'pi': 0, 'qi': 0, 'si': 0, 'shipped': 0}
         for r in rows:
             if r.get('pi_completed') and not r.get('qi_completed'):
@@ -375,6 +433,13 @@ def get_weekly_kpi() -> Tuple[Dict[str, Any], int]:
                 else:
                     pipeline['shipped'] += 1
 
+        # Sprint 62-BE v2.2: shipped 3필드 (plan/actual/ops) + defect_count placeholder
+        # 반개구간 [start, end) 사용 — week_end(일요일) + 1일 = 다음 월요일이 exclusive end
+        week_end_exclusive = week_end + timedelta(days=1)
+        shipped_plan = _count_shipped(conn, week_start, week_end_exclusive, 'plan')
+        shipped_actual = _count_shipped(conn, week_start, week_end_exclusive, 'actual')
+        shipped_ops = _count_shipped(conn, week_start, week_end_exclusive, 'ops')
+
         return jsonify({
             'week': week,
             'year': year,
@@ -387,10 +452,107 @@ def get_weekly_kpi() -> Tuple[Dict[str, Any], int]:
             'by_model': by_model,
             'by_stage': by_stage,
             'pipeline': pipeline,
+            'shipped_plan': shipped_plan,
+            'shipped_actual': shipped_actual,
+            'shipped_ops': shipped_ops,
+            'defect_count': None,
         }), 200
 
     except PsycopgError as e:
         logger.error(f"weekly-kpi DB error: {e}")
+        return jsonify({'error': 'INTERNAL_ERROR', 'message': '데이터 조회 실패'}), 500
+    finally:
+        if conn:
+            put_conn(conn)
+
+
+@factory_bp.route("/monthly-kpi", methods=["GET"])
+@jwt_required
+@view_access_required
+def get_monthly_kpi() -> Tuple[Dict[str, Any], int]:
+    """월간 공장 KPI (Sprint 62-BE v2.2 신설)
+
+    Query Parameters:
+        month: YYYY-MM (기본: 현재 월, KST)
+        date_field: mech_start | finishing_plan_end | ship_plan_date | actual_ship_date
+                    (기본: mech_start) — pi_start 불허 (monthly-detail 전용)
+    """
+    month_str = request.args.get('month')
+    date_field = request.args.get('date_field', 'mech_start')
+
+    # Codex 2차 Q4 M 반영: monthly-kpi 전용 화이트리스트 (pi_start 제외)
+    if date_field not in _ALLOWED_DATE_FIELDS_MONTHLY_KPI:
+        return jsonify({
+            'error': 'INVALID_DATE_FIELD',
+            'message': f'date_field는 {", ".join(sorted(_ALLOWED_DATE_FIELDS_MONTHLY_KPI))} 중 하나여야 합니다.'
+        }), 400
+
+    # month 파싱 (KST 기준)
+    from datetime import datetime
+    kst = timezone(timedelta(hours=9))
+    today = datetime.now(kst).date()
+    if month_str:
+        try:
+            parts = month_str.split('-')
+            if len(parts) != 2:
+                raise ValueError
+            year_val = int(parts[0])
+            month_val = int(parts[1])
+            if month_val < 1 or month_val > 12:
+                raise ValueError
+            start_date = date(year_val, month_val, 1)
+        except (ValueError, IndexError):
+            return jsonify({
+                'error': 'INVALID_MONTH',
+                'message': 'month 형식은 YYYY-MM이어야 합니다.'
+            }), 400
+    else:
+        year_val = today.year
+        month_val = today.month
+        start_date = date(year_val, month_val, 1)
+        month_str = f"{year_val}-{month_val:02d}"
+
+    # end_date 계산 (다음 달 1일, 반개구간 [start, end))
+    if month_val == 12:
+        end_date = date(year_val + 1, 1, 1)
+    else:
+        end_date = date(year_val, month_val + 1, 1)
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # production_count: date_field 기준 COUNT (화이트리스트 검증 완료, f-string 안전)
+        cur.execute(
+            f"SELECT COUNT(*) AS cnt FROM plan.product_info p "
+            f"WHERE p.{date_field} >= %s AND p.{date_field} < %s",
+            (start_date, end_date)
+        )
+        row = cur.fetchone()
+        production_count = row['cnt'] if isinstance(row, dict) else row[0]
+
+        # shipped 3필드 (plan/actual/ops)
+        shipped_plan = _count_shipped(conn, start_date, end_date, 'plan')
+        shipped_actual = _count_shipped(conn, start_date, end_date, 'actual')
+        shipped_ops = _count_shipped(conn, start_date, end_date, 'ops')
+
+        return jsonify({
+            'month': month_str,
+            'month_range': {
+                'start': start_date.isoformat(),
+                'end': end_date.isoformat(),   # [1일, 다음달 1일) — 반개구간 exclusive end
+            },
+            'date_field_used': date_field,
+            'production_count': production_count,
+            'shipped_plan': shipped_plan,
+            'shipped_actual': shipped_actual,
+            'shipped_ops': shipped_ops,
+            'defect_count': None,
+        }), 200
+
+    except PsycopgError as e:
+        logger.error(f"monthly-kpi DB error: {e}")
         return jsonify({'error': 'INTERNAL_ERROR', 'message': '데이터 조회 실패'}), 500
     finally:
         if conn:

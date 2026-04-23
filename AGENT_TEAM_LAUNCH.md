@@ -29324,6 +29324,235 @@ tests/backend/test_factory_kpi.py (신규)
 
 ---
 
+## ⚠️ Sprint 62-BE v2.2 — 데이터 공급 인프라만 (2026-04-23 축소 확정)
+
+> **상태**: 🟢 **구현 + 테스트 완료** (2026-04-23) — 신규 TC 17/17 GREEN + 회귀 36/36 GREEN / Railway 배포 대기
+> **구현 산출물**:
+>   - `backend/migrations/050_factory_kpi_indexes.sql` (신규, ALTER + partial index 3개)
+>   - `backend/app/routes/factory.py` (+155/-6)
+>   - `tests/backend/test_factory_kpi.py` (신규, 11 TC)
+> **부수 발견**: test DB 스키마 drift 확인 — Prod DB엔 `actual_ship_date`/`finishing_plan_end` 있으나 migration SQL 부재 → migration 050에 `ALTER TABLE IF NOT EXISTS` 추가로 양쪽 정합 확보 (Prod no-op, test 신규 생성)
+> **근거 체인**: v1 원안 → VIEW v2 역제안 → Codex 1차(Q1~Q7) → Railway DB 실측 → Twin파파 피드백 (자동 합산 폐기 + 이행률/정합성 BACKLOG 이관)
+> **스코프 결정**: **데이터 공급 인프라만** 본 Sprint 포함. 경영 KPI 계산 로직(이행률·정합성)은 **BACKLOG-BIZ-KPI-SHIPPING-01** 이관.
+> **CLAUDE.md 원칙 부합**: "Don't design for hypothetical future requirements"
+
+### v1 → v2 → v2.2 진화 요약
+
+| 조항 | 원안 v1 | v2 (VIEW 역제안) | **v2.2 최종** |
+|---|---|---|---|
+| weekly-kpi WHERE 절 | `ship_plan_date` → `finishing_plan_end` 교정 | ship_plan_date 유지 | **ship_plan_date 유지** (현 31대 유지) |
+| monthly-kpi 기준 | `finishing_plan_end` 고정 | `date_field` 파라미터 4옵션 | **`date_field` 파라미터 4옵션** (기본 `mech_start`) |
+| monthly-detail 전환 | `mech_start` → `finishing_plan_end` | mech_start 영구 유지 | **mech_start 영구 유지** |
+| 출하 응답 필드 | `shipped_count` 단일 UNION | 4필드 (`union/realtime/actual/plan`) | **3필드** (`plan/actual/ops`) — UNION 자동 합산 폐기 |
+| `_ALLOWED_DATE_FIELDS` | 3값 | 5값 | **5값** (monthly-kpi 4값과 분리) |
+| 이행률/정합성 계산 | — | — | **BACKLOG 이관** (BIZ-KPI-SHIPPING-01) |
+
+### 🚫 v2 → v2.2 주요 제거/수정 사항
+
+1. **`shipped_union` / `shipped_count` (UNION 자동 합산) 폐기** — Twin파파 피드백: 소스 비교가 본질, 자동 합집합은 의미 없음
+2. **`shipped_realtime` → `shipped_ops` 리네임** — 프로젝트 정체성(AXIS-OPS) 명시 + Codex Q5 "realtime 의미 모호" 지적 해소
+3. **`_FIELD_LABELS` 확장 제거** — Codex Q1 검증 결과 `ship_plan_date`(admin.py:2262), `finishing_plan_end`(L2265) 이미 존재. `actual_ship_date`는 ETL 추적 범위 편입 시점에 별도 등록
+4. **이행률/정합성 계산 필드 전체 제거** — BACKLOG-BIZ-KPI-SHIPPING-01 로 이관
+5. **`null_count` 응답 필드 제거** — Twin파파 피드백: NULL = "아직 출하 안 됨" 정상 상태, 경고 아님
+
+### 수정 범위 — `backend/app/routes/factory.py` (v2.2)
+
+| # | 위치 | 변경 | LOC |
+|---|---|---|---|
+| 1 | weekly-kpi L322 WHERE | **변경 없음** (ship_plan_date 유지) | 0 |
+| 2 | pipeline 판정 L363~376 | 기존 유지 (`pipeline.shipped` 의미 보존, `today` 제한 有) | 0 |
+| 3 | `_count_shipped(conn, start, end, basis)` 헬퍼 신설 | basis=`plan/actual/ops` **3분기** | +30 |
+| 4 | weekly-kpi 응답 확장 | `shipped_plan/actual/ops` + `defect_count` (4필드) | +6 |
+| 5 | `get_monthly_kpi()` 신설 | `date_field` 파라미터 + 헬퍼 호출 + shipped_* 3필드 | +40 |
+| 6 | `_ALLOWED_DATE_FIELDS_MONTHLY_KPI` 상수 신설 (Codex Q4 M) | **4값** (`mech_start/finishing_plan_end/ship_plan_date/actual_ship_date`) — pi_start 제외 | +5 |
+| 7 | `_ALLOWED_DATE_FIELDS` (monthly-detail 기존) 확장 | 3값 → 5값 (pi_start 포함 유지) | +3 |
+| 8 | route 등록 | `factory_bp.route("/monthly-kpi")` | +3 |
+| 9 | **M-NEW-3** migration SQL: 인덱스 3개 `CONCURRENTLY` 추가 | 실측 근거: 3개 전부 누락 확정 | +12 (SQL 파일) |
+
+**순 증분: ~100 LOC** (CLAUDE.md 코드 크기 원칙 1단계 범위 내).
+
+### `_count_shipped(conn, start, end, basis)` 헬퍼 (v2.2, 3분기)
+
+```python
+def _count_shipped(conn, start, end, basis):
+    """basis: 'plan' | 'actual' | 'ops'
+
+    3개 소스는 자동 합산되지 않음 — FE 또는 경영 대시보드 레이어에서 비교 분석.
+    - plan   : ship_plan_date + si_completed (계획 기준 완료)
+    - actual : actual_ship_date (Teams 엑셀 수기 → cron)
+    - ops    : SI_SHIPMENT.completed_at (OPS 앱 실시간, 베타 전환 중)
+
+    ※ 경영 KPI (이행률 = actual/plan, 정합성 = ops/actual) 계산은 BACKLOG-BIZ-KPI-SHIPPING-01
+    """
+    cur = conn.cursor()
+    if basis == 'plan':
+        # Codex 3차 Q2 A 반영: LEFT → INNER JOIN (si_completed=TRUE 조건이 null-rejecting이라 동작 동일, 의도 명시용)
+        cur.execute("""
+            SELECT COUNT(*)
+            FROM plan.product_info p
+            INNER JOIN completion_status cs ON p.serial_number = cs.serial_number
+            WHERE p.ship_plan_date >= %s AND p.ship_plan_date < %s
+              AND cs.si_completed = TRUE
+        """, (start, end))
+    elif basis == 'actual':
+        cur.execute("""
+            SELECT COUNT(*) FROM plan.product_info
+            WHERE actual_ship_date >= %s AND actual_ship_date < %s
+        """, (start, end))
+    elif basis == 'ops':
+        cur.execute("""
+            SELECT COUNT(DISTINCT serial_number)
+            FROM app_task_details
+            WHERE task_id = 'SI_SHIPMENT'
+              AND completed_at IS NOT NULL
+              AND completed_at >= %s AND completed_at < %s
+              AND force_closed = false
+        """, (start, end))
+    else:
+        raise ValueError(f"Invalid basis: {basis}")
+    return cur.fetchone()[0]
+```
+
+### 응답 스키마 (v2.2 최종)
+
+#### `WeeklyKpiResponse` (v2.2)
+
+```python
+{
+  # ... 기존 필드 전부 유지 ...
+  "pipeline": { ..., "shipped": int },  # deprecated (기존 today 제한 로직, FE backward compat 유지)
+  "shipped_plan":    int,   # ship_plan_date + si_completed (계획 완료)
+  "shipped_actual":  int,   # actual_ship_date (Teams 엑셀 수기 → cron)
+  "shipped_ops":     int,   # SI_SHIPMENT.completed_at (OPS 앱, 베타 전환 중)
+  "defect_count":    null   # placeholder (QMS 미연동)
+}
+```
+
+#### `MonthlyKpiResponse` (신설, v2.2)
+
+```python
+{
+  "month": "YYYY-MM",
+  "month_range": { "start": "YYYY-MM-DD", "end": "YYYY-MM-DD" },  # [1일, 다음달 1일)
+  "date_field_used": "mech_start",     # 4옵션 중 실제 적용된 값
+  "production_count": int,              # date_field 기준 COUNT
+  "shipped_plan":    int,
+  "shipped_actual":  int,
+  "shipped_ops":     int,
+  "defect_count":    null
+}
+# completion_rate / by_stage / pipeline / by_model 미포함
+```
+
+### 인덱스 추가 (M-NEW-3, 실측 근거) — migration SQL
+
+**실측 결과 (2026-04-23 Railway DB)**: 3개 누락 확정
+- ✅ 존재: `idx_app_task_details_completed_at`
+- ❌ 누락: `plan.product_info.actual_ship_date`
+- ❌ 누락: `plan.product_info.ship_plan_date`
+- ❌ 누락: `plan.product_info.finishing_plan_end`
+
+```sql
+-- migrations/050_factory_kpi_indexes.sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_product_info_actual_ship_date
+  ON plan.product_info (actual_ship_date) WHERE actual_ship_date IS NOT NULL;
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_product_info_ship_plan_date
+  ON plan.product_info (ship_plan_date) WHERE ship_plan_date IS NOT NULL;
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_product_info_finishing_plan_end
+  ON plan.product_info (finishing_plan_end) WHERE finishing_plan_end IS NOT NULL;
+
+-- SI_SHIPMENT 복합 인덱스 (선택, Codex Q2 Advisory)
+-- CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_task_details_si_shipment
+--   ON app_task_details (task_id, completed_at) WHERE force_closed = false;
+```
+
+> ⚠️ `CONCURRENTLY`는 트랜잭션 내 실행 불가 → migration_runner autocommit 모드로 실행됨 (선례: `029_attendance_trend_index.sql`)
+> ⚠️ 029 migration의 커뮤니티 테이블 lock 우려 없음 — 인덱스 생성 시 읽기 block 없음
+
+### pytest 범위 (v2.2, 11 TC — Codex 2차 Q7 3건 + Codex 3차 Q6 1건 반영)
+
+```
+tests/backend/test_factory_kpi.py (신규)
+├─ TC-FK-01: weekly-kpi 기본 응답 + shipped_plan/actual/ops 3필드 포함
+├─ TC-FK-02: weekly-kpi WHERE 절 ship_plan_date 유지 (기존 회귀)
+├─ TC-FK-03: monthly-kpi 기본 (date_field=mech_start 기본값)
+├─ TC-FK-04: monthly-kpi date_field 4옵션 순회 (finishing_plan_end/ship_plan_date/actual_ship_date)
+├─ TC-FK-05: monthly-kpi date_field=pi_start → 400 (화이트리스트 분리 검증, Codex 2차 Q4 M)
+├─ TC-FK-06: _count_shipped basis 3종 각각 정확 반환 (자동 합산 X)
+├─ TC-FK-07: _count_shipped force_closed=true SI_SHIPMENT 건 제외 확인
+├─ TC-FK-08: monthly-detail 기존 `pi_start`/`mech_start` 허용 유지 + 신규 3값 허용 (Codex 2차 Q4)
+├─ TC-FK-09: [Codex 2차 Q7] 동일 S/N이 actual_ship_date + SI_SHIPMENT 양쪽에 있을 때 각 필드 정확 1건 반환 (3필드 독립성)
+├─ TC-FK-10: [Codex 2차 Q7] SI_SHIPMENT + actual 동시 + force_closed=true 시나리오 → ops=0, actual=1
+└─ TC-FK-11: [Codex 3차 Q6 A] 반개구간 `[start, end)` 경계 TC — 주차 월요일 00:00 / 일요일 23:59 / 다음 월요일 00:00 3건 fixture로 주간 범위 정확히 포함/배제 확인 (week end boundary = NEXT week start 포함 X)
+
+회귀:
+├─ tests/backend/test_factory.py — weekly-kpi 스키마 backward compat (pipeline.shipped 유지)
+└─ tests/backend/test_admin_api.py — monthly-detail 기존 2 date_field 동작 유지
+```
+
+### 착수 조건 (v2.2, 완료 상태)
+
+1. ✅ **Twin파파 v2.2 승인** (2026-04-23 완료)
+2. ✅ **Railway DB 인덱스 실측** — 3개 누락 확정 → migration 050 동봉 결정
+3. ✅ **shipped 3종 현재 수치 실측** (이번 주: plan=0, actual=23, ops=0) — FE Sprint 36 기본값은 `actual` 또는 `ops` (ops 값은 베타 전환 중 0 정상)
+4. 🔁 **Codex 3차 재검증 (v2.2)** — 축소 스코프 재검증 프롬프트 갱신 필요 (`CODEX_REVIEW_SPRINT_62_BE_V2.md` 업데이트)
+5. 🔁 **구현 착수** — Codex 합의 후
+
+### § Codex 합의 기록 (v2.2)
+
+**1차 검증 (v1 설계, 2026-04-22)**:
+- M1 (UNION 경계 중복) — v2에서 해소 후 v2.2에서 UNION 자체 폐기 ✅
+- M2 (반개구간 표시) — v2.2 BE SQL `<` 연산 유지 ✅
+- M3 (`_FIELD_LABELS` `finishing_plan_end` 누락) — 검증 결과 이미 존재(admin.py:2265) → **무효 판정** (Codex 1차 지적 근거 재확인 필요)
+
+**2차 검증 (v2, 2026-04-23 완료)**:
+- **Q1 (A)** — Claude M-NEW-1 과다. `ship_plan_date`/`finishing_plan_end` 이미 존재 (admin.py:2262/2265) → **M-NEW-1 철회** (`actual_ship_date`만 ETL 추적 편입 시 별도 Sprint)
+- **Q2 (A)** — `UNION + COUNT(DISTINCT)` 중복 제거 2번. v2.2는 UNION 자체 폐기로 자동 해소
+- **Q3 (N)** — 스키마 breaking 없음 확인 (`pipeline.shipped` FE 런타임 미참조, version.ts:56 코멘트만)
+- **Q4 (M)** — monthly-kpi 4값 vs `_ALLOWED_DATE_FIELDS` 5값 불일치 → **v2.2 수정 범위 #6/#7 분리 반영 완료**
+- **Q5 (M)** — `shipped_plan` 이름 모호 → v2.2에서 `shipped_plan` 단순 의미 유지 (이행률 계산 BACKLOG 이관으로 혼동 원천 차단)
+- **Q6 (A)** — Claude A-NEW-3 방향 맞음 → **v2.2 반영 완료** (migration 050)
+- **Q7 (A)** — 추가 TC 3건 → **TC-FK-05, TC-FK-09, TC-FK-10 반영 완료**
+- **종합 판정**: v2 채택 N, M 2건 (Q4/Q5) → **v2.2에서 Q4 반영 + Q5는 BACKLOG 이관으로 해소**
+
+**3차 검증 (v2.2, 2026-04-23 완료, CONDITIONAL APPROVED)**:
+- **종합 판정**: M=0 / A=4 / v2.2 채택 가능 (머지 블로커 없음)
+- **Q1 (N)** — 3필드 독립 구조 적절. 경영 KPI BACKLOG 이관 타당. `shipped_ops` 네이밍 SI_SHIPMENT.completed_at에 명확히 바운드됨
+- **Q2 (A)** — `LEFT JOIN` + `si_completed=TRUE`가 null-rejecting으로 INNER 동작이나 의도 명시용 **`INNER JOIN` 변경 권장** → **수용** (수정 범위 #3 INNER JOIN 반영 완료)
+- **Q3 (A)** — partial index `WHERE IS NOT NULL` 적절. migration 050 runner autocommit 호환. Railway planner 실제 선택은 **배포 후 EXPLAIN 검증 필요** → **수용** (POST-REVIEW-SPRINT-62-BE-V2.2 에 EXPLAIN 검증 항목 추가)
+- **Q4 (N)** — 2차 M 완전 해소. 화이트리스트 2개 상수 분리 완결. `_COMMON_DATE_FIELDS` 추출 불필요 (indirection 비용만 증가)
+- **Q5 (A)** — 2차 M 머지 블로커 아님. 단 `pipeline.shipped` vs `shipped_plan` **네이밍 부채 advisory debt로 기록** → **수용** (BIZ-KPI-SHIPPING-01 확정 시점에 final 네이밍 결정, 현재 premature 리네임 지양)
+- **Q6 (A)** — 10 TC 충분하나 반개구간 `[start, end)` 경계 TC 1건 추가 권장 → **수용** (TC-FK-11 추가 완료)
+
+**Claude 원안 약점 trail (CLAUDE.md ④ 맹목 동조 방지 규칙 준수)**:
+- Q2: LEFT JOIN 표기가 NULL 포함 의도로 오독 가능 — 의도 명시성 부족
+- Q3: 인덱스 활용 실측 없이 설계 단계 확정 — Railway 실측 배포 후 이관
+- Q5: `pipeline.shipped` vs `shipped_plan` 두 개념 공존 명시 부재 — advisory debt
+- Q6: 반개구간 semantic change 명시 TC 부재 — boundary regression 리스크 간과
+
+**Claude Opus v2.2 최종 반영 요약**:
+- ~~M-NEW-1~~ 철회 (Codex 2차 Q1 A — 기존 라벨 존재)
+- ~~M-NEW-2~~ BACKLOG 이관 (이행률 로직 자체를 본 Sprint 제외)
+- **M-NEW-3** 유지 (인덱스 3개 migration 050 동봉)
+- ~~A-NEW-4~~ 충족 (shipped 3종 실측 완료, ops=0/actual=23/plan=0)
+- **Codex 3차 Q2/Q6 설계 반영 완료** (INNER JOIN + TC-FK-11)
+- **Codex 3차 Q3/Q5 POST-REVIEW 이관** (Railway EXPLAIN + 네이밍 부채)
+- **신규 BACKLOG-BIZ-KPI-SHIPPING-01** — 경영 대시보드 KPI 설계 이관
+
+### 연관 BACKLOG
+
+- **BIZ-KPI-SHIPPING-01** (DRAFT) — 경영 대시보드 출하 KPI 설계
+  - 선행: 본 Sprint 배포 완료
+  - 착수 조건: App 베타 테스트 진행 상황에 따라
+  - 검토 항목: 이행률 정의, 정합성 공개 범위, plan_count 정의 확정
+- **SPRINT-62-BE-POST-REVIEW-20260423** — 사후 Codex 검토 (배포 후 1주 내)
+
+**Codex 2차 응답 도착 후 반영 위치**: 본 § Codex 합의 기록 아래 → 추가 M은 위 수정 범위 테이블에 편입 → A는 BACKLOG `POST-REVIEW-SPRINT-62-BE-V2-20260423` 등록
+
+---
+
 ## 🔧 HOTFIX-SCHEDULER-PHASE1.5 프롬프트 — Alert silent fail ERROR 로깅 (2026-04-22 등록, 🔴 S2)
 
 > 목적: ALERT_SCHEDULER_DIAGNOSIS.md §11.3.4 **가능성 3 (G.3 silent fail)** 포착용 ERROR 로깅 배포

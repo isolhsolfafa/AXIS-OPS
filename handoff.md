@@ -1,7 +1,68 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-04-22
+> 마지막 업데이트: 2026-04-23
+
+---
+
+## 🟢 2026-04-23 세션 요약 — Sprint 62-BE v2.2 구현 완료 (v2.10.0 배포 대기)
+
+> **한 줄 요약**: Factory KPI 공급 인프라 확장 (weekly-kpi 3필드 + monthly-kpi 신설 + migration 050) — 신규 TC 17/17 + 회귀 36/36 GREEN, Railway 배포 대기
+
+### 핵심 의사 결정 (3차 합의 축적)
+
+| 단계 | 주체 | 결정 |
+|---|---|---|
+| v1 원안 (Opus) | Claude | weekly-kpi WHERE `ship_plan_date`→`finishing_plan_end` 교정 / `shipped_count` 단일 UNION |
+| v1 Codex 1차 | Codex | M1(UNION 중복) / M2(반개구간) / M3(`_FIELD_LABELS` 누락) 지적 |
+| v2 VIEW 역제안 | VIEW FE | v1.34.4 `mech_start` 영구 유지 + `shipped_count` 4필드 + `date_field` 파라미터 |
+| v2 Codex 2차 | Codex | M 2건 (Q4 화이트리스트 불일치 / Q5 shipped_plan 이름) + A 4건 |
+| v2.2 축소 확정 | **Twin파파** | UNION 자동 합산 폐기 (3개 소스 비교가 본질), 이행률·정합성 BACKLOG 이관 (App 베타 100% 전환 후 확정), `shipped_realtime`→`shipped_ops` 리네임 |
+| v2.2 Codex 3차 | Codex | **M=0 / A=4 CONDITIONAL APPROVED** — v2.2 채택 가능 |
+| A 4건 합의 반영 | Claude+Codex | INNER JOIN / TC-FK-11 경계 / EXPLAIN POST-REVIEW / 네이밍 부채 debt |
+
+### 산출물 (3 파일 + 문서 4 파일)
+
+**구현**:
+- `backend/migrations/050_factory_kpi_indexes.sql` (신규, +20 LOC) — ALTER TABLE IF NOT EXISTS 2개 + CONCURRENTLY partial index 3개
+- `backend/app/routes/factory.py` (+155/-6) — `_count_shipped` 3분기 헬퍼 + `_ALLOWED_DATE_FIELDS_MONTHLY_KPI` 신규 상수 + `get_monthly_kpi()` route + weekly-kpi 응답 3필드 확장 + monthly-detail 화이트리스트 5값 확장
+- `tests/backend/test_factory_kpi.py` (신규, +330 LOC) — 11 TC (parametrize 17 assertions)
+
+**문서**:
+- `AGENT_TEAM_LAUNCH.md` Sprint 62-BE v2.2 섹션 (§ Codex 합의 기록 3차 결과 + Claude 원안 약점 trail 4건)
+- `BACKLOG.md` — `BIZ-KPI-SHIPPING-01` 🟢 DRAFT 신규 + `POST-REVIEW-SPRINT-62-BE-V2.2-20260423` 🟡 OPEN 신규
+- `CODEX_REVIEW_SPRINT_62_BE_V2.md` — 3차 축소 스코프 프롬프트 (Q1~Q6)
+- `CHANGELOG.md` — v2.10.0 엔트리
+
+### 부수 발견 (설계 단계에서 포착)
+
+1. **Test DB 스키마 drift** — Prod에는 `actual_ship_date`/`finishing_plan_end` 컬럼이 ETL로 추가돼 있으나 `backend/migrations/*.sql` 에 정식 DDL 부재 → pytest 실행 시 500 에러로 발견. migration 050 에 `ALTER TABLE ADD COLUMN IF NOT EXISTS` 추가로 양쪽 정합 확보 (Prod no-op)
+2. **Codex M-NEW-1 과다 지적 정정** — Codex 1차가 지적한 `_FIELD_LABELS` `finishing_plan_end` 누락은 실제로 `admin.py:2265` 이미 존재. `ship_plan_date` 도 `admin.py:2262` 존재. Codex 2차 Q1 A에서 스스로 정정
+3. **Codex의 자기 재검증 가능** — v1 1차 검증 지적을 v2/v2.2 검증에서 스스로 무효화하는 패턴 확인. 편향 감소 효과
+
+### Railway DB 실측 수치 (2026-04-23)
+
+- **인덱스**: `completed_at` 1개만 존재, `actual_ship_date`/`ship_plan_date`/`finishing_plan_end` 3개 누락 확정 → migration 050 근거
+- **주간 shipped 3종**: `shipped_ops=0` / `shipped_actual=23` / `shipped_plan=0` (이번 주 2026-04-20~27)
+- **NULL 비율**: actual_ship_date 35.3% (미출하 정상) / ship_plan_date 0.1% / finishing_plan_end 0.1%
+- **SI_SHIPMENT task 현황**: 71건 중 completed 1건 (베타 전환 초기 상태 — 정상)
+
+### pytest 결과
+
+```
+신규 TC (test_factory_kpi.py)  17/17 PASSED ✅
+회귀 TC (test_factory.py + test_admin_api.py)  36/36 PASSED ✅
+─────────────────────────────────────────────────────────
+합계                          53 PASSED / 0 regression
+```
+
+### 다음 세션 시작 시 할 일
+
+1. git commit + push (v2.10.0) → Railway 자동 배포
+2. Railway 배포 후 Q3 A EXPLAIN ANALYZE 검증 — `_count_shipped` 3분기 쿼리가 partial index 실제 사용하는지
+3. notices INSERT — v2.10.0 공지 (`version LIKE '2.%'` 기존 pinned 해제 후 신규 pinned)
+4. VIEW Sprint 36 (Cursor에서 동시 진행 중) — BE 3필드 배포 후 TEMP-HARDCODE 제거 연동 확인
+5. POST-REVIEW-SPRINT-62-BE-V2.2 (배포 후 7일 내)
 
 ---
 
