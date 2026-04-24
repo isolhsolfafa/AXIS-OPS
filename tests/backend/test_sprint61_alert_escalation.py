@@ -552,6 +552,73 @@ class TestOrphanOnFinal:
                 # get_setting('alert_orphan_on_final_enabled') = False 시 스킵 확인
                 assert mock.return_value == False
 
+    def test_tc_61b_22b_orphan_on_final_delivery_target_worker_id(self, app, db_conn, setup_sprint61):
+        """TC-61B-22B (v2.10.3 FIX-ORPHAN-ON-FINAL-DELIVERY):
+        ORPHAN_ON_FINAL alert INSERT 시 target_worker_id 반드시 지정돼야 함.
+        2026-04-22 HOTFIX-DELIVERY 에서 scheduler 3곳은 수정됐으나 task_service.py 경로 누락 →
+        8건/4일 legacy NULL 발생. v2.10.3 이 _resolve_managers_for_category 를 써서
+        관리자별 개별 INSERT 하도록 수정."""
+        cur = db_conn.cursor()
+        sn = setup_sprint61['test_sn']
+        qr = setup_sprint61['test_qr']
+        worker_id = setup_sprint61['mech_worker_id']
+
+        cur.execute("DELETE FROM app_alert_logs WHERE serial_number = %s", (sn,))
+        cur.execute("DELETE FROM app_task_details WHERE serial_number = %s", (sn,))
+        db_conn.commit()
+
+        # 미시작 ELEC task 1건 (ORPHAN_ON_FINAL 조건)
+        _create_task(cur, db_conn, sn, qr, 'ELEC', 'PANEL_WORK', '판넬 작업')
+        db_conn.commit()
+
+        # task_service.complete_task 안의 ORPHAN_ON_FINAL 경로 직접 호출
+        with app.app_context():
+            from app.models.task_detail import get_not_started_tasks
+            from app.services.alert_service import create_and_broadcast_alert, sn_label
+            from app.services.scheduler_service import _resolve_managers_for_category
+
+            not_started = get_not_started_tasks(sn, 'ELEC')
+            assert len(not_started) >= 1, "전제: 미시작 task 존재"
+
+            managers = _resolve_managers_for_category(sn, 'ELEC')
+            assert len(managers) >= 1, \
+                "fixture elec_partner='TMS' + TMS(E) manager 에 의해 최소 1명 매칭 기대"
+
+            task_names = ', '.join([t['task_name'] for t in not_started])
+            msg = f"{sn_label(sn)} ELEC 테스트 완료 — 미시작 {len(not_started)}건: {task_names}"
+
+            # v2.10.3 패턴: 관리자별 개별 INSERT
+            for manager_id in managers:
+                create_and_broadcast_alert({
+                    'alert_type': 'ORPHAN_ON_FINAL',
+                    'message': msg,
+                    'serial_number': sn,
+                    'qr_doc_id': qr,
+                    'triggered_by_worker_id': worker_id,
+                    'target_worker_id': manager_id,
+                    'target_role': 'ELEC',
+                })
+
+        # 검증: 생성된 alert 전부 target_worker_id IS NOT NULL
+        cur.execute("""
+            SELECT COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE target_worker_id IS NOT NULL) AS delivered,
+                   COUNT(*) FILTER (WHERE target_worker_id IS NULL) AS legacy_null
+            FROM app_alert_logs
+            WHERE alert_type = 'ORPHAN_ON_FINAL' AND serial_number = %s
+        """, (sn,))
+        r = cur.fetchone()
+        total = r['total'] if isinstance(r, dict) else r[0]
+        delivered = r['delivered'] if isinstance(r, dict) else r[1]
+        legacy_null = r['legacy_null'] if isinstance(r, dict) else r[2]
+
+        assert total >= 1, f"ORPHAN_ON_FINAL alert 생성 기대, got {total}"
+        assert legacy_null == 0, (
+            f"ORPHAN_ON_FINAL 은 target_worker_id NULL 이면 안 됨 (v2.10.3 회귀 가드). "
+            f"total={total}, delivered={delivered}, legacy_null={legacy_null}"
+        )
+        assert delivered == total
+
 
 # ─────────────────────────────────────────────
 # Task 3: API 확장 테스트 (TC-61B-23 ~ 30)

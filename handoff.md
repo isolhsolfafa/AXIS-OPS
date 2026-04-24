@@ -91,17 +91,19 @@ Codex 3차 Q3 A 해소용 실측:
 - `idx_product_info_ship_plan_date` 현재 미사용이나 si_completed=TRUE 비율 증가 시 자동 활성화 가능. 삭제 불필요 (공간 무시)
 - Q5 (네이밍 부채 `pipeline.shipped` vs `shipped_plan`) — 관찰형 7일 유지, BIZ-KPI-SHIPPING-01 착수 시 final 네이밍 결정
 
-### 🏁 Sprint 62-BE v2.2 전체 종결 (2026-04-23)
+### 🏁 Sprint 62-BE v2.2 전체 종결 (2026-04-23~24)
 
 - ✅ v2.10.0 배포 (factory.py + migration 050 + 11 TC)
 - ✅ v2.10.1 PATCH 교정 (weekly-kpi WHERE finishing_plan_end)
 - ✅ v2.10.2 PATCH 교정 (FIX-CHECKLIST-DONE-DEDUPE-KEY, Codex Q4-4 M 해소)
-- ✅ Notices bump (id=102, v2.10.1 → v2.10.2)
-- ✅ Netlify FE 배포 3회 (v2.10.0 + v2.10.1 + v2.10.2)
+- ✅ v2.10.3 PATCH 교정 (FIX-ORPHAN-ON-FINAL-DELIVERY, HOTFIX-DELIVERY 숨은 4번째 경로)
+- ✅ Notices bump (id=102, v2.10.1 → v2.10.2 → v2.10.3)
+- ✅ Netlify FE 배포 4회 (v2.10.0 + v2.10.1 + v2.10.2 + v2.10.3)
 - ✅ Migration 050 Railway 적용 + migration_history 기록
 - ✅ POST-REVIEW EXPLAIN ANALYZE Q3 A 해소
 - ✅ POST-REVIEW-HOTFIX 4건 일괄 Codex 사후 검토 (Phase A 완료)
 - ⏸ Q5 네이밍 부채 관찰형 7일 유지
+- 🟢 **CASCADE-ALERT-NEXT-PROCESS DRAFT 등록** — ORPHAN_ON_FINAL 의 원래 설계 의도 (현재 공정 + 다음 공정 관리자 동시 알림) 는 사내 공정 활성화 계획 변동 이슈로 후순위 보류 (BACKLOG)
 
 ### 📋 Phase A Codex 사후 검토 결과 (2026-04-23)
 

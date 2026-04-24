@@ -6,6 +6,37 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.10.3] - 2026-04-24
+
+> FIX-ORPHAN-ON-FINAL-DELIVERY — v2.10.2 배포 후 Q4-5 48h 관찰에서 발견된 숨은 4번째 delivery 실패 경로 수정. 2026-04-22 HOTFIX-ALERT-SCHEDULER-DELIVERY 가 `scheduler_service.py` 3곳만 고쳤는데 `task_service.py` 내 `complete_task` 경로에 동일 패턴의 **target_worker_id 미지정 버그** 가 숨어있어 2026-04-23~24 4일간 8건 legacy NULL 발생.
+
+### Fixed
+
+- **`task_service.py:391~419` ORPHAN_ON_FINAL alert INSERT** — `_create_alert_61(...)` 호출 시 `target_role` 만 지정하고 `target_worker_id` 누락 → `role_ELEC`/`role_TMS` room broadcast → 구독자 0 → **관리자 전원 alert 수신 실패**
+- 수정: `_resolve_managers_for_category` (scheduler_service.py 표준 패턴) 재사용 + 관리자별 개별 INSERT 로 전환. `target_worker_id=manager_id` 지정
+- 부수: 로그 메시지에 `managers={N}` 추가 (delivery count 가시화)
+
+### 실측 피해 (2026-04-23 Codex 사후 Q4-5 관찰 기반)
+
+| 구간 | NULL 건수 | 상태 |
+|---|---|---|
+| 2026-04-23 14:51 ~ 04-24 08:07 KST | 8건 | 미전달 (legacy, 자연 소거 대상) |
+| 이후 (v2.10.3 배포 이후) | 0건 예상 | ✅ |
+
+### Tests
+
+- **TC-61B-22B 신규** (`test_sprint61_alert_escalation.py::TestOrphanOnFinal`)
+  - ORPHAN_ON_FINAL alert INSERT 시 `target_worker_id IS NOT NULL` 보장 회귀 가드
+  - `_resolve_managers_for_category('ELEC')` 반환 매니저 수만큼 개별 INSERT 검증
+- pytest 4/4 GREEN (TC-61B-20/21/22/22B)
+
+### Related
+
+- **HOTFIX-ALERT-SCHEDULER-DELIVERY-20260422** 의 숨은 4번째 경로 — v2.10.3 으로 완전 종결
+- 신규 BACKLOG: `CASCADE-ALERT-NEXT-PROCESS` 🟢 DRAFT — ORPHAN_ON_FINAL 의 원래 설계 의도 (현재 공정 + 다음 공정 관리자 동시 알림 = 공정 연쇄 차단 알림) 는 사내 공정 (PI/QI/SI) 활성화 계획 변동 이슈로 후순위 보류. 현재는 A안 (해당 공정 관리자만) 유지.
+
+---
+
 ## [2.10.2] - 2026-04-23
 
 > FIX-CHECKLIST-DONE-DEDUPE-KEY — 2026-04-22 HOTFIX 4건 일괄 Codex 사후 검토 (Phase A) 결과 발견된 M1 (Q4-4) + Q4-2 advisory 일괄 수정.

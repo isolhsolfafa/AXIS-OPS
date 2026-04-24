@@ -389,6 +389,10 @@ class TaskService:
                 )
 
             # Sprint 61-BE: ORPHAN_ON_FINAL — 미시작 task 잔존 알림
+            # v2.10.3 FIX-ORPHAN-ON-FINAL-DELIVERY (HOTFIX-ALERT-SCHEDULER-DELIVERY 누락 4번째 경로):
+            # 2026-04-22 HOTFIX 에서 scheduler_service.py 3곳은 수정했으나 본 경로 누락 →
+            # target_worker_id 미지정으로 `role_TMS`/`role_ELEC` room broadcast → 구독자 0
+            # → 8건/4일 legacy NULL (2026-04-23~24). scheduler 3곳 표준 패턴 적용.
             from app.models.admin_settings import get_setting as _get_setting_61
             if _get_setting_61('alert_orphan_on_final_enabled', True):
                 from app.models.task_detail import get_not_started_tasks
@@ -396,23 +400,27 @@ class TaskService:
                 if not_started:
                     from app.services.alert_service import sn_label as _sn_label_61
                     from app.services.alert_service import create_and_broadcast_alert as _create_alert_61
+                    from app.services.scheduler_service import _resolve_managers_for_category
                     label = _sn_label_61(task.serial_number)
                     task_names = ', '.join([t['task_name'] for t in not_started])
                     msg = (
                         f"{label} {task.task_category} {task.task_name} 완료 — "
                         f"미시작 작업 {len(not_started)}건 존재: {task_names}"
                     )
-                    _create_alert_61({
-                        'alert_type': 'ORPHAN_ON_FINAL',
-                        'message': msg,
-                        'serial_number': task.serial_number,
-                        'qr_doc_id': task.qr_doc_id,
-                        'triggered_by_worker_id': worker_id,
-                        'target_role': task.task_category,
-                    })
+                    managers = _resolve_managers_for_category(task.serial_number, task.task_category)
+                    for manager_id in managers:
+                        _create_alert_61({
+                            'alert_type': 'ORPHAN_ON_FINAL',
+                            'message': msg,
+                            'serial_number': task.serial_number,
+                            'qr_doc_id': task.qr_doc_id,
+                            'triggered_by_worker_id': worker_id,
+                            'target_worker_id': manager_id,
+                            'target_role': task.task_category,
+                        })
                     logger.info(
                         f"ORPHAN_ON_FINAL: sn={task.serial_number}, "
-                        f"not_started={len(not_started)}"
+                        f"not_started={len(not_started)}, managers={len(managers)}"
                     )
 
         # 카테고리 전체 완료 확인 (같은 serial_number + task_category)
