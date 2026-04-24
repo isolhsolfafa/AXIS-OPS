@@ -70,9 +70,12 @@ def setup_sprint61(db_conn, create_test_worker, get_auth_token):
     cur.execute("DELETE FROM plan.product_info WHERE serial_number = %s", (test_sn,))
     db_conn.commit()
 
+    # v2.10.2: partner 필드 추가 — _resolve_managers_for_category 가 product_info.*_partner 로
+    # 관리자 찾기 때문에 누락 시 managers=[] → alert 0건 → TC fail.
     cur.execute("""
-        INSERT INTO plan.product_info (serial_number, model, sales_order)
-        VALUES (%s, 'GAIA-TEST', '9999')
+        INSERT INTO plan.product_info (serial_number, model, sales_order,
+                                       mech_partner, elec_partner)
+        VALUES (%s, 'GAIA-TEST', '9999', 'FNI', 'TMS')
         ON CONFLICT (serial_number) DO NOTHING
     """, (test_sn,))
 
@@ -458,6 +461,45 @@ class TestChecklistDoneTaskOpen:
             count2 = cur.fetchone()[0]
 
             assert count2 == count1, "3일 이내 중복 방지"
+
+    def test_tc_61b_19b_dedup_per_task_detail(self, app, db_conn, setup_sprint61):
+        """TC-61B-19B (v2.10.2 FIX-CHECKLIST-DONE-DEDUPE-KEY, Codex 사후 Q4-4 M):
+        같은 S/N 에 복수 ELEC task(PANEL_WORK, WIRING)이 open 상태일 때,
+        각 task 별로 각각 alert 가 발송되어야 함 (과거 버그: 첫 task alert 후 나머지 3일 suppress)."""
+        cur = db_conn.cursor()
+        sn = setup_sprint61['test_sn']
+        qr = setup_sprint61['test_qr']
+        worker_id = setup_sprint61['mech_worker_id']
+
+        cur.execute("DELETE FROM app_alert_logs WHERE serial_number = %s", (sn,))
+        cur.execute("DELETE FROM app_task_details WHERE serial_number = %s", (sn,))
+        db_conn.commit()
+
+        # IF_2 완료 (체크리스트 완료 조건)
+        _create_task(cur, db_conn, sn, qr, 'ELEC', 'IF_2', 'I.F 2',
+                     worker_id=worker_id,
+                     started_at=datetime.now(KST) - timedelta(hours=2),
+                     completed_at=datetime.now(KST) - timedelta(hours=1))
+        # 미완료 ELEC task 2개 (동일 S/N 내 복수 open)
+        _create_task(cur, db_conn, sn, qr, 'ELEC', 'PANEL_WORK', '판넬 작업')
+        _create_task(cur, db_conn, sn, qr, 'ELEC', 'WIRING', '배선 포설')
+
+        with app.app_context():
+            from app.services.scheduler_service import _check_checklist_done_task_open
+            _check_checklist_done_task_open()
+
+        # 각 task 별로 DISTINCT alert 발송 검증
+        cur.execute("""
+            SELECT DISTINCT task_detail_id FROM app_alert_logs
+            WHERE alert_type = 'CHECKLIST_DONE_TASK_OPEN' AND serial_number = %s
+              AND task_detail_id IS NOT NULL
+        """, (sn,))
+        distinct_tasks = cur.fetchall()
+        assert len(distinct_tasks) == 2, (
+            f"동일 S/N 내 복수 ELEC open task 2건 각각 alert 발송 기대, "
+            f"실제 DISTINCT task_detail_id 건수 = {len(distinct_tasks)}. "
+            f"v2.10.2 이전 버그에서는 1건만 나와야 fail (Q4-4 M 회귀 가드)."
+        )
 
 
 class TestOrphanOnFinal:

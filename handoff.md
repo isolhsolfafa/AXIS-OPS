@@ -95,13 +95,36 @@ Codex 3차 Q3 A 해소용 실측:
 
 - ✅ v2.10.0 배포 (factory.py + migration 050 + 11 TC)
 - ✅ v2.10.1 PATCH 교정 (weekly-kpi WHERE finishing_plan_end)
-- ✅ Notices bump (id=102, v2.10.1)
-- ✅ Netlify FE 배포 2회 (v2.10.0 + v2.10.1)
+- ✅ v2.10.2 PATCH 교정 (FIX-CHECKLIST-DONE-DEDUPE-KEY, Codex Q4-4 M 해소)
+- ✅ Notices bump (id=102, v2.10.1 → v2.10.2)
+- ✅ Netlify FE 배포 3회 (v2.10.0 + v2.10.1 + v2.10.2)
 - ✅ Migration 050 Railway 적용 + migration_history 기록
 - ✅ POST-REVIEW EXPLAIN ANALYZE Q3 A 해소
+- ✅ POST-REVIEW-HOTFIX 4건 일괄 Codex 사후 검토 (Phase A 완료)
 - ⏸ Q5 네이밍 부채 관찰형 7일 유지
 
-**다음 세션 최우선**: 없음. Sprint 62-BE 종결. 다른 Sprint 착수 대기.
+### 📋 Phase A Codex 사후 검토 결과 (2026-04-23)
+
+4 HOTFIX 일괄 검토 → **M=1 / A=12 / N=2**
+
+- **HOTFIX #1 PHASE1.5**: Close ✅ (Advisory 2건 OBSERV-ALERT-SILENT-FAIL 흡수)
+- **HOTFIX #2 SCHEMA-RESTORE**: Close ✅ (Advisory 3건 기존 BACKLOG 흡수)
+- **HOTFIX #3 DUP**: Close ✅ (Advisory 3건 — fd close / dead state / Redis 조건부)
+- **HOTFIX #4 DELIVERY**: **v2.10.2 PATCH 로 Close** ✅ (M1 즉시 수정 + Q4-2 동시 해결)
+
+**v2.10.2 수정 범위**:
+- `scheduler_service.py` CHECKLIST_DONE_TASK_OPEN dedupe + RELAY_ORPHAN `message LIKE` → `task_detail_id` 전환
+- `test_sprint61_alert_escalation.py` TC-61B-19B 신규 + setup fixture partner 보강
+- `pytest` 결과: TC-61B-17/18/19/19B 전부 GREEN (이전 fixture 누락으로 TC-17 도 간헐 fail 했던 것 동시 해결)
+
+### 📤 다음 액션 로드맵 (Phase B~G)
+
+- **Phase B** (Twin파파 결정 필요): Railway DB rotation / 작업 flow 디버깅
+- **Phase C (이번 주 내)**: OBSERV-ALERT-SILENT-FAIL (P1) + UX-SPRINT55-FINALIZE-DIALOG
+- **Phase D**: POST-REVIEW-MIGRATION-049-NOT-APPLIED
+- **Phase E**: OBSERV 3건 + ADMIN-ACTION-AUDIT
+- **Phase F**: Sprint 55 UX 개선
+- **Phase G**: INFRA-COLLATION / TEST-CLEAN-CORE / FE-ALERT-BADGE-SYNC
 
 ---
 

@@ -877,17 +877,18 @@ def check_orphan_relay_tasks_job() -> None:
         alert_count = 0
 
         for orphan in orphans:
-            # HOTFIX-ALERT-SCHEDULER-DELIVERY-20260422:
-            # 배치 dedupe (M2 수용) — target_worker_id 지정된 row 만 고려 (legacy NULL 제외)
-            # 기존 query 는 target_worker_id 구분 없이 any row 체크하여 legacy 가 새 배송 차단
+            # v2.10.2 FIX-CHECKLIST-DONE-DEDUPE-KEY (Codex 사후 Q4-2 advisory):
+            # dedupe 를 message LIKE → task_detail_id 기반으로 전환.
+            # 기존: message LIKE %task_name% — 동명 task(IF_1/IF_2 등)가 중복 매칭 가능 + 인덱스 miss
+            # 개선: task_detail_id = orphan['task_detail_id'] — idx_alert_logs_dedupe partial index 활용
             cur.execute("""
                 SELECT DISTINCT target_worker_id FROM app_alert_logs
                 WHERE alert_type = 'RELAY_ORPHAN'
                   AND serial_number = %s
+                  AND task_detail_id = %s
                   AND target_worker_id IS NOT NULL
-                  AND message LIKE %s
                   AND created_at > NOW() - INTERVAL '24 hours'
-            """, (orphan['serial_number'], f"%{orphan['task_name']}%"))
+            """, (orphan['serial_number'], orphan['task_detail_id']))
             already_sent = {row['target_worker_id'] for row in cur.fetchall()}
 
             # 표준 패턴 (task_service.py L571) — 관리자별 개별 INSERT
@@ -910,6 +911,7 @@ def check_orphan_relay_tasks_job() -> None:
                     'qr_doc_id': orphan['qr_doc_id'],
                     'target_worker_id': manager_id,
                     'target_role': orphan['task_category'],  # 라벨용 유지
+                    'task_detail_id': orphan['task_detail_id'],  # v2.10.2: dedupe 키로 저장
                 })
                 alert_count += 1
 
@@ -1059,15 +1061,18 @@ def _check_checklist_done_task_open():
                 sn = task_row['serial_number']
                 td_id = task_row['id']
 
-                # HOTFIX-ALERT-SCHEDULER-DELIVERY-20260422:
-                # 배치 dedupe (M2) — target_worker_id 지정된 row 만 legacy 제외
+                # v2.10.2 FIX-CHECKLIST-DONE-DEDUPE-KEY (Codex 사후 Q4-4 M):
+                # dedupe 쿼리에 task_detail_id 누락 → 같은 S/N 내 복수 ELEC task(IF_1/IF_2)가
+                # open 상태일 때 첫 alert 이후 나머지 task alert 3일간 suppress 되는 버그 수정.
+                # + idx_alert_logs_dedupe partial index (task_detail_id IS NOT NULL) 활용 가능.
                 cur.execute("""
                     SELECT DISTINCT target_worker_id FROM app_alert_logs
                     WHERE alert_type = 'CHECKLIST_DONE_TASK_OPEN'
                       AND serial_number = %s
+                      AND task_detail_id = %s
                       AND target_worker_id IS NOT NULL
                       AND created_at > NOW() - INTERVAL '3 days'
-                """, (sn,))
+                """, (sn, td_id))
                 already_sent = {row['target_worker_id'] for row in cur.fetchall()}
 
                 label = sn_label(sn)

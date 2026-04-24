@@ -6,6 +6,43 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.10.2] - 2026-04-23
+
+> FIX-CHECKLIST-DONE-DEDUPE-KEY — 2026-04-22 HOTFIX 4건 일괄 Codex 사후 검토 (Phase A) 결과 발견된 M1 (Q4-4) + Q4-2 advisory 일괄 수정.
+> **프로덕션 알람 누락 리스크 해소**: 동일 S/N 내 복수 ELEC task (IF_1 + IF_2 등) 가 open 상태일 때 첫 alert 이후 나머지 3일 suppress 되는 버그.
+
+### Fixed
+
+- **CHECKLIST_DONE_TASK_OPEN dedupe key 오류 수정** (`scheduler_service.py:1064~1070`, Codex 사후 Q4-4 M)
+  - dedupe 쿼리에 `task_detail_id = %s` 누락 → 같은 S/N 내 서로 다른 ELEC task 의 alert 가 서로 suppress 되는 버그
+  - 수정: `WHERE serial_number = %s` → `WHERE serial_number = %s AND task_detail_id = %s`
+  - 부수 효과: `idx_alert_logs_dedupe` partial index (`WHERE task_detail_id IS NOT NULL`) 활용 가능
+- **RELAY_ORPHAN dedupe `message LIKE` → `task_detail_id` 전환** (`scheduler_service.py:883~913`, Codex 사후 Q4-2 advisory)
+  - 기존: `message LIKE '%task_name%'` — 동명 task 중복 매칭 가능 + 인덱스 miss
+  - 수정: `task_detail_id = orphan['task_detail_id']` — 정확한 dedupe + index 활용
+  - 부수: INSERT dict 에도 `'task_detail_id': orphan['task_detail_id']` 추가
+
+### Tests
+
+- **TC-61B-19B 신규** (`test_sprint61_alert_escalation.py::TestChecklistDoneTaskOpen`)
+  - 동일 S/N 에 ELEC open task 2건 (`PANEL_WORK` + `WIRING`) 상황에서 **각각 DISTINCT alert 발송** 검증
+  - v2.10.2 이전 버그 회귀 가드 (이전 버전으로 롤백 시 FAIL)
+- **setup_sprint61 fixture 보강** — `product_info` INSERT 에 `mech_partner='FNI'` + `elec_partner='TMS'` 추가
+  - `_resolve_managers_for_category` 가 partner 필드로 관리자 찾기 때문에 누락 시 alert 0건 → 기존 TC-61B-17 도 불안정
+  - 사전 누락된 fixture 정정 (v2.10.2 변경과 별개, 동일 커밋에 포함)
+
+### Codex 사후 검토 결과 반영 (POST-REVIEW-HOTFIX-BATCH 2026-04-23)
+
+- **HOTFIX #1 (PHASE1.5)**: Close ✅ — Q1-1/1-3 Advisory 는 `OBSERV-ALERT-SILENT-FAIL` 흡수
+- **HOTFIX #2 (SCHEMA-RESTORE)**: Close ✅ — Q2-1/2-2/2-3 Advisory 는 기존 BACKLOG 흡수 (runbook / MIGRATION-049 / STARTUP-ASSERTION)
+- **HOTFIX #3 (DUP)**: Close ✅ — Q3-2/3-3/3-4 Advisory 는 신규 FIX 엔트리 + Redis 조건부 유지
+- **HOTFIX #4 (DELIVERY)**: **본 PATCH 로 Close** ✅ — Q4-4 M 수정 + Q4-2 동시 해결
+- **Q4-1 role 경로 company 필터**: 🟠 신규 `SEC-ROLE-COMPANY-FILTER` 엔트리 등록 (leakage 리스크)
+- **Q4-3 N+1 query**: `REFACTOR-SCHEDULER-SPLIT` 흡수
+- **Q4-5 48h 관찰 SQL**: 실행 권장 (본 배포 후)
+
+---
+
 ## [2.10.1] - 2026-04-23
 
 > Sprint 62-BE 보정 PATCH — VIEW 측 입장 재검토 후 요청 반영. v2.2 에서 "숫자 변동 없음(31대 유지)" 근거로 `ship_plan_date` 유지 결정했으나, 주간 생산량의 **의미** (생산 완료 기준) 측면에서 `finishing_plan_end` 가 라벨 [Planned Finish] 과 일치. 실측 기반 수치 변동 투명 공개.
