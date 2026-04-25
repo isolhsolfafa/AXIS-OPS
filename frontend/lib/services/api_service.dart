@@ -205,9 +205,12 @@ class ApiService {
     try {
       // apiBaseUrl에서 /api 제거하여 루트 URL 추출
       final rootUrl = apiBaseUrl.replaceAll(RegExp(r'/api$'), '');
+      // v2.10.4 (2026-04-25): Railway /health TTFB 간헐 15초 관찰됨 → Flutter health
+      // timeout 5초에서는 false-positive "System Offline" 발생. 일반 API timeout(15s)
+      // 와 일관성 유지 위해 20초로 상향. Railway 지연 근본 원인은 별건.
       final dio = Dio(BaseOptions(
-        connectTimeout: const Duration(seconds: 5),
-        receiveTimeout: const Duration(seconds: 5),
+        connectTimeout: const Duration(seconds: 10),
+        receiveTimeout: const Duration(seconds: 20),
       ));
       final response = await dio.get('$rootUrl$path');
       if (response.statusCode == 200 && response.data is Map) {
