@@ -227,3 +227,50 @@ def close_pool():
         _conn_created_at.clear()
         logger.info("[db_pool] Connection pool closed")
         _pool = None
+
+
+def warmup_pool() -> tuple:
+    """
+    OBSERV-DB-POOL-IDLE-DISCONNECT-WARMUP-20260427:
+    Pool conn 자발적 폐기 방지 — _MIN_CONN 만큼 SELECT 1 실행으로 max_age 시계 리셋.
+
+    배경: max_age=300s 만료 + lazy 재생성 race 로 MIN=5 사실상 무효.
+          실측 (2026-04-27): 풀 초기화 후 10 → 9 → 7 conn (10분 만에 30% 감소).
+
+    효과: scheduler_service 의 5분 간격 cron 에서 호출 → 모든 idle conn 활성화 →
+          max_age 시계 리셋 → MIN=5 강제 유지.
+
+    Returns:
+        tuple (warmed: int, requested: int) — 성공한 conn 수 / 요청한 conn 수.
+    """
+    if _pool is None:
+        logger.debug("[db_pool] warmup skipped — pool not initialized")
+        return (0, 0)
+
+    conns = []
+    try:
+        for _ in range(_MIN_CONN):
+            try:
+                conn = _pool.getconn()
+                conns.append(conn)
+            except Exception as e:
+                logger.warning(f"[db_pool] warmup getconn failed (skip): {e}")
+                break
+
+        warmed = 0
+        for conn in conns:
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT 1")
+                cur.close()
+                warmed += 1
+            except Exception as e:
+                logger.warning(f"[db_pool] warmup SELECT 1 failed: {e}")
+
+        return (warmed, len(conns))
+    finally:
+        for conn in conns:
+            try:
+                _pool.putconn(conn)
+            except Exception:
+                pass

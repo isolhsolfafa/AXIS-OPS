@@ -15,11 +15,12 @@ from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from app.config import Config
 from app.services.duration_validator import check_unfinished_tasks
 from app.services.alert_service import sn_label
-from app.db_pool import put_conn
+from app.db_pool import put_conn, warmup_pool
 
 
 logger = logging.getLogger(__name__)
@@ -167,8 +168,33 @@ def init_scheduler() -> BackgroundScheduler:
         replace_existing=True
     )
 
-    logger.info("Scheduler initialized with 11 jobs")
+    # ── OBSERV-DB-POOL-WARMUP-20260427: DB Pool warmup — 매 5분 ──
+    # 실측 (2026-04-27): max_age=300s 만료 + lazy 재생성 race 로 MIN=5 무효
+    # (10:14 → 10:24 KST conn 10→9→7). warmup 으로 max_age 시계 리셋 → MIN 강제 유지.
+    _scheduler.add_job(
+        func=_pool_warmup_job,
+        trigger=IntervalTrigger(minutes=5),
+        id='pool_warmup',
+        name='DB Pool warmup (매 5분, max_age 시계 리셋)',
+        next_run_time=datetime.now(Config.KST) + timedelta(seconds=10),
+        replace_existing=True
+    )
+
+    logger.info("Scheduler initialized with 12 jobs")
     return _scheduler
+
+
+def _pool_warmup_job() -> None:
+    """
+    OBSERV-DB-POOL-IDLE-DISCONNECT-WARMUP-20260427:
+    매 5분 DB Pool 의 idle conn 들에 SELECT 1 실행 → max_age 시계 리셋 → MIN 강제 유지.
+    db_pool.warmup_pool() 호출만 담당.
+    """
+    try:
+        warmed, requested = warmup_pool()
+        logger.info(f"[pool_warmup] {warmed}/{requested} conn warmed")
+    except Exception as e:
+        logger.error(f"[pool_warmup] failed: {e}", exc_info=True)
 
 
 def start_scheduler() -> None:

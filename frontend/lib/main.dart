@@ -278,6 +278,24 @@ class _AppStartupState extends ConsumerState<AppStartup> {
       if (!mounted) return;
 
       if (success) {
+        // FEAT-PIN-STATUS-BACKEND-FALLBACK-20260427:
+        // 로컬 PIN 플래그 잃은 경우라도 backend `/auth/pin-status` 로 자동 복구.
+        // refresh 성공 = JWT 살아있음 → /auth/pin-status 호출 가능.
+        // registered=true 면 로컬 복구 + PinLoginScreen 으로 (사용자 보안 의도 유지).
+        final backendPinRegistered = await authService.getBackendPinStatus();
+        if (!mounted) return;
+        if (backendPinRegistered) {
+          await authService.savePinRegistered(true);  // 로컬 양방향 sync 복구
+          if (!mounted) return;
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              settings: const RouteSettings(name: '/pin-login'),
+              builder: (_) => const PinLoginScreen(),
+            ),
+          );
+          return;
+        }
+        // backend 에서도 PIN 미등록 → 정상 흐름 (마지막 경로 복원)
         // 자동 로그인 성공 → 마지막 경로 복원 시도
         final lastRoute = await authService.getLastRoute();
 

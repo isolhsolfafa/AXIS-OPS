@@ -6,6 +6,108 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.10.6] - 2026-04-27 — FEAT-PIN-STATUS-BACKEND-FALLBACK + OBSERV-DB-POOL-WARMUP
+
+> **PIN 자동 복구 (FE) + DB Pool warmup (BE) 병행 배포**.
+> FIX-PIN-FLAG v2.10.5 (1차 보호) + 본 v2.10.6 의 backend fallback (2차 보호) 으로 PIN 손실 사용자 자동 복구. 동시에 실측으로 입증된 MIN=5 무효 문제 (10:14→10:24 conn 10→9→7) 도 warmup cron 으로 해결.
+
+### Added (FE — FEAT-PIN-STATUS-BACKEND-FALLBACK-20260427, P1 격상)
+
+- **`frontend/lib/services/auth_service.dart`** `getBackendPinStatus()` 신규 (~15 LOC):
+  - `/auth/pin-status` (BE 엔드포인트, JWT 보호) 호출 → `{"pin_registered": bool}` 응답 파싱
+  - 호출 실패 (네트워크/서버) 시 `false` 반환 → 정상 흐름 fallback (debugPrint 로그)
+- **`frontend/lib/main.dart`** L275~ 라우팅 분기 추가 (~16 LOC):
+  - `tryAutoLogin()` 성공 후 `getBackendPinStatus()` 호출
+  - `pin_registered=true` → `savePinRegistered(true)` 로 로컬 양방향 sync 복구 + PinLoginScreen 으로 진입
+  - `pin_registered=false` → 정상 흐름 (마지막 경로 복원, HomeScreen)
+- 효과: PIN 사용자가 로컬 storage 잃어도 (IndexedDB 손실 시) backend 가 진실의 source 로 자동 복구 → 사용자 보안 의도 유지
+
+### Added (BE — OBSERV-DB-POOL-IDLE-DISCONNECT-WARMUP-20260427, P2)
+
+- **`backend/app/db_pool.py`** `warmup_pool() -> tuple[int, int]` public 함수 신규 (~40 LOC):
+  - `_MIN_CONN` 만큼 `getconn()` → `SELECT 1` → `putconn()`
+  - 모든 idle conn 의 `max_age` 시계 리셋 → MIN 강제 유지
+  - finally 블록으로 반납 보장
+  - Claude Code advisory 1차 A1 반영 (private `_pool` 직접 import 회피, public API 노출)
+- **`backend/app/services/scheduler_service.py`** L17, L23 import 추가 (`IntervalTrigger`, `warmup_pool`):
+  - `_pool_warmup_job()` 신규 함수 (warmup_pool 호출 + 결과 로그)
+  - `add_job` 등록 — `IntervalTrigger(minutes=5)` + `next_run_time=datetime.now(Config.KST) + timedelta(seconds=10)` (timezone-aware, A5 반영)
+  - 스케줄러 job 수: **11 → 12**
+
+### 실측 데이터 (OBSERV-WARMUP 트리거 근거)
+
+```
+2026-04-27 KST (DB_POOL_MIN=5, DB_POOL_MAX=30, max_age=300s):
+  10:14:00  풀 초기화 직후     OPS 10 conn (5×2 worker)  baseline
+  10:19:00  5분 경과            OPS  9 conn (-1)          max_age 1차 만료
+  10:24:00  10분 경과           OPS  7 conn (-3)          감소 가속
+```
+
+→ Codex 라운드 3 A4 advisory ("MIN=5 효과는 max_age 만료 직전~직후 변동 가능, 실측 필요") 가 10분만에 실측으로 입증.
+
+### Claude Code advisory 1차 (M=0 / A=5, OBSERV-WARMUP)
+
+| # | Advisory | 반영 |
+|:---:|:---|:---|
+| A1 | `_pool` private API 직접 import → public `warmup_pool()` 노출 권장 | ✅ db_pool.py 에 public 함수 추가 |
+| A2 | pytest TC test env `_pool=None` skip 처리 명시 | ✅ warmup_pool 자체에서 None 처리 |
+| A3 | `IntervalTrigger` 명시 import 권장 | ✅ scheduler_service.py L17 |
+| A4 | ThreadPool max=10 - warmup 5 = 여유 5 (burst 차단 위험 낮음) | ✅ 위험 평가 완료 |
+| A5 | `next_run_time=datetime.now()` → timezone 명시 권장 | ✅ `Config.KST` 적용 |
+
+### Codex 이관 여부
+
+- **FEAT-PIN-STATUS-BACKEND-FALLBACK**: ❌ 6항목 미충족 (FE 2파일 + main.dart 분기 추가만, 인증 흐름은 `getBackendPinStatus` 호출 추가 + `savePinRegistered(true)` 호출 — 인증 로직 신규 X). FIX-PIN-FLAG v2.10.5 의 후속이라 같은 검토 컨텍스트.
+- **OBSERV-DB-POOL-WARMUP**: ❌ 6항목 미충족 (BE 1함수 신규 + scheduler 1 job 추가). Claude Code 자체 검토만으로 진행.
+
+### Tests
+
+- `tests/backend/test_scheduler.py` 8 passed / 1 skipped / 회귀 0건 ✅
+- BE syntax check (db_pool.py + scheduler_service.py) ✅
+
+### Deploy
+
+- 빌드: flutter build web --release ✓ 12.1s
+- 배포 (FE): Netlify Deploy ID `69eef28fca3b7ffce577068d` (2026-04-27 KST)
+- 배포 (BE): Railway 자동 (git push origin main)
+- Production URL: https://gaxis-ops.netlify.app
+
+### Post-deploy 검증
+
+#### Railway logs (배포 직후)
+
+```
+[scheduler] Scheduler initialized with 12 jobs   ← 11 → 12 확인
+[pool_warmup] 5/5 conn warmed                    ← 10초 후 첫 실행
+```
+
+#### 1시간 관찰 (`pg_stat_activity`)
+
+매 5분마다 conn 수 측정 → **10 영구 유지** = 성공. 7 이하로 감소 시 Phase C (warmup 효과 미진).
+
+### 신규 BACKLOG 갱신
+
+- `FEAT-PIN-STATUS-BACKEND-FALLBACK-20260427` 🔴 P1 → ✅ COMPLETED (v2.10.6)
+- `OBSERV-DB-POOL-IDLE-DISCONNECT-WARMUP-20260427` 🟡 P2 → ✅ COMPLETED (v2.10.6)
+- `AUDIT-PWA-SW-INDEXEDDB-PRESERVE-20260427` 🟡 P2 (대기, 30분 audit)
+- `UX-LOGIN-FALLBACK-PIN-RESET-LINK-20260427` 🟢 P3 (대기)
+- `FEAT-AUTH-STORAGE-MIGRATION-FULL-20260427` 🟡 P2 (대기, 보안 trade-off 검토)
+
+### Rollback
+
+- FEAT-PIN-STATUS: `main.dart` + `auth_service.dart` git revert → flutter build → Netlify
+- OBSERV-WARMUP: `db_pool.py` + `scheduler_service.py` git revert → Railway 자동 재배포 (~1분)
+- 둘 다 부수 효과 없음
+
+### Related
+
+- 설계 상세: `AGENT_TEAM_LAUNCH.md`
+  - FEAT-PIN-STATUS-BACKEND-FALLBACK-20260427 섹션 (L31772+)
+  - OBSERV-DB-POOL-IDLE-DISCONNECT-WARMUP-20260427 섹션 (L32002+)
+- 별건 (관찰 중): `FIX-DB-POOL-MAX-SIZE-20260427` Phase B (D+0 ~ D+3 화/수/목)
+
+---
+
 ## [2.10.5] - 2026-04-27 — FIX-PIN-FLAG-MIGRATION-SHAREDPREFS
 
 > **PIN 등록 플래그 storage 안정화** — `pin_registered` 를 SecureStorage (IndexedDB) → SharedPreferences (localStorage) 양방향 sync 이전. 4 라운드 advisory review (Claude Code 1차 + Codex 1차 — M 8건 + 추가 리스크 2건 전수 반영) 후 적용.

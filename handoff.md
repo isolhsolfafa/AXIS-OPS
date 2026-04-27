@@ -1,11 +1,115 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-04-27 (v2.10.5)
+> 마지막 업데이트: 2026-04-27 (v2.10.6)
 
 ---
 
-## 🟢 2026-04-27 세션 요약 (2/2) — FIX-PIN-FLAG-MIGRATION-SHAREDPREFS Deploy 완료 (v2.10.5)
+## 🟢 2026-04-27 세션 요약 (3/3) — FEAT-PIN-STATUS-BACKEND-FALLBACK + OBSERV-DB-POOL-WARMUP 병행 Deploy (v2.10.6)
+
+> **한 줄 요약**: FE 자동 PIN 복구 (P1 격상) + BE Pool warmup cron (P2, 실측 입증) 병행 배포. v2.10.6 Netlify (FE) + Railway (BE) 모두 배포 완료. PIN 사용자 보안 의도 유지 + Pool conn 영구 10 보장.
+
+### 핵심 의사 결정 (병행 진행 안전성 검증 완료)
+
+| Sprint | 영역 | 충돌 | 위험도 |
+|---|---|---|---|
+| FEAT-PIN-STATUS-BACKEND-FALLBACK | FE (main.dart + auth_service.dart) | 없음 | 🟢 LOW |
+| OBSERV-DB-POOL-WARMUP | BE (db_pool.py + scheduler_service.py) | 없음 | 🟢 LOW |
+
+→ 두 작업 다른 영역 + 의존성 없음 → 병행 안전. pytest test_scheduler.py 8 passed / 0 failed.
+
+### 코드 변경 (v2.10.6)
+
+**FE (FEAT-PIN-STATUS-BACKEND-FALLBACK, P1 격상)**:
+- `frontend/lib/services/auth_service.dart` `getBackendPinStatus()` 신규 (~15 LOC)
+  - `/auth/pin-status` 호출 + try/catch + debugPrint
+- `frontend/lib/main.dart` L275~ tryAutoLogin 성공 후 backend PIN 복구 분기 추가 (~16 LOC)
+
+**BE (OBSERV-DB-POOL-WARMUP, P2)**:
+- `backend/app/db_pool.py` `warmup_pool()` public 함수 신규 (~40 LOC, A1 반영)
+- `backend/app/services/scheduler_service.py`:
+  - L17 `from apscheduler.triggers.interval import IntervalTrigger` (A3)
+  - L23 `from app.db_pool import put_conn, warmup_pool`
+  - `_pool_warmup_job()` 신규 함수
+  - `add_job` 12번째 등록 — `IntervalTrigger(minutes=5)` + `next_run_time=datetime.now(Config.KST) + timedelta(seconds=10)` (timezone-aware, A5)
+  - 스케줄러 job 수: **11 → 12**
+
+**버전**:
+- `backend/version.py` v2.10.5 → 2.10.6
+- `frontend/lib/utils/app_version.dart` v2.10.5 → 2.10.6
+
+### Claude Code advisory 1차 (OBSERV-WARMUP, M=0/A=5)
+
+| # | Advisory | 반영 |
+|:---:|:---|:---|
+| A1 | private `_pool` API 직접 import → public `warmup_pool()` 노출 | ✅ |
+| A2 | pytest TC `_pool=None` skip 처리 | ✅ warmup_pool 자체 처리 |
+| A3 | `IntervalTrigger` 명시 import | ✅ |
+| A4 | ThreadPool 경합 위험 평가 | ✅ 5/10 여유 |
+| A5 | timezone-aware `next_run_time` | ✅ Config.KST |
+
+### Codex 이관 미해당
+
+두 sprint 모두 6항목 미충족:
+- 인증 로직 변경 X (FEAT 는 호출 추가만, 로직 변경 X)
+- 3파일 이상 X (각 2파일 이내)
+- API 응답/스키마/FK X
+- 클린코어 데이터 X
+
+→ Claude Code 자체 검토 + 회귀 pytest 만으로 진행.
+
+### 안전성 검증 완료
+
+- ✅ Flutter web build 성공 (12.1s)
+- ✅ BE syntax check (db_pool.py + scheduler_service.py)
+- ✅ pytest test_scheduler.py: 8 passed / 1 skipped / 회귀 0건
+- ✅ 다른 storage 키 영향 X (FEAT 는 pin_registered 만)
+- ✅ scheduler 기존 11 job 영향 X
+
+### Deploy
+
+- 빌드: flutter build web --release ✓ 12.1s
+- 배포 (FE): Netlify Deploy ID `69eef28fca3b7ffce577068d` (2026-04-27 KST)
+- 배포 (BE): Railway 자동 (git push → ~1분)
+- Production URL: https://gaxis-ops.netlify.app
+
+### Post-deploy 검증 (Twin파파)
+
+#### Railway logs (배포 직후, ~1분)
+
+```
+[scheduler] Scheduler initialized with 12 jobs   ← 11 → 12 확인
+[pool_warmup] 5/5 conn warmed                    ← 첫 실행 (10초 후)
+```
+
+#### 1시간 관찰 (`pg_stat_activity`)
+
+매 5분 conn 수 측정 → **10 영구 유지** = 성공. 7 이하 감소 시 Phase C 검토.
+
+#### FEAT-PIN-STATUS 효과 검증
+
+PIN 사용자가 IndexedDB 잃어도 `/auth/pin-status` 자동 호출 → PinLoginScreen 복귀 (HomeScreen 직행 X).
+
+### 다음 세션 시작 시 할 일
+
+1. **공지(notices) v2.10.6 bump** — PIN 자동 복구 + DB Pool 안정화 사용자 공지 (+ v2.10.5 합쳐서)
+2. **FIX-DB-POOL Phase B 관찰 결과 정리** (D+1 화 4-28, D+2 수 4-29, D+3 목 4-30) — Pool exhausted grep + Q-B 재측정
+3. **FEAT-PIN-FLAG 효과 측정** — D+7 (5-04) baseline SQL 재측정
+4. **OBSERV-WARMUP 효과 검증** — D+1 새벽~출근 peak conn 추세 측정 (10 유지 확인)
+5. **잔존 BACKLOG**:
+   - `AUDIT-PWA-SW-INDEXEDDB-PRESERVE-20260427` 🟡 P2 (audit, 30분)
+   - `UX-LOGIN-FALLBACK-PIN-RESET-LINK-20260427` 🟢 P3 (1h)
+   - `FEAT-AUTH-STORAGE-MIGRATION-FULL-20260427` 🟡 P2 (보안 trade-off)
+
+### 산출물 (v2.10.6)
+
+- 코드 4 파일: db_pool.py + scheduler_service.py + auth_service.dart + main.dart
+- 버전 2 파일: backend/version.py + frontend/lib/utils/app_version.dart
+- 문서 3 파일: CHANGELOG.md ([2.10.6] entry) + BACKLOG.md (FEAT/OBSERV COMPLETED) + handoff.md (3/3 세션)
+
+---
+
+## 🟢 2026-04-27 세션 요약 (2/3) — FIX-PIN-FLAG-MIGRATION-SHAREDPREFS Deploy 완료 (v2.10.5)
 
 > **한 줄 요약**: PIN 등록 플래그 storage 안정화 — `pin_registered` SecureStorage → SharedPreferences 양방향 sync 이전. 4 라운드 advisory review (M=8/8 + 추가 리스크 2/2 전수 반영) 후 적용. v2.10.5 Netlify 배포 완료.
 
@@ -70,7 +174,7 @@
 
 ---
 
-## 🟢 2026-04-27 세션 요약 (1/2) — FIX-DB-POOL-MAX-SIZE-20260427 Phase A 적용 (Phase B 관찰 중)
+## 🟢 2026-04-27 세션 요약 (1/3) — FIX-DB-POOL-MAX-SIZE-20260427 Phase A 적용 (Phase B 관찰 중)
 
 > **한 줄 요약**: Railway env `DB_POOL_MAX` 20→30 변경 (MIN=5 유지) — 코드 변경 0, 4 라운드 advisory review (Codex×2 + Claude Code×1 + Twin파파 fact-check×1) 후 적용. Phase B 3일 (화/수/목) 관찰 중.
 

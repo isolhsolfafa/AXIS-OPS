@@ -32007,6 +32007,8 @@ Padding(
 > **예상 소요**: 1~1.5h (BE 단일 함수 추가 + pytest TC + 배포)
 > **트리거 근거**: 2026-04-27 10:14~10:24 KST 실측 — Pool 초기화 직후 OPS 10 conn → 5분 후 9 → 10분 후 7 (감소 가속). `max_age=300s` 만료 시 lazy 재생성 race 로 MIN=5 사실상 무효. 다음 burst 도착 시 cold-start 비용 +900~4500ms 발생 가능
 > **담당**: BE teammate
+> **Codex 이관 여부**: ❌ 6항목 미충족 (단일 함수 신규 / DB 스키마 변경 X / API 응답 X / 인증 로직 X / 클린코어 X / 1파일 touch). Claude Code 자체 검토만으로 진행
+> **Claude Code advisory 1차 (2026-04-27)**: A1 `_pool` private API 직접 import → public `warmup_pool()` 함수 노출 권장 / A2 pytest TC test env `_pool=None` skip 처리 명시 / A3 `IntervalTrigger` 명시 import 권장 (스타일) / A4 ThreadPool max=10 - warmup 5 conn = 여유 5, burst 시 다른 job 차단 가능성 낮음 / A5 `next_run_time=datetime.now()` → timezone 명시 (`Config.KST`) 권장 — 모두 A 레벨, M=0
 
 ### 🎯 목적
 

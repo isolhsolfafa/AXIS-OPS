@@ -344,6 +344,25 @@ class AuthService {
     return token != null && token.isNotEmpty;
   }
 
+  /// FEAT-PIN-STATUS-BACKEND-FALLBACK-20260427:
+  /// Backend 의 PIN 등록 상태 조회 (`/auth/pin-status`). 로컬 storage 잃은 경우 자동 복구용.
+  ///
+  /// 응답: `{"pin_registered": bool, "biometric_enabled": bool}`
+  /// 호출 실패 (네트워크/서버 오류) 시 false 반환 — 정상 흐름 fallback.
+  /// 호출자는 true 받으면 savePinRegistered(true) 로 로컬 플래그 복구.
+  Future<bool> getBackendPinStatus() async {
+    try {
+      final response = await _apiService.get('/auth/pin-status');
+      if (response is Map && response['pin_registered'] == true) {
+        return true;
+      }
+      return false;
+    } catch (e) {
+      debugPrint('[auth] /auth/pin-status check failed (non-fatal): $e');
+      return false;
+    }
+  }
+
   /// PIN 등록 여부 확인 (로컬 캐시)
   ///
   /// FIX-PIN-FLAG-MIGRATION-SHAREDPREFS-20260427:
