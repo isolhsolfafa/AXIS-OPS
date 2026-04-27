@@ -263,6 +263,9 @@ def warmup_pool() -> tuple:
                 cur = conn.cursor()
                 cur.execute("SELECT 1")
                 cur.close()
+                # HOTFIX-06 (v2.10.7): max_age 시계 리셋 — warmup 의도대로 작동.
+                # 누락 시 warmup 후에도 _is_conn_usable() 가 expired 판정 → discard → fallback.
+                _conn_created_at[id(conn)] = time.time()
                 warmed += 1
             except Exception as e:
                 logger.warning(f"[db_pool] warmup SELECT 1 failed: {e}")
