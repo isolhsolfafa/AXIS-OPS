@@ -8,3 +8,4 @@ gunicorn
 email-validator
 bcrypt
 APScheduler>=3.10
+sentry-sdk[flask]>=2.0

@@ -1,1 +1,1 @@
-web: gunicorn --bind 0.0.0.0:$PORT --worker-class gthread --threads 8 -w 2 --timeout 30 --graceful-timeout 10 "app:create_app()"
+web: gunicorn --bind 0.0.0.0:$PORT --worker-class gthread --threads 8 -w 2 --timeout 30 --graceful-timeout 10 --access-logfile=- --log-level=info "app:create_app()"

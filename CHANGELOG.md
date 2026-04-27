@@ -6,6 +6,126 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.10.8] - 2026-04-27 — 알람 시스템 사후 검증 마무리 3건 (BE only)
+
+> **Sprint**: OBSERV-RAILWAY-LOG-LEVEL-MAPPING + POST-REVIEW-MIGRATION-049-NOT-APPLIED + OBSERV-ALERT-SILENT-FAIL
+> 4-22 발생 알람 silent failure (5일간 52건 NULL) 의 사후 검증 마무리. 외부 자동 감지 layer (Sentry) + log level 정확화 + migration sync assertion 도입.
+
+### Changed (BE only — 인프라 강화)
+
+#### 1. OBSERV-RAILWAY-LOG-LEVEL-MAPPING (Sentry alert rule 선행 조건)
+
+- **`backend/app/__init__.py`**:
+  - `import sys` 추가
+  - `logging.basicConfig(... stream=sys.stdout, force=True)` 명시 (기본 stderr 금지)
+- **`backend/Procfile`**:
+  - gunicorn `--access-logfile=- --log-level=info` 추가
+- 효과: Python `logger.info()` 호출이 Railway 에서 'error' level 로 잘못 태깅되던 문제 해소. Sentry alert rule 의 `level=error` 필터 정확 작동.
+
+#### 2. OBSERV-ALERT-SILENT-FAIL (Sentry 정식 연동)
+
+- **`backend/requirements.txt`**: `sentry-sdk[flask]>=2.0` 추가
+- **`backend/app/__init__.py`**: `_init_sentry()` 함수 신규 (~50 LOC)
+  - DSN env 없으면 graceful skip (로컬/test 환경 호환)
+  - `FlaskIntegration` + `LoggingIntegration` (INFO breadcrumb / ERROR event capture)
+  - `release` 자동 binding (version.py)
+  - `send_default_pii=False` (PII 보호)
+  - 환경변수: `SENTRY_DSN` (필수), `SENTRY_ENVIRONMENT` (기본 production), `SENTRY_TRACES_SAMPLE_RATE` (기본 0.0)
+- **`backend/app/migration_runner.py`**: 실패 시 `sentry_sdk.capture_exception(e)` 추가
+- 효과: scheduler 죽음 / migration 실패 / target_worker_id NULL 다발 등 silent failure 외부 자동 감지
+
+#### 3. POST-REVIEW-MIGRATION-049-NOT-APPLIED + OBSERV-MIGRATION-RUNNER-STARTUP-ASSERTION
+
+- **`backend/app/migration_runner.py`** `assert_migrations_in_sync()` 함수 신규 (~40 LOC):
+  - disk(코드) vs DB(`migration_history`) 동기화 검증
+  - `not_yet_applied` 발견 시 logger.error + `sentry_sdk.capture_message`
+  - 4-22 049 미적용 사례 같은 silent gap 즉시 외부 알림
+- **`backend/app/__init__.py`**: `run_migrations()` 직후 `assert_migrations_in_sync()` 호출
+- **신규 산출물**: `POST_MORTEM_MIGRATION_049.md` — 4가지 가설 검증 (가설 ④ "Docker artifact / Railway build cache" 가장 유력) + 재발 방지 권장 3건
+
+### Twin파파 측 작업 (배포 후)
+
+1. **Sentry 가입 + project 생성**:
+   - https://sentry.io 가입
+   - "Create Project" → Platform: Python → Framework: Flask
+   - DSN 발급 (예: `https://abc123@o123.ingest.sentry.io/456`)
+2. **Railway env 추가**:
+   ```
+   SENTRY_DSN = <발급받은 DSN>
+   SENTRY_ENVIRONMENT = production  (선택, 기본 production)
+   SENTRY_TRACES_SAMPLE_RATE = 0.0  (선택, performance tracing OFF)
+   ```
+3. **Sentry alert rule 설정** (Sentry Dashboard):
+   - Issues → Alert rules
+   - Rule: `level == error AND message contains "[migration-assert]" or "[scheduler]"` → 즉시 알림
+4. **검증**:
+   - Railway logs: `[sentry] initialized (env=production, release=2.10.8)`
+   - Railway logs: `[migration-assert] ✅ sync OK (12 migrations applied)`
+   - Sentry test event 자동 발송 확인
+
+### Tests
+
+- pytest test_scheduler.py 8 passed / 1 skipped / 회귀 0건 ✅ (logging 변경 영향 0)
+- BE syntax check (init/migration_runner) ✅
+
+### Codex 이관 미해당
+
+- LOG-LEVEL: 코드 ~10 LOC (인프라 설정 only)
+- POST-REVIEW: 분석 보고서만 (코드 변경 분리)
+- SENTRY: 코드 ~90 LOC, 인증/스키마/API 무관 + 1파일 수준
+
+→ Codex 이관 체크리스트 6항목 미충족. Claude Code 자체 검토 + pytest 회귀 충분.
+
+### Deploy
+
+- BE only (frontend 변경 0)
+- 배포: Railway 자동 (git push origin main)
+- Production: https://axis-ops-api.up.railway.app (BE)
+- Sentry DSN 설정은 Twin파파 측 별도 (위 작업 1~2번)
+
+### Rollback
+
+- LOG-LEVEL: `__init__.py` + Procfile git revert
+- SENTRY: `__init__.py` + `requirements.txt` git revert (또는 `SENTRY_DSN` env 제거로 graceful skip)
+- migration assertion: `__init__.py` 호출 + `migration_runner.py` 함수 git revert
+
+### Related
+
+- 설계 상세: 본 commit + `POST_MORTEM_MIGRATION_049.md`
+- 4-22 사건 trail: `BACKLOG.md` L319 (HOTFIX-ALERT-SCHEMA-RESTORE), L324 (POST-REVIEW), L333 (POST-REVIEW-MIGRATION-049-NOT-APPLIED)
+
+---
+
+## [2.10.7] - 2026-04-27 — HOTFIX-06 warmup_pool() 시계 리셋 누락 수정 (사후 보충)
+
+> ⚠️ **사후 보충 entry** (2026-04-27 정리). v2.10.7 commit 시 CHANGELOG 추가 누락.
+
+### Fixed
+
+- **`backend/app/db_pool.py warmup_pool()`** L240+ — `_conn_created_at[id(conn)] = time.time()` 1줄 추가:
+  - v2.10.6 OBSERV-DB-POOL-WARMUP 배포 후 결함 발견: warmup 외형상 작동하지만 SELECT 1 만 실행하고 시계 리셋 안 함 → `_is_conn_usable()` 가 expired 판정 → discard → direct conn fallback
+  - 동일 파일 내 `_create_direct_conn() L112`, `get_conn() L154-155` 의 검증된 패턴 그대로 적용 (명백한 누락 정정)
+
+### Tests
+
+- pytest test_scheduler.py 8 passed / 1 skipped / 회귀 0건 (327.32s)
+
+### Deploy
+
+- BE only — Railway 자동 (git push origin main)
+- git commit: `7a13085`
+
+### Limitation (per-worker 함정)
+
+본 fix 는 fcntl lock 으로 1 worker (Worker A) 만 scheduler 실행 → Worker A 의 pool 만 시계 리셋. **Worker B 의 pool 은 자연 만료**. 결과: conn 7~11 진동 (영구 10 의도는 절반 달성). 사용자 영향 0 입증 후 D+1 측정 결과 따라 v2.10.8 HOTFIX-06b (각 worker 자체 warmup) 진행 결정.
+
+### Related
+
+- v2.10.6 OBSERV-DB-POOL-IDLE-DISCONNECT-WARMUP 후속
+- 별건 잠재 BACKLOG: HOTFIX-06b (per-worker warmup, D+1 측정 후 결정)
+
+---
+
 ## [2.10.6] - 2026-04-27 — FEAT-PIN-STATUS-BACKEND-FALLBACK + OBSERV-DB-POOL-WARMUP
 
 > **PIN 자동 복구 (FE) + DB Pool warmup (BE) 병행 배포**.

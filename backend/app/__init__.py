@@ -6,6 +6,8 @@ Sprint 13: Flask-SocketIO → flask-sock 마이그레이션
 """
 
 import logging
+import os
+import sys
 from flask import Flask, jsonify, g, request
 from flask_cors import CORS
 from flask_sock import Sock
@@ -16,6 +18,53 @@ from app.config import Config
 logger = logging.getLogger(__name__)
 
 sock = Sock()
+
+
+# OBSERV-ALERT-SILENT-FAIL-20260427: Sentry 정식 연동
+# DSN 환경변수 없으면 graceful skip (로컬/test 환경 호환).
+# 4-22 알람 silent failure 5일 누적 사례 (HOTFIX-ALERT-SCHEDULER-DELIVERY) 의
+# 외부 자동 감지 layer. migration 실패, scheduler 죽음, target_worker_id NULL
+# 다발 등 ERROR/CRITICAL 자동 capture → Sentry alert rule 로 즉시 알림.
+def _init_sentry() -> None:
+    """Sentry SDK 초기화 — DSN 없으면 graceful skip."""
+    dsn = os.environ.get('SENTRY_DSN', '').strip()
+    if not dsn:
+        logger.info("[sentry] SENTRY_DSN not set, skipping Sentry init (local/test env)")
+        return
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.flask import FlaskIntegration
+        from sentry_sdk.integrations.logging import LoggingIntegration
+
+        environment = os.environ.get('SENTRY_ENVIRONMENT', 'production')
+        # version.py 의 VERSION 가져오기 (release 추적)
+        try:
+            from version import VERSION as _release
+        except Exception:
+            _release = None
+
+        sentry_sdk.init(
+            dsn=dsn,
+            integrations=[
+                FlaskIntegration(),
+                LoggingIntegration(
+                    level=logging.INFO,        # breadcrumb 으로 INFO 까지 수집
+                    event_level=logging.ERROR,  # ERROR 이상은 event 로 capture
+                ),
+            ],
+            traces_sample_rate=float(os.environ.get('SENTRY_TRACES_SAMPLE_RATE', '0.0')),
+            environment=environment,
+            release=_release,
+            send_default_pii=False,  # PII 보호 (이메일/IP 등 자동 차단)
+        )
+        logger.info(f"[sentry] initialized (env={environment}, release={_release})")
+    except ImportError:
+        logger.warning("[sentry] sentry_sdk not installed, skipping init")
+    except Exception as e:
+        logger.error(f"[sentry] init failed (non-fatal): {e}")
+
+
+_init_sentry()
 
 
 def create_app(config_class: type = Config) -> Flask:
@@ -31,10 +80,15 @@ def create_app(config_class: type = Config) -> Flask:
     app = Flask(__name__)
     app.config.from_object(config_class)
 
-    # 로깅 설정
+    # 로깅 설정 (OBSERV-RAILWAY-LOG-LEVEL-MAPPING-20260427)
+    # stream=sys.stdout 명시 — 기본 stderr 출력 시 Railway 가 'error' level 로 잘못 태깅
+    # → Sentry alert rule 의 level=error 필터 정확 작동 위한 선행 조건
+    # force=True — gunicorn master 가 fork 전에 basicConfig 호출했을 수 있어 재설정 보장
     logging.basicConfig(
         level=logging.DEBUG if app.config['DEBUG'] else logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        stream=sys.stdout,
+        force=True,
     )
 
     # CORS 설정 (/api/* + /health)
@@ -101,8 +155,11 @@ def create_app(config_class: type = Config) -> Flask:
 
     # Migration 자동 실행 — 미실행 migration 순차 적용
     if not app.config.get('TESTING', False):
-        from app.migration_runner import run_migrations
+        from app.migration_runner import run_migrations, assert_migrations_in_sync
         run_migrations()
+        # OBSERV-MIGRATION-RUNNER-STARTUP-ASSERTION-20260427:
+        # 4-22 049 미적용 사례 재발 방지 — disk vs DB sync 검증, gap 시 Sentry alert
+        assert_migrations_in_sync()
 
     # 블루프린트 등록
     from app.routes.auth import auth_bp

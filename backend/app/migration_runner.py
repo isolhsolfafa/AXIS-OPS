@@ -114,6 +114,13 @@ def run_migrations() -> None:
 
             except Exception as e:
                 logger.error(f"[migration] ❌ {filename} 실행 실패: {e}")
+                # OBSERV-ALERT-SILENT-FAIL-20260427: Sentry capture (silent failure 방지)
+                # 4-22 049 미적용 사례 같은 silent gap 외부 자동 감지.
+                try:
+                    import sentry_sdk
+                    sentry_sdk.capture_exception(e)
+                except ImportError:
+                    pass  # Sentry 미설치 환경 (로컬/test)
                 # 실패한 migration에서 멈추고 이후 migration은 건너뜀
                 raise
             finally:
@@ -132,6 +139,54 @@ def run_migrations() -> None:
     finally:
         if conn:
             put_conn(conn)
+
+
+def assert_migrations_in_sync() -> None:
+    """
+    OBSERV-MIGRATION-RUNNER-STARTUP-ASSERTION-20260427:
+    앱 시작 시 코드(disk)와 DB(migration_history) 의 migration 동기화 검증.
+    4-22 049 미적용 사례 (POST_MORTEM_MIGRATION_049.md 권장 ①) 재발 방지.
+
+    - missing_from_disk: DB 적용됐는데 disk 에 없음 (rollback 의심)
+    - not_yet_applied: disk 에 있는데 DB 미적용 (049 같은 silent gap)
+
+    not_yet_applied 발견 시 logger.error + Sentry capture_exception.
+    """
+    if not os.path.isdir(MIGRATIONS_DIR):
+        return
+
+    files_in_disk = {f for f in os.listdir(MIGRATIONS_DIR) if _FILE_PATTERN.match(f)}
+
+    conn = None
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        executed = _get_executed(cur)
+    finally:
+        if conn:
+            put_conn(conn)
+
+    missing_from_disk = executed - files_in_disk
+    not_yet_applied = files_in_disk - executed
+
+    if missing_from_disk:
+        logger.error(
+            f"[migration-assert] DB 적용됐지만 disk 에 없음: {sorted(missing_from_disk)}"
+        )
+
+    if not_yet_applied:
+        msg = f"[migration-assert] ⚠️ disk 에 있지만 DB 미적용: {sorted(not_yet_applied)}"
+        logger.error(msg)
+        # Sentry capture — 049 같은 silent gap 즉시 외부 알림
+        try:
+            import sentry_sdk
+            sentry_sdk.capture_message(msg, level='error')
+        except ImportError:
+            pass
+    else:
+        logger.info(
+            f"[migration-assert] ✅ sync OK ({len(executed)} migrations applied)"
+        )
 
 
 def _split_statements(sql: str) -> list:
