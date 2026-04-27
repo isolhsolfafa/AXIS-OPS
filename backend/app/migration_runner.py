@@ -39,9 +39,16 @@ def _ensure_migration_table(cur) -> None:
 
 
 def _get_executed(cur) -> set:
-    """이미 실행된 migration 파일명 set 반환"""
+    """이미 실행된 migration 파일명 set 반환.
+
+    HOTFIX-07 (v2.10.9): db_pool 이 RealDictCursor 사용 → row 가 dict-like.
+    이전 `row[0]` 은 KeyError 유발했지만 run_migrations 의 outer try/except 가
+    silent 흡수했음. v2.10.8 에서 assert_migrations_in_sync() 가 추가되며
+    try/except 없이 호출 → KeyError 가 그대로 propagate → gunicorn worker
+    boot 실패 → 503. row['filename'] 로 정정.
+    """
     cur.execute("SELECT filename FROM migration_history")
-    return {row[0] for row in cur.fetchall()}
+    return {row['filename'] for row in cur.fetchall()}
 
 
 def run_migrations() -> None:
@@ -150,43 +157,55 @@ def assert_migrations_in_sync() -> None:
     - missing_from_disk: DB 적용됐는데 disk 에 없음 (rollback 의심)
     - not_yet_applied: disk 에 있는데 DB 미적용 (049 같은 silent gap)
 
-    not_yet_applied 발견 시 logger.error + Sentry capture_exception.
+    not_yet_applied 발견 시 logger.error + Sentry capture_message.
+
+    HOTFIX-07 (v2.10.9): outer try/except 추가 — assertion 자체 실패가
+    gunicorn worker boot 막지 않도록 안전망. 실패 시에도 app 은 정상 boot.
     """
-    if not os.path.isdir(MIGRATIONS_DIR):
-        return
-
-    files_in_disk = {f for f in os.listdir(MIGRATIONS_DIR) if _FILE_PATTERN.match(f)}
-
-    conn = None
     try:
-        conn = get_conn()
-        cur = conn.cursor()
-        executed = _get_executed(cur)
-    finally:
-        if conn:
-            put_conn(conn)
+        if not os.path.isdir(MIGRATIONS_DIR):
+            return
 
-    missing_from_disk = executed - files_in_disk
-    not_yet_applied = files_in_disk - executed
+        files_in_disk = {f for f in os.listdir(MIGRATIONS_DIR) if _FILE_PATTERN.match(f)}
 
-    if missing_from_disk:
-        logger.error(
-            f"[migration-assert] DB 적용됐지만 disk 에 없음: {sorted(missing_from_disk)}"
-        )
+        conn = None
+        try:
+            conn = get_conn()
+            cur = conn.cursor()
+            executed = _get_executed(cur)
+        finally:
+            if conn:
+                put_conn(conn)
 
-    if not_yet_applied:
-        msg = f"[migration-assert] ⚠️ disk 에 있지만 DB 미적용: {sorted(not_yet_applied)}"
-        logger.error(msg)
-        # Sentry capture — 049 같은 silent gap 즉시 외부 알림
+        missing_from_disk = executed - files_in_disk
+        not_yet_applied = files_in_disk - executed
+
+        if missing_from_disk:
+            logger.error(
+                f"[migration-assert] DB 적용됐지만 disk 에 없음: {sorted(missing_from_disk)}"
+            )
+
+        if not_yet_applied:
+            msg = f"[migration-assert] ⚠️ disk 에 있지만 DB 미적용: {sorted(not_yet_applied)}"
+            logger.error(msg)
+            # Sentry capture — 049 같은 silent gap 즉시 외부 알림
+            try:
+                import sentry_sdk
+                sentry_sdk.capture_message(msg, level='error')
+            except ImportError:
+                pass
+        else:
+            logger.info(
+                f"[migration-assert] ✅ sync OK ({len(executed)} migrations applied)"
+            )
+    except Exception as e:
+        # HOTFIX-07: assertion 실패가 worker boot 막지 않도록 안전망
+        logger.error(f"[migration-assert] assertion failed (non-fatal): {e}", exc_info=True)
         try:
             import sentry_sdk
-            sentry_sdk.capture_message(msg, level='error')
+            sentry_sdk.capture_exception(e)
         except ImportError:
             pass
-    else:
-        logger.info(
-            f"[migration-assert] ✅ sync OK ({len(executed)} migrations applied)"
-        )
 
 
 def _split_statements(sql: str) -> list:
