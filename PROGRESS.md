@@ -3,8 +3,136 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.10.5 (FIX-PIN-FLAG-MIGRATION-SHAREDPREFS, 2026-04-27)
+> **현재 버전**: v2.10.6 (FEAT-PIN-STATUS-BACKEND-FALLBACK + OBSERV-DB-POOL-WARMUP 병행, 2026-04-27)
 > **최근 인프라**: FIX-DB-POOL-MAX-SIZE-20260427 — Railway env DB_POOL_MAX 20→30 (2026-04-27, 코드 변경 0)
+
+---
+
+## FEAT-PIN-STATUS-BACKEND-FALLBACK + OBSERV-DB-POOL-WARMUP: 병행 배포 (2026-04-27, v2.10.6)
+
+**배경**: 4-27 KST 같은 날 두 작업 병행 진행 — (1) FIX-PIN-FLAG v2.10.5 의 2차 보호 layer (backend fallback), (2) FIX-DB-POOL-MAX Phase A 적용 후 실측으로 입증된 MIN=5 무효 문제 해결.
+
+**병행 안전성 검증**:
+
+| 차원 | FEAT-PIN-STATUS (FE) | OBSERV-WARMUP (BE) | 충돌 |
+|---|---|---|---|
+| 수정 파일 | `main.dart` + `auth_service.dart` | `db_pool.py` + `scheduler_service.py` | ✅ 없음 |
+| 의존성 | 없음 | 없음 | ✅ 독립 |
+| 회귀 | 0 | pytest 8 passed | ✅ |
+| 운영 영향 | PIN 라우팅 분기 추가 | 신규 cron job (기존 11→12) | ✅ |
+
+---
+
+### Part A — FEAT-PIN-STATUS-BACKEND-FALLBACK (FE, P1 격상)
+
+**트리거**: FIX-PIN-FLAG v2.10.5 의 Limitation — `pin_registered` 만 SharedPrefs 로 옮겨도 4개 키 (refresh_token + worker_id + worker_data 포함) 일괄 손실 시 효과 없음. Backend 가 진실의 source 로 자동 복구가 진짜 root fix.
+
+**코드 변경**:
+- `frontend/lib/services/auth_service.dart` `getBackendPinStatus()` 신규 (~15 LOC):
+  - `/auth/pin-status` (BE 엔드포인트, JWT 보호) 호출
+  - 응답 `{"pin_registered": bool, "biometric_enabled": bool}` 파싱
+  - 호출 실패 (네트워크/서버) 시 `false` 반환 + debugPrint 로그 — 정상 흐름 fallback
+- `frontend/lib/main.dart` L275~ 라우팅 분기 추가 (~16 LOC):
+  - `tryAutoLogin()` 성공 후 `getBackendPinStatus()` 호출
+  - `pin_registered=true` → `savePinRegistered(true)` 로 로컬 양방향 sync 복구 + PinLoginScreen
+  - `pin_registered=false` → 정상 흐름 (마지막 경로 복원, HomeScreen)
+
+**효과**: PIN 사용자가 IndexedDB 잃어도 backend 가 진실의 source 로 자동 복구 → 사용자 보안 의도 유지 (HomeScreen 직행 X).
+
+**BE 엔드포인트 사전 확인**:
+- `backend/app/routes/auth.py:823` `@auth_bp.route("/pin-status", methods=["GET"])` 이미 존재
+- `@jwt_required` 보호 + `hr.worker_auth_settings.pin_hash` 조회
+
+---
+
+### Part B — OBSERV-DB-POOL-IDLE-DISCONNECT-WARMUP (BE, P2 격상)
+
+**트리거**: 2026-04-27 KST 실측 — Phase A 적용 (DB_POOL_MAX=30 + MIN=5) 후:
+
+```
+10:14:00  풀 초기화 직후     OPS 10 conn (5×2 worker)  baseline
+10:19:00  5분 경과            OPS  9 conn (-1)          max_age 1차 만료
+10:24:00  10분 경과           OPS  7 conn (-3)          감소 가속
+```
+
+→ Codex 라운드 3 A4 advisory ("MIN=5 효과는 max_age 만료 직전~직후 변동 가능, 실측 필요") 가 10분만에 실측 입증. P3 → P2 격상.
+
+**Claude Code advisory 1차 (M=0/A=5)**:
+- A1 `_pool` private API 직접 import → public `warmup_pool()` 함수 노출 권장
+- A2 pytest TC test env `_pool=None` skip 처리 명시
+- A3 `IntervalTrigger` 명시 import 권장 (스타일)
+- A4 ThreadPool max=10 - warmup 5 = 여유 5 (burst 차단 위험 낮음)
+- A5 `next_run_time=datetime.now()` → timezone 명시 권장
+
+**Codex 이관 미해당**: 6항목 미충족 (단일 함수 신규, DB 스키마 변경 X, API 응답 X, 인증 로직 X, 클린코어 X, 1파일 touch).
+
+**코드 변경**:
+- `backend/app/db_pool.py` `warmup_pool() -> tuple[int, int]` public 함수 신규 (~40 LOC, A1 반영):
+  - `_MIN_CONN` 만큼 `getconn()` → `SELECT 1` → `putconn()`
+  - finally 블록으로 반납 보장
+  - `_pool=None` 시 `(0, 0)` 반환 (test env safe)
+- `backend/app/services/scheduler_service.py`:
+  - L17 `from apscheduler.triggers.interval import IntervalTrigger` (A3)
+  - L23 `from app.db_pool import put_conn, warmup_pool`
+  - `_pool_warmup_job()` 신규 함수 (warmup_pool 호출 + 결과 로그 + try/except)
+  - `add_job` 12번째 등록:
+    - `IntervalTrigger(minutes=5)`
+    - `next_run_time=datetime.now(Config.KST) + timedelta(seconds=10)` (timezone-aware, A5 반영)
+  - 스케줄러 job 수: **11 → 12**
+
+**효과**: 매 5분 풀 안 모든 idle conn 활성화 → max_age 시계 리셋 → MIN=5 강제 유지 → 영구 10 conn 보장.
+
+---
+
+### 안전성 검증 종합
+
+- ✅ Flutter web build 성공 (12.1s)
+- ✅ BE syntax check (db_pool.py + scheduler_service.py 정상)
+- ✅ pytest test_scheduler.py: 8 passed / 1 skipped / 회귀 0건
+- ✅ 기존 11 job 영향 X (12번째 추가만)
+- ✅ 기존 storage 키 영향 X (FEAT 는 pin_registered 호출 추가만)
+- ✅ Rollback git revert 1 commit 으로 둘 다 원복
+
+### Deploy
+
+- 빌드: flutter build web --release ✓ 12.1s
+- 배포 (FE): Netlify Deploy ID `69eef28fca3b7ffce577068d` (2026-04-27 KST)
+- 배포 (BE): Railway 자동 (git push origin main → ~1분)
+- Production URL: https://gaxis-ops.netlify.app
+- git commit: `2e023eb` (`222aec0..2e023eb`)
+
+### Post-deploy 검증 (Twin파파)
+
+#### Railway logs (배포 직후)
+
+```
+[scheduler] Scheduler initialized with 12 jobs   ← 11 → 12 확인
+[pool_warmup] 5/5 conn warmed                    ← 첫 실행 (10초 후)
+```
+
+#### 1시간 관찰 (`pg_stat_activity`)
+
+매 5분마다 conn 수 측정 → **10 영구 유지** = 성공. 이전 추세 (10→9→7) 와 비교.
+
+#### FEAT-PIN-STATUS 효과 검증
+
+PIN 사용자가 IndexedDB 잃은 케이스 시뮬레이션 → `/auth/pin-status` 호출 → PinLoginScreen 복귀 (HomeScreen 직행 X).
+
+### 문서 산출물
+
+- 코드 4 파일: db_pool.py + scheduler_service.py + auth_service.dart + main.dart
+- 버전 2 파일: backend/version.py + frontend/lib/utils/app_version.dart
+- 문서 4 파일: AGENT_TEAM_LAUNCH.md (advisory trail) + CHANGELOG.md ([2.10.6] entry) + BACKLOG.md (FEAT/OBSERV COMPLETED) + handoff.md (3/3 세션) + PROGRESS.md (이 섹션)
+
+### 신규 BACKLOG 갱신
+
+- `FEAT-PIN-STATUS-BACKEND-FALLBACK-20260427` 🔴 P1 → ✅ COMPLETED (v2.10.6)
+- `OBSERV-DB-POOL-IDLE-DISCONNECT-WARMUP-20260427` 🟡 P2 → ✅ COMPLETED (v2.10.6)
+
+남은 BACKLOG (대기):
+- `AUDIT-PWA-SW-INDEXEDDB-PRESERVE-20260427` 🟡 P2 (audit, 30분)
+- `UX-LOGIN-FALLBACK-PIN-RESET-LINK-20260427` 🟢 P3 (1h)
+- `FEAT-AUTH-STORAGE-MIGRATION-FULL-20260427` 🟡 P2 (보안 trade-off, 3~4h)
 
 ---
 

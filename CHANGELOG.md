@@ -231,6 +231,31 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.10.4] - 2026-04-25 — 긴급 health timeout 보정 (사후 보충)
+
+> ⚠️ **사후 보충 entry** (2026-04-27 정리). 이전 세션 (2026-04-25) 배포 시 CHANGELOG 보충 누락. handoff.md 4-27 세션 (2/3) "부수 발견" 으로 추적.
+
+### Fixed (긴급, 현장 영향)
+
+- **`frontend/lib/services/api_service.dart` L209-210** `getPublic()` Dio 인스턴스 timeout 보정:
+  - `connectTimeout: 5s` → **10s**
+  - `receiveTimeout: 5s` → **20s**
+- 트리거: 2026-04-25 KST "System Offline" UX 발생. Railway `/health` 200 OK 정상 응답 + TTFB 12~15s 간헐 (외부 원인) → Flutter health check 5s timeout 초과 → 클라이언트가 false-positive `System Offline` 표시
+- 해결: 일반 API timeout (15s) 와 일관성 + 5s 여유 → 20s. Railway TTFB 지연 근본 원인은 별건 (`OBSERV-RAILWAY-HEALTH-TTFB-15S-INTERMITTENT` BACKLOG 추적).
+
+### Deploy
+
+- 빌드: flutter build web --release ✓ 45.2s
+- 배포: Netlify Deploy ID `69ec09a231e1446389627519` (2026-04-25 KST)
+- git commit: `cd701e2` "fix: v2.10.4 health check timeout 5s→20s — System Offline false positive 긴급 해소"
+
+### Related
+
+- 별건 BACKLOG: `OBSERV-RAILWAY-HEALTH-TTFB-15S-INTERMITTENT` 🟡 P2 — Railway TTFB 15s 근본 원인 조사 + 외부 모니터링 도입 검토
+- v2.10.6 OBSERV-DB-POOL-WARMUP 적용 후 `direct conn fallback` 빈도 0 도달 시 → TTFB 자연 안정화 가능 (부수 효과 검증 필요)
+
+---
+
 ## [2.10.3] - 2026-04-24
 
 > FIX-ORPHAN-ON-FINAL-DELIVERY — v2.10.2 배포 후 Q4-5 48h 관찰에서 발견된 숨은 4번째 delivery 실패 경로 수정. 2026-04-22 HOTFIX-ALERT-SCHEDULER-DELIVERY 가 `scheduler_service.py` 3곳만 고쳤는데 `task_service.py` 내 `complete_task` 경로에 동일 패턴의 **target_worker_id 미지정 버그** 가 숨어있어 2026-04-23~24 4일간 8건 legacy NULL 발생.
