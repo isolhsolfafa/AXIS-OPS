@@ -95,6 +95,10 @@ def _is_conn_usable(conn) -> bool:
         cur = conn.cursor()
         cur.execute("SELECT 1")
         cur.close()
+        # HOTFIX-08 (v2.10.10): SELECT 1 후 transaction 정리.
+        # psycopg2 default autocommit=False → SELECT 도 BEGIN 자동 시작 → INTRANS 상태로 풀 반납됨.
+        # 이 conn 을 받아 m_conn.autocommit=True 시도 시 set_session error 발생 (migration_runner 사례).
+        conn.rollback()
         return True
     except Exception:
         return False
@@ -263,6 +267,8 @@ def warmup_pool() -> tuple:
                 cur = conn.cursor()
                 cur.execute("SELECT 1")
                 cur.close()
+                # HOTFIX-08 (v2.10.10): SELECT 1 후 transaction 정리 (INTRANS 상태 회피).
+                conn.rollback()
                 # HOTFIX-06 (v2.10.7): max_age 시계 리셋 — warmup 의도대로 작동.
                 # 누락 시 warmup 후에도 _is_conn_usable() 가 expired 판정 → discard → fallback.
                 _conn_created_at[id(conn)] = time.time()
