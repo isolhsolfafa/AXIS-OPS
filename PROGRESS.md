@@ -3,7 +3,164 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.9.10 (FIX-25 v4 progress API에 partner/line 4필드 노출, 2026-04-20)
+> **현재 버전**: v2.10.5 (FIX-PIN-FLAG-MIGRATION-SHAREDPREFS, 2026-04-27)
+> **최근 인프라**: FIX-DB-POOL-MAX-SIZE-20260427 — Railway env DB_POOL_MAX 20→30 (2026-04-27, 코드 변경 0)
+
+---
+
+## FIX-PIN-FLAG-MIGRATION-SHAREDPREFS: PIN 등록 플래그 storage 안정화 (2026-04-27, v2.10.5)
+
+**배경**: 2026-04-26 Twin파파 PC sticky cache 조사 + PIN 화면 손실 가설 분석 → `pin_registered` 플래그가 `flutter_secure_storage` (encrypted IndexedDB) 에 저장 중. PWA 환경 IndexedDB 손실 (iOS Safari 7일 idle / Storage quota evict / Origin 변경) 시 → main.dart 라우팅 EmailLoginScreen 빠짐 → 비번 모름 → 막힘. 동일 파일의 `device_id` 는 이미 SharedPreferences (localStorage) 사용 중인 비대칭 구조.
+
+**4 라운드 advisory review (M=8/8 + 추가 리스크 2/2 전수 반영)**:
+
+| 라운드 | 주체 | 핵심 발견 |
+|---|---|---|
+| 1 (자체) | Claude Code | A1 인증 로직 영향 → Codex 이관 / A2 baseline SQL 추가 / A3 ⛔ 단방향 마이그레이션 rollback 위험 → **양방향 sync 채택** / A4 양방향 write 패턴 / A5 race / A6 IndexedDB trigger (6건) |
+| 2 (Codex) | Codex 1차 | M1 atomic try/catch / M2 SQL `request_path` LIKE / M3 SW 업데이트 ≠ IndexedDB / Q2.d rollback 5번째 / Q2.e cohort / Q3.g 다른 가설 / Q3.h D+7 통계 / Q4.j iOS Safari localStorage 도 영향 (M=8) |
+| 3 (Codex 추가) | Codex | refresh_token + worker_id + worker_data 도 SecureStorage → BACKLOG `FEAT-AUTH-STORAGE-MIGRATION-FULL` 신규 / backend `/auth/pin-status` 가 진짜 root fix → BACKLOG `FEAT-PIN-STATUS-BACKEND-FALLBACK` P2 → P1 격상 (2건) |
+| 4 (배포 검증) | Twin파파 | home_screen.dart 별건 알림 배지 동기화 동시 포함 안전 검증 (1건) |
+
+**최종 결정**:
+- Storage 정책: SharedPreferences 주 저장소 + SecureStorage 보조 저장소 (양방향 sync)
+- atomic 정책: SharedPrefs 반드시 성공 + SecureStorage best-effort try/catch
+- Rollback 정책: SecureStorage delete 안 함 (양방향 sync 로 rollback 시 일괄 빠짐 위험 0)
+
+**수정 파일 (FE 1파일 + 부수 1파일 + 버전 2파일 = 4파일)**:
+- `frontend/lib/services/auth_service.dart` (+50/-11 LOC):
+  - L3 `package:flutter/foundation.dart` import (debugPrint)
+  - `hasPinRegistered()` 양방향 read + auto-sync (SharedPrefs 우선, SecureStorage fallback)
+  - `savePinRegistered()` 양방향 write + atomic try/catch (Codex M1 반영)
+  - `logout()` (L243) SharedPrefs `pin_registered` 도 정리
+- `frontend/lib/screens/home/home_screen.dart` 알림 배지 동기화 (별건, 같은 commit)
+- `backend/version.py` v2.10.4 → 2.10.5
+- `frontend/lib/utils/app_version.dart` v2.10.4 → 2.10.5
+
+**무변경 (의도적)**:
+- `frontend/lib/main.dart` 라우팅 분기 무변경 (FEAT-PIN-STATUS-BACKEND-FALLBACK 후속 Sprint 에서 진행)
+- `auth_service.dart` 의 `_refreshTokenKey` / `_workerIdKey` / `_workerDataKey` 무변경 (FEAT-AUTH-STORAGE-MIGRATION-FULL 후속 Sprint 에서 진행)
+
+**Limitation (Codex 1차 advisory 핵심)**:
+
+| 손실 패턴 | 빈도 | 본 Sprint | FEAT-PIN-STATUS-BACKEND |
+|---|---|---|---|
+| pin_registered 만 단독 | 드뭄 | ✅ | ✅ |
+| 4개 키 함께 (Clear site data, evict) | 흔함 | ❌ | ✅ (refresh 살아있으면) |
+| iOS Safari 7일 idle | 흔함 | ❌ | ✅ (refresh 살아있으면) |
+
+→ **본 Sprint = 1차 보호 layer**. 진짜 root fix 는 `FEAT-PIN-STATUS-BACKEND-FALLBACK` (P1 격상).
+
+**Deploy**:
+- 빌드: flutter build web --release ✓ 12.2s
+- 배포: Netlify Deploy ID `69eed5d26147a9d3c6966ecf` (2026-04-27 KST)
+- Production URL: https://gaxis-ops.netlify.app
+
+**Baseline 측정 (Twin파파 pgAdmin, 배포 전 1회 권장)**:
+
+설계서 L31644~31691 SQL 3종 (`request_path` LIKE 패턴, Codex M2 정정):
+1. PIN 손실 의심 사용자 식별 (같은 날 `/auth/login` 2회 이상)
+2. EmailLoginScreen 진입 빈도 (사용자당 login attempts/day)
+3. 출근 burst 시점 auth_pct (`/auth/login` + `/auth/refresh` 비중)
+
+**1주 관찰 지표 (D+7 = 2026-05-04)**:
+- PIN 손실 의심 사용자: baseline ___ → 0~1명/일 (기대)
+- 사용자당 login attempts/day: baseline ___ → ~1.0 (기대)
+- auth_pct: baseline ___ → 감소 시 connection burst 부수 기여 입증
+
+**통계 신뢰성 보강 (Codex Q3.g/h)**:
+- 동일 요일 3일 pre/post 비교 (화/수/목 같은 요일 3주 데이터)
+- active worker 분모 정규화
+- Cohort 정의 (cohort_A: build_date >= 2026-04-27 / cohort_B: < 2026-04-27 / cohort_secure_write_ok vs fail)
+- 다른 가설 구분 cohort (device_id, UA, 시간대)
+
+**Codex 공식 이관 적용 (인증 로직 영향)**:
+본 작업은 CLAUDE.md L130 Codex 이관 체크리스트 4번 (인증·권한 로직 변경) 해당 + "판정 애매 시 = 자동 이관" 적용. Codex 1차 advisory review 후 적용.
+
+**롤백**:
+`auth_service.dart` 변경 git revert → flutter build web → Netlify 배포. 양방향 sync 채택으로 rollback 시 4개 케이스 안전, 단 SecureStorage write 실패 cohort (try/catch best-effort) 만 잔존 위험.
+
+**문서 산출물 (FE 1파일 + 문서 4파일 + 신규 1파일)**:
+- `frontend/lib/services/auth_service.dart` 핵심 변경
+- `AGENT_TEAM_LAUNCH.md` FIX-PIN-FLAG-MIGRATION-SHAREDPREFS-20260427 섹션 (L31395+) — 양방향 sync 코드 + atomic try/catch + Limitation + baseline SQL + Rollback 5케이스
+- `CHANGELOG.md` `[2.10.5]` entry
+- `BACKLOG.md` 5개 entry 신규 (FIX-PIN-FLAG / FEAT-PIN-STATUS-BACKEND P1 / AUDIT / UX / FEAT-AUTH-STORAGE-MIGRATION-FULL)
+- `handoff.md` 2026-04-27 (2/2) FIX-PIN-FLAG 세션
+- `CODEX_REVIEW_FIX_PIN_FLAG_20260427.md` Codex 1차 advisory 프롬프트
+
+**신규 BACKLOG (4개 후속 Sprint)**:
+- `FEAT-PIN-STATUS-BACKEND-FALLBACK-20260427` 🔴 P1 (격상 — 진짜 root fix, 1h)
+- `AUDIT-PWA-SW-INDEXEDDB-PRESERVE-20260427` 🟡 P2 (audit, 30분)
+- `UX-LOGIN-FALLBACK-PIN-RESET-LINK-20260427` 🟢 P3 (UX, 1h)
+- `FEAT-AUTH-STORAGE-MIGRATION-FULL-20260427` 🟡 P2 (Codex 신규 권장)
+
+---
+
+## FIX-DB-POOL-MAX-SIZE-20260427: DB Connection Pool 사이즈 보정 (2026-04-27, 인프라 only)
+
+**배경**: 4-25 토 새벽 (KST 07:29) Pool exhausted 다발 사례 + 사용자 ≥120명 / peak 07:30~09:00, 16:30~17:00 출근 burst 패턴 확정. 기존 Railway env `DB_POOL_MAX=20` 으로는 Q-B 측정 31 동시 in-flight 흡수에 부족 (per-worker 분배 시 worker A 16+ 필요).
+
+**진단 데이터 (3 SQL — Q-A/Q-B/Q-C)**:
+- **Q-A**: 시간대별 burst 분석 (4-19 ~ 4-25, 7일치) — Mon 07 624 req / Fri 16 629 req 최다, Tue 15 max 2415ms / p99 1981ms 최저
+- **Q-B**: ⭐ 결정적 데이터 — 2026-04-21 화 출근 burst 측정 (07:00~09:00 KST self-join CTE)
+  - peak 31 동시 in-flight (08:06:07)
+  - 21 동시 17회 (07:46~08:55, 70분간 연속)
+- **Q-C**: task API 성장 추이 (3-29 ~ 4-27, 30일) — work_api 13→365 (4-16 peak), total_api 287→4920 (4-16 peak)
+
+**4 라운드 advisory review (M=0 / A=12)**:
+
+| 라운드 | 주체 | 핵심 발견 |
+|---|---|---|
+| 1 (텍스트) | Codex 1차 | scheduler peak 8 conn 재계산 / 단계적 25→30 한 번에 직행 / direct conn fallback 비용 200~500ms 명시 / 평균 conn 정상치 정정 (4건) |
+| 2 (코드 구조) | Claude Code | ⛔ **per-worker 독립 pool 구조** 발견 (`init_pool() in create_app()` — gunicorn -w 2 fork 시 각 worker 독립 pool) / Phase B 1일→3일 통계 신뢰성 / pg_stat_activity SQL pid+client_addr 정밀화 (4건) |
+| 3 (데이터 정합성) | Codex 3차 | Q-B 일자 오기 (4-27→4-21) / 5x 산수 오류 (31×5=155 in-flight, MAX=30 으로 부족) / MIN ↔ max_age=300s race / grep `\b` 경계 + `get_db_connection` 함수명 누락 (4건) |
+| 4 (env fact-check) | **Twin파파** | ⚠️ **prod env 가 이미 5/20 운영 중** (코드 default 1/10 가정 X). 결론 (MAX=30) 유지하되 fallback 빈도 추정 정정 (3건) |
+
+**최종 결정**:
+- `DB_POOL_MAX = 20 → 30` (변경)
+- `DB_POOL_MIN = 5` (유지, 기존 운영값)
+
+**산정 근거 (per-worker 분배)**:
+- Worker A (scheduler owner, fcntl lock): HTTP 8 thread + scheduler peak 4 + 여유 = **15 conn 필요**
+- Worker B (HTTP only): HTTP 8 thread + 여유 2 = **10 conn 필요**
+- MAX=30 채택 → 양 worker 100% 안전 + 미래 2x (62 in-flight) 흡수
+- Postgres `max_connections=100` 중 30×2=60 + pgAdmin 2 = **62/100 점유 (안전권)**
+
+**미래 dimensioning**:
+- 사용자 600명 (5x) 도달 시 → MAX=70~80 + Postgres tier 상향 / PgBouncer 도입 검토 필수
+- 현재 12~18개월 안정 보장 추정
+
+**Phase A** (✅ 2026-04-27 KST 완료):
+- Twin파파가 Railway Dashboard → axis-ops-api → Variables 에서 `DB_POOL_MAX = 20→30` 직접 변경
+- 자동 재배포 ~1분
+- Railway logs 확인: `[db_pool] Connection pool initialized: min=5, max=30, max_age=300s, connect_timeout=5s`
+
+**Phase B** (3일 관찰 중, 화/수/목):
+- D+0 (4-27 월) 16:30~17:00 KST 퇴근 peak — `Pool exhausted` grep
+- D+1/D+2/D+3 (화/수/목) 07:30~09:00 KST 출근 peak 동일 grep
+- off-peak (12:00) Q-B 동시 in-flight 재측정 SQL (peak 후 O(N²) 부담 회피)
+- pg_stat_activity 정밀 SQL (pid+client_addr 로 worker A/B 분리)
+
+**Phase C** (D+3 이후 조건부):
+- 0 fallback / 3일 → 30 충분, Sprint COMPLETED
+- 1~5건 / 3일 → MAX=40 ↑ (잠재 leak 의심)
+- 10+건 / 3일 → MAX=50 ↑ + leak audit 필수
+
+**Codex 공식 이관 미해당**:
+본 작업은 Codex 이관 체크리스트 6항목 미충족 (단순 env 변경 + 코드 변경 0 + S1/S2 미해당). Advisory review 만 4 라운드 수행 (정식 Codex 이관 절차 미적용).
+
+**롤백**:
+`DB_POOL_MAX = 30 → 20` env 복원 → 자동 재배포 ~1분, 코드 영향 0.
+
+**문서 산출물 (코드 0 / 문서 4)**:
+- `AGENT_TEAM_LAUNCH.md` FIX-DB-POOL-MAX-SIZE-20260427 섹션 (라운드 4 trail 포함, 약점 12건)
+- `BACKLOG.md` FIX-DB-POOL 항목 → 🟡 PHASE A APPLIED → B 관찰 중
+- `CHANGELOG.md` `[Infra] - 2026-04-27` entry 추가
+- `handoff.md` 2026-04-27 세션 요약 추가
+
+**별건 BACKLOG 등록 (2026-04-27)**:
+- `OBSERV-DB-POOL-IDLE-DISCONNECT-WARMUP` 🟢 P3 (격하 — MIN=5 가 cold-start 일부 흡수)
+- `OBSERV-RAILWAY-HEALTH-TTFB-15S-INTERMITTENT` 🟡 P2 (별건, Pool 30 적용 후 자연 해결 여부 확인)
+- `OBSERV-SLOW-QUERY-ENDPOINT-PROFILING` 🟡 P2 (Q-A 화/수 p99≥1초 burst 9건 endpoint 분석)
 
 ---
 

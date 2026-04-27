@@ -587,7 +587,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             children: [
               IconButton(
                 icon: const Icon(Icons.notifications_outlined, color: GxColors.slate, size: 22),
-                onPressed: () => Navigator.pushNamed(context, '/alerts'),
+                onPressed: () async {
+                  await Navigator.pushNamed(context, '/alerts');
+                  ref.read(alertProvider.notifier).refreshUnreadCount();
+                },
               ),
               if (unreadCount > 0)
                 Positioned(
@@ -760,7 +763,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               title: '알림',
               subtitle: '공정 누락 및 이상 알림 확인',
               badge: unreadCount > 0 ? unreadCount : null,
-              onTap: () => Navigator.pushNamed(context, '/alerts'),
+              onTap: () async {
+                await Navigator.pushNamed(context, '/alerts');
+                // 알림 화면에서 돌아올 때 배지 카운트 동기화
+                ref.read(alertProvider.notifier).refreshUnreadCount();
+              },
             ),
             const SizedBox(height: 8),
 

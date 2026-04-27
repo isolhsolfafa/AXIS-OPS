@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:math';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'api_service.dart';
@@ -242,10 +243,11 @@ class AuthService {
       await _secureStorage.delete(key: _workerDataKey);
       await _secureStorage.delete(key: _pinRegisteredKey);
 
-      // 마지막 경로도 삭제
+      // 마지막 경로 + pin_registered SharedPrefs 도 정리 (FIX-PIN-FLAG-MIGRATION 양방향 cleanup)
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_lastRouteKey);
       await prefs.remove(_lastRouteArgsKey);
+      await prefs.remove(_pinRegisteredKey);
     } catch (e) {
       await _secureStorage.deleteAll();
       rethrow;
@@ -344,19 +346,49 @@ class AuthService {
 
   /// PIN 등록 여부 확인 (로컬 캐시)
   ///
-  /// PIN 설정 시 savePinRegistered(true) 호출로 캐시됨
-  /// 로그아웃 시 삭제됨
+  /// FIX-PIN-FLAG-MIGRATION-SHAREDPREFS-20260427:
+  /// SharedPreferences (localStorage) 우선 read, fallback 으로 SecureStorage (IndexedDB).
+  /// IndexedDB 손실 (iOS Safari 7일 idle / Storage quota evict / Origin 변경) 에도 안정적.
+  /// 양방향 sync 정책 — SecureStorage delete 안 함 (rollback 안전).
   Future<bool> hasPinRegistered() async {
-    final value = await _secureStorage.read(key: _pinRegisteredKey);
-    return value == 'true';
+    final prefs = await SharedPreferences.getInstance();
+
+    // 1순위: SharedPreferences read (주 저장소)
+    final fromPrefs = prefs.getString(_pinRegisteredKey);
+    if (fromPrefs != null) {
+      return fromPrefs == 'true';
+    }
+
+    // 2순위: SecureStorage fallback (마이그레이션 + IndexedDB 잔존)
+    final fromSecure = await _secureStorage.read(key: _pinRegisteredKey);
+    if (fromSecure != null) {
+      // SharedPreferences 로 sync (양방향, SecureStorage 유지 — rollback 안전)
+      await prefs.setString(_pinRegisteredKey, fromSecure);
+      return fromSecure == 'true';
+    }
+
+    return false;
   }
 
   /// PIN 등록 상태 저장 (PIN 설정/해제 시 호출)
+  ///
+  /// FIX-PIN-FLAG-MIGRATION-SHAREDPREFS-20260427:
+  /// SharedPreferences 주 저장소 + SecureStorage best-effort (atomic 보장 불가).
+  /// SecureStorage write 실패해도 SharedPrefs 가 주 저장소이므로 non-fatal.
   Future<void> savePinRegistered(bool registered) async {
-    await _secureStorage.write(
-      key: _pinRegisteredKey,
-      value: registered.toString(),
-    );
+    final prefs = await SharedPreferences.getInstance();
+    final value = registered ? 'true' : 'false';
+
+    // ① 주 저장소 (반드시 성공)
+    await prefs.setString(_pinRegisteredKey, value);
+
+    // ② 보조 저장소 best-effort (실패해도 SharedPrefs 가 주 저장소)
+    try {
+      await _secureStorage.write(key: _pinRegisteredKey, value: value);
+    } catch (e) {
+      debugPrint('[auth] SecureStorage write failed (non-fatal, SharedPrefs is primary): $e');
+      // 의도적 무시 — desync 발생 가능하지만 다음 hasPinRegistered() 의 양쪽 read 가 흡수
+    }
   }
 
   /// 앱 시작 시 자동 로그인 시도

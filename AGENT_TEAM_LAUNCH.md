@@ -30853,3 +30853,1393 @@ WHERE alert_type = 'CHECKLIST_DONE_TASK_OPEN'
 | **합계** | +18 / -3 | **+42 / -3** |
 
 > 업데이트 Gate #2 "변경 라인 수 ±40 LOC" → **±50 LOC 로 완화**. M2 수용으로 불가피한 증가. 코드 크기 원칙 (파일당 800) 에는 영향 없음 (~1050 → ~1090 LOC, 임계 유지).
+
+---
+
+## 🔧 FIX-DB-POOL-MAX-SIZE-20260427 프롬프트 — DB Connection Pool 사이즈 보정 (🟡 P1)
+
+> **등록일**: 2026-04-27 09:00 KST (월요일 출근 peak 진단 결과 기반)
+> **우선순위**: 🟡 P1 (사용자 영향 0건이나 buffer 부족, peak 시 exhaustion 가능성)
+> **상태**: 🔴 OPEN (즉시 착수)
+> **예상 소요**: env 변경 5분 + 검증 관찰 1일
+> **트리거 근거**: 주말 동안 사용자/시간대 진단 결과 (`사용자 ≥ 120명`, peak 07:30~09:00 / 16:30~17:00) + Pool maxconn=20 mismatch 확정. Pool exhaustion 로그 누적 (4-25 토요일 새벽 KST 07:29 다발 사례)
+> **담당**: BE teammate (env 변경 → 재배포 → peak 관찰)
+> **⚠️ 라운드 4 — Twin파파 fact-check (2026-04-27 deploy 직전)**: 기존 Railway env 가 **이미 5/20 으로 운영 중이었음** (코드 default 1/10 가정 X). Q-B 31 peak 데이터는 **maxconn=20 환경** 측정 결과. 변경: 20 → **30**, MIN 5 유지. 결론(MAX=30 채택) 동일 유효, 다만 fallback 추정 빈도는 설계서 추정보다 낮았음 (10 capacity 초과 11건 → 20 capacity 초과 1건/peak).
+> **Codex advisory 1차 (2026-04-27)**: A1 scheduler peak 8 conn 재계산, A2 단계적 → 한 번에 30 직행, A3 평균 conn 정상치 정정, A4 direct conn fallback 지연 비용 명시
+> **Claude Code advisory 2차 (2026-04-27)**: ⛔ **per-worker 독립 pool 구조** 인지 (init_pool() in create_app() — 각 worker fork 시 독립 pool 생성), DB_POOL_MIN=1 cold-start 영향(❌ 라운드 4 정정 — 이미 MIN=5), Phase B 1일→3일 통계 신뢰성, pg_stat_activity SQL pid+client_addr 정밀화, Q-B 31 peak 동시 in-flight 데이터 반영
+> **Codex advisory 3차 (2026-04-27)**: A1 Q-B 일자 오기 (4-27→4-21), A2 5x 산수 오류 정정 (2x 흡수 / 5x 추가 상향 필요), A3 21 동시 17회 fallback 누적량 명시(❌ 라운드 4 정정 — 20 capacity 환경에서 누적량 훨씬 낮음), A4 MIN=5 ↔ max_age=300s 상호작용 단서, A5 grep `\b` 경계 + 함수명 누락 (Claude Code 라운드 2 부분 오인 — `get_db_connection` 실존을 부정 / Codex 라운드 3 가 grep fact-check 로 정정)
+> **최종 결정**: `DB_POOL_MAX=30` + `DB_POOL_MIN=5` (Q-B 31 peak / per-worker × 2 / **미래 2x 까지 흡수**, 5x 도달 시 추가 상향 필요 / Postgres 62/100 안전권)
+> **Codex 공식 이관 여부**: ❌ — Codex 이관 체크리스트 6항목 미충족 (단순 env 변경, 코드 변경 0, S2/S3 미해당). Advisory review 만 다라운드 수행
+> **배포 진행**: 2026-04-27 KST — Twin파파 Railway Dashboard 에서 직접 적용 (5/20 → 5/30) → 자동 재배포
+
+### 🎯 목적
+
+현재 **`DB_POOL_MAX=10`** 으로 설정되어 있어 다음 두 시점에 buffer 가 부족:
+
+1. **출근 peak (07:30~09:00 KST)** — 약 60+ 사용자가 PWA 일제 시작 → 동시 요청 burst
+2. **퇴근 peak (16:30~17:00 KST)** — attendance check + work/complete burst
+
+`gunicorn -w 2 --threads 8 = 16 동시 처리` + scheduler peak ~8 conn = **최소 24 conn 동시 필요**. 현재 maxconn=10 은 60% 부족.
+
+### ⚠️ Per-worker 독립 pool 구조 (Claude Code 리뷰 핵심)
+
+`backend/app/__init__.py:60-62` 검증:
+```python
+# DB Connection Pool 초기화 (Sprint 30)
+if not app.config.get('TESTING', False):
+    from app.db_pool import init_pool, close_pool
+    init_pool()    # ← create_app() 안에서 호출
+```
+
+**Gunicorn `-w 2` (preload 없음) → 각 worker 가 독립적으로 `create_app()` 호출 → 각자 `init_pool()` 실행 → 독립 pool 보유**.
+
+```
+gunicorn master (PID X)
+  ├─ Worker A (PID Y) — 독립 pool [_MAX_CONN conn]  ← scheduler owner (fcntl lock)
+  └─ Worker B (PID Z) — 독립 pool [_MAX_CONN conn]  ← HTTP only
+```
+
+**중요한 의미**:
+- `DB_POOL_MAX=30` 설정 시 → 실제 Postgres 점유 = **30 × 2 worker = 60 conn**
+- `DB_POOL_MIN=5` 설정 시 → 상시 warm = **5 × 2 worker = 10 conn**
+- per-worker 부하 분배:
+  - Worker A (scheduler owner): HTTP 8 + scheduler peak 4 + heavy path 2 + 여유 1 = **15 conn 필요**
+  - Worker B (HTTP only): HTTP 8 + 여유 2 = **10 conn 필요**
+  - max(15, 10) + 미래 5x 부하 buffer = **20~25 per-worker 권장 → MAX=30 채택**
+
+### 🧮 scheduler peak conn 재계산 (Codex A1 반영)
+
+`scheduler_service.py` 11 job 분포 + APScheduler `ThreadPoolExecutor` max_workers=10 (기본값):
+
+| 시점 | 동시 발화 job 수 | 비고 |
+|:---|:---:|:---|
+| 매분 (휴게시간 자동 일시정지) | 1 | 상시 |
+| 09:00 KST | **3** | task_escalation + check_not_started + check_checklist_done |
+| 매시 정각 | 2~3 | RELAY_ORPHAN, ORPHAN_ON_FINAL 등 |
+| 09:00 + 매시 정각 + 매분 동시 | **worst case 4** | 09:00 + 매분 겹침 |
+
+→ 4 concurrent × conn 1~2 = **scheduler peak 8 conn**. 기존 추정 5 는 매분 휴게시간 단발 가정 누락.
+
+### 📊 진단 데이터 (2026-04-25~27 누적)
+
+#### 사용자 영향 (Q5 — 7일치)
+
+| 일자 | 07-09시 요청수 | slow_req≥5s | over_1s |
+|:---|---:|---:|---:|
+| 4-19 (Sun) | 81 | 0 | 0 |
+| 4-20 (Mon) | 872 | 0 | 1 |
+| 4-21 (Tue) | 747 | 0 | 0 |
+| 4-22 (Wed) | 808 | 0 | 0 |
+| 4-23 (Thu) | 922 | 0 | 0 |
+| 4-24 (Fri) | 679 | 0 | 1 |
+| 4-25 (Sat) | 434 | 0 | 0 |
+
+→ **사용자 체감 5초 이상 지연 0건** (direct conn fallback 으로 미체감). 다만 Pool exhausted 로그는 발생.
+
+#### 풀 상태 (월요일 oğd 8:50 KST 실측)
+
+```
+application_name      conn  state   비고
+(NULL)                 4    idle    OPS 백엔드 (정상 conn 반납 직후)
+pgAdmin 4 - CONN       1            너 pgAdmin 세션
+pgAdmin 4 - DB         1            너 pgAdmin 세션
+─────────────────
+                       6 (분기 없음, OPS 단독)
+```
+
+→ **트랜잭션 누수 없음** (`idle in transaction` 0건). 풀 동작 자체는 건강. 단지 사이즈 부족.
+
+#### ⭐ Q-B 동시 in-flight 실측 (**2026-04-21 화요일 출근 burst** 측정, 결정적 데이터)
+
+> Codex A1 정정: 측정 일자를 작성 일자(4-27) 가 아닌 **데이터 일자 (4-21 화)** 로 명시. SQL `WHERE created_at >= '2026-04-21 07:00:00+09'` 와 정합.
+
+`app_access_log` 에서 burst 시점 동시 in-flight 측정:
+
+```sql
+WITH inflight AS (
+  SELECT created_at,
+         created_at - (duration_ms || ' milliseconds')::interval AS started_at
+  FROM app_access_log
+  WHERE created_at >= '2026-04-21 07:00:00+09'
+    AND created_at <  '2026-04-21 09:00:00+09'
+)
+SELECT TO_CHAR(date_trunc('second', a.started_at AT TIME ZONE 'Asia/Seoul'), 'HH24:MI:SS'),
+       COUNT(*) AS concurrent
+FROM inflight a JOIN inflight b ON b.started_at <= a.started_at AND b.created_at >= a.started_at
+GROUP BY 1 ORDER BY 2 DESC LIMIT 20;
+```
+
+**결과**:
+```
+peak (08:06:07):  31 동시 in-flight   ← 결정적
+빈번:             21 동시 (15회 이상, 17회 정밀 카운트)
+보통:             15 동시
+```
+
+**per-worker 분배 추정** (Round-robin 가정):
+- Worker A: ~16 (scheduler owner 라 약간 더)
+- Worker B: ~15
+
+→ **MAX=10 으로는 fallback 6건 발생 (peak 단발), MAX=30 이면 fallback 0**.
+
+##### ⚠️ Codex A3 보강 — 21 동시 17회 fallback 누적량
+
+```
+21 동시 × per-worker ~10.5 (10 capacity 초과 0.5)  
+  → fallback 1~2건 / 17회 = 17~34건 / 출근 peak (단일 burst 기준)
+  → 일별 누적 ~100 fallback events 가능 (출근 + 퇴근 + 잡다 burst 합산)
+
+영향:
+  - 사용자 체감: 0 (Q5 slow_req=0 로 입증)
+  - Postgres 부담: TLS handshake × 100건/일 = CPU spike 누적
+  - max_connections 100 한계 압박: 단발 31 peak + fallback 시 일시적 25+ 점유
+```
+
+→ **누적 측면에서도 MAX=30 은 즉시 적용 가치 있음** (사용자 영향 0 이지만 인프라 비용 축적).
+
+#### Q-A 시간대별 burst (Top 5 + Slow Top 5)
+
+| Day | Hour | req | max_ms | p99_ms | 메모 |
+|:---|:---:|---:|---:|---:|:---|
+| Fri | 16 | 629 | 669 | 254 | 퇴근 peak |
+| Mon | 07 | 624 | 125 | 97 | 출근 peak |
+| Thu | 07 | 574 | 165 | 99 | 출근 peak |
+| Wed | 07 | 527 | 549 | 196 | 출근 peak |
+| Tue | 11 | 375 | 1331 | 462 | work API 부하 |
+| **Tue** | **15** | 162 | **2415** | **1981** | ⚠️ p99 worst |
+| Wed | 10 | 133 | 1660 | 1224 | ⚠️ slow burst |
+| Wed | 18 | 37 | 1183 | 1143 | ⚠️ low req but slow |
+| Sat | 00 | 68 | 1200 | 837 | 새벽 cold-start |
+
+→ 화/수가 부하 집중. **MIN=5 도입 시 새벽~peak 직전 cold-start 부하 60% 감소 예상**.
+
+#### Q-C task API 성장 추이 (3-29 ~ 4-27, 30일)
+
+```
+work_api    13 → 365 (peak 4-16) → 100~260 안정
+tasks_api   26 → 293 (peak)        → 65~240 안정
+product_api 22 → 336 (peak)        → 99~315 안정
+total_api  287 → 4920 (peak)        → 1100~3500
+```
+
+→ **3월말 도입 → 4월 중순 안정화**. 향후 **사용자 120명 → 600명 (5x) 도달 시** total_api 가 비례 성장 예상 (Codex I2 정확화: 일평균 3000 → 15000 req).
+
+##### ⚠️ Codex A2 정정 — MAX=30 의 dimensioning 한계
+
+```
+현재 31 peak in-flight × 5x = 155 in-flight 미래
+per-worker = 77.5 conn 필요 → MAX=30 으로는 절대 흡수 불가
+
+정확한 future-proof 단계:
+  ├─ MAX=30 (현재 결정) → 미래 2x (62 in-flight) 까지 안전
+  ├─ MAX=50 → 3x (93 in-flight) 까지
+  ├─ MAX=70~80 → 5x (155 in-flight) 도달 시 필수 (+ Postgres tier 상향 검토)
+  └─ Postgres max_connections 100 한계 → MAX=80 × 2 = 160 시 Postgres 자체 한도 초과
+                                           → PgBouncer 또는 Postgres tier 상향 필수
+```
+
+→ **MAX=30 은 12~18개월 안정 보장**. 사용자 600명 도달 시점 (현재 추세 6~12개월 후) 에 추가 상향 + 인프라 재검토 필수. 본 Sprint 문서에 그 시점 트리거 명시.
+
+#### Postgres max_connections vs 현재
+
+```
+Railway Postgres max_connections: 100 (Pro plan 기본)
+다른 서비스 사용:                  없음 (OPS 단독)
+현재 OPS Pool maxconn:             10
+이상적 사이즈:                     30 (HTTP 16 + scheduler 8 + 여유 6)
+```
+
+→ **여유 70%, 30 으로 ↑ 안전** (Codex A2 반영: 단계적 25→30 대신 첫 peak 에서 충분 buffer 확보 위해 한 번에 30 채택).
+
+#### direct conn fallback 비용 (Codex A4)
+
+Pool exhausted 발생 시 `_create_direct_conn()` 호출되는데, 이 fallback 자체에 다음 비용 추가:
+
+| 단계 | 시간 |
+|:---|:---:|
+| TLS handshake | ~100~200 ms |
+| psycopg2 auth | ~50~100 ms |
+| connect_timeout 5s 대기 (worst) | 0 ~ 5000 ms |
+| **typical 추가 지연** | **+200~500 ms** |
+| **worst case** | **+5초 (timeout 직전 응답)** |
+
+→ Q5 의 `slow_req=0` 결과는 평균 케이스 (200~500ms 추가) 가 모두 5초 안에 끝났다는 것. 다만 **TTFB 15s intermittent 호소 (별건 OBSERV)** 의 일부 기여 가능성 있음. 30 으로 ↑ 시 fallback 빈도 자체가 0 으로 떨어지면 부수 효과로 TTFB 도 안정될 수 있음.
+
+### 🧩 수정 범위
+
+**대상**: Railway 환경변수 **2개**
+
+```
+Railway Dashboard → axis-ops-api → Variables 탭
+DB_POOL_MAX = 30
+DB_POOL_MIN = 5     ← Claude Code A2 반영 (cold-start 해소)
+```
+
+**코드 변경 0**. `db_pool.py:22-23` 의 기본값 (1, 10) 은 그대로 두고 env 만 override. 재배포 자동 트리거.
+
+**Procfile 변경 없음**. `gunicorn -w 2 --threads 8` 그대로.
+
+#### MIN=5 도입 효과
+
+```
+새벽 idle 5분 후 peak burst (Q-A Mon 07:00 624 req):
+  MIN=1: 1 conn warm + 14 신규 생성 (200~500ms × 14 = +최대 7초)
+  MIN=3: 3 conn warm + 12 신규 생성
+  MIN=5: 5 conn warm + 10 신규 생성  ← cold-start 60% 단축
+
+Postgres 점유 (상시):
+  MIN=5 × 2 worker = 10 conn 상시 + pgAdmin 2 = 12 (피크 외 시간)
+  MAX=30 × 2 worker = 60 conn (worst case 시)
+  → 12~60 / 100 = 12~60% 점유 (안전권)
+```
+
+→ MIN=5 도입으로 **별건 OBSERV-DB-POOL-IDLE-DISCONNECT-WARMUP 의 cold-start 부분 자연 해결**. 5분 간격 SELECT 1 cron 별건은 여전히 유효 (Railway proxy idle disconnect 방지 차원).
+
+##### ⚠️ Codex A4 보강 — MIN=5 와 max_age=300s 상호작용
+
+`db_pool.py:26 _MAX_CONN_AGE = 300` (5분) 자발적 폐기 정책과 psycopg2 `ThreadedConnectionPool` 의 minconn 동작:
+
+```
+풀 초기화 (앱 시작 직후):
+  ├─ minconn=5 즉시 5 conn 생성  ← MIN 보장 ✅
+  
+5분 경과 (max_age 만료):
+  ├─ 폐기된 conn 즉시 재생성 안 됨 (lazy)
+  ├─ 다음 getconn() 호출 시 lazy 재생성
+  ├─ idle 시간 (요청 없음) 길수록 MIN 미달 가능 ⚠️
+  
+peak burst 진입:
+  ├─ 폐기된 conn 한꺼번에 신규 생성 (TLS handshake N건)
+  ├─ MIN=5 의 cold-start 단축 효과가 5분 주기로 흔들림
+```
+
+→ **MIN=5 의 즉시 효과는 풀 초기화 직후 ~5분 만 강하게 보장**. 그 후엔 max_age 만료 + lazy 재생성 race 로 일시적 MIN 미달 가능.
+
+**해결 (별건 OBSERV-DB-POOL-IDLE-DISCONNECT-WARMUP)**:
+- 5분 간격 SELECT 1 cron — pool 의 모든 conn 활성화 → max_age 시계 리셋 → MIN 강제 유지
+- 또는 `_MAX_CONN_AGE` 자체를 늘림 (Railway proxy 와의 균형 검토)
+
+→ **본 Sprint (env 만 적용) 만으로는 cold-start 완전 해결 불가**. Phase B 검증에 풀 초기화 직후 (D+0 배포 후 5분 / 5~30분 / 30분 이후) conn 수 변화 측정 추가하면 효과 정확 측정 가능.
+
+### 📋 Phase A — env 적용 (즉시, 5분)
+
+1. Railway Dashboard 접근
+2. `axis-ops-api` service → Variables 탭
+3. `DB_POOL_MAX` = `30` 추가 (또는 기존 값 수정)
+4. `DB_POOL_MIN` = `5` 추가 (Claude Code A2 반영)
+5. Save → 자동 재배포 (~1분)
+6. Railway logs 확인:
+   ```
+   [db_pool] Connection pool initialized: min=5, max=30, max_age=300s, connect_timeout=5s
+   ```
+   `min=5, max=30` 확인되면 적용 완료.
+
+### 📋 Phase B — 검증 (3일 관찰, Claude Code A3 반영)
+
+> 1일 관찰 → 3일 (화/수/목) 출근 peak 확장. 통계 신뢰성 + 평일 정상 패턴 확정.
+
+#### B.1 — D+0 (배포 당일) 16:30~17:00 KST 퇴근 peak
+
+```bash
+# Railway logs grep
+"Pool exhausted"            # 0건 목표
+"Using direct connection"   # 0건 목표
+```
+
+#### B.2 — D+1 (화) 07:30~09:00 KST 출근 peak
+
+동일 grep + 시간대별 추세 비교.
+
+#### B.3 — D+2 (수) 07:30~09:00 KST 출근 peak
+
+동일 grep + 추세 일관성 확인.
+
+#### B.4 — D+3 (목) 07:30~09:00 KST 출근 peak
+
+동일 grep + Phase C 결정.
+
+#### B.5 — peak 시점 pg_stat_activity 정밀 진단 (Claude Code A4)
+
+각 peak 직후 (08:00 / 17:00 KST) 1회 실행:
+
+```sql
+-- pid + client_addr 추가로 worker A/B 분리 진단
+SELECT
+  pid,
+  state,
+  application_name,
+  client_addr,
+  EXTRACT(EPOCH FROM (now() - state_change))::INT AS idle_sec,
+  TO_CHAR(query_start AT TIME ZONE 'Asia/Seoul', 'HH24:MI:SS.MS') AS query_start_kst,
+  SUBSTRING(query, 1, 60) AS query_snippet
+FROM pg_stat_activity
+WHERE datname = 'railway'
+  AND (application_name IS NULL OR application_name = '')
+ORDER BY pid;
+```
+
+→ pid 그룹 2개 보이면 worker A/B 정상 분리. pid 그룹 합계 별 부하 비교 가능.
+
+#### B.6 — Q-B 동시 in-flight 재측정 (D+1 ~ D+3)
+
+> ⚠️ **Codex I3 — O(N²) 부담**: peak 시간 (07:30~09:00) 가 ~700 req/시 면 self-join ~500K rows. **점심 시간 (12:00~13:00 KST) 또는 18:00 이후 off-peak 에 측정 권장**. peak 직후 prod DB 부담 회피.
+
+```sql
+-- 핵심: peak 후 동시 in-flight 가 30 이내인지 확인
+-- 실행 시점: off-peak (12:00~13:00 KST) 권장
+WITH inflight AS (
+  SELECT created_at,
+         created_at - (duration_ms || ' milliseconds')::interval AS started_at
+  FROM app_access_log
+  WHERE created_at >= 'YYYY-MM-DD 07:00:00+09'
+    AND created_at <  'YYYY-MM-DD 09:00:00+09'
+)
+SELECT TO_CHAR(date_trunc('second', a.started_at AT TIME ZONE 'Asia/Seoul'), 'HH24:MI:SS') AS sec_kst,
+       COUNT(*) AS concurrent
+FROM inflight a
+JOIN inflight b ON b.started_at <= a.started_at AND b.created_at >= a.started_at
+GROUP BY 1 ORDER BY concurrent DESC LIMIT 20;
+```
+
+→ peak 동시 in-flight `< 30 × 2 = 60` 면 안전. `> 50` 시 Phase C 상향 트리거.
+
+### 📋 Phase C — 추가 상향 검토 (조건부, D+3 이후)
+
+3일 관찰 결과:
+- **Pool exhausted 0건/3일** → 30 충분, Sprint 종료
+- **Pool exhausted 1~5건/3일** → 40 으로 ↑ (잠재 leak 의심)
+- **Pool exhausted 10+건/3일** → 50 으로 ↑ + **connection leak audit 필수**
+- **Q-B 재측정 동시 in-flight ≥ 50** → 40 으로 ↑
+
+상향 시 같은 방식으로 env 만 변경.
+
+### 📋 Phase D — conn 사용 분포 정상치 검증 (Codex A3 반영)
+
+배포 후 24h 이상 경과 후 `pg_stat_activity` 시간대별 conn 분포:
+
+| 시점 | 정상 범위 | leak 의심 |
+|:---|:---:|:---|
+| 새벽 02:00~05:00 KST (idle) | **1~3** | 5+ 면 의심 |
+| 평소 근무 (09:30~16:00) | **3~7** | 10+ 지속이면 의심 |
+| Peak (07:30~09:00, 16:30~17:00) | **15~25** | 28+ 면 30 부족 시그널 |
+| 비peak 평균 | **3~7** | 8+ 평균이면 leak audit |
+
+비peak 평균이 8 이상이면 **conn leak audit Sprint 별도 등록**:
+```bash
+# OPS 백엔드 코드 audit (Codex 3차 A5 정정 — \b 단어 경계 + 두 함수 모두)
+# 참고: get_db_connection (worker.py:137 wrapper) 와 get_conn (db_pool.py:132) 둘 다 실존
+# Claude Code I1 보강: BRE → ERE (-rEn) 으로 macOS BSD + Linux GNU 이식성 ↑
+
+# ERE 형태 (권장 — 이식성 높음)
+grep -rEn "\b(get_conn|get_db_connection)\b" backend/app --include="*.py" | wc -l
+grep -rEn "\bput_conn\b" backend/app --include="*.py" | wc -l
+
+# BRE 형태 (대안 — 일부 환경)
+# grep -rn "\b\(get_conn\|get_db_connection\)\b" backend/app --include="*.py" | wc -l
+
+# 두 카운트 차이가 클수록 leak 가능성 ↑
+
+# 추가 audit — try/finally 패턴 누락 의심:
+grep -rEn "\b(get_conn|get_db_connection)\b" backend/app --include="*.py" | \
+  xargs -I{} sh -c 'echo "{}" | grep -L "put_conn"' | head -20
+```
+
+### 🚦 Pre-deploy Gate
+
+| # | 항목 | 확인 |
+|:---:|:---|:---:|
+| 1 | Railway Postgres max_connections 가 100 이상 | ☐ |
+| 2 | 다른 서비스 같은 Postgres 공유 안 함 | ✅ (이미 확인) |
+| 3 | OPS 외 pgAdmin 등 admin 도구 conn 합산해도 80 이내 | ☐ |
+| 4 | 현재 transaction leak 없음 (`idle in transaction` 0건) | ✅ (이미 확인) |
+| 5 | Phase B 검증 SQL 작성 완료 | ✅ |
+| 6 | Rollback 계획 (env 값 복원) 명확 | ✅ |
+
+### 🔍 Post-deploy 검증
+
+배포 1분 후:
+```
+Railway logs → "Connection pool initialized: min=5, max=30, ..." 1건 출력 확인
+```
+
+배포 1시간 후 (비peak 시간 기준):
+```sql
+SELECT COUNT(*) FROM pg_stat_activity
+WHERE datname = 'railway' AND (application_name IS NULL OR application_name = '');
+```
+→ **평균 3~7 정도면 정상** (비peak 시간). 8 이상 지속되면 conn leak 의심 → Phase D 진단.
+
+배포 다음 출근 peak (D+1 07:30~09:00):
+```
+Railway logs grep "Pool exhausted"
+```
+→ 0건이면 성공.
+
+### 📦 Rollback
+
+```
+Railway Variables → DB_POOL_MAX = 10 + DB_POOL_MIN = 1 (또는 두 변수 삭제)
+→ 자동 재배포 ~1분
+→ 원복 완료
+```
+
+부수 효과 없음. 코드 변경 없으니 git 영향도 없음.
+
+### 📝 Claude 원안 약점 trail (CLAUDE.md ④ 규칙 준수)
+
+본 Sprint 초안 (2026-04-27 09:00 KST) 부터 최종안까지 **3 라운드 교차 검증** 으로 발견된 약점 9건 (M=0 / A=9):
+
+#### 라운드 1 — Codex advisory 1차 (텍스트 일관성)
+
+| # | 약점 | 정정 |
+|:---:|:---|:---|
+| 1 | scheduler conn 추정 5 → 실제 ~8 (09:00 동시 4 job) | per-worker 표 추가, scheduler peak 8 명시 |
+| 2 | 단계적 25→30 vs 한 번에 30 직행 | 단일 peak 관찰 기회 → 30 직행 채택 |
+| 3 | "비peak 평균 8~15 정상" → 실제 1~3 | 정상치 표 정정 |
+| 4 | direct conn fallback 비용 (200~500ms) 누락 | fallback 비용 표 추가 |
+
+#### 라운드 2 — Claude Code advisory 2차 (코드 구조 검증)
+
+| # | 약점 | 정정 |
+|:---:|:---|:---|
+| 5 | ⛔ **per-worker 독립 pool 구조 인지 누락** — 단일 pool 가정으로 산정 ("16+5+여유 4=25") | grep `init_pool() in create_app()` 으로 검증 → per-worker 분석 (worker A 15 + worker B 10) → MAX=30 |
+| 6 | DB_POOL_MIN=1 cold-start 영향 누락 (`_MIN_CONN=1` 발견) | MIN=5 추가 |
+| 7 | Phase B 1일이 통계 신뢰성 부족 | 3일 (화/수/목) 확장 |
+| 8 | pg_stat_activity SQL pid+client_addr 누락 | worker A/B 분리 진단 SQL 정밀화 |
+
+#### 라운드 3 — Codex advisory 3차 (데이터 정합성)
+
+| # | 약점 | 정정 |
+|:---:|:---|:---|
+| 9.1 | Q-B 일자 오기 (4-27 → 4-21 화) | 라벨 정정 |
+| 9.2 | "5x 흡수" 산수 오류 (31×5=155 in-flight, MAX=30 으로 부족) | "2x 흡수, 5x 도달 시 MAX=70~80 + 인프라 재검토" 정정 |
+| 9.3 | 21 동시 17회 누적 fallback 미언급 | 일별 ~100건 추정 명시 |
+| 9.4 | MIN=5 ↔ max_age=300s 상호작용 미분석 | psycopg2 minconn 동작 + 5분 후 lazy 재생성 명시 |
+| 9.5 | grep `\b` 경계 누락 + 함수명 누락 (**Claude Code 라운드 2 부분 오인** — `get_db_connection` 실존을 부정 / Codex 라운드 3 가 grep fact-check 로 정정) | 두 함수 모두 (`get_conn` + `get_db_connection`) + 단어 경계 `\b` 추가 (BRE→ERE `-rEn` 이식성 추가 권장) |
+
+#### 라운드 4 — Twin파파 fact-check (deploy 직전, 2026-04-27 KST)
+
+| # | 약점 | 정정 |
+|:---:|:---|:---|
+| 10 | ⛔ **현재 env 값 가정 오류** — 코드 default (1/10) 가정으로 진단 시작 | 실제 prod 는 **이미 5/20 운영 중** 이었음. Twin파파 fact-check 로 발견. 결론(30 채택) 유지하되 fallback 빈도 추정 정정 (10→20 capacity 환경 = peak 11건이 아닌 1건) |
+| 11 | Codex 라운드 2 #6 (MIN=1 cold-start 영향) 가정 무효화 | 이미 MIN=5 였으므로 cold-start 효과는 운영 중이었음. MIN 변경 없음 |
+| 12 | Codex 라운드 3 #9.3 (21 동시 17회 누적 fallback ~100건/일) 과대 추정 | 20 capacity 환경 = 21 동시 시 1건만 fallback. 누적량은 17건/peak 수준. 사용자 영향 0 일관 |
+
+#### Info 항목 (선택 보강)
+
+- I1 — 화/수 p99≥1초 burst 9건 (Tue 19:00 max 2495ms / Wed 00:00 239 req) → **신규 BACKLOG `OBSERV-SLOW-QUERY-ENDPOINT-PROFILING` 분리**
+- I2 — 5x 정확화: "사용자 120명 → 600명 도달 시" 명시
+- I3 — B.6 SQL O(N²) 부담 → off-peak (12:00 또는 18:00 이후) 측정 권장 단서
+- I4 — **인프라 작업 사전 점검 SOP**: 코드 default 값 ≠ prod env 값. Railway Variables 사전 확인 필수 (Twin파파 또는 Railway CLI `railway variables` 명령)
+
+**교훈** (CLAUDE.md ④ 자기검증 강화):
+- 코드 구조 의존 산정은 **반드시 grep/Read 기반 검증** 거쳐야 함 (라운드 2 의 per-worker 발견이 결정적)
+- Cowork prompt review (Codex) + terminal code review (Claude Code) 는 **보완적**, 둘 다 돌려야 깊이 있는 검증
+- 단일 pool 가정은 fork 기반 worker 환경에서 **즉시 의심 대상**
+- 산수 검증 (5x = 155, 31×5 등) 은 **별도 라운드** 로 구분 — 라운드 1 이 놓친 것을 라운드 3 에서 잡음
+- **Claude Code 자체도 부분 오인 가능** (라운드 2 A5: `get_db_connection` 실존을 부정 → 라운드 3 Codex 가 grep fact-check 로 정정) → AI 검증도 grep 검증 거쳐 fact-check 필요. **검증 주체와 무관하게 코드 사실은 grep/Read 로 직접 검증** 이 최종 권한.
+- **외부 환경 가정도 fact-check 거쳐야 함** (라운드 4): Railway env 값을 코드 default (1/10) 로 가정 → 실제는 이미 5/20 운영 중. 인프라 작업 시 prod env 사전 확인 SOP 필수.
+
+**Codex 공식 이관 미해당**: 본 Sprint 는 단순 env 변경 + 코드 변경 0 + S1/S2 미해당으로 **Codex 이관 체크리스트 6항목 미충족**. 따라서 advisory review 만 다라운드 수행했으며, 정식 Codex 이관 절차 (CLAUDE.md AI 검증 워크플로우 v2 ②) 미적용.
+
+### 📋 BACKLOG 동기화
+
+```
+FIX-DB-POOL-MAX-SIZE-20260427        🟡 P1  (이 Sprint, MAX=30 + MIN=5)
+  ├─ Phase A: env 2개 적용 (MAX=30, MIN=5 직행)
+  ├─ Phase B: 3일 peak 관찰 (화/수/목)
+  ├─ Phase C: 조건부 40~50 상향 (leak 또는 Q-B≥50 의심 시)
+  └─ Phase D: conn 사용 분포 정상치 검증 (pid+client_addr 분리)
+
+OBSERV-DB-POOL-IDLE-DISCONNECT-WARMUP   🟡 P2 → 🟢 P3 (격하, 다음 Sprint)
+  └─ Pool warmup cron 도입 (5분 간격 SELECT 1)
+     MIN=5 도입으로 **cold-start 부분 자연 해결**, Railway proxy disconnect 방지 차원만 남음
+
+OBSERV-RAILWAY-HEALTH-TTFB-15S-INTERMITTENT   🟡 P2 (별건)
+  └─ direct conn fallback 의 +0.3~0.5s 지연이 TTFB 15s 의 일부 기여 가능성
+     Pool 30 + MIN 5 적용 후 fallback 빈도 측정 → 0 이면 자연 해결 검증
+     (Q-B 31 peak 흡수로 fallback 발생 자체가 사라질 가능성 ↑)
+
+OBSERV-SLOW-QUERY-ENDPOINT-PROFILING   🟡 P2 (신규, Codex I1 분리)
+  ├─ 4-21 화요일 19:00 (353 req max 2495ms) endpoint 분석 ⚠️ 출근 peak 수준 + max 2.5초
+  ├─ 4-22 수요일 00:00 (239 req 자정 batch 의심) — cron/ETL 후보 식별
+  ├─ 화/수 p99 ≥ 1초 burst 9건 endpoint 별 분류
+  ├─ 산출: heavy endpoint 식별 → 쿼리 최적화 또는 timeout 적용 결정
+  └─ Pool 사이즈와 무관한 별건 — slow query 자체는 본 Sprint 가 해결 안 함
+```
+
+### 📝 사후 기록 양식 (배포 후)
+
+```
+✅ 배포 완료 (2026-04-27 HH:MM KST)
+  ├─ Railway logs: Connection pool initialized: min=5, max=30 ✓
+  ├─ pg_stat_activity 비peak 평균 conn: ___개 (정상치 3~7)
+  ├─ D+0 16:30 퇴근 peak Pool exhausted: ___건
+  ├─ D+1 (화) 07:30 출근 peak Pool exhausted: ___건
+  ├─ D+2 (수) 07:30 출근 peak Pool exhausted: ___건
+  ├─ D+3 (목) 07:30 출근 peak Pool exhausted: ___건
+  ├─ Q-B 재측정 peak 동시 in-flight: ___ (배포 전 31)
+  └─ 결정: Phase C 상향 (Y/N) — 사유 ___
+
+OPEN → COMPLETED 전환
+```
+
+### 🤝 후속 Sprint 연계
+
+- `FIX-PIN-FLAG-MIGRATION-SHAREDPREFS` (🔴 S2) — 다른 root cause (PIN 화면 손실), 병행 가능
+- `OBSERV-DB-POOL-IDLE-DISCONNECT-WARMUP` (🟡 P2) — Pool 사이즈와 무관한 idle disconnect 해결, 다음 Sprint
+- `OBSERV-RAILWAY-HEALTH-TTFB-15S-INTERMITTENT` (🟡 P2) — health TTFB 모니터링, 외부 도구 도입
+
+---
+
+## 🔧 FIX-PIN-FLAG-MIGRATION-SHAREDPREFS-20260427 프롬프트 — PIN 등록 플래그 SharedPreferences 이전 (🔴 S2)
+
+> **등록일**: 2026-04-27 KST
+> **우선순위**: 🔴 S2 (사용자 편의성 직접 영향 + connection burst 부수 기여 가설, 30분 작업)
+> **상태**: 🔴 OPEN (Codex 1차 advisory review 대기 → 합의 후 즉시 착수)
+> **예상 소요**: 30분 (FE 단일 파일 수정 + pytest 또는 수동 검증)
+> **트리거 근거**: 2026-04-26 Twin파파 PC sticky cache 조사 + PIN 화면 손실 가설 분석 → 코드 검증 결과 `pin_registered` 플래그가 **`flutter_secure_storage` (encrypted IndexedDB)** 에 저장 중. PWA 환경에서 SW 업데이트 또는 IndexedDB 캐시 정책 변경 시 손실 가능. 손실 → main.dart 라우팅이 EmailLoginScreen 으로 빠지고 → 비번 모름 → 작업자 막힘 (사용자 영향 직접). v2.10.x 시리즈 빠른 PATCH 배포로 SW 갱신 빈번 → 손실 위험 누적. **2026-04-27 Twin파파 가설 추가**: 손실 사용자가 새로고침 반복 시 `/auth/refresh` + `/auth/login` 누적 호출 → connection burst 부수 기여 가능 (FIX-DB-POOL Q-B 31 peak 의 일부 원인 후보).
+> **담당**: FE teammate (auth_service.dart 단일 파일 + 마이그레이션 로직)
+> **Codex 이관 권장**: ⚠️ **인증 로직 영향** (PIN 등록 판단 → main.dart 라우팅 분기) → CLAUDE.md L130 체크리스트 4번 해당 + "판정 애매 시 = 자동 이관" 적용. Codex 1차 advisory review 후 적용.
+> **Claude Code advisory 1차 (2026-04-27)**: A1 인증 로직 영향 → Codex 이관 권장 / A2 connection 인과 정량 입증 부재 (baseline SQL 추가) / A3 ⛔ **Rollback 시 신규 사용자 일괄 빠짐 위험** (단방향 마이그레이션 → 양방향 sync 권장) / A4 `savePinRegistered()` 양방향 write 패턴 권장 / A5 race condition (낮은 위험, 명시적 lock 선택) / A6 IndexedDB 손실 trigger 정확성 (SW 업데이트는 일반적으로 무영향, AUDIT Sprint 사후 검증)
+> **Codex 1차 advisory 반영 (2026-04-27)**: M 8건 정정 — rollback best-effort 명시, baseline SQL request_path 정정, Storage trigger 정정 (SW 업데이트 ≠ IndexedDB 손실), rollback case 5번째 추가, cohort 정의, 다른 가설 구분, iOS Safari localStorage 도 영향, **4개 키 함께 손실 시 본 Sprint 효과 영역 좁음 — FEAT-PIN-STATUS-BACKEND-FALLBACK 가 진짜 root fix (P1 격상)**
+
+### ⚠️ Limitation — 본 Sprint 효과 영역 (Codex 1차 advisory 핵심)
+
+`auth_service.dart` 의 SecureStorage 사용 키 4개 모두 IndexedDB 일괄 손실 영향:
+- `pin_registered` (이 Sprint 가 옮김)
+- `refresh_token`, `worker_id`, `worker_data` (그대로 SecureStorage)
+
+| 손실 패턴 | 빈도 | 본 Sprint | FEAT-BACKEND-FALLBACK |
+|:---|:---:|:---:|:---:|
+| pin_registered 만 단독 | 드뭄 | ✅ | ✅ |
+| 4개 키 함께 (Clear site data, evict) | 흔함 | ❌ | ✅ (refresh 살아있으면) |
+| iOS Safari 7일 idle | 흔함 | ❌ | ✅ (refresh 살아있으면) |
+
+→ **본 Sprint = 1차 보호 layer (작은 영역). FEAT-PIN-STATUS-BACKEND-FALLBACK + 추가로 refresh_token/worker_id 이전 = 진짜 root fix**.
+
+### 🎯 목적
+
+`pin_registered` 플래그를 **SecureStorage (IndexedDB) → SharedPreferences (localStorage)** 로 이전. SW 업데이트·캐시 정책 변경에 안정적인 storage 로 옮겨 **PIN 등록 사용자가 EmailLoginScreen 으로 떨어지지 않도록 보장**.
+
+### 🔬 가설 입증 — 코드 증거
+
+```dart
+// auth_service.dart 현재 (문제 코드)
+static const String _pinRegisteredKey = 'pin_registered';
+
+Future<bool> hasPinRegistered() async {
+  final value = await _secureStorage.read(key: _pinRegisteredKey);  // ⚠️ IndexedDB
+  return value == 'true';
+}
+
+// main.dart L260~269 라우팅
+final hasPinRegistered = await authService.hasPinRegistered();
+if (hasPinRegistered) {
+  → PinLoginScreen          // ✅ 정상 경로
+} else {
+  → EmailLoginScreen        // ❌ 비번 모름 → 막힘
+}
+```
+
+```dart
+// device_id 비교 (이미 SharedPreferences 사용 중 — 안정적)
+static const String _deviceIdKey = 'axis_device_id';
+
+Future<String> getDeviceId() async {
+  final prefs = await SharedPreferences.getInstance();   // ✅ localStorage
+  var id = prefs.getString(_deviceIdKey);
+  ...
+}
+```
+
+→ **두 storage 가 다른 곳** 에 저장되는 비대칭 구조. device_id 는 살아남지만 pin_registered 만 잃을 수 있음.
+
+### 📊 storage 안정성 비교 (Web/PWA, Codex M3 + Q4.j 정정)
+
+| Storage | 저장 위치 | 손실 trigger |
+|:---|:---|:---|
+| **SharedPreferences** | localStorage (plain) | (1) 사용자 "Clear site data" (2) iOS Safari 7일 idle (3) Storage quota evict (드뭄) |
+| **flutter_secure_storage** | IndexedDB (AES 암호화) | (1) 사용자 "Clear site data" (2) Storage quota eviction (3) **iOS Safari 7일 idle** (4) Origin 변경 (5) 일부 커스텀 SW (Flutter 표준 SW 는 안전) |
+
+**중요 정정**:
+- ❌ "SW 업데이트 = IndexedDB 손실" 부정확. Flutter 표준 SW 는 IndexedDB 안 건드림. `AUDIT-PWA-SW-INDEXEDDB-PRESERVE` Sprint 에서 확정.
+- ⚠️ **iOS Safari 7일 idle 정책은 localStorage 에도 적용** — SharedPrefs 도 안전 100% 아님. 본 Sprint 효과는 1, 4 trigger 에 한정.
+- 진짜 root fix 는 backend fallback (FEAT-PIN-STATUS-BACKEND).
+
+→ PIN 플래그처럼 **잃어도 보안 위험 없는 단순 boolean** 은 SharedPreferences 가 적정 (1차 보호).
+
+### 🧩 수정 범위
+
+**대상 파일 1개**: `frontend/lib/services/auth_service.dart`
+
+**변경 양**: ~30 LOC (마이그레이션 로직 포함)
+
+**변경 함수 2개**:
+
+#### 1. `hasPinRegistered()` — 양쪽 read + sync 마이그레이션 (A3/A4 반영)
+
+```dart
+// Before
+Future<bool> hasPinRegistered() async {
+  final value = await _secureStorage.read(key: _pinRegisteredKey);
+  return value == 'true';
+}
+
+// After (양방향 sync 마이그레이션)
+Future<bool> hasPinRegistered() async {
+  final prefs = await SharedPreferences.getInstance();
+
+  // 1순위: SharedPreferences 에서 read
+  final fromPrefs = prefs.getString(_pinRegisteredKey);
+  if (fromPrefs != null) {
+    return fromPrefs == 'true';
+  }
+
+  // 2순위: 옛 SecureStorage (마이그레이션 fallback)
+  final fromSecure = await _secureStorage.read(key: _pinRegisteredKey);
+  if (fromSecure != null) {
+    // 발견 → SharedPreferences 로 sync (양방향, SecureStorage delete 안 함 — rollback 안전)
+    await prefs.setString(_pinRegisteredKey, fromSecure);
+    return fromSecure == 'true';
+  }
+
+  return false;
+}
+```
+
+#### 2. `savePinRegistered(bool)` — 양방향 sync (Claude Code advisory 1차 A3/A4 반영)
+
+> **변경 사유**: 단방향 마이그레이션 (SecureStorage delete) 채택 시 rollback 시점에 **신규 사용자 (SharedPrefs 만 'true' 보유)** 가 이전 코드에서 SecureStorage read → null → false 로 인식되어 EmailLoginScreen 일괄 빠짐. 양방향 sync 로 rollback 안전성 확보.
+
+```dart
+// Before (기존)
+Future<void> savePinRegistered(bool registered) async {
+  await _secureStorage.write(
+    key: _pinRegisteredKey,
+    value: registered ? 'true' : 'false',
+  );
+}
+
+// After (양방향 sync — A3/A4 + Codex M1 atomic best-effort 반영)
+Future<void> savePinRegistered(bool registered) async {
+  final prefs = await SharedPreferences.getInstance();
+  final value = registered ? 'true' : 'false';
+
+  // ① 주 저장소 (반드시 성공해야 함)
+  await prefs.setString(_pinRegisteredKey, value);
+
+  // ② 보조 저장소 best-effort (실패해도 SharedPrefs 가 주 저장소이므로 non-fatal)
+  try {
+    await _secureStorage.write(key: _pinRegisteredKey, value: value);
+  } catch (e) {
+    debugPrint('[auth] SecureStorage write failed (non-fatal, SharedPrefs is primary): $e');
+    // 의도적 무시 — desync 발생 가능하지만 다음 hasPinRegistered() 의 양쪽 read 가 흡수
+  }
+
+  // ⚠️ delete 안 함 — rollback 시 이전 코드(SecureStorage-only)도 호환
+  // IndexedDB 손실 시 SharedPrefs fallback 으로 자연 복구 (storage 안정성 ↑)
+}
+```
+
+**Trade-off**:
+- 단방향 (SecureStorage delete): storage 깔끔, rollback 위험
+- 양방향 (sync): rollback 안전, IndexedDB 손실에도 SharedPrefs fallback 유지 ✅
+
+→ 양방향 채택 (안전성 우선). storage 중복은 boolean 1개 수준이라 무시 가능.
+
+#### 3. `logout()` — 양쪽 모두 delete (라인 243 수정, A3/A4 반영)
+
+```dart
+// Before (logout 흐름 일부)
+await _secureStorage.delete(key: _pinRegisteredKey);
+
+// After
+await _secureStorage.delete(key: _pinRegisteredKey);     // 기존 위치 정리
+final prefs = await SharedPreferences.getInstance();
+await prefs.remove(_pinRegisteredKey);                    // 새 위치 정리
+```
+
+> logout 시점은 양쪽 모두 정리. 의도된 PIN 해제이므로 `savePinRegistered(false)` 와 다른 destructive 동작.
+
+### ✅ 마이그레이션 호환성 (기존 사용자 영향 0)
+
+```
+기존 사용자 (SecureStorage 에만 'true' 보유):
+  앱 진입 → hasPinRegistered() 호출
+  → SharedPreferences read → null
+  → SecureStorage read → 'true' 발견
+  → SharedPreferences 'true' sync (SecureStorage 유지 — 양방향 sync 정책, rollback 안전)
+  → return true → PinLoginScreen ✅
+
+신규 사용자:
+  → SharedPreferences 에 직접 저장
+  → 손실 위험 ↓
+
+PIN 잃은 사용자 (이전 손실 케이스):
+  → SharedPreferences null + SecureStorage null
+  → return false → EmailLoginScreen
+  → 한 번 비번 로그인 후 PIN 재등록 시 SharedPreferences 에 저장
+  → 다음부터 손실 안 함
+```
+
+### 🚦 Pre-deploy Gate
+
+| # | 항목 | 확인 |
+|:---:|:---|:---:|
+| 1 | `auth_service.dart` 외 다른 파일 변경 없음 | ☐ |
+| 2 | `flutter_secure_storage` import 유지 (다른 함수 사용 중) | ☐ |
+| 3 | `shared_preferences` import 이미 있음 | ✅ (deviceId 에서 사용 중) |
+| 4 | 마이그레이션 로직 — 양쪽 read + SharedPrefs 우선 | ☐ |
+| 5 | 단위 테스트 (또는 수동 검증) — 양쪽 read 시나리오 | ☐ |
+| 6 | logout 흐름 양쪽 cleanup 확인 | ☐ |
+
+### 🧪 검증 시나리오
+
+#### Case 1 — 신규 사용자 PIN 등록
+
+```
+1. 앱 진입 → SharedPreferences.getString('pin_registered') = null
+2. SecureStorage 도 null
+3. EmailLoginScreen 진입 → 로그인 성공
+4. PIN 등록 버튼 → savePinRegistered(true) 호출
+5. SharedPreferences 에 'true' 저장 ✅
+6. 다음 진입 → hasPinRegistered() → SharedPreferences 'true' → PinLoginScreen ✅
+```
+
+#### Case 2 — 기존 사용자 자동 마이그레이션
+
+```
+1. 사용자 PC: 옛 버전에서 PIN 등록 → SecureStorage 'true' 보유
+2. v2.10.x 배포 후 첫 진입
+3. hasPinRegistered() → SharedPreferences null → SecureStorage 'true' 발견
+4. 자동 이전 → SharedPreferences 'true' sync (SecureStorage 유지 — 양방향 sync 정책, rollback 안전)
+5. PinLoginScreen ✅
+6. 다음 진입부터 SharedPreferences 우선 read (빠름)
+```
+
+#### Case 3 — SW 업데이트 후 IndexedDB 손실
+
+```
+1. SW 업데이트 → IndexedDB 캐시 일부 손실 가능 시나리오
+2. SecureStorage 의 pin_registered 손실 (가설)
+3. 그러나 SharedPreferences 는 별도 → 'true' 유지
+4. hasPinRegistered() → SharedPreferences 'true' → PinLoginScreen ✅
+5. 사용자 영향 0
+```
+
+### 🔍 Post-deploy 검증 + Baseline 측정 (A2 + Codex M2 반영)
+
+#### Baseline SQL — 배포 전 1회 측정 필수
+
+> Twin파파 가설 입증용. PIN 손실 의심 사용자 수 + 새로고침 burst 누적량 정량화.
+> ⚠️ **Codex M2 정정**: `request_path = '...'` exact match → query string 포함 시 깨짐. **`LIKE '...%'` 패턴** 으로 통일.
+
+##### 1. PIN 손실 의심 사용자 식별 (같은 날 `/auth/login` 2회 이상)
+
+```sql
+SELECT
+  DATE(created_at AT TIME ZONE 'Asia/Seoul') AS day,
+  worker_id,
+  COUNT(*) FILTER (WHERE request_path LIKE '/api/auth/login%') AS login_count,
+  COUNT(*) FILTER (WHERE request_path LIKE '/api/auth/refresh%') AS refresh_count,
+  COUNT(*) FILTER (WHERE request_path LIKE '/api/auth/refresh%' AND status_code = 401) AS refresh_fail
+FROM app_access_log
+WHERE created_at >= NOW() - INTERVAL '7 days'
+  AND worker_id IS NOT NULL
+GROUP BY 1, 2
+HAVING COUNT(*) FILTER (WHERE request_path LIKE '/api/auth/login%') >= 2
+ORDER BY 1 DESC, login_count DESC;
+```
+
+**기대 baseline** (가설):
+- 일평균 PIN 손실 의심 사용자 5~10명
+- 사용자당 login_count 2~5회/일
+- refresh_fail 동반 발생 (refresh_token 도 잃은 케이스)
+
+##### 2. EmailLoginScreen 진입 빈도 (= `/auth/login` 호출 추세)
+
+```sql
+SELECT
+  DATE(created_at AT TIME ZONE 'Asia/Seoul') AS day,
+  COUNT(*) AS login_attempts,
+  COUNT(DISTINCT worker_id) AS unique_users,
+  ROUND(COUNT(*)::numeric / NULLIF(COUNT(DISTINCT worker_id), 0), 2) AS attempts_per_user
+FROM app_access_log
+WHERE created_at >= NOW() - INTERVAL '14 days'
+  AND request_path LIKE '/api/auth/login%'
+GROUP BY 1 ORDER BY 1 DESC;
+```
+
+**기대 baseline**: 사용자당 login attempts/day < 1.2 (정상 운영 시 1회 이하). 1.2+ 면 PIN 손실 영향 의심.
+
+##### 3. 출근 burst 시점 `/auth/refresh` + `/auth/login` 비중
+
+```sql
+-- Q-A burst 시점 (Mon 07 등) 의 auth API 비중
+SELECT
+  EXTRACT(DOW FROM created_at AT TIME ZONE 'Asia/Seoul') AS dow,
+  EXTRACT(HOUR FROM created_at AT TIME ZONE 'Asia/Seoul') AS hour_kst,
+  COUNT(*) AS total_req,
+  COUNT(*) FILTER (WHERE request_path LIKE '/api/auth/login%' OR request_path LIKE '/api/auth/refresh%') AS auth_req,
+  ROUND(COUNT(*) FILTER (WHERE request_path LIKE '/api/auth/login%' OR request_path LIKE '/api/auth/refresh%')::numeric * 100 / COUNT(*), 1) AS auth_pct
+FROM app_access_log
+WHERE created_at >= NOW() - INTERVAL '7 days'
+GROUP BY 1, 2
+HAVING COUNT(*) > 100
+ORDER BY total_req DESC LIMIT 10;
+```
+
+**해석**:
+- auth_pct 30%+ 시 → 매 사용자 평균 multiple auth call → PIN 손실 영향 강함
+- auth_pct 10% 이하 → 정상 (PIN 손실 영향 미미)
+
+#### 1주일 관찰 지표 (배포 후 D+7 재측정, Codex Q3.g/h + Q2.e 반영)
+
+```
+SQL 1: PIN 손실 의심 사용자
+  배포 전 baseline: ___명/일
+  배포 후 D+7: 0~1명/일 (기대)
+
+SQL 2: 사용자당 login attempts/day
+  배포 전 baseline: ___
+  배포 후 D+7: ~1.0 (기대)
+
+SQL 3: auth_pct 추세
+  배포 전 baseline: ___%
+  배포 후 D+7: ___%
+  → 감소 시 → connection burst 부수 기여 입증 (단, 다른 가설 구분 cohort 필요)
+```
+
+##### ⚠️ 통계 신뢰성 필수 보강 (Codex Q3.g/h)
+
+**1일 단순 비교 → 다른 가설 (네트워크 재시도 / refresh 7일 만료 / 탭 restore) 와 구분 불가**. 통계 신뢰성 위해:
+
+1. **동일 요일 3일 pre/post 비교** — 화/수/목 같은 요일 3주 데이터 (예: pre 4-15/22 vs post 5-6/13)
+2. **active worker 분모 정규화** — `login_count / DISTINCT worker_id` 로 1인당 평균
+3. **Cohort 정의** (Q2.e):
+   - `cohort_A` = build_date >= 2026-04-27 (fix 적용)
+   - `cohort_B` = build_date < 2026-04-27 (fix 미적용)
+   - `cohort_secure_write_ok` vs `cohort_secure_write_fail` (best-effort write 결과 별도)
+4. **다른 가설 구분 cohort** — device_id (특정 기기 빈발 여부) + UA (브라우저별 패턴) + 시간대 (점심·새벽 idle 후 재진입)
+
+**해석**:
+- cohort_A 대비 cohort_B 의 PIN 재등록 빈도 ≥ 2배 → 본 Sprint 효과 정량 입증
+- 차이 < 1.5배 → 본 Sprint 효과 미미 → 다른 root cause 추정
+
+#### Connection burst 부수 효과 검증 (FIX-DB-POOL 연계)
+
+본 Sprint 적용 후 **Q-B 동시 in-flight 재측정** 결과 비교:
+- 4-21 화 baseline: 31 peak / 21 동시 17회
+- 본 Sprint 후 D+7 재측정: ___ peak / ___ 동시 ___회
+- 감소 시 → PIN 손실 → 새로고침 burst 가설 입증
+- 변화 없음 → connection 부담은 다른 root cause (FIX-DB-POOL 단독 해결책)
+
+### 📦 Rollback (A3 양방향 sync 적용 후)
+
+```
+auth_service.dart 변경 git revert → flutter build web → Netlify 배포
+→ 기존 SecureStorage-only 동작 복원
+```
+
+#### 양방향 sync 적용 시 rollback 안전성
+
+| 사용자 케이스 | rollback 후 동작 | 결과 |
+|---|---|---|
+| 기존 사용자 (SecureStorage 'true' 보유) | SecureStorage read → 'true' | ✅ PinLoginScreen |
+| 마이그레이션 된 사용자 (양쪽 'true') | SecureStorage read → 'true' | ✅ PinLoginScreen |
+| 신규 PIN 등록 사용자 (양쪽 'true' — 양방향 sync 덕) | SecureStorage read → 'true' | ✅ PinLoginScreen |
+| logout 한 사용자 | 양쪽 모두 null | ✅ EmailLoginScreen (의도된 흐름) |
+| **(Codex Q2.d) SharedPrefs 'true' + SecureStorage write 실패 사용자** | SecureStorage read → null | ❌ **EmailLoginScreen — baseline 위험 복귀** (try/catch best-effort 결과로 발생 가능) |
+
+→ **양방향 sync 채택으로 rollback 시 대부분 안전, 다만 SecureStorage write 실패 cohort 만 잔존 위험** (A3 + Codex Q2.d). cohort_secure_write_fail 측정으로 영향 정량 가능.
+
+#### 단방향 마이그레이션 (이전 안 된 패턴) 의 위험 — 참고
+
+```
+신규 사용자 (SharedPrefs 'true' 만 보유 — SecureStorage delete 됨)
+  → rollback 후 이전 코드는 SecureStorage 만 read → null → false
+  → ❌ EmailLoginScreen 일괄 빠짐 → 비번 모름 → 막힘
+```
+
+→ 단방향 채택 시 이 위험 발생. 양방향 sync 로 회피.
+
+부작용 최소화하려면 rollback 전 추가 점검 불필요 (양방향 sync 가 이미 보장).
+
+### 📋 BACKLOG 동기화
+
+```
+FIX-PIN-FLAG-MIGRATION-SHAREDPREFS-20260427    🔴 S2  (이 Sprint, 30분)
+  └─ pin_registered 플래그 SharedPreferences 이전 + 자동 마이그레이션
+
+FEAT-PIN-STATUS-BACKEND-FALLBACK-20260427      🔴 P1  (격상 — 진짜 root fix, 1h)
+  └─ 양쪽 storage 다 잃어도 backend /auth/pin-status 로 자동 복구
+
+AUDIT-PWA-SW-INDEXEDDB-PRESERVE-20260427        🟡 P2  (검증, 30분)
+  └─ flutter_service_worker.js audit — IndexedDB 손실 경로 확인
+
+UX-LOGIN-FALLBACK-PIN-RESET-LINK-20260427       🟢 P3  (UX, 1h)
+  └─ EmailLoginScreen 에 "PIN 재등록 요청" 링크 추가
+
+FEAT-AUTH-STORAGE-MIGRATION-FULL-20260427       🟡 P2  (Codex 신규 권장)
+  └─ refresh_token + worker_id + worker_data 도 SharedPrefs 양방향 sync 이전
+     보안 trade-off (refresh_token plaintext localStorage) 검토 필수
+```
+
+### 🤝 후속 Sprint 연계
+
+본 Sprint 가 1차 보호 (storage 안정성). 추가 보호 layer 가 다음 3건:
+
+1. **`FEAT-PIN-STATUS-BACKEND-FALLBACK-20260427`** 🔴 P1 (격상 — Codex 1차 advisory 반영, 진짜 root fix) — 양쪽 storage 다 잃어도 backend `worker_auth_settings.pin_hash` 로 진실 검증 가능. 앱 시작 시 refresh_token 살아있으면 → backend `/auth/pin-status` 호출 → PIN 등록 여부 자동 복구.
+
+2. **`AUDIT-PWA-SW-INDEXEDDB-PRESERVE-20260427`** 🟡 P2 — `frontend/web/flutter_service_worker.js` 가 IndexedDB 를 건드리는 경로 있는지 grep audit. 표준 Flutter SW 는 IndexedDB 안 건드리지만 커스텀 코드면 위험.
+
+3. **`UX-LOGIN-FALLBACK-PIN-RESET-LINK-20260427`** 🟢 P3 — EmailLoginScreen 에 "이전에 PIN 으로 로그인하셨나요? 관리자에게 PIN 재등록 요청" 링크 + 비번 잊은 사용자용 안내. 1번 + 2번이 99% 해결하는데 그래도 빠지는 사용자용 마지막 fallback.
+
+---
+
+## 🔧 FEAT-PIN-STATUS-BACKEND-FALLBACK-20260427 프롬프트 — Backend PIN 상태 자동 복구 (🔴 P1)
+
+> **등록일**: 2026-04-27 KST
+> **우선순위**: 🔴 P1 (격상 — Codex 1차 advisory 반영, 4개 키 함께 손실 시 진짜 root fix, FIX-PIN-FLAG-MIGRATION 직후 진행)
+> **상태**: 🔴 OPEN
+> **예상 소요**: 1h (FE 분기 추가 + BE `/auth/pin-status` 활용)
+> **트리거 근거**: FIX-PIN-FLAG-MIGRATION (1차 보호) 후에도 양쪽 storage 다 잃는 극단 케이스 가능. backend `worker_auth_settings.pin_hash` 가 진실의 source 이므로 자동 복구 layer 추가
+> **담당**: FE teammate
+
+### 🎯 목적
+
+로컬 storage (SharedPreferences + SecureStorage) 둘 다 잃어도, **backend 의 PIN 등록 여부를 조회해서 자동 복구**. 사용자는 EmailLoginScreen 빠지지 않고 PinLoginScreen 으로 진입.
+
+### 🧩 수정 범위
+
+**대상**: `frontend/lib/main.dart` 의 라우팅 분기 (L260~269 근처)
+
+**현재 흐름**:
+```dart
+final hasPinRegistered = await authService.hasPinRegistered();
+if (hasPinRegistered) {
+  → PinLoginScreen
+} else {
+  → EmailLoginScreen   // ← 로컬 잃으면 무조건 여기
+}
+```
+
+**변경 흐름**:
+```dart
+final hasPinRegistered = await authService.hasPinRegistered();
+final hasRefreshToken = await authService.hasRefreshToken();
+
+if (hasPinRegistered) {
+  → PinLoginScreen
+} else if (hasRefreshToken) {
+  // 로컬 PIN 플래그 잃었지만 refresh_token 살아있음 → backend 검증
+  final refreshed = await authService.refreshToken();
+  if (refreshed) {
+    final pinStatus = await apiService.get('/auth/pin-status');
+    if (pinStatus['registered'] == true) {
+      // backend 가 PIN 등록 확인 → 로컬 플래그 복구 + PIN 화면
+      await authService.savePinRegistered(true);
+      → PinLoginScreen ✅
+      return;
+    }
+  }
+  → EmailLoginScreen   // refresh 실패 또는 PIN 미등록
+} else {
+  → EmailLoginScreen   // 진짜 신규 사용자
+}
+```
+
+### ✅ 효과
+
+```
+시나리오: 로컬 storage 다 잃은 기존 사용자
+
+기존 (FIX-PIN-FLAG-MIGRATION 만 적용):
+  → 로컬 양쪽 null → EmailLoginScreen → 비번 모름 → 막힘 ❌
+
+이 Sprint 적용 후:
+  → 로컬 양쪽 null
+  → refresh_token 살아있음 (별도 SecureStorage 보호되지만 함께 잃었을 수도)
+  → 살아있다면: backend /auth/pin-status 호출 → 'true' 응답 → 로컬 복구 → PinLoginScreen ✅
+  → 잃었다면: EmailLoginScreen 으로 fallback (이 경우는 진짜 비번 필요)
+```
+
+### 🚦 의존성
+
+- 선행: `FIX-PIN-FLAG-MIGRATION-SHAREDPREFS-20260427` 완료
+- BE 엔드포인트: `/auth/pin-status` 이미 존재 (`PROGRESS.md` L2284 확인)
+
+### 📦 작업 단계
+
+1. `main.dart` 분기 추가 (~20 LOC)
+2. `hasRefreshToken()` helper 가 auth_service 에 있는지 확인 → 없으면 추가 (~10 LOC)
+3. 수동 검증 — 로컬 storage 비우고 refresh_token 만 있는 상태 시뮬레이션
+4. 배포 + 1주 관찰
+
+---
+
+## 🔧 AUDIT-PWA-SW-INDEXEDDB-PRESERVE-20260427 프롬프트 — Service Worker IndexedDB 손실 경로 audit (🟡 P2)
+
+> **등록일**: 2026-04-27 KST
+> **우선순위**: 🟡 P2 (선택적, 30분 작업)
+> **상태**: 🔴 OPEN
+> **예상 소요**: 30분 (audit grep + 결론 문서화)
+> **트리거 근거**: PIN 플래그 손실 가설 검증 — Flutter PWA 의 SW 가 IndexedDB 를 건드리는 코드 경로 있는지 확인. 표준 Flutter SW 는 cache versioning 만 하고 IndexedDB 는 안 건드리지만, 커스텀 코드 또는 가능 시나리오 검증 필요
+> **담당**: FE teammate
+
+### 🎯 목적
+
+`frontend/web/flutter_service_worker.js` 와 SW 관련 코드에서 **IndexedDB 를 건드리는 경로** 식별. 발견되면 위험 평가 + 필요 시 수정.
+
+### 📋 audit 명령
+
+```bash
+cd /Users/twinfafa/Desktop/GST/AXIS-OPS/frontend/web
+
+# IndexedDB 직접 건드림
+grep -i "indexedDB\|deleteObjectStore\|deleteDatabase\|deleteStore" flutter_service_worker.js
+
+# Cache 정책 (간접 영향 가능)
+grep -i "caches.delete\|cache.keys\|deleteAllCaches" flutter_service_worker.js
+
+# Storage 일괄 정리 패턴
+grep -i "self.clients.matchAll\|skipWaiting\|clients.claim" flutter_service_worker.js
+```
+
+### 📊 결과 분류
+
+| 발견 | 위험도 | 조치 |
+|:---|:---:|:---|
+| IndexedDB 직접 호출 0건 | 🟢 안전 | 문서화만 (기록 가치 ↑) |
+| `caches.delete('axis')` 같은 패턴 발견 | 🟡 중간 | SecureStorage 영향 분석 |
+| `deleteDatabase()` 발견 | 🔴 높음 | 즉시 코드 수정 필요 |
+| `clients.claim()` 만 있음 | 🟢 안전 | 표준 Flutter 패턴 |
+
+### 📝 산출물
+
+`AXIS-OPS/docs/SW_INDEXEDDB_AUDIT_20260427.md` 신규 또는 본 Sprint 섹션 사후 기록:
+
+```
+SW 코드 IndexedDB 영향 audit 결과 (2026-04-27)
+
+찾은 패턴: ___
+위험도: 🟢 / 🟡 / 🔴
+조치: ___
+PIN 손실 가설과의 연관성: ___
+```
+
+---
+
+## 🔧 UX-LOGIN-FALLBACK-PIN-RESET-LINK-20260427 프롬프트 — 로그인 실패 fallback UX (🟢 P3)
+
+> **등록일**: 2026-04-27 KST
+> **우선순위**: 🟢 P3 (FIX-PIN-FLAG-MIGRATION + FEAT-BACKEND-FALLBACK 후 잔존 케이스 대응)
+> **상태**: 🔴 OPEN
+> **예상 소요**: 1h (FE EmailLoginScreen 확장 + 안내 문구)
+> **트리거 근거**: 1번 + 2번 Sprint 가 99% 케이스 해결하지만, refresh_token 도 잃은 극단 케이스 잔존 가능. 그 사용자가 EmailLoginScreen 에 빠졌을 때 비번을 모르는 상태에서 다음 step 안내 부재 → 관리자 호출 / 막힘
+> **담당**: FE teammate
+
+### 🎯 목적
+
+EmailLoginScreen 에 사용자가 막혔을 때 **명확한 다음 step 안내** 표시. 비번 잊은 사용자 / PIN 으로만 로그인하던 사용자 모두 적절한 fallback 제공.
+
+### 🧩 수정 범위
+
+**대상**: `frontend/lib/screens/auth/email_login_screen.dart` (또는 동일 역할 파일)
+
+**추가 요소** 2개:
+
+#### 1. 비번 입력란 옆 "비밀번호를 잊으셨나요?" 링크
+
+```dart
+TextButton(
+  onPressed: () { /* 비번 재설정 안내 모달 */ },
+  child: Text('비밀번호를 잊으셨나요?'),
+),
+```
+
+#### 2. 화면 하단 "이전에 PIN 으로 로그인하셨나요?" 안내
+
+```dart
+Padding(
+  padding: EdgeInsets.symmetric(vertical: 16),
+  child: Column(
+    children: [
+      Icon(Icons.help_outline, size: 32, color: GxColors.slate),
+      SizedBox(height: 8),
+      Text(
+        '이전에 PIN 으로 로그인하셨나요?',
+        style: TextStyle(fontSize: 14, color: GxColors.slate),
+      ),
+      SizedBox(height: 4),
+      Text(
+        'PIN 재등록을 위해 관리자에게 요청해주세요',
+        style: TextStyle(fontSize: 12, color: GxColors.silver),
+      ),
+      TextButton(
+        onPressed: () { /* 관리자 연락처 모달 */ },
+        child: Text('관리자에게 요청'),
+      ),
+    ],
+  ),
+),
+```
+
+### ✅ 효과
+
+- **첫 회 진입 사용자**: 일반 비번 로그인 흐름 그대로 (방해 없음)
+- **PIN 사용자가 잘못 빠진 케이스**: "관리자 요청" 옵션으로 명확히 안내
+- **비번 잊은 사용자**: 재설정 link 로 stuck 안 됨
+
+### 🚦 의존성
+
+- 1번 + 2번 Sprint 배포 후 잔존 케이스만 대응
+- 관리자 PIN 재등록 흐름이 backend 에 이미 있어야 (없으면 별도 Sprint)
+
+---
+
+## 🔧 OBSERV-DB-POOL-IDLE-DISCONNECT-WARMUP-20260427 프롬프트 — DB Pool warmup cron (🟡 P2, 격상)
+
+> **등록일**: 2026-04-27 KST (P3 → P2 격상)
+> **우선순위**: 🟡 P2 (실측으로 MIN=5 무효 입증, FIX-DB-POOL-MAX-SIZE-20260427 와 병행 권고)
+> **상태**: 🔴 OPEN (즉시 착수 권고)
+> **예상 소요**: 1~1.5h (BE 단일 함수 추가 + pytest TC + 배포)
+> **트리거 근거**: 2026-04-27 10:14~10:24 KST 실측 — Pool 초기화 직후 OPS 10 conn → 5분 후 9 → 10분 후 7 (감소 가속). `max_age=300s` 만료 시 lazy 재생성 race 로 MIN=5 사실상 무효. 다음 burst 도착 시 cold-start 비용 +900~4500ms 발생 가능
+> **담당**: BE teammate
+
+### 🎯 목적
+
+DB Pool 의 conn 들이 idle 상태에서 자발적으로 폐기되는 것을 방지. **5분 간격 자동 SELECT 1 실행**으로 max_age 시계 리셋 → MIN=5 강제 유지 → 영구 10 conn 보장 (per-worker 5 × 2 worker).
+
+### 🔬 실측 데이터 — MIN=5 무효 입증
+
+```
+2026-04-27 KST (DB_POOL_MIN=5, DB_POOL_MAX=30, max_age=300s):
+
+10:14:00  풀 초기화 직후     OPS 10 conn (5×2)  baseline
+10:19:00  5분 경과            OPS  9 conn (-1)   max_age 1차 만료
+10:24:00  10분 경과           OPS  7 conn (-3)   감소 가속
+
+per-worker 분배 (추정):
+  Worker A: 5 → 4 → 5 (자연 흐름 일부 재생성)
+  Worker B: 5 → 5 → 2 (이 worker 가 idle, 폐기 누적)
+  합계: 7
+
+이대로면:
+  15분 후: 5 또는 더 ↓
+  점심 시간 (사용자 적음): 4 ~ 2 까지 가능
+```
+
+→ Codex 라운드 3 A4 advisory ("MIN=5 효과는 max_age 만료 직전~직후 변동 가능, 실측 필요") 가 **10분 만에 실측으로 입증**됨.
+
+### 💡 해결 아이디어 (비유)
+
+```
+도서관 책 10권 — "5분 안 빌리면 자동 반납" 정책
+  손님 안 오는 시간대 → 점점 9권, 7권, 5권으로 줄어듦
+
+해결:
+  사서가 5분마다 책 한 권씩 펼쳐주면 → "이용 중" 으로 인정 → 줄어들지 않음
+  
+코드:
+  APScheduler 의 새 job _pool_warmup_job
+  매 5분마다 풀 안 모든 conn 에 SELECT 1 실행
+  → max_age 시계 리셋 → 폐기 안 됨 → MIN=5 강제 유지
+```
+
+### 🧩 수정 범위
+
+**대상 파일 1개**: `backend/app/services/scheduler_service.py`
+
+**변경 양**: ~30 LOC (신규 함수 1개 + scheduler 등록 1줄)
+
+**구현 (초안)**:
+
+```python
+# scheduler_service.py 신규 추가
+def _pool_warmup_job():
+    """
+    DB Pool conn 자발적 폐기 방지 — 매 5분 SELECT 1 으로 활성화.
+    
+    배경: max_age=300s 만료 + lazy 재생성으로 MIN 미달 발생.
+          실측 (2026-04-27): 10 → 9 → 7 (10분만에 30% 감소).
+    
+    효과: 모든 idle conn 의 max_age 시계 리셋 → MIN 강제 유지.
+    """
+    from app.db_pool import _pool, _MIN_CONN, _is_conn_usable
+    
+    if _pool is None:
+        logger.debug("[pool_warmup] pool not initialized, skip")
+        return
+    
+    # 풀에서 MIN_CONN 만큼 꺼내서 SELECT 1 실행 후 반납
+    conns = []
+    try:
+        for _ in range(_MIN_CONN):
+            try:
+                conn = _pool.getconn()
+                conns.append(conn)
+            except Exception as e:
+                logger.warning(f"[pool_warmup] getconn failed (attempt skipped): {e}")
+                break
+        
+        warmed = 0
+        for conn in conns:
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT 1")
+                cur.close()
+                warmed += 1
+            except Exception as e:
+                logger.warning(f"[pool_warmup] SELECT 1 failed on conn: {e}")
+        
+        logger.info(f"[pool_warmup] {warmed}/{len(conns)} conn warmed (target MIN={_MIN_CONN})")
+    finally:
+        # 반드시 반납
+        for conn in conns:
+            try:
+                _pool.putconn(conn)
+            except Exception:
+                pass
+
+
+# init_scheduler() 또는 start_scheduler() 안에 등록
+scheduler.add_job(
+    _pool_warmup_job,
+    trigger='interval',
+    minutes=5,
+    id='pool_warmup',
+    replace_existing=True,
+    next_run_time=datetime.now() + timedelta(seconds=10),  # 시작 10초 후 첫 실행
+)
+logger.info("[scheduler] pool_warmup job registered (interval=5min)")
+```
+
+### ✅ 위험도 평가 — 매우 낮음
+
+| 항목 | 평가 |
+|:---|:---:|
+| 기존 코드 변경 | 0 (신규 함수만) |
+| fcntl lock 영향 | 없음 (이미 1 worker 만 scheduler) |
+| DB 부하 | 무시 가능 (SELECT 1 × 5 conn × 12회/시간 = 60 query/시간) |
+| 회귀 위험 | 매우 낮음 |
+| 롤백 비용 | git revert 1 commit |
+
+### 🚦 Pre-deploy Gate
+
+| # | 항목 | 확인 |
+|:---:|:---|:---:|
+| 1 | `_pool_warmup_job` 함수가 fcntl lock 보호 worker 안에서만 실행 | ☐ (scheduler_service 자체가 fcntl 보호) |
+| 2 | `_MIN_CONN`, `_pool` import 정확 | ☐ |
+| 3 | finally 블록으로 반납 보장 | ☐ |
+| 4 | 신규 pytest TC 1개 (warmup job 호출 후 conn 수 유지 검증) | ☐ |
+| 5 | scheduler 등록 시점 — `init_scheduler()` 안 또는 `start_scheduler()` 안 | ☐ |
+| 6 | 기존 11 job 회귀 (pytest 전체 GREEN) | ☐ |
+
+### 🧪 신규 pytest TC
+
+```python
+# tests/backend/test_pool_warmup.py 신규
+def test_pool_warmup_keeps_min_conn():
+    """warmup job 실행 후 conn 수가 MIN 이상 유지되는지"""
+    from app.services.scheduler_service import _pool_warmup_job
+    from app.db_pool import _pool, _MIN_CONN
+    
+    if _pool is None:
+        pytest.skip("Pool not initialized in test env")
+    
+    # 풀의 모든 conn 한 번에 꺼내서 max_age 만료시키기 (시뮬레이션)
+    # ... (test setup)
+    
+    # warmup 실행
+    _pool_warmup_job()
+    
+    # MIN 보장 확인
+    # ... (assertion)
+```
+
+수동 검증도 가능 — 배포 후 pg_stat_activity 측정.
+
+### 🔍 Post-deploy 검증
+
+#### 즉시 (배포 후 5분)
+
+```
+Railway logs:
+  [scheduler] pool_warmup job registered (interval=5min)
+  [pool_warmup] 5/5 conn warmed (target MIN=5)
+```
+
+#### 1시간 관찰
+
+```sql
+-- 매 5분마다 conn 수 확인 (적용 효과 측정)
+SELECT
+  TO_CHAR(now() AT TIME ZONE 'Asia/Seoul', 'HH24:MI:SS') AS time_kst,
+  COUNT(*) AS conn_count
+FROM pg_stat_activity
+WHERE datname = 'railway'
+  AND (application_name IS NULL OR application_name = '');
+```
+
+| 시각 | 기대 conn (warmup 적용 후) | 비교 (현재) |
+|:---|:---:|:---:|
+| 0분 | 10 | 10 |
+| 5분 | 10 | 9 |
+| 10분 | 10 | 7 |
+| 1시간 | 10 | 알 수 없음 (계속 ↓) |
+| 점심 idle | 10 | 5 이하 가능 |
+
+→ **모든 시점 10 유지** = 성공.
+
+### 📦 Rollback
+
+```
+git revert <commit-sha>
+→ scheduler_service.py 원복
+→ Railway 자동 재배포 ~1분
+→ _pool_warmup_job 사라짐, 이전 동작 (점진 감소) 복귀
+```
+
+부수 효과 없음.
+
+### 📋 BACKLOG 동기화
+
+```
+OBSERV-DB-POOL-IDLE-DISCONNECT-WARMUP-20260427    🟡 P2  (이 Sprint, 격상)
+  ├─ scheduler_service.py 에 _pool_warmup_job 추가
+  ├─ 5분 간격 SELECT 1 × MIN_CONN
+  ├─ pytest TC 1개 + 회귀 11 job GREEN
+  └─ 배포 후 pg_stat_activity 1시간 관찰 → conn=10 영구 유지 확인
+```
+
+### 🤝 후속 Sprint 연계
+
+- `FIX-DB-POOL-MAX-SIZE-20260427` 와 **병행 가능** (서로 다른 차원). MAX 는 capacity, warmup 은 idle 안정성.
+- `OBSERV-RAILWAY-HEALTH-TTFB-15S-INTERMITTENT` — warmup 도입 후 Railway proxy 와의 conn 안정성도 ↑ → TTFB 안정화 부수 효과 가능.
+- `INFRA-RAILWAY-KEEP-WARM-PING` — 만약 외부 모니터링 (UptimeRobot) 도 5분 간격 ping 하면 warmup 과 중복. 외부 도구는 다른 차원 (health endpoint 모니터링) 이라 공존 OK.
+
+### 📝 사후 기록 양식 (배포 후)
+
+```
+✅ 배포 완료 (2026-04-XX HH:MM KST)
+  ├─ commit: <sha>
+  ├─ Railway logs: "pool_warmup job registered" ✓
+  ├─ 첫 warmup 실행: "5/5 conn warmed" ✓
+  
+1시간 관찰 (배포 후 5분/15분/30분/60분 시점):
+  ├─ 5분:  conn ___개 (기대 10)
+  ├─ 15분: conn ___개 (기대 10)
+  ├─ 30분: conn ___개 (기대 10)
+  ├─ 60분: conn ___개 (기대 10)
+  └─ 점심 idle 시점: conn ___개 (기대 10)
+  
+판정:
+  ├─ MIN=5 영구 유지 (Y/N): ___
+  └─ 추가 조치 필요: ___ (없으면 Sprint 종료)
+
+OPEN → COMPLETED 전환
+```
+
+---

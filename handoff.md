@@ -1,7 +1,138 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-04-23
+> 마지막 업데이트: 2026-04-27 (v2.10.5)
+
+---
+
+## 🟢 2026-04-27 세션 요약 (2/2) — FIX-PIN-FLAG-MIGRATION-SHAREDPREFS Deploy 완료 (v2.10.5)
+
+> **한 줄 요약**: PIN 등록 플래그 storage 안정화 — `pin_registered` SecureStorage → SharedPreferences 양방향 sync 이전. 4 라운드 advisory review (M=8/8 + 추가 리스크 2/2 전수 반영) 후 적용. v2.10.5 Netlify 배포 완료.
+
+### 핵심 의사 결정 (4 라운드 advisory 누적)
+
+| 라운드 | 주체 | 발견 | 반영 |
+|---|---|---|---|
+| 1 (자체) | Claude Code | 인증 로직 영향 → Codex 이관 / 양방향 sync 채택 / baseline SQL 추가 (6건) | ✅ |
+| 2 (Codex) | Codex 1차 | M 8건 (atomic / SQL LIKE / SW trigger / rollback 5번째 / cohort / 다른 가설 / D+7 통계 / iOS Safari) | ✅ 8/8 |
+| 3 (Codex 추가) | Codex | 추가 리스크 2: refresh_token 도 SecureStorage / backend `/auth/pin-status` 가 진짜 root fix | ✅ 2/2 BACKLOG |
+| 4 (배포 검증) | Twin파파 | home_screen.dart 별건 알림 배지 동기화 동시 포함 안전 검증 | ✅ |
+
+### 코드 변경 (v2.10.5)
+
+- `frontend/lib/services/auth_service.dart`:
+  - L3 `package:flutter/foundation.dart` import 추가 (debugPrint)
+  - `hasPinRegistered()` 양방향 read + sync (SharedPrefs 우선, SecureStorage fallback + auto-sync, **delete 안 함** rollback 안전)
+  - `savePinRegistered()` 양방향 write + atomic try/catch (SharedPrefs 주 저장소, SecureStorage best-effort)
+  - `logout()` (L243) SharedPrefs `pin_registered` 도 정리 (양방향 cleanup)
+- `frontend/lib/utils/app_version.dart` v2.10.4 → **2.10.5**
+- `backend/version.py` v2.10.4 → **2.10.5**
+- 부수: `frontend/lib/screens/home/home_screen.dart` 알림 배지 동기화 (별건, 같은 commit 포함)
+
+### Deploy
+
+- 빌드: flutter build web --release ✓ 12.2s
+- 배포: Netlify Deploy ID `69eed5d26147a9d3c6966ecf`
+- Production URL: https://gaxis-ops.netlify.app
+
+### Limitation (Codex 1차 advisory 핵심)
+
+4개 SecureStorage 키 (`pin_registered`, `refresh_token`, `worker_id`, `worker_data`) 가 IndexedDB 일괄 손실 시 본 Sprint 효과 영역 좁음:
+- `pin_registered` 만 단독 손실 (드뭄) → ✅ 본 Sprint 보호
+- 4개 함께 손실 (Clear site data, Storage quota evict) → ❌ FEAT-PIN-STATUS-BACKEND-FALLBACK (P1) 가 진짜 root fix
+
+### 신규 BACKLOG (4개 후속 Sprint, BACKLOG.md L347-L351 등록 완료)
+
+- `FEAT-PIN-STATUS-BACKEND-FALLBACK-20260427` 🔴 P1 (격상 — 진짜 root fix, 1h)
+- `AUDIT-PWA-SW-INDEXEDDB-PRESERVE-20260427` 🟡 P2 (audit, 30분)
+- `UX-LOGIN-FALLBACK-PIN-RESET-LINK-20260427` 🟢 P3 (UX, 1h)
+- `FEAT-AUTH-STORAGE-MIGRATION-FULL-20260427` 🟡 P2 (Codex 신규 권장 — refresh_token + worker_id + worker_data 도 양방향 sync)
+
+### 다음 세션 시작 시 할 일
+
+1. **Baseline SQL 측정** — 설계서 L31644~31691 SQL 3종 pgAdmin 실행 (배포 전 1회 권장, **사후 측정도 가능**)
+2. **D+7 재측정 비교** (2026-05-04) — PIN 손실 의심 사용자 / login attempts / auth_pct 변화
+3. **공지(notices) bump** — v2.10.5 사용자 공지 INSERT (PIN 화면 손실 보호 + 알림 배지 동기화)
+4. **L32002 OBSERV-DB-POOL-IDLE-DISCONNECT-WARMUP P2 (격상)** — 실측으로 MIN=5 무효 입증 (10:14 → 10:24 conn 10→9→7), warmup cron 추가 (1~1.5h)
+5. **FEAT-PIN-STATUS-BACKEND-FALLBACK P1** — 본 Sprint 직후 진행 (1h, 진짜 root fix)
+
+### 부수 발견 (별도 보고)
+
+1. **MIN=5 max_age=300s race 실측 입증** — 2026-04-27 10:14~10:24 KST 측정 결과 OPS 10→9→7 conn (10분만에 30% 감소). Codex 라운드 3 A4 advisory 가 실측으로 입증. → `OBSERV-DB-POOL-IDLE-DISCONNECT-WARMUP` P3 → P2 격상 + 본 세션 설계서 작성 (L32002).
+2. **CHANGELOG v2.10.4 entry 누락** — 이전 세션 (4-25 health timeout 5→20s) 시 보충 안 됨. 별도 보충 필요 (사후 정리).
+
+### 산출물 (FIX-PIN-FLAG)
+
+- 코드 3 파일: auth_service.dart + app_version.dart + version.py
+- 부수 1 파일: home_screen.dart
+- 문서 4 파일: AGENT_TEAM_LAUNCH.md (PIN-FLAG + OBSERV-WARMUP 설계서) + CHANGELOG.md ([2.10.5] entry) + BACKLOG.md (5개 entry) + handoff.md (이 파일)
+- 신규 1 파일: `CODEX_REVIEW_FIX_PIN_FLAG_20260427.md`
+
+---
+
+## 🟢 2026-04-27 세션 요약 (1/2) — FIX-DB-POOL-MAX-SIZE-20260427 Phase A 적용 (Phase B 관찰 중)
+
+> **한 줄 요약**: Railway env `DB_POOL_MAX` 20→30 변경 (MIN=5 유지) — 코드 변경 0, 4 라운드 advisory review (Codex×2 + Claude Code×1 + Twin파파 fact-check×1) 후 적용. Phase B 3일 (화/수/목) 관찰 중.
+
+### 핵심 의사 결정 (4 라운드 advisory 누적)
+
+| 라운드 | 주체 | 발견 |
+|---|---|---|
+| 1 (텍스트) | Codex 1차 | scheduler peak 8 conn / 단계적 25→30 직행 / fallback 비용 / 평균 conn 정정 (4건) |
+| 2 (코드 구조) | Claude Code | ⛔ **per-worker 독립 pool** 발견 (init_pool() in create_app() — 단일 pool 가정 무효) / Phase B 3일 확장 / pid+client_addr SQL (4건) |
+| 3 (데이터 정합성) | Codex 3차 | Q-B 일자 오기 (4-27→4-21) / 5x 산수 오류 (155 in-flight 부족) / MIN ↔ max_age race / grep `\b` + `get_db_connection` 함수명 누락 (4건) |
+| 4 (env fact-check) | **Twin파파** | ⚠️ 코드 default (1/10) 가정 오류 — **prod 가 이미 5/20 운영 중**. 결론 (MAX=30) 유지하되 fallback 추정 정정 (3건) |
+
+### 최종 결정 + 배포
+
+- **MAX**: 20 → **30** (Railway env)
+- **MIN**: 5 (변경 없음, 유지)
+- 배포 방식: Twin파파 Railway Dashboard 에서 직접 적용 → 자동 재배포
+- 코드 변경 0 / 버전 bump 없음 / notices 없음
+
+### Q-B 결정적 데이터 (2026-04-21 화 출근 burst)
+
+- peak 31 동시 in-flight (08:06:07 KST)
+- 21 동시 17회 (07:46~08:55)
+- MAX=20 환경에서 fallback 1건/peak (라운드 4 정정)
+- MAX=30 채택으로 fallback 0 + 미래 2x (62 in-flight) 까지 dimensioning
+
+### Phase B 관찰 일정
+
+| 날짜 | 시점 | 점검 |
+|---|---|---|
+| D+0 (4-27 월) | 16:30~17:00 KST | 퇴근 peak — Railway logs `Pool exhausted` grep |
+| D+1 (4-28 화) | 07:30~09:00 KST | 출근 peak |
+| D+2 (4-29 수) | 07:30~09:00 KST | 출근 peak |
+| D+3 (4-30 목) | 07:30~09:00 KST | 출근 peak + Phase C 결정 |
+| off-peak (12:00) | — | Q-B SQL 재측정 (O(N²) 부담 회피) |
+
+### 다음 세션 시작 시 할 일
+
+1. **Railway logs 검증** — `[db_pool] Connection pool initialized: min=5, max=30, max_age=300s, connect_timeout=5s` 1건 출력 확인 (D+0 배포 직후)
+2. **Phase B grep 결과 정리** — 매일 오전 + 17:00 후 Railway logs `Pool exhausted` / `Using direct connection` 카운트
+3. **D+3 (4-30 목) Phase C 결정**:
+   - 0 fallback / 3일 → 30 충분, BACKLOG `FIX-DB-POOL-MAX-SIZE-20260427` COMPLETED 처리
+   - 1~5건 / 3일 → MAX=40 ↑ (잠재 leak 의심)
+   - 10+건 / 3일 → MAX=50 ↑ + leak audit 필수
+
+### 부수 발견
+
+1. **CHANGELOG v2.10.4 entry 누락** — 이전 세션 (2026-04-25 health timeout 5→20s 패치) 시 CHANGELOG 보충 안 됨. 별도 보충 필요 (사후 정리 항목).
+2. **외부 환경 가정 SOP 부재** — 라운드 4 (Twin파파 fact-check) 가 결정적이었음. 향후 인프라 작업 시 Railway Variables 사전 확인 SOP 정립 필요 (CLAUDE.md INFRA 섹션 추가 후보).
+
+### 산출물 (문서만 4 파일, 코드 0)
+
+- `AGENT_TEAM_LAUNCH.md` FIX-DB-POOL-MAX-SIZE-20260427 섹션 (라운드 4 trail 추가, 약점 12건)
+- `BACKLOG.md` FIX-DB-POOL 항목 → 🟡 PHASE A APPLIED → B 관찰 중
+- `CHANGELOG.md` `[Infra] - 2026-04-27` entry 추가
+- `handoff.md` (이 파일) 2026-04-27 세션 추가
+
+### 별건 BACKLOG (2026-04-27 등록)
+
+- `OBSERV-DB-POOL-IDLE-DISCONNECT-WARMUP` 🟢 P3 (격하 — MIN=5 가 cold-start 일부 흡수, 나머지는 5분 SELECT 1 cron)
+- `OBSERV-RAILWAY-HEALTH-TTFB-15S-INTERMITTENT` 🟡 P2 (별건, Pool 30 적용 후 자연 해결 여부 확인)
+- `OBSERV-SLOW-QUERY-ENDPOINT-PROFILING` 🟡 P2 (Q-A 화/수 p99≥1초 burst 9건 endpoint 분석 — Tue 19:00 max 2495ms / Wed 00:00 239 req 등)
 
 ---
 

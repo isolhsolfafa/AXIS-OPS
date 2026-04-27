@@ -6,6 +6,129 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.10.5] - 2026-04-27 — FIX-PIN-FLAG-MIGRATION-SHAREDPREFS
+
+> **PIN 등록 플래그 storage 안정화** — `pin_registered` 를 SecureStorage (IndexedDB) → SharedPreferences (localStorage) 양방향 sync 이전. 4 라운드 advisory review (Claude Code 1차 + Codex 1차 — M 8건 + 추가 리스크 2건 전수 반영) 후 적용.
+
+### Changed
+
+- **`frontend/lib/services/auth_service.dart`** L20, L243-360 — `pin_registered` 플래그 양방향 sync 패턴 적용:
+  - `hasPinRegistered()`: SharedPrefs 우선 read, fallback SecureStorage + 자동 sync (양방향, SecureStorage 유지 — rollback 안전)
+  - `savePinRegistered()`: SharedPrefs 주 저장소 + SecureStorage best-effort try/catch (atomic 보장 불가 → non-fatal 로 처리, debugPrint 로그)
+  - `logout()` (L243): SharedPrefs `pin_registered` 도 정리 (양방향 cleanup)
+- `package:flutter/foundation.dart` import 추가 (debugPrint 사용)
+
+### 부수 변경
+
+- **`frontend/lib/screens/home/home_screen.dart`** — 알림 화면에서 돌아올 때 `alertProvider.refreshUnreadCount()` 호출 (배지 카운트 동기화). FIX-PIN-FLAG 와 무관한 별건 개선, 같은 commit 에 포함.
+
+### 4 라운드 advisory trail (M=8/8 + 추가 리스크 2/2 반영)
+
+- **Claude Code 1차** (사전 자체 검증, 6건):
+  - A1 인증 로직 영향 → Codex 이관 결정
+  - A2 connection 인과 정량 입증 부재 → baseline SQL 3종 추가
+  - A3 ⛔ 단방향 마이그레이션 시 rollback 위험 → 양방향 sync 채택
+  - A4 `savePinRegistered()` 양방향 write 패턴
+  - A5 race condition (낮은 위험)
+  - A6 IndexedDB 손실 trigger 정확성
+
+- **Codex 1차** (M=8 / 추가 리스크 2):
+  - M1/Q1.a atomic 보장 불가 → best-effort try/catch + 로그 명시
+  - M2/Q3.f baseline SQL `request_path` LIKE 패턴 정정
+  - M3/Q4.i SW 업데이트 ≠ IndexedDB 손실 정정
+  - Q2.d Rollback 표 5번째 케이스 (SharedPrefs 'true' + SecureStorage write 실패)
+  - Q2.e Cohort 정의 (cohort_A/B + secure_write_ok/fail)
+  - Q3.g 다른 가설 구분 cohort (device_id, UA, 시간대)
+  - Q3.h D+7 통계 신뢰성 (3일 pre/post + active worker 정규화)
+  - Q4.j iOS Safari localStorage 도 영향
+  - 추가 리스크 1: refresh_token + worker_id + worker_data 도 SecureStorage → BACKLOG `FEAT-AUTH-STORAGE-MIGRATION-FULL` 신규
+  - 추가 리스크 2: backend `/auth/pin-status` 가 진짜 root fix → BACKLOG `FEAT-PIN-STATUS-BACKEND-FALLBACK` P2 → P1 격상
+
+### Limitation
+
+본 Sprint = 1차 보호 layer. `pin_registered` 만 단독 손실 케이스 (드뭄) 보호. **4개 키 함께 손실 (Clear site data, Storage quota evict, iOS Safari 7일 idle) 시 효과 없음** — `FEAT-PIN-STATUS-BACKEND-FALLBACK` (P1 격상) 이 진짜 root fix.
+
+### Deploy
+
+- 빌드: flutter build web --release ✓ 12.2s
+- 배포: Netlify Deploy ID `69eed5d26147a9d3c6966ecf` (2026-04-27 KST)
+- Production URL: https://gaxis-ops.netlify.app
+
+### Baseline 측정 (Twin파파 pgAdmin 배포 전 1회 권장)
+
+설계서 L31644~31691 SQL 3종 — PIN 손실 의심 사용자 / login attempts 추세 / auth_pct. 결과는 D+7 재측정과 비교하여 본 Sprint 효과 정량 입증.
+
+### Rollback
+
+`frontend/lib/services/auth_service.dart` 변경 git revert → flutter build web → Netlify 배포. 양방향 sync 채택으로 rollback 안전 (단, SecureStorage write 실패한 cohort 만 잔존 위험).
+
+### 신규 BACKLOG (4개 후속 Sprint)
+
+- `FEAT-PIN-STATUS-BACKEND-FALLBACK-20260427` 🔴 P1 (격상 — 진짜 root fix)
+- `AUDIT-PWA-SW-INDEXEDDB-PRESERVE-20260427` 🟡 P2
+- `UX-LOGIN-FALLBACK-PIN-RESET-LINK-20260427` 🟢 P3
+- `FEAT-AUTH-STORAGE-MIGRATION-FULL-20260427` 🟡 P2 (Codex 신규 권장)
+
+### Related
+
+- 설계 상세: `AGENT_TEAM_LAUNCH.md` FIX-PIN-FLAG-MIGRATION-SHAREDPREFS-20260427 섹션
+- Codex 1차 advisory: `CODEX_REVIEW_FIX_PIN_FLAG_20260427.md`
+- 별건 (병행): `FIX-DB-POOL-MAX-SIZE-20260427` Phase B 관찰 중
+
+---
+
+## [Infra] - 2026-04-27 — FIX-DB-POOL-MAX-SIZE-20260427
+
+> **인프라 변경 only — 코드 변경 0, 버전 bump 없음**.
+> Railway env `DB_POOL_MAX` **20 → 30** 변경 (MIN=5 유지). 4 라운드 advisory review (Codex 1차 + Claude Code 2차 + Codex 3차 + Twin파파 fact-check 4차) 로 약점 12건 정정 후 적용.
+
+### Changed (Railway env only)
+
+- `DB_POOL_MAX`: 20 → **30** (per-worker 독립 pool × 2 worker = Postgres 60/100 점유)
+- `DB_POOL_MIN`: 5 (변경 없음, 기존 운영값 유지)
+
+### 결정 근거 (Q-B 결정적 데이터)
+
+- **2026-04-21 화요일 출근 burst 측정** (4-25 ~ 4-27 진단):
+  - peak 31 동시 in-flight (08:06:07 KST)
+  - 21 동시 in-flight 17회 (07:46~08:55, 70분간)
+  - MAX=20 환경에서 fallback 1건/peak 발생 (라운드 4 정정 — 이전 추정 ~100건/일은 코드 default 가정 오류 기반)
+- **per-worker 독립 pool 구조** (`backend/app/__init__.py:60-62` `init_pool()` in `create_app()`):
+  - gunicorn `-w 2` (preload 없음) → 각 worker fork 후 독립 pool 생성
+  - Worker A (scheduler owner, fcntl lock): HTTP 8 + scheduler peak 4 + 여유 = 15 conn 필요
+  - Worker B (HTTP only): 8 + 여유 2 = 10 conn 필요
+  - MAX=30 채택으로 worker A 100% 안전 + 미래 2x (62 in-flight) 까지 dimensioning
+
+### 4 라운드 advisory trail (M=0 / A=12)
+
+- 라운드 1 (Codex 1차): scheduler peak 8 conn 재계산, 단계적 25→30 한 번에 직행, fallback 비용 (200~500ms) 명시 (4건)
+- 라운드 2 (Claude Code 2차): ⛔ per-worker 독립 pool 구조 발견 (단일 pool 가정 정정), Phase B 1일→3일 통계 신뢰성, pg_stat_activity SQL pid+client_addr 정밀화 (4건)
+- 라운드 3 (Codex 3차): Q-B 일자 오기 (4-27→4-21) 정정, 5x 산수 오류 (31×5=155 in-flight, MAX=30 으로 부족), MIN=5 ↔ max_age=300s 상호작용, grep `\b` 경계 + `get_db_connection` 함수명 누락 정정 (4건, M=0)
+- 라운드 4 (Twin파파 fact-check): ⚠️ 코드 default (1/10) 가정 오류 — 실제 prod 가 이미 5/20 운영 중. 결론 (MAX=30) 유지하되 fallback 빈도 추정 정정 (3건)
+
+### Codex 공식 이관 미해당
+
+본 작업은 단순 env 변경 + 코드 변경 0 + S1/S2 미해당으로 **Codex 이관 체크리스트 6항목 미충족**. Advisory review 만 4 라운드 수행 (정식 Codex 이관 절차 미적용).
+
+### Phase B 관찰 계획 (D+0 ~ D+3)
+
+- D+0 (2026-04-27 월) 16:30~17:00 KST 퇴근 peak — `Pool exhausted` grep
+- D+1 (4-28 화) 07:30~09:00 출근 peak
+- D+2 (4-29 수) 07:30~09:00 출근 peak
+- D+3 (4-30 목) 07:30~09:00 출근 peak + Phase C 결정
+- off-peak (12:00) Q-B 동시 in-flight 재측정 SQL (peak 후 O(N²) 부담 회피)
+
+### Rollback
+
+`DB_POOL_MAX = 30 → 20` env 복원 → 자동 재배포 ~1분, 코드 영향 0.
+
+### Related
+
+- 설계 상세: `AGENT_TEAM_LAUNCH.md` FIX-DB-POOL-MAX-SIZE-20260427 섹션 (약점 trail 12건 + 4 라운드 검증 기록)
+- 별건 BACKLOG: `OBSERV-DB-POOL-IDLE-DISCONNECT-WARMUP` (P3, 격하 — MIN=5 가 cold-start 일부 흡수), `OBSERV-RAILWAY-HEALTH-TTFB-15S-INTERMITTENT` (P2, 별건), `OBSERV-SLOW-QUERY-ENDPOINT-PROFILING` (P2, 신규 분리)
+
+---
+
 ## [2.10.3] - 2026-04-24
 
 > FIX-ORPHAN-ON-FINAL-DELIVERY — v2.10.2 배포 후 Q4-5 48h 관찰에서 발견된 숨은 4번째 delivery 실패 경로 수정. 2026-04-22 HOTFIX-ALERT-SCHEDULER-DELIVERY 가 `scheduler_service.py` 3곳만 고쳤는데 `task_service.py` 내 `complete_task` 경로에 동일 패턴의 **target_worker_id 미지정 버그** 가 숨어있어 2026-04-23~24 4일간 8건 legacy NULL 발생.
