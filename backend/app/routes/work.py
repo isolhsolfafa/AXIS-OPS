@@ -262,8 +262,8 @@ def complete_work() -> Tuple[Dict[str, Any], int]:
             result['category_completed'] = response.get('category_completed', False)
             result['task_finished'] = response.get('task_finished', True)
             result['relay_mode'] = response.get('relay_mode', False)
-            if 'duration_warnings' in response:
-                result['duration_warnings'] = response['duration_warnings']
+            # FIX-26: duration_warnings 항상 forward (빈 리스트 default — 키 존재 계약 보장)
+            result['duration_warnings'] = response.get('duration_warnings', [])
             # Sprint 52: Manager가 TM TANK_MODULE 직접 완료 시 FE 체크리스트 진입 유도
             if response.get('checklist_ready'):
                 result['checklist_ready'] = True

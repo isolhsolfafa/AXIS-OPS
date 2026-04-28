@@ -32713,3 +32713,845 @@ OPEN → COMPLETED 전환
 ```
 
 ---
+
+## 🔧 FIX-26-DURATION-WARNINGS-FORWARD-20260428 프롬프트 — `/api/app/work/complete` 응답 duration_warnings 키 누락 fix (🟡 P2)
+
+> **등록일**: 2026-04-28 KST (BACKLOG 4-22 등록 → 4-28 Sprint 시작)
+> **Sprint ID**: `FIX-26-DURATION-WARNINGS-FORWARD-20260428`
+> **BACKLOG 연계**: L362 `BUG-DURATION-VALIDATOR-API-FIELD` (4-22 등록, Codex 라운드 2 합의 trail 보유)
+> **우선순위**: 🟡 P2 (silent failure 아님, FE 영향 가능성 있음, REVERSE_COMPLETION 같은 잘못된 입력 감지 case 에서 사용자에게 경고 미전달)
+> **상태**: 🔴 OPEN (즉시 착수 가능 — Codex 라운드 2 (2026-04-28) Q1/Q2 A 라벨 합의로 별건 확정 + 응답 키 생성 경로 분석 완료)
+> **예상 소요**: 30분 (BE ~2 LOC + pytest 회귀)
+> **선행 의존성**: 없음
+> **병행 가능**: FIX-PROCESS-VALIDATOR-TMS-MAPPING (v2.10.11 배포 후) post-deploy 관찰 + FIX-DB-POOL Phase B D+2/D+3 관성 — 모두 코드 영역 무관
+> **충돌 위험**: 없음 (task_service / work.py 의 duration_warnings 처리 라인 1~2줄 수정만)
+> **트리거 근거**: 2026-04-22 HOTFIX-ALERT-SCHEDULER-DELIVERY 세션 중 발견 → 4-22 BACKLOG 등록만 + Codex 미이관 → 4-28 FIX-PROCESS-VALIDATOR-TMS-MAPPING 후 pytest 회귀 시 동일 fail 재출현 → Codex 라운드 2 Q1/Q2 A 합의 → 별건 fix Sprint 시작
+> **담당**: BE teammate (또는 Lead 직접) — Codex 라운드 2 분석 완료 후 추가 이관 불필요
+> **Codex 이관**: ❌ 불필요 — 라운드 2 에서 응답 키 생성 경로 (duration_validator → task_service → work.py) 정확 분석 + A 라벨 합의
+
+### ⚠️ Codex 라운드 2 합의 (2026-04-28) — 4-22 별건 확정
+
+```
+Q1 결과: A — 본 fail 은 duration_validator.py:70-93 REVERSE_COMPLETION 브랜치가
+  "warnings" 키로 반환 → task_service.py:361-363, 496-498 + work.py:261-266 가
+  duration_warnings 로 forward. 응답 키 생성 경로 4-22 부터 누락된 별건.
+Q2 결과: A — FIX-PROCESS-VALIDATOR-TMS-MAPPING 회귀 0건 + 본 BUG 별건 확정.
+```
+
+### 🔬 응답 키 생성 경로 + 누락 지점 분석
+
+```
+실패 TC: tests/backend/test_duration_validator.py::TestReverseDuration::test_reverse_completion (L245)
+시나리오:
+  1. started_at = now() + 1h (미래)
+  2. POST /api/app/work/complete → completed_at(now) < started_at(future) → REVERSE_COMPLETION trigger
+  3. assert 'duration_warnings' in data  ← FAIL: 키 자체가 응답에 없음
+
+응답 키 생성 경로:
+  ① duration_validator.validate_duration() L70-93
+     → REVERSE_COMPLETION 시 warnings.append("완료 시간이 시작 시간보다 이릅니다.")
+     → return {"valid": False, "warnings": [...], "alerts_created": N}
+
+  ② task_service.complete_task() L361-365
+     → duration_validation = validate_duration(task_detail_id)
+     → duration_warnings = duration_validation.get('warnings', [])
+     → if duration_warnings: logger.warning(...)
+
+  ③ task_service.complete_task() L497-498 (⚠️ 누락 지점 1)
+     → if duration_warnings:
+           response['duration_warnings'] = duration_warnings
+     → 빈 리스트 [] 일 때 키 자체 없음
+
+  ④ work.py L265-266 (⚠️ 누락 지점 2 — defensive forward 필요)
+     → if 'duration_warnings' in response:
+           result['duration_warnings'] = response['duration_warnings']
+     → response 에 키 없으면 forward 안 됨
+```
+
+→ **두 conditional layer (③ + ④) 가 빈 리스트일 때 키 자체를 응답에서 제거**. 테스트는 키 존재를 가정 → fail.
+
+### 🎯 목적
+
+`/api/app/work/complete` 응답에 `duration_warnings` 키 항상 존재 보장. 빈 리스트 `[]` 라도 키는 노출 → API 계약 명확화 + FE 가 `data.duration_warnings.length > 0` 형태로 안전하게 검증 가능.
+
+### 🛠️ 옵션 검토 (3개)
+
+| 옵션 | 변경 범위 | 장점 | 단점 |
+|---|---|---|---|
+| **A**: task_service.py L497 만 unconditional | +0 LOC (`if` 제거) | 책임 위치 명확 (응답 생성자가 키 보장) | work.py 의 conditional forward 도 그대로면 효과 X |
+| **B**: work.py L265-266 만 default 빈 리스트 | ~1 LOC | 작은 변경 | 시멘틱 분산 (work.py 가 default 책임) |
+| **C (권장)**: 양 끝 모두 unconditional | ~2 LOC | API 계약 명확 + 방어적 + Codex 라운드 2 명시 방향 부합 | 약간 더 LoC |
+
+→ **옵션 C 채택**: BACKLOG L362 entry 의 fix 방향 ("task_service.complete_task() 응답 dict 에 duration_warnings 키 forward + work.py L261-266 의 result.get('duration_warnings', []) 명시") 와 정확히 일치.
+
+### 🧩 수정 범위 (3 파일, ~5 LOC touch)
+
+```
+1. backend/app/services/task_service.py (~1 LOC)
+   └─ L497: if duration_warnings:  →  (제거, unconditional 로 만들기)
+   └─ L498: response['duration_warnings'] = duration_warnings  ← 그대로 (들여쓰기 1단 위)
+
+2. backend/app/routes/work.py (~2 LOC)
+   └─ L265: if 'duration_warnings' in response:  →  (제거)
+   └─ L266: result['duration_warnings'] = response['duration_warnings']
+            → result['duration_warnings'] = response.get('duration_warnings', [])
+
+3. tests/backend/test_duration_validator.py (회귀 검증, +0 LOC)
+   └─ TestReverseDuration::test_reverse_completion: 기존 fail TC 가 그대로 PASS 되는지 확인
+   └─ 신규 TC 1개 추가 권장: test_complete_normal_returns_empty_duration_warnings
+       (정상 완료 시 duration_warnings: [] 빈 리스트로 반환되는지)
+```
+
+**총 변경**: ~5 LOC touch / net +2 LOC (BE) + 신규 TC 1개 (~10 LOC).
+
+### 🛠️ 구현 (초안)
+
+#### Step 1 — `task_service.py` L497 unconditional
+
+```python
+# Before (L496-498)
+        # Sprint 3: duration 경고가 있으면 응답에 포함
+        if duration_warnings:
+            response['duration_warnings'] = duration_warnings
+
+# After
+        # Sprint 3 / FIX-26: duration 경고는 항상 응답에 포함 (빈 리스트라도)
+        # → API 계약 명확화 + FE 가 키 존재 가정 가능
+        response['duration_warnings'] = duration_warnings
+```
+
+#### Step 2 — `work.py` L265-266 default fallback
+
+```python
+# Before
+            if 'duration_warnings' in response:
+                result['duration_warnings'] = response['duration_warnings']
+
+# After
+            # FIX-26: duration_warnings 항상 forward (빈 리스트 default)
+            result['duration_warnings'] = response.get('duration_warnings', [])
+```
+
+#### Step 3 — pytest TC 보강 (test_duration_validator.py)
+
+```python
+class TestDurationWarningsAlwaysPresent:
+    """FIX-26 — /api/app/work/complete 응답에 duration_warnings 키 항상 존재 보장."""
+
+    def test_normal_completion_returns_empty_duration_warnings(self, client, db_conn):
+        """정상 완료 시 duration_warnings: [] 빈 리스트로 반환 (키 존재 보장)."""
+        worker_id = create_test_worker(role='MECH', email='dur-fix26-1@test.com')
+        create_test_completion_status(serial_number='SN-DUR-FIX26-01')
+        started_at = datetime.now(timezone.utc) - timedelta(hours=2)  # 정상 (과거)
+        task_id = create_test_task(
+            worker_id=worker_id,
+            serial_number='SN-DUR-FIX26-01',
+            qr_doc_id='DOC-DUR-FIX26-01',
+            task_category='MECH',
+            task_id='CABINET_ASSY',
+            task_name='캐비넷 조립',
+            started_at=started_at,
+        )
+        token = get_auth_token(worker_id, role='MECH')
+        response = client.post(
+            '/api/app/work/complete',
+            json={'task_id': task_id},
+            headers={'Authorization': f'Bearer {token}'},
+        )
+        assert response.status_code == 200
+        data = response.get_json()
+        assert 'duration_warnings' in data, "정상 완료에도 duration_warnings 키 존재해야 함 (FIX-26 계약)"
+        assert data['duration_warnings'] == [], "정상 완료 시 빈 리스트"
+```
+
+### 🚦 Pre-deploy Gate
+
+| # | 항목 | 확인 |
+|:---:|:---|:---:|
+| 1 | `task_service.py` L497 conditional 제거 (unconditional 응답 키 추가) | ☐ |
+| 2 | `work.py` L265-266 conditional 제거 (default 빈 리스트 forward) | ☐ |
+| 3 | 기존 fail TC `TestReverseDuration::test_reverse_completion` GREEN 전환 | ☐ |
+| 4 | 신규 TC `test_normal_completion_returns_empty_duration_warnings` GREEN | ☐ |
+| 5 | 회귀 검증 (test_duration_validator + test_task_service + test_work_api) GREEN | ☐ |
+| 6 | FE 영향 검토 — `data.duration_warnings.length > 0` 형태 코드 안전 작동 (Flutter null safety) | ☐ |
+
+### 🔍 Post-deploy 검증
+
+#### 즉시 (배포 직후 1시간)
+
+```
+Railway logs grep:
+  "Duration validation warnings" 정상 출력 (REVERSE_COMPLETION / DURATION_EXCEEDED 시)
+  → API 응답에 duration_warnings 키 항상 존재
+```
+
+#### FE 거동 검증 (수동)
+
+```
+1. Flutter 앱에서 task 정상 완료 → 응답 duration_warnings: [] 도착 (FE 표시 변화 0)
+2. 작업자가 시간 입력 실수 → REVERSE_COMPLETION → 응답 duration_warnings: ["완료 시간이 시작 시간보다 이릅니다."]
+   → FE 가 경고 표시 (선택적, FE 미구현이면 무시 — 본 Sprint BE only)
+```
+
+### 📦 Rollback (3 파일 atomic)
+
+```
+git revert <commit-sha>
+→ 3 파일 원복
+→ Railway 자동 재배포 ~1분
+→ 이전 동작 (조건부 키 누락) 복귀
+
+부분 revert: 안전 (work.py 만 원복해도 task_service.py 가 키 보장하면 작동, 반대도 동일)
+```
+
+### 📋 BACKLOG 동기화
+
+```
+BUG-DURATION-VALIDATOR-API-FIELD (BACKLOG L362, 4-22 등록)
+  → ✅ COMPLETED (FIX-26-DURATION-WARNINGS-FORWARD-20260428, v2.10.12 예정)
+  ├─ task_service.py L497 unconditional response key
+  ├─ work.py L265-266 default empty list forward
+  ├─ pytest TestReverseDuration::test_reverse_completion GREEN 전환
+  ├─ 신규 TC test_normal_completion_returns_empty_duration_warnings + 1
+  └─ 회귀 0건 (전체 test_duration_validator + test_task_service + test_work_api)
+```
+
+### 🤝 후속 Sprint 연계
+
+```
+없음. 본 Sprint 가 BACKLOG L362 의 4-22 잔존 별건을 완전 close.
+```
+
+### 📝 사후 기록 양식 (배포 후)
+
+```
+✅ 배포 완료 (2026-04-XX HH:MM KST, v2.10.12)
+  ├─ commit: <sha>
+  ├─ pytest TestReverseDuration::test_reverse_completion: PASS ✓
+  ├─ pytest test_normal_completion_returns_empty_duration_warnings: PASS ✓
+  └─ FE 거동: duration_warnings 키 항상 존재 확인 (정상/경고 모두)
+
+회귀 검증:
+  └─ test_duration_validator 전체 GREEN (이전 1 fail → 0 fail)
+
+OPEN → COMPLETED 전환 (BACKLOG L362)
+```
+
+---
+
+## 🔧 FIX-DB-POOL-DIRECT-FALLBACK-LOG-LEVEL-20260428 프롬프트 — db_pool direct conn fallback ERROR 잡음 분리 (🟢 P3)
+
+> **등록일**: 2026-04-28 KST
+> **Sprint ID**: `FIX-DB-POOL-DIRECT-FALLBACK-LOG-LEVEL-20260428`
+> **BACKLOG 연계**: `FIX-DB-POOL-DIRECT-FALLBACK-LOG-LEVEL-20260428` (4-28 신규 등록)
+> **우선순위**: 🟢 P3 (사용자 영향 0, Sentry 잡음 정리 + 진짜 ERROR 추적성 회복)
+> **상태**: 🔴 OPEN (즉시 착수 가능 — 분석 완료, log level 강등 + counter 추가 표준 패턴)
+> **예상 소요**: 30~45분 (BE ~10 LOC + pytest TC 3개 ~30 LOC + 검증)
+> **선행 의존성**: 없음
+> **병행 가능**: FIX-26-DURATION-WARNINGS-FORWARD-20260428 / FIX-WEBSOCKET-STOPITERATION-SENTRY-NOISE-20260428 — 모두 코드 영역 무관, v2.10.13 묶음 배포 가능
+> **충돌 위험**: 없음 (`db_pool.py` 의 L172 1줄 + 모듈 변수/getter 추가, fallback 로직 자체 무수정)
+> **트리거 근거**: 2026-04-28 KST Sentry 대시보드에서 `[db_pool] All pool connections unusable, creating direct connection` issue (transaction=`notices.get_notices` / handled=-- / 22 events/16h / 0 users / Release 2.10.10) 자동 감지
+> **담당**: BE teammate (또는 Lead 직접) — 분석 완료
+> **Codex 이관**: ❌ 불필요 — log level 강등 + counter 표준 패턴, 분석 완료
+
+### 🔬 원인 분석 — 왜 의도된 fallback 이 ERROR 로 잡히는가
+
+```
+실제 실행 흐름 (db_pool.py:136-173 get_conn):
+  ① 라우트 핸들러 → get_conn() 호출 (예: notices.get_notices)
+  ② _pool.getconn() → conn 1개 획득
+  ③ _is_conn_usable(conn) 검사 (L72-104):
+     - closed?
+     - now() - created > _MAX_CONN_AGE (300s)?
+     - SELECT 1 health check?
+  ④ unusable → logger.warning("Unusable connection (attempt N/3), discarding") → _discard_conn → 다음 attempt
+  ⑤ 3번 모두 fail → ⚠️ logger.error("All pool connections unusable, creating direct connection")
+  ⑥ _create_direct_conn() 으로 fallback → HTTP 요청 정상 완료 (+0.3~0.5s 지연만)
+
+Sentry 자동 capture 경로 (__init__.py:50-52):
+  LoggingIntegration(level=INFO, event_level=ERROR)
+  → logger.error(...) 호출 시 자동 event capture
+  → mechanism={"handled": null} (logger 직접 호출이라 stacktrace 없음)
+  → transaction = "notices.get_notices" (현재 활성 Flask request)
+
+실증:
+  - 22 events / 0 users → 사용자 영향 0 입증
+  - notices.get_notices 가 transaction 으로 자주 뜨는 이유:
+    클라이언트 polling 빈도 ↑ (홈 화면 진입/새로고침/poll cycle)
+    + 짧은 endpoint 라 conn 빠른 cycling
+    → max_age 임계 conn 만날 확률 ↑
+
+근본 메커니즘 가설 (검증 필요, 별건 OBSERV-WARMUP-INTERVAL-TUNE-20260428):
+  - _MAX_CONN_AGE = 300s
+  - warmup interval = 5분 (scheduler_service.py L161)
+  - warmup 직전 ~10초 window 에서 5 conn 이 동시 cohort stale
+    → 3 retry 모두 같은 cohort 만남 → fallback
+  - 22 events / 16h ≈ 1.4건/h 빈도 부합
+
+   ⚠️ 본 Sprint 는 잡음 분리만 — 빈도 자체 축소는 별건 P2 OBSERV-WARMUP-INTERVAL-TUNE 분리.
+```
+
+### 🎯 옵션 비교
+
+```
+옵션 A — logger.error → warning 강등 + counter metric 분리 ✅ 채택
+  ├─ ~10 LOC, db_pool.py 단일 파일
+  ├─ 의미론 정합 (fallback 자체는 의도된 동작 → warning 적정)
+  ├─ 신호 보존: counter 변수 `_direct_fallback_count` + getter
+  ├─ 후속 가시성: /admin/db-pool-status endpoint 또는 logger.info 주기 출력 확장 가능
+  ├─ 회귀 위험 0 (log level 변경만, fallback 로직 무수정)
+  └─ Rollback 1 commit revert atomic
+
+옵션 B — Sentry `before_send` 필터 (FIX-WEBSOCKET-STOPITERATION 패턴 차용)
+  ├─ ~15 LOC, __init__.py before_send hook 확장
+  ├─ log level 보존 (logger.error 그대로)
+  ├─ 모듈 결합도 ↑ (db_pool 메시지 문자열을 sentry hook 이 알아야 함)
+  └─ 폐기 — db_pool 관련 ERROR 의미론 자체가 부정합 (warning 가 적정)
+
+옵션 C — warmup interval 5→3분 단축 (근본 해결)
+  ├─ scheduler_service.py L161 IntervalTrigger(minutes=5) → 3
+  ├─ DB 부하 ↑ (60 query/h → 100 query/h, 무시 가능)
+  ├─ fallback 빈도 자체 ↓ (잡음 + 신호 양쪽 동시 해결)
+  └─ 별건 OBSERV-WARMUP-INTERVAL-TUNE-20260428 (P2) 로 분리 — 본 Sprint 와 직교
+```
+
+### 📐 수정 범위 (2 파일)
+
+#### 1) `backend/app/db_pool.py` — log level 강등 + counter 추가 (~10 LOC)
+
+```python
+# 모듈 상단 변수 추가 (L37 _conn_created_at 근처)
+_direct_fallback_count: int = 0  # 누적 direct conn fallback 발생 수
+
+
+def get_direct_fallback_count() -> int:
+    """direct conn fallback 누적 카운트 (관찰성용)."""
+    return _direct_fallback_count
+
+
+# get_conn() L171-173 수정
+def get_conn():
+    ...
+    # 모든 재시도 실패
+    global _direct_fallback_count
+    _direct_fallback_count += 1
+    logger.warning(  # ⭐ error → warning 강등
+        "[db_pool] All pool connections unusable after %d retries, "
+        "creating direct connection (cumulative fallback=%d)",
+        retries, _direct_fallback_count,
+    )
+    return _create_direct_conn()
+```
+
+⚠️ **주의**: `global _direct_fallback_count` 선언 누락 시 UnboundLocalError. 함수 내 increment 직전 명시 필수.
+
+#### 2) `tests/backend/test_db_pool.py` 신규 또는 확장 (+30 LOC, TC 3개)
+
+```python
+"""
+db_pool direct conn fallback 동작 단위 테스트.
+FIX-DB-POOL-DIRECT-FALLBACK-LOG-LEVEL-20260428.
+"""
+from unittest.mock import patch, MagicMock
+import logging
+
+import pytest
+
+from app import db_pool
+
+
+def test_fallback_increments_counter(caplog):
+    """3 retry 모두 unusable 판정 시 counter 증가 + warning 로그."""
+    before = db_pool.get_direct_fallback_count()
+
+    fake_conn = MagicMock()
+    with patch.object(db_pool, '_pool') as mock_pool, \
+         patch.object(db_pool, '_is_conn_usable', return_value=False), \
+         patch.object(db_pool, '_create_direct_conn', return_value='DIRECT'):
+        mock_pool.getconn.return_value = fake_conn
+
+        with caplog.at_level(logging.WARNING, logger='app.db_pool'):
+            result = db_pool.get_conn()
+
+    assert result == 'DIRECT'
+    assert db_pool.get_direct_fallback_count() == before + 1
+    # warning level 확인 (error 아님)
+    fallback_logs = [r for r in caplog.records
+                     if 'All pool connections unusable' in r.message]
+    assert len(fallback_logs) == 1
+    assert fallback_logs[0].levelno == logging.WARNING
+
+
+def test_normal_path_no_counter_increment():
+    """정상 conn 획득 시 counter 무변화."""
+    before = db_pool.get_direct_fallback_count()
+
+    fake_conn = MagicMock()
+    with patch.object(db_pool, '_pool') as mock_pool, \
+         patch.object(db_pool, '_is_conn_usable', return_value=True):
+        mock_pool.getconn.return_value = fake_conn
+        result = db_pool.get_conn()
+
+    assert result is fake_conn
+    assert db_pool.get_direct_fallback_count() == before  # 무변화
+
+
+def test_pool_exhausted_does_not_increment_fallback_counter():
+    """pool.PoolError (exhausted) 경로는 별도 — direct fallback counter 증가 X."""
+    before = db_pool.get_direct_fallback_count()
+
+    from psycopg2 import pool as pg_pool
+    with patch.object(db_pool, '_pool') as mock_pool, \
+         patch.object(db_pool, '_create_direct_conn', return_value='DIRECT'):
+        mock_pool.getconn.side_effect = pg_pool.PoolError("exhausted")
+        result = db_pool.get_conn()
+
+    assert result == 'DIRECT'
+    # exhausted fallback 은 별도 경로 (L150-151) — 본 counter 와 분리
+    assert db_pool.get_direct_fallback_count() == before
+```
+
+⚠️ TC3 의 의미: pool exhausted (L150) 와 unusable retry 실패 (L172) 는 **다른 fallback 경로**. counter 는 L172 만 추적. exhausted 도 추적하려면 별도 counter 필요 (본 Sprint 범위 외).
+
+### ✅ Pre-deploy Gate
+
+```
+1. pytest tests/backend/test_db_pool.py -v
+   → 3/3 PASS (TC1: counter+warning / TC2: normal 무변화 / TC3: exhausted 분리)
+
+2. 회귀: pytest tests/backend/ -k "db_pool or pool"
+   → 모든 기존 db_pool 관련 테스트 GREEN
+
+3. 코드 리뷰:
+   - global _direct_fallback_count 선언 (UnboundLocalError 방지)
+   - get_direct_fallback_count() public getter (모듈 외부 접근용)
+   - logger.warning 강등 (error 아님)
+
+4. Sentry 대시보드 배포 전 카운트 기록:
+   "[db_pool] All pool connections unusable" issue events: ___ (예상 ~22+)
+```
+
+### 🚀 배포 순서
+
+```
+1. commit: "fix(db_pool): downgrade direct fallback log to warning + counter
+
+  - L172 logger.error → logger.warning (fallback is intentional safety net)
+  - Add _direct_fallback_count + get_direct_fallback_count() getter
+  - Add test_db_pool.py TC 3개 (counter / normal / exhausted 분리)
+  - Refs: FIX-DB-POOL-DIRECT-FALLBACK-LOG-LEVEL-20260428"
+
+2. git push origin main → Railway 자동 재배포 ~1분
+   → Railway logs 에 [db_pool] Connection pool initialized 정상 출력 확인
+
+3. Flutter 앱 클라이언트 재배포 불필요 (BE only)
+```
+
+### 📊 Post-deploy 관찰 (1h / 24h / 7d)
+
+#### T+1h
+```
+Sentry 대시보드 → 본 issue:
+  events 카운트 증가 멈춤 확인 (배포 전 22 → 1h 후 22 그대로 기대)
+  → ERROR level 미발생 자동 검증
+
+Railway logs:
+  - [db_pool] All pool connections unusable after 3 retries, creating direct connection (cumulative fallback=N)
+    → WARNING level 로 출력 확인 (이전 ERROR 이었음)
+  - cumulative fallback 카운터 누적 추세 가시성 확보
+```
+
+#### T+24h
+```
+본 issue events: 22 (변동 없음)
+
+Sentry 대시보드 잡음 ↓ → 진짜 ERROR 추적성 ↑:
+  - PYTHON-FLASK-1 (4-22 enum cast) 정상 (31 events 그대로)
+  - PYTHON-FLASK-4 (TMS mapping 후속 잔존) 정상
+  - 새 ERROR 발생 시 명확히 식별 가능
+
+Railway logs cumulative fallback 추세:
+  - 배포 후 24h 누적: ___ (1.4건/h * 24 = ~33 추정)
+  - 추세 보면 별건 OBSERV-WARMUP-INTERVAL-TUNE 우선순위 P2→P1 격상 검토
+```
+
+#### T+7d 종합 판정
+```
+Sentry 본 issue events 누적:
+  배포 전: 22
+  배포 후 D+7: 22 (그대로)
+  → 본 Sprint 효과 정량 입증 → COMPLETED
+
+Railway logs cumulative fallback (7일):
+  - 0~50건/일: 현재 운영 안정 → 별건 P3 유지
+  - 50~200건/일: 별건 P2 진행 권장 (warmup 단축)
+  - 200건/일+: 별건 P1 격상 + max_age 축소 동반 검토
+```
+
+### 📦 Rollback
+
+```
+git revert <commit-sha>
+→ 2 파일 원복 (db_pool.py + test_db_pool.py)
+→ Railway 자동 재배포 ~1분
+→ 이전 동작 (ERROR level + Sentry 자동 capture) 복귀
+
+부분 revert: 안전 (2 파일 atomic, 의존성 없음)
+영향 범위 0 (log level + counter, 비즈니스 로직 무관)
+```
+
+### 📋 BACKLOG 동기화
+
+```
+FIX-DB-POOL-DIRECT-FALLBACK-LOG-LEVEL-20260428          🟢 P3
+  → ✅ COMPLETED (v2.10.13 예정, 2026-04-28)
+  ├─ db_pool.py L172 logger.error → warning 강등
+  ├─ _direct_fallback_count + get_direct_fallback_count() 신규
+  ├─ test_db_pool.py TC 3개 추가
+  ├─ Sentry 본 issue events 동결 (22 → 22)
+  └─ 회귀 0건 (test_db_pool + 의존 모듈 GREEN 유지)
+```
+
+### 🤝 후속 Sprint 연계
+
+```
+OBSERV-WARMUP-INTERVAL-TUNE-20260428          🟡 P2 (별건, 본 Sprint Post-deploy 관찰 결과로 우선순위 조정)
+  └─ scheduler_service.py L161 IntervalTrigger(minutes=5) → 3
+  └─ db_pool.py _MAX_CONN_AGE 300s → 240s 동반 검토
+  └─ 효과: warmup 직전 cohort stale window 축소 → fallback 빈도 자체 ↓
+  └─ 본 Sprint 의 cumulative fallback 카운터로 효과 정량 측정 가능
+
+OBSERV-DB-POOL-STATUS-ENDPOINT-20260428      🟢 P3 (선택, 후속 가시성)
+  └─ /admin/db-pool-status 신규 endpoint
+  └─ 응답: { _MIN_CONN, _MAX_CONN, current_idle, current_used, direct_fallback_count }
+  └─ 본 Sprint 의 get_direct_fallback_count() 활용
+  └─ 운영 가시성 단계적 ↑ (Sentry 외 자체 dashboard)
+```
+
+### 📝 사후 기록 양식 (배포 후)
+
+```
+✅ 배포 완료 (2026-04-XX HH:MM KST, v2.10.13)
+  ├─ commit: <sha>
+  ├─ Railway logs: [db_pool] Connection pool initialized 정상 ✓
+  ├─ pytest test_db_pool: 3/3 PASS ✓
+  └─ Sentry 본 issue events: 22 (배포 시점 동결)
+
+1h / 24h / 7d 관찰:
+  ├─ T+1h:   Sentry events ___ (기대 22 동결) / Railway warning 확인 ___
+  ├─ T+24h:  Sentry events ___ / cumulative fallback 누적 ___
+  └─ T+7d:   Sentry events ___ / cumulative fallback 누적 ___ → COMPLETED 판정
+
+후속 Sprint 우선순위 결정 (T+7d 기준):
+  ├─ cumulative fallback 0~350/주: OBSERV-WARMUP-INTERVAL-TUNE P3 유지
+  ├─ 350~1400/주: P2 진행
+  └─ 1400/주+: P1 격상 + max_age 축소 동반
+
+OPEN → COMPLETED 전환
+```
+
+---
+
+## 🔧 FIX-WEBSOCKET-STOPITERATION-SENTRY-NOISE-20260428 프롬프트 — flask-sock wsgi generator drain StopIteration 필터 (🟢 P3)
+
+> **등록일**: 2026-04-28 KST
+> **Sprint ID**: `FIX-WEBSOCKET-STOPITERATION-SENTRY-NOISE-20260428`
+> **BACKLOG 연계**: `FIX-WEBSOCKET-STOPITERATION-SENTRY-NOISE-20260428` (4-28 신규 등록)
+> **우선순위**: 🟢 P3 (사용자 영향 0, Sentry 잡음 정리 + 진짜 ERROR 추적성 회복)
+> **상태**: 🔴 OPEN (즉시 착수 가능 — 분석 완료, before_send hook 패턴 표준)
+> **예상 소요**: 30~45분 (BE ~15 LOC + pytest TC 3개 ~30 LOC + 검증)
+> **선행 의존성**: 없음
+> **병행 가능**: FIX-26-DURATION-WARNINGS-FORWARD-20260428 / FIX-DB-POOL Phase B 관찰 — 모두 코드 영역 무관
+> **충돌 위험**: 없음 (`__init__.py` `_init_sentry()` 함수 내 신규 hook 1개 추가, 기존 로직 무수정)
+> **트리거 근거**: 2026-04-28 KST Sentry 대시보드에서 PYTHON-FLASK-2 issue (StopIteration / unhandled / mechanism=wsgi / transaction=websocket_route) 도입 16h 내 302 events / Escalating 자동 감지 + q-c.csv 평일/주말 패턴으로 실 운영 트래픽 확인 (샘플 데이터 X)
+> **담당**: BE teammate (또는 Lead 직접) — 분석 완료
+> **Codex 이관**: ❌ 불필요 — Sentry SDK before_send 표준 패턴, 분석 완료
+
+### 🔬 원인 분석 — 왜 StopIteration 이 unhandled 로 잡히는가
+
+```
+실제 실행 흐름:
+  ① 클라이언트 (Flutter PWA) → /ws WebSocket connect
+  ② gunicorn → flask_sock Sock.route('/ws') 가 wsgi 응답을 generator stream 으로 반환
+  ③ ws_handler(ws) 함수 진입 (events.py:116)
+     └─ try/except 외곽 + while True: ws.receive(timeout=60) 루프
+     └─ ws.receive() 내부 try/except Exception: break (L162) — 정상 작동 ✓
+  ④ 클라이언트 disconnect → ws_handler return → registry.unregister
+  ⑤ ⚠️ 여기서부터 ws_handler 외부 — gunicorn wsgi 가 generator drain (응답 스트림 종료)
+     └─ flask_sock 내부 generator 가 더 이상 yield 할 게 없음 → StopIteration raise (Python 정상 종료 신호)
+     └─ ws_handler 의 try/except 는 이미 return 했으므로 catch 범위 밖
+  ⑥ Sentry FlaskIntegration 의 wsgi middleware 가 unhandled exception 자동 capture
+     └─ mechanism={"type": "wsgi", "handled": false}
+     └─ transaction = "websocket_route"
+     └─ Sentry 대시보드 → PYTHON-FLASK-2 events 누적
+
+실증 코드 트레일:
+  events.py:159-163
+    while True:
+        try:
+            data = ws.receive(timeout=60)
+        except Exception:           # ✓ ws.receive 자체는 보호됨
+            break
+
+  events.py:183-186
+    except Exception as e:           # ✓ ws_handler 외곽 보호 (StopIteration 도 포함)
+        logger.error(...)
+    finally:
+        registry.unregister(...)     # ✓ unregister 항상 실행
+
+  → ws_handler 함수 내부는 안전. 문제는 함수 return 이후 wsgi generator drain 단계.
+
+확정 패턴:
+  - `mechanism.type == 'wsgi'`
+  - `transaction == 'websocket_route'`
+  - `exception.values[0].type == 'StopIteration'`
+  → 위 3 조건 모두 성립 시 정상 disconnect (Python generator 정상 종료)
+```
+
+### 🎯 옵션 비교
+
+```
+옵션 A — Sentry `before_send` hook 필터 ✅ 채택
+  ├─ ~15 LOC, _init_sentry() 함수 내부 수정
+  ├─ 표준 Sentry SDK 패턴 (docs.sentry.io 권장)
+  ├─ 다른 transaction 의 StopIteration 은 정상 capture (방어 폭 정확)
+  ├─ 회귀 위험 0 (필터만 추가, 정상 capture 경로 무영향)
+  └─ Rollback 1 commit revert atomic
+
+옵션 B — flask-sock middleware wrap (폐기)
+  ├─ wsgi response generator 자체를 wrapper 로 감싸 StopIteration suppress
+  ├─ flask-sock 내부 동작 의존 → 라이브러리 업데이트 시 깨질 위험
+  ├─ ~50+ LOC, middleware 등록 + Sock 인스턴스 패치
+  └─ 위험도 높음 → 폐기
+
+옵션 C — Sentry UI 에서 issue ignore (폐기)
+  ├─ 영구 해결 X (다른 environment / SENTRY_DSN 변경 시 재발)
+  ├─ 코드 트레일 부재 → 추후 root cause 추적 불가
+  └─ 폐기
+```
+
+### 📐 수정 범위 (2 파일)
+
+#### 1) `backend/app/__init__.py` — `_init_sentry()` 함수 내 `before_send` hook 추가 (+15 LOC)
+
+```python
+# 기존 _init_sentry() 함수 내 sentry_sdk.init() 호출 직전에 hook 정의
+
+def _sentry_before_send(event, hint):
+    """
+    Sentry event 필터 — flask-sock wsgi generator drain 시 발생하는
+    StopIteration 정상 종료 시그널을 잡음으로 분리.
+
+    매칭 조건 (모두 성립 시 None 반환 → Sentry 미전송):
+      - exception.values[0].type == 'StopIteration'
+      - exception.values[0].mechanism.type == 'wsgi'
+      - event.transaction == 'websocket_route'
+
+    한 조건이라도 어긋나면 정상 capture (다른 곳의 StopIteration 추적 보존).
+    """
+    try:
+        exc_info = event.get('exception', {}).get('values', [])
+        if not exc_info:
+            return event
+        first = exc_info[0]
+        exc_type = first.get('type', '')
+        mechanism = first.get('mechanism', {}) or {}
+        mechanism_type = mechanism.get('type', '')
+        transaction = event.get('transaction', '')
+
+        if (exc_type == 'StopIteration'
+                and mechanism_type == 'wsgi'
+                and transaction == 'websocket_route'):
+            return None  # 잡음 → drop
+    except Exception:
+        pass  # 필터 자체 실패 시 정상 capture (안전 fallback)
+    return event
+
+
+sentry_sdk.init(
+    dsn=dsn,
+    integrations=[
+        FlaskIntegration(),
+        LoggingIntegration(
+            level=logging.INFO,
+            event_level=logging.ERROR,
+        ),
+    ],
+    traces_sample_rate=float(os.environ.get('SENTRY_TRACES_SAMPLE_RATE', '0.0')),
+    environment=environment,
+    release=_release,
+    send_default_pii=False,
+    before_send=_sentry_before_send,   # ⭐ 신규
+)
+```
+
+#### 2) `tests/backend/test_sentry_filter.py` 신규 (+30 LOC, TC 3개)
+
+```python
+"""
+Sentry before_send hook 단위 테스트.
+FIX-WEBSOCKET-STOPITERATION-SENTRY-NOISE-20260428.
+"""
+from app import _sentry_before_send
+
+
+def test_filters_websocket_stopiteration():
+    """websocket_route + wsgi + StopIteration 모두 매칭 시 None 반환 (drop)."""
+    event = {
+        'transaction': 'websocket_route',
+        'exception': {'values': [{
+            'type': 'StopIteration',
+            'mechanism': {'type': 'wsgi', 'handled': False},
+        }]},
+    }
+    assert _sentry_before_send(event, hint={}) is None
+
+
+def test_passes_other_transaction_stopiteration():
+    """다른 transaction 의 StopIteration 은 정상 전달 (false negative 방지)."""
+    event = {
+        'transaction': 'some_other_route',
+        'exception': {'values': [{
+            'type': 'StopIteration',
+            'mechanism': {'type': 'wsgi'},
+        }]},
+    }
+    assert _sentry_before_send(event, hint={}) == event
+
+
+def test_passes_non_stopiteration_at_websocket():
+    """websocket_route 의 다른 exception type 은 정상 전달."""
+    event = {
+        'transaction': 'websocket_route',
+        'exception': {'values': [{
+            'type': 'ValueError',
+            'mechanism': {'type': 'wsgi'},
+        }]},
+    }
+    assert _sentry_before_send(event, hint={}) == event
+```
+
+⚠️ `_sentry_before_send` 가 `_init_sentry()` 함수 내부 nested 함수면 import 불가 → **모듈 레벨로 끌어올려서** 정의 (테스트 가능성 보장).
+
+### ✅ Pre-deploy Gate
+
+```
+1. pytest tests/backend/test_sentry_filter.py -v
+   → 3/3 PASS (TC1: drop / TC2: pass other transaction / TC3: pass other exc)
+
+2. 회귀: pytest tests/backend/test_app.py + test_websocket.py
+   → 모두 GREEN (sentry init 경로 무영향)
+
+3. 코드 리뷰: _sentry_before_send 가 모듈 레벨에 있는지 확인 (nested 면 import 불가)
+
+4. Sentry 대시보드 배포 전 카운트 기록:
+   PYTHON-FLASK-2 events: ___ (예상 ~302+, 시간 경과로 증가 가능)
+```
+
+### 🚀 배포 순서
+
+```
+1. commit: "fix(sentry): filter flask-sock wsgi StopIteration noise
+
+  - Add before_send hook in _init_sentry()
+  - Match wsgi+StopIteration+websocket_route pattern → drop
+  - Add test_sentry_filter.py (TC 3개)
+  - Refs: FIX-WEBSOCKET-STOPITERATION-SENTRY-NOISE-20260428"
+
+2. git push origin main → Railway 자동 재배포 ~1분
+   → Railway logs 에 `[sentry] initialized` 정상 출력 확인 (sentry init 경로 무영향)
+
+3. Flutter 앱 클라이언트 재배포 불필요 (BE only)
+```
+
+### 📊 Post-deploy 관찰 (1h / 24h / 7d)
+
+#### T+1h
+```
+Sentry 대시보드 → PYTHON-FLASK-2 issue:
+  events 카운트 증가 멈춤 확인 (배포 전 302 → 1h 후 302 그대로 기대)
+
+Railway logs 무영향 확인:
+  - [sentry] initialized (env=production, release=2.10.13) ✓
+  - 다른 ERROR 정상 출력 ✓
+```
+
+#### T+24h
+```
+PYTHON-FLASK-2 events: 302 (변동 없음, escalating tag 자동 해제 기대)
+
+다른 issue 영향 검사:
+  - PYTHON-FLASK-1 (4-22 enum cast) → 정상 (기존 31 events 그대로)
+  - PYTHON-FLASK-4 (TMS mapping 후속) → 정상
+  - 새 issue 발생 0건 또는 정상 capture
+```
+
+#### T+7d 종합 판정
+```
+Sentry PYTHON-FLASK-2 events 누적:
+  배포 전: 302
+  배포 후 D+7: 302 (그대로)
+  → 본 Sprint 효과 정량 입증 → COMPLETED
+
+Sentry 대시보드 잡음 ↓ → 진짜 ERROR 추적성 ↑
+  - 4-22 alert silent failure 같은 가치 있는 ERROR 가 잡음에 묻히지 않음
+  - alert rule (level=error) 정확도 ↑
+```
+
+### 📦 Rollback
+
+```
+git revert <commit-sha>
+→ 1 파일 원복 (__init__.py)
+→ Railway 자동 재배포 ~1분
+→ 이전 동작 (전체 capture, 잡음 포함) 복귀
+
+부분 revert: 안전 (1 파일 atomic)
+영향 범위 0 (필터만 제거 → 정상 capture 복구)
+```
+
+### 📋 BACKLOG 동기화
+
+```
+FIX-WEBSOCKET-STOPITERATION-SENTRY-NOISE-20260428          🟢 P3
+  → ✅ COMPLETED (v2.10.13 예정, 2026-04-28)
+  ├─ __init__.py before_send hook 추가
+  ├─ test_sentry_filter.py 신규 (TC 3개)
+  ├─ Sentry PYTHON-FLASK-2 events 동결 (302 → 302)
+  └─ 회귀 0건 (test_app + test_websocket GREEN 유지)
+```
+
+### 🤝 후속 Sprint 연계
+
+```
+없음 (단발성 잡음 정리).
+
+다만 이번 패턴은 일반화 가능:
+  - 추후 다른 wsgi/asgi 정상 종료 시그널이 잡음으로 분류되면
+    동일 hook 의 매칭 조건만 확장 (e.g. mechanism.type='asgi' 추가)
+  - 잡음 분류 정책 변경 시 본 Sprint 의 hook 함수가 단일 source of truth
+```
+
+### 📝 사후 기록 양식 (배포 후)
+
+```
+✅ 배포 완료 (2026-04-XX HH:MM KST, v2.10.13)
+  ├─ commit: <sha>
+  ├─ Railway logs: [sentry] initialized 정상 ✓
+  ├─ pytest test_sentry_filter: 3/3 PASS ✓
+  └─ Sentry PYTHON-FLASK-2 events: 302 (배포 시점 동결)
+
+1h / 24h / 7d 관찰:
+  ├─ T+1h:   PYTHON-FLASK-2 events ___ (기대 302 동결)
+  ├─ T+24h:  PYTHON-FLASK-2 events ___
+  └─ T+7d:   PYTHON-FLASK-2 events ___ → COMPLETED 판정
+
+다른 issue 회귀 검증:
+  ├─ PYTHON-FLASK-1 (enum cast): 31 events 유지 (Y/N) ___
+  ├─ PYTHON-FLASK-4 (TMS): 31 events 유지 (Y/N) ___
+  └─ 신규 ERROR 정상 capture (Y/N) ___
+
+OPEN → COMPLETED 전환
+```
+
+---

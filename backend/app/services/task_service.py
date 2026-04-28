@@ -493,9 +493,9 @@ class TaskService:
                 response['checklist_ready'] = True
                 response['checklist_category'] = 'ELEC'
 
-        # Sprint 3: duration 경고가 있으면 응답에 포함
-        if duration_warnings:
-            response['duration_warnings'] = duration_warnings
+        # Sprint 3 / FIX-26: duration 경고는 항상 응답에 포함 (빈 리스트라도 키 존재 보장).
+        # API 계약 명확화 — FE 가 data.duration_warnings 키 존재 가정 가능.
+        response['duration_warnings'] = duration_warnings
 
         return response, 200
 

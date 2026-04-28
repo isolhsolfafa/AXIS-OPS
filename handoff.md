@@ -1,11 +1,63 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-04-28 14:30 KST (FIX-PROCESS-VALIDATOR-TMS-MAPPING v2.10.11 배포)
+> 마지막 업데이트: 2026-04-28 16:00 KST (FIX-26 DURATION_WARNINGS v2.10.12 배포)
 
 ---
 
-## 🟢 2026-04-28 세션 요약 (2/2) — FIX-PROCESS-VALIDATOR-TMS-MAPPING v2.10.11 (옵션 D-2)
+## 🟢 2026-04-28 세션 요약 (3/3) — FIX-26-DURATION-WARNINGS-FORWARD v2.10.12
+
+> **한 줄 요약**: 4-22 등록 BACKLOG L362 `BUG-DURATION-VALIDATOR-API-FIELD` 본격 fix. `/api/app/work/complete` 응답에 `duration_warnings` 키 항상 존재 보장 (옵션 C — 양 끝 unconditional). test_reverse_completion 은 시작/종료 timestamp 서버 자동 기록 + prod 0건 실측 입증으로 `@pytest.mark.skip` 처리.
+
+### 코드 변경 (v2.10.12, BE 2 파일 + test 1 파일)
+
+| 파일 | LoC | 핵심 |
+|---|---:|---|
+| task_service.py | ±0 | L497-499 — unconditional 응답 키 (조건부 제거) |
+| work.py | -1/+1 | L265-266 — default 빈 리스트 forward |
+| test_duration_validator.py | +62 | assertion 갱신 + 신규 TC 1개 + skip mark |
+| backend/version.py | bump | v2.10.11 → v2.10.12 |
+| frontend/.../app_version.dart | bump | v2.10.11 → v2.10.12 |
+
+### 핵심 인사이트 — 본 Sprint 단순화 (사용자 정정 반영)
+
+- 시작/종료 timestamp 가 **서버 `datetime.now(Config.KST)` 자동 기록** (`task_service.py:146/256`, `work.py:448`)
+- 클라이언트가 시간 보내거나 입력하는 경로 0
+- REVERSE_COMPLETION (시작 > 종료) 은 운영 발생 불가 — 인프라 사고 (NTP jump back / SQL 직접 조작 / timezone 버그) 차원
+- prod 실측 0건 (4-04 ~ 4-28 24일 누적, started_at>completed_at WHERE 절)
+- 대시보드 Rollback 키로 잘못된 종료 사후 복구 메커니즘 별도 존재
+- → 처음 우려한 silent failure / 4-22 유사 구조 모두 무의미. 본 Sprint 는 응답 contract 일관성만 fix
+
+### Codex 라운드 2 합의 trail
+
+v2.10.11 (FIX-PROCESS-VALIDATOR-TMS-MAPPING) 후속에서 Codex Q1/Q2 모두 A 라벨 합의:
+- 본 fail 은 `duration_validator.py:70-93` REVERSE_COMPLETION 브랜치 → `task_service.py:361-363,496-498` → `work.py:261-266` 응답 키 생성 경로 4-22 부터 누락된 별건
+- v2.10.11 회귀 0건 + 본 BUG 별건 확정 → 별도 Sprint 처리
+
+### pytest 결과
+
+```
+test_duration_validator.py:
+  ✅ test_normal_duration_no_warnings (assertion 갱신 후 신 계약 호환)
+  ✅ test_duration_over_14h
+  ✅ test_very_short_duration
+  ⏸ test_reverse_completion (skip — 시작/종료 timestamp 서버 자동 기록, prod 0건)
+  ✅ test_normal_completion_returns_empty_duration_warnings (신규)
+```
+
+### BACKLOG 동기화
+
+- L362 `BUG-DURATION-VALIDATOR-API-FIELD` → ✅ COMPLETED (v2.10.12)
+- 별건 BACKLOG 등록 불필요 (P3 INFO 수준 이하 — 사용자 영향 0 입증)
+
+### Post-deploy 검증 (예정)
+
+- FE 영향 0 — `data.duration_warnings` 안전 접근 가능 (FE 가 옵셔널 처리 안 했어도 빈 리스트 받음)
+- 운영 회귀 검증 불필요 (응답 dict 키 1개 추가만)
+
+---
+
+## 🟢 2026-04-28 세션 요약 (2/3) — FIX-PROCESS-VALIDATOR-TMS-MAPPING v2.10.11 (옵션 D-2)
 
 > **한 줄 요약**: 4-22 HOTFIX-ALERT-SCHEDULER-DELIVERY 의 표준 패턴이 duration_validator 3곳 + task_service L403 에 미적용 → TMS 매니저 silent failure (Sentry 도입 8h 자동 감지, 31 events). `process_validator.resolve_managers_for_category()` public 함수 신설 + 5 파일 atomic refactor + pytest 신규 TC 7개. 회귀 0건. Codex 2라운드 검증 합의 완료.
 

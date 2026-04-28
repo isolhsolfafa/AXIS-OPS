@@ -6,6 +6,71 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.10.12] - 2026-04-28 — FIX-26 DURATION_WARNINGS 응답 키 일관성 (BE only)
+
+> **Sprint**: `FIX-26-DURATION-WARNINGS-FORWARD-20260428`
+> 4-22 등록 BACKLOG L362 `BUG-DURATION-VALIDATOR-API-FIELD` 본격 fix. 4-28 FIX-PROCESS-VALIDATOR-TMS-MAPPING (v2.10.11) 회귀 시 동일 fail 재출현 → Codex 라운드 2 A 합의 (별건 확정) → 본 Sprint 진행.
+
+### Fixed (BE only — 응답 키 contract 일관성)
+
+#### 1. `task_service.py` L497-499 — unconditional 응답 키
+
+- Before: `if duration_warnings: response['duration_warnings'] = duration_warnings` (조건부 키)
+- After: `response['duration_warnings'] = duration_warnings` (항상 키 존재, 빈 리스트 [] 라도)
+- API 계약 명확화: FE 가 `data.duration_warnings` 안전 접근 가능
+
+#### 2. `work.py` L265-266 — default fallback forward
+
+- Before: `if 'duration_warnings' in response: result['duration_warnings'] = response['duration_warnings']`
+- After: `result['duration_warnings'] = response.get('duration_warnings', [])`
+- 방어적 forward — task_service / work.py 양 끝 모두 보장 (옵션 C 채택)
+
+### Tests (test_duration_validator.py)
+
+- `test_normal_duration_no_warnings` L75-76: `assert 'duration_warnings' not in data` → `assert 'duration_warnings' in data; assert data['duration_warnings'] == []` (신 계약 정합)
+- 신규 클래스 `TestDurationWarningsAlwaysPresent::test_normal_completion_returns_empty_duration_warnings` 추가 — 정상 완료 시 빈 리스트 반환 검증
+- `TestReverseDuration::test_reverse_completion` `@pytest.mark.skip` 추가 — 사유: 시작/종료 timestamp 서버 자동 기록 (`task_service.py:146/256` `datetime.now(Config.KST)`), 운영 발생 불가 (prod 0건 실측, 4-04~4-28 24일 누적). REVERSE_COMPLETION 은 서버 시계 NTP jump back / SQL 직접 조작 / timezone 버그 같은 인프라 사고에서만 발생하는 방어적 안전망
+
+### LoC 변경
+
+| 파일 | Before | After | 차이 |
+|---|---:|---:|---:|
+| task_service.py | 1486 | 1486 | ±0 (조건부 → unconditional) |
+| work.py | (이전) | (동일) | -1/+1 (조건부 → default get) |
+| test_duration_validator.py | 246 | 308 | +62 (skip mark + 신규 TC) |
+
+### 사용자 영향 0 — silent failure 우려는 무의미
+
+본 Sprint 검토 중 "Sprint 55 multi-worker early return path 가 silent failure 일으키는가" 우려 제기됐으나:
+- 시작/종료 timestamp 서버 `datetime.now()` 자동 기록 → 클라이언트 시간 입력 path 0
+- prod 실측: REVERSE_COMPLETION 발생 0건 (24일 누적)
+- 대시보드 Rollback 키로 사후 복구 메커니즘 별도 존재
+- 시나리오 자체가 인프라 사고 차원
+
+→ 별건 BACKLOG 등록 불필요 (P3 INFO 수준 이하). 본 Sprint 는 응답 contract 일관성만 fix 하고 종결.
+
+### Codex 합의 trail
+
+- 라운드 2 (2026-04-28, FIX-PROCESS-VALIDATOR-TMS-MAPPING 후속): Q1/Q2 모두 A — `duration_warnings` 키 누락은 응답 키 생성 경로의 4-22 부터 누락된 별건 확정. v2.10.11 회귀 0건. v2.10.12 별도 Sprint 처리.
+
+### Deploy
+
+- BE only (frontend version 만 동시 bump)
+- Railway 자동 배포
+
+### Rollback (3 파일 atomic)
+
+- git revert <commit-sha> → 3 파일 원복
+- Railway 자동 재배포 ~1분
+- 부분 revert 안전 (각 파일 독립 작동)
+
+### Related
+
+- 설계서: `AGENT_TEAM_LAUNCH.md` § FIX-26-DURATION-WARNINGS-FORWARD-20260428 (L32717+)
+- BACKLOG: L362 `BUG-DURATION-VALIDATOR-API-FIELD` → COMPLETED
+
+---
+
 ## [2.10.11] - 2026-04-28 — FIX-PROCESS-VALIDATOR-TMS-MAPPING (옵션 D-2, BE only)
 
 > **Sprint**: `FIX-PROCESS-VALIDATOR-TMS-MAPPING-20260428`
