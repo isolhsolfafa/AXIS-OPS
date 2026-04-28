@@ -400,14 +400,14 @@ class TaskService:
                 if not_started:
                     from app.services.alert_service import sn_label as _sn_label_61
                     from app.services.alert_service import create_and_broadcast_alert as _create_alert_61
-                    from app.services.scheduler_service import _resolve_managers_for_category
+                    from app.services.process_validator import resolve_managers_for_category
                     label = _sn_label_61(task.serial_number)
                     task_names = ', '.join([t['task_name'] for t in not_started])
                     msg = (
                         f"{label} {task.task_category} {task.task_name} 완료 — "
                         f"미시작 작업 {len(not_started)}건 존재: {task_names}"
                     )
-                    managers = _resolve_managers_for_category(task.serial_number, task.task_category)
+                    managers = resolve_managers_for_category(task.serial_number, task.task_category)
                     for manager_id in managers:
                         _create_alert_61({
                             'alert_type': 'ORPHAN_ON_FINAL',

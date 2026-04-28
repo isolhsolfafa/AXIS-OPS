@@ -1,7 +1,220 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-04-27 (v2.10.6)
+> 마지막 업데이트: 2026-04-28 14:30 KST (FIX-PROCESS-VALIDATOR-TMS-MAPPING v2.10.11 배포)
+
+---
+
+## 🟢 2026-04-28 세션 요약 (2/2) — FIX-PROCESS-VALIDATOR-TMS-MAPPING v2.10.11 (옵션 D-2)
+
+> **한 줄 요약**: 4-22 HOTFIX-ALERT-SCHEDULER-DELIVERY 의 표준 패턴이 duration_validator 3곳 + task_service L403 에 미적용 → TMS 매니저 silent failure (Sentry 도입 8h 자동 감지, 31 events). `process_validator.resolve_managers_for_category()` public 함수 신설 + 5 파일 atomic refactor + pytest 신규 TC 7개. 회귀 0건. Codex 2라운드 검증 합의 완료.
+
+### 코드 변경 (v2.10.11, BE 5 파일 atomic)
+
+| 파일 | LoC 변경 | 핵심 |
+|---|---:|---|
+| process_validator.py | **+30** | `_CATEGORY_PARTNER_FIELD` + `resolve_managers_for_category()` 신설 |
+| scheduler_service.py | **-15** | private 함수 + dict 제거 + import 교체 + 3 호출 site 1:1 |
+| task_service.py | **±0** | L403 import + L410 호출 1:1 (Codex M2 누락 발견) |
+| duration_validator.py | **±0** | L74/L100/L179 + import 1줄 |
+| tests/conftest.py | +50 | `seed_test_managers_for_partner` 격리 fixture (옵션 D, Codex M1) |
+| tests/backend/test_process_validator.py | +130 | TC 7개 (TMS-GAIA / DRAGON 회귀 / MECH / ELEC / PI / unknown / e2e) |
+
+→ Line 규칙 모두 통과 (scheduler/task_service God File 잔존 but LoC 감소/0).
+
+### Codex 합의 trail (2 라운드)
+
+- **라운드 1 (Sprint 설계 검증)**: M=2 / A=2 / N=2
+  - M1 (fixture 정합성) → 옵션 D 격리 fixture 채택
+  - M2 (Rollback 5파일) → task_service.py L403 누락 발견, 5 파일 명시
+  - A1 (DRAGON gap) → 별건 BACKLOG `BUG-DRAGON-TMS-PARTNER-MAPPING-20260428`
+  - A2 (e2e 회귀 TC) → `test_duration_validator_tms_alert_creation_e2e` 추가
+- **라운드 2 (pytest 회귀 라벨링)**: Q1/Q2 모두 A
+  - test_duration_validator 1 fail = BACKLOG L362 BUG-DURATION-VALIDATOR-API-FIELD (4-22 별건)
+  - 본 Sprint 응답 키 생성 경로 영향 0 → 별도 Sprint 처리 결정
+
+### pytest 결과
+
+```
+✅ 신규 TC 7/7 PASS (TestResolveManagersForCategory 6 + e2e 1)
+✅ 회귀 51 passed / 5 skipped / 0 fail (test_scheduler / test_scheduler_integration / test_task_seed)
+⚠️ test_duration_validator 1 fail = 4-22 기존 별건 (Codex A 라벨 합의)
+```
+
+### 다음 우선 처리 (별도 Sprint)
+
+1. 🟡 **BUG-DURATION-VALIDATOR-API-FIELD** (BACKLOG L362) — `/api/app/work/complete` 응답에 `duration_warnings` 키 forward (30~60분)
+2. 🟢 BUG-DRAGON-TMS-PARTNER-MAPPING-20260428 (BACKLOG L353) — prod DB 실측 후 우선순위 재평가
+
+### Post-deploy 검증 (예정)
+
+- 즉시 (1h): Sentry PYTHON-FLASK-4 events 31 → 정착 추세 확인
+- 매시간 정각 (UTC) 7번: TMS / MECH / ELEC / PI 매니저 도달
+- D+7: Sentry events 31 그대로 → COMPLETED 판정
+
+---
+
+## 🟢 2026-04-28 세션 요약 (1/2) — D+1 출근 peak 측정 PASS, 옵션 X1 유지
+
+> **한 줄 요약**: 4-28 출근 peak (07:30~09:00 KST) 측정 결과 Pool exhausted 0 / direct conn fallback 0 / OPS conn 6~7 안정 / Sentry 새 issue 0 → v2.10.11 HOTFIX-06b 진행 불필요. v2.10.7 HOTFIX-06 단독으로 사용자 영향 0 보장 확정.
+
+### 측정 결과
+
+| 항목 | 기대 | 실측 | 판정 |
+|---|---|---|---|
+| Pool exhausted | 0건 | **0건** | ✅ |
+| direct conn fallback | 0건 | **0건** | ✅ |
+| OPS conn (peak) | ≥ 10 | **6~7 안정** | ✅ |
+| Sentry 새 issue | 0건 | **0건** | ✅ |
+
+### 결정
+
+- ✅ 옵션 X1 유지 — Worker A 5 conn (warmup) + Worker B 자연 사용분 = 안정적 운영
+- ❌ v2.10.11 HOTFIX-06b (per-worker warmup) 진행 불필요
+- ✅ `OBSERV-DB-POOL-IDLE-DISCONNECT-WARMUP-20260427` **COMPLETED 확정** (부분 완료 → 정식 완료)
+- 🟡 D+2 (4-29) / D+3 (4-30) 동일 추세 관찰 — Phase B 자연 종결 예정
+- 🔴 다음 우선 처리: BACKLOG L352 `FIX-PROCESS-VALIDATOR-TMS-MAPPING-20260428` (옛 ID `-ROLE-MAPPING-20260427` 통일, Cowork 설계 완료 → Codex 이관 진행 중)
+
+### 부수 발견 trail (Sentry layer)
+
+- 4-28 03:00 KST cron 시점 Sentry 가 `Failed to get managers for role=TMS: invalid input value for enum role_enum: "TMS"` 31 events 자동 감지 → BACKLOG L352 등록 (FIX-PROCESS-VALIDATOR-TMS-ROLE-MAPPING)
+- 4-22 HOTFIX-ALERT-SCHEDULER-DELIVERY 의 잔존 silent failure (process_validator/duration_validator 의 enum cast 미처리) → Sentry DSN 활성화 8시간 만에 자동 발견
+- ADR-019 가치 입증 trail 3차 사례 추가 (memory.md)
+
+### 이번 주 핵심 3가지 — 3개 모두 완료 ✅
+
+1. ✅ PIN 화면 손실 막기 (v2.10.5 + v2.10.6)
+2. ✅ DB Pool 안정화 마무리 (v2.10.6/.7 + D+1 PASS)
+3. ✅ 알람 장애 사후 검증 마무리 (v2.10.8 + Sentry 활성화)
+
+---
+
+## 🟢 2026-04-27 세션 요약 (6/6) — Sentry DSN 활성화 + WEEKLY_PLAN 갱신
+
+> **한 줄 요약**: Twin파파 측 sentry.io 가입 + Python/Flask project 생성 + DSN 발급 + Railway env (`SENTRY_DSN` / `SENTRY_ENVIRONMENT` / `SENTRY_TRACES_SAMPLE_RATE`) 등록 완료. v2.10.8 에 도입한 `_init_sentry()` 가 정식 활성화 → 외부 자동 감지 layer 1차 가동 시작.
+
+### 활성화 결과
+
+- ✅ `SENTRY_DSN` env 등록 → 다음 deploy 시 `_init_sentry()` 가 정상 init (이전엔 graceful skip 모드였음)
+- ✅ `LoggingIntegration` (INFO breadcrumb / ERROR event capture) 정식 작동
+- ✅ `FlaskIntegration` HTTP exception 자동 캡처
+- ✅ `release` 자동 binding (version.py)
+- 🟡 Sentry alert rule 미세 조정 (다음 주 운영 후 노이즈 비율 기반)
+
+### 시스템 신뢰성 1차 완성
+
+```
+Before (4-22 사고): silent gap → 5일 무인지 → 사용자 신고로 발견
+After (4-27+):       silent gap → assertion 즉시 캡처 → Sentry email/push
+                     평균 인지 시간: 5일 → ~1분
+```
+
+### WEEKLY_PLAN_20260427.md 갱신
+
+- v2.10.8/9/10 + Sentry 활성화 반영 (마지막 업데이트 23:13 KST)
+- 핵심 3가지 → 2개 완료 + 1개 부분 완료 (DB Pool D+1 측정 잔존)
+- 신규 섹션 "🛡️ assertion 자동 감지 layer + Sentry 시스템 확장" 추가 (자동 감지 시퀀스 표 + Before/After 비교)
+- 4-28 화 측정 plan 에 v2.10.10 정상화 확인 + Sentry 24h 노이즈 비율 항목 추가
+
+---
+
+## 🟢 2026-04-27 세션 요약 (5/6) — HOTFIX-08 v2.10.10 db_pool transaction 정리 누락 + 046a 자동 적용
+
+> **한 줄 요약**: v2.10.9 배포 후 Railway log 에 `046a_elec_checklist_seed.sql 실행 실패: set_session cannot be used inside a transaction` 발생 → assertion 이 두 번째 잠재 버그 (db_pool transaction 정리 누락 + 046a silent gap) 사용자 영향 0 시점에 발견. db_pool 2곳 SELECT 1 후 `conn.rollback()` 추가로 해결. 046a 자동 재적용 (ON CONFLICT idempotent).
+
+### 문제 원인
+
+- psycopg2 default `autocommit=False` → SELECT 도 BEGIN 자동 시작 → INTRANS 상태로 풀 반납
+- 이 conn 을 받아 `m_conn.autocommit = True` 시도 시 `set_session cannot be used inside a transaction` 거부
+- 영향받은 호출 경로: `_is_conn_usable()` + `warmup_pool()` 두 군데
+
+### 코드 변경 (v2.10.10, BE only ~2줄)
+
+- `backend/app/db_pool.py _is_conn_usable()` L98+ — SELECT 1 후 `conn.rollback()` 추가
+- `backend/app/db_pool.py warmup_pool()` L270+ — 동일 패턴 적용
+- `backend/version.py` v2.10.9 → 2.10.10
+- `frontend/lib/utils/app_version.dart` v2.10.9 → 2.10.10
+
+### 부수 발견 (가설 ④ 두 번째 사례)
+
+- **046a_elec_checklist_seed.sql 도 silent gap** — 4-22 049 와 동일 Docker artifact 사례로 추정. assertion 이 자동 적용 시도 → set_session error 노출
+- ON CONFLICT DO NOTHING idempotent 보장으로 prod 31항목 안전 재적용. **사용자 영향 0** ✅
+- POST_MORTEM_MIGRATION_049.md 가설 ④ (Docker artifact / Railway build cache) 의 두 번째 케이스로 trail 추가
+
+### git commit / 검증
+
+- commit: `72579e1` (v2.10.10)
+- pytest 회귀 0건
+- Railway log 검증: `[migration] ✅ 046a_elec_checklist_seed.sql 실행 완료` + `[migration-assert] ✅ sync OK (13 migrations applied)` (12 → 13 갱신)
+
+---
+
+## 🟢 2026-04-27 세션 요약 (4/6) — HOTFIX-07 v2.10.9 RealDictCursor row[0] KeyError 긴급 복구
+
+> **한 줄 요약**: v2.10.8 배포 직후 `assert_migrations_in_sync()` 첫 호출 시 worker boot 503 발생. `_get_executed()` 의 `row[0]` 이 RealDictCursor 와 호환 안 됨 → KeyError: 0. assertion 도입 자체가 5일 누적된 silent 버그를 즉시 노출시킨 사례 (assertion 가치 1차 입증).
+
+### 문제 원인
+
+- `db_pool` 이 `RealDictCursor` 사용 → row 가 dict-like → `row[0]` 은 `KeyError: 0`
+- 이전 `run_migrations()` 의 outer try/except 가 silent 흡수 → 5일간 무인지
+- v2.10.8 의 `assert_migrations_in_sync()` 는 try/except 없이 호출 → KeyError 그대로 propagate → gunicorn worker boot 실패 → 503
+
+### 코드 변경 (v2.10.9, BE only)
+
+- `backend/app/migration_runner.py _get_executed()` L51 — `row[0]` → `row['filename']`
+- `backend/app/migration_runner.py assert_migrations_in_sync()` L165+ — outer try/except 안전망 추가 (assertion 자체 실패가 worker boot 막지 않도록)
+- `backend/version.py` v2.10.8 → 2.10.9
+- `frontend/lib/utils/app_version.dart` v2.10.8 → 2.10.9
+
+### Lesson
+
+- **assertion 도입 자체가 사고 발견 trigger 가 됨** — 5일간 silent 흡수된 row[0] KeyError 가 try/except 없는 호출 경로에서 즉시 노출
+- 향후 신규 assertion 도입 시 outer try/except 안전망 표준화 권장
+
+---
+
+## 🟢 2026-04-27 세션 요약 (4/6 핵심) — v2.10.8 알람 시스템 사후 검증 마무리 4 Sprint 통합 배포
+
+> **한 줄 요약**: 4-22 알람 silent failure (5일 52건 NULL) 사고의 사후 검증 마무리. POST-REVIEW-MIGRATION-049 + OBSERV-RAILWAY-LOG-LEVEL + OBSERV-ALERT-SILENT-FAIL (Sentry) + OBSERV-MIGRATION-RUNNER-STARTUP-ASSERTION 4 Sprint 통합 배포. 외부 자동 감지 layer 1차 완성.
+
+### Sprint별 산출 (v2.10.8, BE only ~140 LOC)
+
+| Sprint | 산출 |
+|---|---|
+| OBSERV-RAILWAY-LOG-LEVEL-MAPPING | `Procfile` `--access-logfile=- --log-level=info` 추가 + `__init__.py` `logging.basicConfig(stream=sys.stdout, force=True)` 명시 |
+| OBSERV-ALERT-SILENT-FAIL (Sentry) | `requirements.txt` `sentry-sdk[flask]>=2.0` + `_init_sentry()` 신규 (~50 LOC, FlaskIntegration + LoggingIntegration + release auto-binding + send_default_pii=False) + migration_runner 실패 시 `sentry_sdk.capture_exception` |
+| POST-REVIEW-MIGRATION-049-NOT-APPLIED | `POST_MORTEM_MIGRATION_049.md` 신규 — 4가지 가설 전수 검증 → ④ Docker artifact / Railway build cache 가장 유력 (Codex POST-REVIEW Q2-2 판정 일치) |
+| OBSERV-MIGRATION-RUNNER-STARTUP-ASSERTION | `assert_migrations_in_sync()` 함수 신규 (~40 LOC) — disk vs DB sync 검증 + gap 시 `sentry_sdk.capture_message` |
+
+### Twin파파 측 후속 (다음 세션 6/6 에서 완료)
+
+1. ✅ sentry.io 가입 + Python/Flask project 생성 + DSN 발급
+2. ✅ Railway env 등록: `SENTRY_DSN` (필수) + `SENTRY_ENVIRONMENT` (production) + `SENTRY_TRACES_SAMPLE_RATE`
+3. 🟡 Sentry alert rule 설정 (1주 운영 후 미세 조정)
+
+### 검증
+
+- pytest test_scheduler.py 8 passed / 1 skipped / 회귀 0건 ✅
+- BE syntax check (init/migration_runner) ✅
+
+---
+
+## 🟢 2026-04-27 세션 요약 (3.5/6) — HOTFIX-06 v2.10.7 warmup_pool() 시계 리셋 누락 fix
+
+> **한 줄 요약**: v2.10.6 OBSERV-WARMUP 배포 후 결함 발견 — warmup 외형상 작동하지만 SELECT 1 만 실행하고 `_conn_created_at` 갱신 안 함 → `_is_conn_usable()` 가 expired 판정 → discard → direct conn fallback 다발. 1줄 추가로 해결.
+
+### 코드 변경 (v2.10.7, BE only 1줄)
+
+- `backend/app/db_pool.py warmup_pool()` L240+ — `_conn_created_at[id(conn)] = time.time()` 1줄 추가
+- `backend/version.py` v2.10.6 → 2.10.7
+- `frontend/lib/utils/app_version.dart` v2.10.6 → 2.10.7
+- git commit: `7a13085`
+
+### Limitation (per-worker 함정)
+
+- 본 fix 는 fcntl lock 으로 1 worker (Worker A) 만 scheduler 실행 → Worker A 의 pool 만 시계 리셋
+- **Worker B 의 pool 은 자연 만료**. 결과: conn 7~11 진동 (영구 10 의도는 절반 달성)
+- 사용자 영향 0 입증 후 **D+1 (4-28 화) 출근 peak 측정 결과 따라 v2.10.11 HOTFIX-06b** (per-worker warmup) 진행 결정
 
 ---
 

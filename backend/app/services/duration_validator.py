@@ -13,7 +13,7 @@ from psycopg2 import Error as PsycopgError
 from app.models.worker import get_db_connection
 from app.models.task_detail import get_task_by_id
 from app.models.alert_log import create_alert
-from app.services.process_validator import get_managers_for_role
+from app.services.process_validator import resolve_managers_for_category
 from app.services.alert_service import sn_label
 from app.db_pool import put_conn
 
@@ -70,8 +70,8 @@ def validate_duration(task_detail_id: int) -> Dict[str, Any]:
     if task.completed_at < task.started_at:
         warnings.append("완료 시간이 시작 시간보다 이릅니다.")
 
-        # 관리자에게 알림 생성
-        managers = get_managers_for_role(task.task_category)
+        # 관리자에게 알림 생성 (TMS 등 partner-based 매핑 표준 함수)
+        managers = resolve_managers_for_category(task.serial_number, task.task_category)
         for manager_id in managers:
             alert_id = create_alert(
                 alert_type='REVERSE_COMPLETION',
@@ -96,8 +96,8 @@ def validate_duration(task_detail_id: int) -> Dict[str, Any]:
     if task.duration_minutes and task.duration_minutes > MAX_DURATION_MINUTES:
         warnings.append(f"작업 시간이 {MAX_DURATION_MINUTES // 60}시간을 초과했습니다. ({task.duration_minutes}분)")
 
-        # 관리자에게 알림 생성
-        managers = get_managers_for_role(task.task_category)
+        # 관리자에게 알림 생성 (TMS 등 partner-based 매핑 표준 함수)
+        managers = resolve_managers_for_category(task.serial_number, task.task_category)
         for manager_id in managers:
             alert_id = create_alert(
                 alert_type='DURATION_EXCEEDED',
@@ -175,8 +175,8 @@ def check_unfinished_tasks() -> List[Dict[str, Any]]:
                     "alert_id": None
                 }
 
-                # 관리자에게 알림 생성
-                managers = get_managers_for_role(row['task_category'])
+                # 관리자에게 알림 생성 (TMS 등 partner-based 매핑 표준 함수)
+                managers = resolve_managers_for_category(row['serial_number'], row['task_category'])
                 for manager_id in managers:
                     alert_id = create_alert(
                         alert_type='UNFINISHED_AT_CLOSING',

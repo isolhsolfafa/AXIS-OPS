@@ -321,3 +321,143 @@ class TestLocationQRCheck:
         assert response.status_code == 200
         data = response.get_json()
         assert data['location_qr_verified'] is False
+
+
+# ==================== FIX-PROCESS-VALIDATOR-TMS-MAPPING-20260428 (TC 7개) ====================
+# Codex 라운드 1 합의: M1 fixture 정합 (옵션 D 격리 fixture) + A2 e2e 회귀 TC.
+# 표준 함수 resolve_managers_for_category 의 partner-based / role-based 분기 검증.
+
+from app.services.process_validator import resolve_managers_for_category
+
+
+class TestResolveManagersForCategory:
+    """본 Sprint 핵심 — process_validator.resolve_managers_for_category() 분기 검증."""
+
+    def test_tms_gaia_partner(
+        self, seed_test_workers, seed_test_products, seed_test_managers_for_partner
+    ):
+        """GAIA TMS task → module_outsourcing='TMS' 매니저 반환 (정규 케이스)."""
+        managers = resolve_managers_for_category('TEST-GAIA-001', 'TMS')
+        assert isinstance(managers, list)
+        assert len(managers) > 0, (
+            "TEST-GAIA-001.module_outsourcing='TMS' 협력사의 TMS(M)/TMS(E) "
+            "매니저 worker_id 가 1명 이상 반환되어야 함"
+        )
+
+    def test_tms_dragon_module_none(
+        self, seed_test_workers, seed_test_products, seed_test_managers_for_partner
+    ):
+        """DRAGON 회귀 — module_outsourcing=None 인 DRAGON 의 TMS 매핑 거동 명시.
+        CLAUDE.md L1100 'DRAGON: tank_in_mech, 한 협력사가 탱크+MECH 일괄'.
+        현재 구현 (`module_outsourcing` 매핑) 은 None 이면 빈 리스트 반환.
+        DRAGON 정합성 검토는 후속 BACKLOG `BUG-DRAGON-TMS-PARTNER-MAPPING-20260428`."""
+        managers = resolve_managers_for_category('TEST-DRAGON-001', 'TMS')
+        assert isinstance(managers, list)
+        # module_outsourcing=None → get_managers_by_partner 가 빈 리스트 반환
+
+    def test_mech_partner(
+        self, seed_test_workers, seed_test_products, seed_test_managers_for_partner
+    ):
+        """MECH task → mech_partner 매니저 반환 (4-22 HOTFIX 표준 패턴 회귀)."""
+        managers = resolve_managers_for_category('TEST-GALLANT-001', 'MECH')
+        assert len(managers) > 0, "mech_partner='BAT' 매니저 1명 이상"
+
+    def test_elec_partner(
+        self, seed_test_workers, seed_test_products, seed_test_managers_for_partner
+    ):
+        """ELEC task → elec_partner 매니저 반환 (회귀)."""
+        managers = resolve_managers_for_category('TEST-GALLANT-001', 'ELEC')
+        assert len(managers) > 0, "elec_partner='C&A' 매니저 1명 이상"
+
+    def test_pi_role_fallback(self, seed_test_workers):
+        """PI task → role 기반 fallback. role='PI' 매니저는 TEST_WORKERS 에 없음.
+        반환 type 만 검증 (role-based 분기 진입 + silent skip 거동 보존)."""
+        managers = resolve_managers_for_category('any-sn', 'PI')
+        assert isinstance(managers, list)
+
+    def test_unknown_returns_empty(self):
+        """알 수 없는 category → role 기반 fallback → enum 없으면 빈 리스트.
+        silent skip 거동 유지 (try/except PsycopgError → [])."""
+        managers = resolve_managers_for_category('any-sn', 'UNKNOWN')
+        assert managers == []
+
+
+def _setup_tms_task_with_long_duration(db_conn, sn: str, duration_hours: int = 15) -> int:
+    """e2e TC helper — TMS task_detail INSERT + duration > 14h 셋업.
+    Returns: 생성된 task_detail.id
+
+    db_conn 의 default cursor 는 tuple 반환 → row[0] 으로 id 추출.
+    """
+    from datetime import datetime, timedelta, timezone
+    cur = db_conn.cursor()
+    started = datetime.now(timezone.utc) - timedelta(hours=duration_hours)
+    completed = datetime.now(timezone.utc)
+    cur.execute(
+        """
+        INSERT INTO app_task_details (
+            worker_id, serial_number, qr_doc_id, task_category, task_id,
+            task_name, started_at, completed_at, duration_minutes, is_applicable
+        )
+        SELECT w.id, %s, %s, 'TMS', 'PRESSURE_TEST', '가압검사',
+               %s, %s, %s, TRUE
+          FROM workers w
+         WHERE w.email = 'tmsm1@test.com'
+         LIMIT 1
+        RETURNING id
+        """,
+        (sn, f'DOC_{sn}', started, completed, duration_hours * 60),
+    )
+    row = cur.fetchone()
+    db_conn.commit()
+    cur.close()
+    return row[0]
+
+
+def test_duration_validator_tms_alert_creation_e2e(
+    db_conn, seed_test_workers, seed_test_products, seed_test_managers_for_partner
+):
+    """⭐ Codex A2 — 원본 장애 경로 직접 재현.
+
+    Before fix: get_managers_for_role('TMS') → enum 'TMS' 부재 → silent skip → alert 0건
+    After fix:  resolve_managers_for_category(sn, 'TMS') → module_outsourcing 매니저 → alert 1+건
+
+    helper-only TC 가 잡지 못하는 회귀 경로 (validate_duration → alert_logs INSERT) 보강.
+    """
+    from app.services.duration_validator import validate_duration
+
+    # TMS task 셋업 — duration 15h (14h 초과 → DURATION_EXCEEDED trigger)
+    task_detail_id = _setup_tms_task_with_long_duration(db_conn, sn='TEST-GAIA-001', duration_hours=15)
+
+    try:
+        result = validate_duration(task_detail_id)
+
+        # 알람 생성 검증 (silent skip 회귀 방지)
+        assert result['alerts_created'] > 0, (
+            "validate_duration() 가 TMS task 의 module_outsourcing 매니저에게 알람을 생성해야 함. "
+            "0 = silent skip 회귀 (FIX-PROCESS-VALIDATOR-TMS-MAPPING fix 효과 무효)"
+        )
+
+        # alert_logs 테이블 직접 검증 (target_worker_id 가 매니저인지)
+        # default cursor → tuple 반환 → row[0]=alert_type, row[1]=target_worker_id
+        cur = db_conn.cursor()
+        cur.execute(
+            """
+            SELECT alert_type, target_worker_id
+              FROM app_alert_logs
+             WHERE serial_number = 'TEST-GAIA-001'
+               AND alert_type = 'DURATION_EXCEEDED'
+            """
+        )
+        rows = cur.fetchall()
+        cur.close()
+        assert len(rows) > 0, "DURATION_EXCEEDED alert 가 1건 이상 생성되어야 함"
+        assert all(r[1] is not None for r in rows), (
+            "target_worker_id (row[1]) 가 None 이면 broadcast 모드 — 본 Sprint 후엔 개별 매니저 INSERT"
+        )
+    finally:
+        # cleanup
+        cur = db_conn.cursor()
+        cur.execute("DELETE FROM app_alert_logs WHERE serial_number = 'TEST-GAIA-001'")
+        cur.execute("DELETE FROM app_task_details WHERE id = %s", (task_detail_id,))
+        db_conn.commit()
+        cur.close()

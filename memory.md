@@ -2,7 +2,7 @@
 
 > 세션 간 누적되는 의사결정, 아키텍처 판단, 감사 결과를 기록합니다.
 > CLAUDE.md = 프로젝트 고정 정보 / memory.md = 누적 학습 / handoff.md = 세션 인계
-> 마지막 업데이트: 2026-04-07
+> 마지막 업데이트: 2026-04-27 (ADR-019 Sentry + assertion 자동 감지 layer)
 
 ---
 
@@ -221,6 +221,60 @@ TM ──(가압완료)──▶ MECH ──(도킹완료)──▶ ELEC ──(
 8. 🟡 **VIEW FE 테스트 2개뿐** — vitest 설치됨 but 테스트 부재
 9. 🟡 **React.lazy/Suspense 미사용** — 코드 스플리팅 없음
 10. 🟡 **ChartSection.tsx 하드코딩 색상** — GxColors 디자인 토큰 존재하나 미적용
+
+---
+
+### ADR-019: Sentry + assertion 자동 감지 layer 도입 (2026-04-27, v2.10.8 ~ v2.10.10)
+
+**배경**: 4-22 알람 silent failure (5일 52건 NULL) 사고. Migration 049 silent gap → logger.error 만으로는 5일간 무인지 → 사용자 직접 신고로 발견. 외부 자동 감지 layer 부재가 사고 인지 시간을 좌우.
+
+**의사결정**:
+1. **Sentry 정식 연동** (OBSERV-ALERT-SILENT-FAIL):
+   - `sentry-sdk[flask]>=2.0` requirements 정식 추가
+   - `_init_sentry()` 함수 (~50 LOC) — DSN env 없으면 graceful skip (로컬/test 호환)
+   - `FlaskIntegration` (HTTP exception) + `LoggingIntegration` (INFO breadcrumb / ERROR event capture)
+   - `release` 자동 binding (version.py) + `send_default_pii=False` (PII 보호)
+   - 환경변수: `SENTRY_DSN` (필수) + `SENTRY_ENVIRONMENT` (기본 production) + `SENTRY_TRACES_SAMPLE_RATE` (기본 0.0)
+
+2. **migration sync assertion** (OBSERV-MIGRATION-RUNNER-STARTUP-ASSERTION):
+   - `assert_migrations_in_sync()` 함수 (~40 LOC) — disk(코드) vs DB(`migration_history`) 동기화 검증
+   - `not_yet_applied` 발견 시 `logger.error` + `sentry_sdk.capture_message` (외부 즉시 알림)
+   - `run_migrations()` 직후 호출
+   - **outer try/except 안전망 표준**: assertion 자체 실패가 worker boot 막지 않도록 (HOTFIX-07 lesson)
+
+3. **log level 정확화** (OBSERV-RAILWAY-LOG-LEVEL-MAPPING):
+   - `logging.basicConfig(stream=sys.stdout, force=True)` 명시 (기본 stderr 금지)
+   - `Procfile` `--access-logfile=- --log-level=info` 추가
+   - Python `logger.info()` 가 Railway 에서 `level: error` 잘못 태깅되던 문제 해소 → Sentry alert rule `level=error` 필터 정확 작동
+
+**가치 입증 (도입 당일 + 8시간)**:
+- 1차 — HOTFIX-07 (v2.10.9): assertion 첫 호출 시 `_get_executed()` `row[0]` KeyError 노출. 5일간 silent 흡수된 잠재 버그가 try/except 없는 경로에서 즉시 발견
+- 2차 — HOTFIX-08 (v2.10.10): assertion 이 `046a_elec_checklist_seed.sql` silent gap (4-22 049 와 동일 Docker artifact 두 번째 사례) 자동 캡처 → db_pool transaction 정리 누락 + 046a 자동 적용. ON CONFLICT idempotent 로 사용자 영향 0
+- 3차 — FIX-PROCESS-VALIDATOR-TMS-ROLE-MAPPING (BACKLOG L352, BE Sprint 예정): Sentry DSN 활성화 후 8시간 만에 매시간 cron 의 `Failed to get managers for role=TMS: invalid input value for enum role_enum: "TMS"` 31 events 자동 감지. 4-22 HOTFIX-ALERT-SCHEDULER-DELIVERY 가 scheduler 3곳만 수정하고 process_validator/duration_validator 의 enum cast 잠재 위험은 그대로 남았던 잔존 silent failure (TMS 매니저 UNFINISHED_AT_CLOSING 알람 미수신, 일 ~240건 / 주 ~1680건 silent skip). LoggingIntegration ERROR event capture 가 가설 검증 layer 가 아닌 **실제 운영 잔존 사고를 직접 발견** 한 첫 사례 — Sentry 가치 입증 = assertion 가치 입증 layer 의 외부 확장 성공
+
+**Before / After**:
+```
+Before (4-22 사고): silent gap → 5일 무인지 → 사용자 신고
+After (4-27+):       silent gap → assertion 즉시 → Sentry email/push
+                     평균 인지 시간: 5일 → ~1분
+```
+
+**시스템 신뢰성 1차 완성** — assertion + LoggingIntegration + FlaskIntegration = 외부 자동 감지 layer 가동.
+
+**파생 표준 (lesson 흡수)**:
+- 신규 assertion 도입 시 outer try/except 안전망 필수 (HOTFIX-07 재발 방지)
+- psycopg2 `RealDictCursor` 환경에서는 `row['column_name']` 접근만 사용 (`row[0]` 금지)
+- 풀에 conn 반납 전 SELECT 후 `conn.rollback()` 표준 (INTRANS 상태 회피, HOTFIX-08 재발 방지)
+
+**Twin파파 측 활성화 완료 (2026-04-27)**:
+- ✅ sentry.io 가입 + Python/Flask project 생성 + DSN 발급
+- ✅ Railway env 등록: `SENTRY_DSN` / `SENTRY_ENVIRONMENT` / `SENTRY_TRACES_SAMPLE_RATE`
+- 🟡 alert rule 미세 조정 (1주 운영 후 노이즈 비율 기반)
+
+**산출물 trail**:
+- `POST_MORTEM_MIGRATION_049.md` (4가지 가설 검증, 가설 ④ Docker artifact 가장 유력)
+- CHANGELOG v2.10.8 / v2.10.9 / v2.10.10 entry
+- BACKLOG: POST-REVIEW-MIGRATION-049 / OBSERV-ALERT-SILENT-FAIL / OBSERV-MIGRATION-RUNNER-STARTUP-ASSERTION / OBSERV-RAILWAY-LOG-LEVEL-MAPPING 4건 COMPLETED
 
 ---
 

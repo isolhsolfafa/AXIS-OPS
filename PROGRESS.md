@@ -3,8 +3,100 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.10.6 (FEAT-PIN-STATUS-BACKEND-FALLBACK + OBSERV-DB-POOL-WARMUP 병행, 2026-04-27)
+> **현재 버전**: v2.10.10 (HOTFIX-08 db_pool transaction 정리 + 046a 자동 적용, 2026-04-27) + Sentry DSN 활성화 완료
 > **최근 인프라**: FIX-DB-POOL-MAX-SIZE-20260427 — Railway env DB_POOL_MAX 20→30 (2026-04-27, 코드 변경 0)
+> **D+1 운영 검증 (2026-04-28)**: 출근 peak 측정 PASS — Pool exhausted 0 / direct conn fallback 0 / OPS conn 6~7 안정 / Sentry 새 issue 0 → 옵션 X1 유지, OBSERV-WARMUP COMPLETED 확정, v2.10.11 HOTFIX-06b 불필요
+
+---
+
+## v2.10.10 (HOTFIX-08): db_pool transaction 정리 누락 + 046a 자동 적용 (2026-04-27)
+
+**원인**: psycopg2 default `autocommit=False` → SELECT 도 BEGIN 자동 시작 → INTRANS 상태로 풀 반납 → 이 conn 을 받아 `m_conn.autocommit = True` 시도 시 `set_session cannot be used inside a transaction` 거부.
+
+**자동 감지 경로**: v2.10.9 배포 후 Railway log 에 `046a_elec_checklist_seed.sql 실행 실패: set_session ...` 발생 → assertion 이 즉시 캡처.
+
+**코드 변경 (BE only ~2줄)**:
+- `backend/app/db_pool.py _is_conn_usable()` L98+ — SELECT 1 후 `conn.rollback()` 추가
+- `backend/app/db_pool.py warmup_pool()` L270+ — 동일 패턴 적용
+- `backend/version.py` v2.10.9 → 2.10.10
+- `frontend/lib/utils/app_version.dart` v2.10.9 → 2.10.10
+
+**부수 효과 (긍정)**: 046a_elec_checklist_seed.sql 자동 적용 — 4-22 049 와 동일 Docker artifact silent gap 두 번째 사례. ON CONFLICT DO NOTHING idempotent 보장으로 prod 31항목 안전 재적용. 사용자 영향 0.
+
+**검증**:
+- pytest 회귀 0건
+- Railway log: `[migration] ✅ 046a_elec_checklist_seed.sql 실행 완료` + `[migration-assert] ✅ sync OK (13 migrations applied)` (12 → 13 갱신)
+- git commit: `72579e1`
+
+**BACKLOG 상태**:
+- assertion 자동 감지 layer 가치 2차 입증 (1차: HOTFIX-07 row[0] / 2차: HOTFIX-08 transaction)
+
+---
+
+## v2.10.9 (HOTFIX-07): RealDictCursor row[0] KeyError 긴급 복구 (2026-04-27)
+
+**원인**: `db_pool` 이 `RealDictCursor` 사용 → row 가 dict-like → `row[0]` 은 `KeyError: 0`. 이전 `run_migrations()` 의 outer try/except 가 silent 흡수 → 5일간 무인지. v2.10.8 의 `assert_migrations_in_sync()` 는 try/except 없이 호출 → KeyError 가 그대로 propagate → gunicorn worker boot 실패 → 503.
+
+**코드 변경 (BE only)**:
+- `backend/app/migration_runner.py _get_executed()` L51 — `row[0]` → `row['filename']`
+- `backend/app/migration_runner.py assert_migrations_in_sync()` L165+ — outer try/except 안전망 (assertion 자체 실패가 worker boot 막지 않도록)
+- `backend/version.py` v2.10.8 → 2.10.9
+- `frontend/lib/utils/app_version.dart` v2.10.8 → 2.10.9
+
+**Lesson**: assertion 도입 자체가 사고 발견 trigger 가 됨 — 5일간 silent 흡수된 row[0] KeyError 가 try/except 없는 호출 경로에서 즉시 노출. 향후 신규 assertion 도입 시 outer try/except 안전망 표준화 권장.
+
+---
+
+## v2.10.8: 알람 시스템 사후 검증 마무리 4 Sprint 통합 (2026-04-27)
+
+**Sprint 통합**:
+- `OBSERV-RAILWAY-LOG-LEVEL-MAPPING` 🔴 P1 → ✅ COMPLETED
+- `POST-REVIEW-MIGRATION-049-NOT-APPLIED` 🔴 S3 → ✅ COMPLETED (POST_MORTEM_MIGRATION_049.md 산출)
+- `OBSERV-ALERT-SILENT-FAIL` 🔴 P1 → ✅ COMPLETED (Sentry 정식)
+- `OBSERV-MIGRATION-RUNNER-STARTUP-ASSERTION` 🟡 P2 → ✅ COMPLETED
+
+**코드 변경 (BE only ~140 LOC)**:
+- `backend/Procfile` — gunicorn `--access-logfile=- --log-level=info` 추가
+- `backend/app/__init__.py` — `import sys` + `logging.basicConfig(stream=sys.stdout, force=True)` 명시 + `_init_sentry()` 함수 신규 (~50 LOC, FlaskIntegration + LoggingIntegration + release auto-binding + send_default_pii=False) + `run_migrations()` 직후 `assert_migrations_in_sync()` 호출
+- `backend/requirements.txt` — `sentry-sdk[flask]>=2.0` 추가
+- `backend/app/migration_runner.py` — `assert_migrations_in_sync()` 함수 신규 (~40 LOC) + 실패 시 `sentry_sdk.capture_exception` / gap 시 `sentry_sdk.capture_message`
+- 신규 산출물: `POST_MORTEM_MIGRATION_049.md` — 4가지 가설 전수 검증 (가설 ④ Docker artifact / Railway build cache 가장 유력)
+
+**Sentry DSN 활성화 (Twin파파 측, 4-27 완료)**:
+1. ✅ sentry.io 가입 + Python/Flask project 생성 + DSN 발급
+2. ✅ Railway env 등록: `SENTRY_DSN` (필수) + `SENTRY_ENVIRONMENT` (production) + `SENTRY_TRACES_SAMPLE_RATE`
+3. 🟡 Sentry alert rule 설정 (1주 운영 후 미세 조정)
+
+**검증**:
+- pytest test_scheduler.py 8 passed / 1 skipped / 회귀 0건
+- BE syntax check (init/migration_runner) ✅
+
+**시스템 신뢰성 1차 완성**:
+```
+Before (4-22 사고): silent gap → 5일 무인지 → 사용자 신고
+After (4-27+):       silent gap → assertion 즉시 → Sentry email/push
+                     평균 인지 시간: 5일 → ~1분
+```
+
+---
+
+## v2.10.7 (HOTFIX-06): warmup_pool() 시계 리셋 누락 fix (2026-04-27)
+
+**원인**: v2.10.6 OBSERV-WARMUP 배포 후 결함 발견 — warmup 외형상 작동하지만 SELECT 1 만 실행하고 `_conn_created_at` 갱신 안 함 → `_is_conn_usable()` 가 expired 판정 → discard → direct conn fallback 다발.
+
+**코드 변경 (BE only 1줄)**:
+- `backend/app/db_pool.py warmup_pool()` L240+ — `_conn_created_at[id(conn)] = time.time()` 1줄 추가
+- `backend/version.py` v2.10.6 → 2.10.7
+- `frontend/lib/utils/app_version.dart` v2.10.6 → 2.10.7
+- git commit: `7a13085`
+
+**Limitation (per-worker 함정)**:
+- 본 fix 는 fcntl lock 으로 1 worker (Worker A) 만 scheduler 실행 → Worker A 의 pool 만 시계 리셋
+- Worker B 의 pool 은 자연 만료. 결과: conn 7~11 진동 (영구 10 의도는 절반 달성)
+- 사용자 영향 0 입증. **D+1 (4-28 화) 출근 peak 측정 결과 따라 v2.10.11 HOTFIX-06b** (per-worker warmup) 진행 결정
+
+**검증**:
+- pytest test_scheduler.py 8 passed / 1 skipped / 회귀 0건 (327.32s)
 
 ---
 

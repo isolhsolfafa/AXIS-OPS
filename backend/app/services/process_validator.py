@@ -22,6 +22,16 @@ from app.db_pool import put_conn
 logger = logging.getLogger(__name__)
 
 
+# task_category → product_info partner field 매핑.
+# 4-22 HOTFIX-ALERT-SCHEDULER-DELIVERY 가 scheduler_service 에 도입한 표준 규약을
+# DRY 정리하며 본 모듈로 이전 (FIX-PROCESS-VALIDATOR-TMS-MAPPING-20260428).
+_CATEGORY_PARTNER_FIELD = {
+    'TMS':  'module_outsourcing',
+    'MECH': 'mech_partner',
+    'ELEC': 'elec_partner',
+}
+
+
 def validate_process_start(
     serial_number: str,
     process_type: str,
@@ -257,3 +267,23 @@ def get_managers_for_role(role: str) -> List[int]:
     finally:
         if conn:
             put_conn(conn)
+
+
+def resolve_managers_for_category(serial_number: str, category: str) -> List[int]:
+    """
+    task_category → 해당 관리자 worker_id 리스트.
+
+    Partner 기반 (TMS/MECH/ELEC) 또는 Role 기반 (PI/QI/SI) 자동 분기.
+    원래 scheduler_service.py 의 _resolve_managers_for_category 로 4-22 HOTFIX 에서
+    도입된 패턴을 process_validator 로 이전 + public 화 (DRY).
+
+    Args:
+        serial_number: S/N — partner 조회용 (TMS/MECH/ELEC 케이스에서만 사용)
+        category: task.task_category ('TMS', 'MECH', 'ELEC', 'PI', 'QI', 'SI', 'TM' 등)
+
+    Returns:
+        매니저 worker_id 리스트. 매핑 실패 / 매니저 없음 시 빈 리스트.
+    """
+    if category in _CATEGORY_PARTNER_FIELD:
+        return get_managers_by_partner(serial_number, _CATEGORY_PARTNER_FIELD[category])
+    return get_managers_for_role(category)

@@ -6,6 +6,158 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.10.11] - 2026-04-28 — FIX-PROCESS-VALIDATOR-TMS-MAPPING (옵션 D-2, BE only)
+
+> **Sprint**: `FIX-PROCESS-VALIDATOR-TMS-MAPPING-20260428`
+> 4-22 HOTFIX-ALERT-SCHEDULER-DELIVERY 의 표준 패턴이 duration_validator 3곳에 미적용 → TMS 매니저 알람 미수신 (silent failure 매시간 ~10건). Sentry 도입 8h 만에 자동 감지 → 30분 fix.
+
+### Fixed (BE only — 5 파일 atomic refactor)
+
+#### 1. `process_validator.py` (+30 LOC) — 표준 함수 신설
+
+- `_CATEGORY_PARTNER_FIELD` dict 신설 (`'TMS':'module_outsourcing'/'MECH':'mech_partner'/'ELEC':'elec_partner'`)
+- `resolve_managers_for_category(serial_number, category)` public 함수 — partner-based / role-based 자동 분기
+- 4-22 HOTFIX 의 scheduler private 함수 패턴을 process_validator 로 이전 + public 화 (DRY)
+
+#### 2. `scheduler_service.py` (-15 LOC) — private 함수 + dict 제거 + import 교체
+
+- `_resolve_managers_for_category` 함수 + `_CATEGORY_PARTNER_FIELD` dict 제거
+- `from app.services.process_validator import resolve_managers_for_category` 추가
+- 3 호출 site (L921 / L1021 / L1110) `_resolve_managers_for_category` → `resolve_managers_for_category` 1:1 교체
+
+#### 3. `task_service.py` (±0 LOC) — Codex M2 누락 발견된 5번째 파일
+
+- L403: `from app.services.scheduler_service import _resolve_managers_for_category` → `from app.services.process_validator import resolve_managers_for_category`
+- L410: 호출 1줄 1:1 교체
+- ORPHAN_ON_FINAL alert (Sprint 61-B) 경로
+
+#### 4. `duration_validator.py` (±0 LOC) — 본 Sprint 핵심 fix 대상
+
+- L16 import: `get_managers_for_role` → `resolve_managers_for_category`
+- L74 (REVERSE_COMPLETION) / L100 (DURATION_EXCEEDED) / L179 (UNFINISHED_AT_CLOSING):
+  - Before: `get_managers_for_role(task.task_category)` → SQL `WHERE role='TMS'` → enum cast 실패 → silent skip
+  - After: `resolve_managers_for_category(sn, category)` → module_outsourcing 매니저 정상 도착
+
+#### 5. `tests/conftest.py` (+50 LOC) — Codex M1 옵션 D 격리 fixture
+
+- `seed_test_managers_for_partner` — TEST_WORKERS 의 partner worker (FNI/BAT/TMS(M)/TMS(E)/P&S/C&A) 일시 매니저 promote
+- teardown 명시적 원복 (`name != 'GST관리자'` 보호 조건) → 다른 테스트 영향 0
+
+#### 6. `tests/backend/test_process_validator.py` (+130 LOC) — TC 7개
+
+- TestResolveManagersForCategory 6 TC: TMS-GAIA partner / TMS-DRAGON 회귀 / MECH partner / ELEC partner / PI role fallback / unknown empty
+- e2e TC 1개 (Codex A2 흡수): `test_duration_validator_tms_alert_creation_e2e` — `validate_duration()` 직접 호출 + alert_logs INSERT 검증
+
+### LoC 변경 (Line 규칙 모두 통과 ✅)
+
+| 파일 | Before | After | 차이 |
+|---|---:|---:|---:|
+| process_validator.py | 259 | 289 | +30 (🟢 500 미만) |
+| scheduler_service.py | 1153 | 1138 | **-15** (⛔ God File 잔존, LoC 감소) |
+| task_service.py | 1486 | 1486 | ±0 (⛔ God File 잔존, mechanical 1:1) |
+| duration_validator.py | 204 | 204 | ±0 (🟢 import 1줄 + 호출 3곳 1:1) |
+
+→ "🔴 새 로직 추가 금지" 규정 우회 (scheduler/task_service 모두 LoC 감소 또는 ±0). REFACTOR-SCHEDULER-SPLIT 의 부분 선행 효과.
+
+### Tests
+
+- pytest 신규 TC: **7/7 PASS** ✅
+- pytest 회귀 (test_scheduler / test_scheduler_integration / test_task_seed): **51 passed / 5 skipped / 0 fail** ✅
+- 1건 무관 fail: `test_duration_validator.py::TestReverseDuration::test_reverse_completion` — BACKLOG L362 `BUG-DURATION-VALIDATOR-API-FIELD` (4-22 기존 별건). **Codex 라운드 2 (2026-04-28) Q1/Q2 모두 A 라벨 합의** — 본 Sprint 응답 키 생성 경로 (duration_validator → task_service → work.py) 영향 0, 별도 Sprint 처리
+
+### Codex 합의 기록
+
+- **라운드 1 (Sprint 설계 검증)**: M=2 / A=2 / N=2 — M1 fixture 정합성 (옵션 D 격리 fixture) + M2 Rollback 5 파일 (task_service.py L403-410 누락 발견) + A1 DRAGON gap (별건 BACKLOG `BUG-DRAGON-TMS-PARTNER-MAPPING-20260428`) + A2 e2e 회귀 TC. 모두 반영
+- **라운드 2 (pytest 회귀 라벨링)**: Q1/Q2 모두 A — 본 Sprint 회귀 0건 + BUG-DURATION-VALIDATOR-API-FIELD 별건 확정
+
+### Deploy
+
+- BE only (frontend version 만 동시 bump)
+- 배포: Railway 자동 (git push origin main)
+- Production: https://axis-ops-api.up.railway.app
+
+### Post-deploy 검증 (예정)
+
+- 즉시 (1h): Sentry PYTHON-FLASK-4 issue events 카운트 증가 멈춤 확인 (31 → 정착)
+- 매시간 정각 (UTC) 7번: TMS / MECH / ELEC / PI 매니저 도달 회귀 검증
+- D+7 종합: Sentry events 31 그대로 → COMPLETED 판정
+
+### Rollback (5 파일 atomic)
+
+```
+git revert <commit-sha>   # 5 파일 동시 원복
+→ Railway 자동 재배포 ~1분
+부분 revert 절대 금지 (ImportError → 앱 boot 실패 → 503 폭주 위험)
+```
+
+### Related
+
+- 설계서: `AGENT_TEAM_LAUNCH.md` L32249 FIX-PROCESS-VALIDATOR-TMS-MAPPING-20260428
+- BACKLOG: L352 (본 Sprint, COMPLETED) / L353 (BUG-DRAGON-TMS-PARTNER-MAPPING 후속) / L362 (BUG-DURATION-VALIDATOR-API-FIELD 별건)
+- 메타 가치: assertion + Sentry layer 가치 입증 #3 (memory.md ADR-019)
+
+---
+
+## [2.10.10] - 2026-04-27 — HOTFIX-08 db_pool transaction 정리 누락 + 046a 자동 적용 (BE only)
+
+> **HOTFIX-08** — v2.10.9 배포 후 Railway log 에 `046a_elec_checklist_seed.sql 실행 실패: set_session cannot be used inside a transaction` 발생. assertion 자동 감지 layer 가 두 번째 잠재 버그 (db_pool transaction 정리 누락 + 046a silent gap) 사용자 영향 0 시점에 발견.
+
+### Fixed
+
+- **`backend/app/db_pool.py _is_conn_usable()`** — SELECT 1 실행 후 `conn.rollback()` 추가:
+  - psycopg2 default `autocommit=False` → SELECT 도 BEGIN 자동 시작 → INTRANS 상태로 풀 반납
+  - 이 conn 을 받아 `m_conn.autocommit=True` 시도 시 `set_session cannot be used inside a transaction` 거부 (migration_runner 사례)
+  - 동일 SELECT 1 검증 패턴인 `warmup_pool()` 에도 동일 1줄 (총 2곳)
+
+### Side Effect (긍정)
+
+- **046a_elec_checklist_seed.sql 자동 적용** — 4-22 049 와 동일한 Docker artifact silent gap 사례로 추정. `ON CONFLICT DO NOTHING` idempotent 보장으로 prod 31항목 안전 재적용. 사용자 영향 0.
+
+### Tests
+
+- pytest 회귀 0건
+- Railway log 검증: `[migration] ✅ 046a_elec_checklist_seed.sql 실행 완료` + `[migration-assert] ✅ sync OK (13 migrations applied)` (12 → 13 갱신)
+
+### Deploy
+
+- BE only — Railway 자동 (git push origin main)
+- git commit: `72579e1`
+
+### Related
+
+- assertion 자동 감지 layer 가치 입증 trail: 도입 당일 잠재 버그 2건 발견 (HOTFIX-07 row[0] + HOTFIX-08 transaction 정리)
+
+---
+
+## [2.10.9] - 2026-04-27 — HOTFIX-07 RealDictCursor row[0] KeyError 긴급 복구 (BE only)
+
+> **HOTFIX-07** — v2.10.8 배포 직후 `assert_migrations_in_sync()` 첫 호출 시 worker boot 503 발생. assertion 자체 도입이 5일 누적된 silent 버그를 즉시 노출시킨 사례 (assertion 가치 1차 입증).
+
+### Fixed
+
+- **`backend/app/migration_runner.py _get_executed()`** L51 — `row[0]` → `row['filename']`:
+  - `db_pool` 이 `RealDictCursor` 사용 → row 가 dict-like → `row[0]` 은 `KeyError: 0`
+  - 이전 `run_migrations()` 의 outer try/except 가 silent 흡수 → 5일간 무인지
+  - v2.10.8 의 `assert_migrations_in_sync()` 는 try/except 없이 호출 → KeyError 가 그대로 propagate → gunicorn worker boot 실패 → 503
+- **`backend/app/migration_runner.py assert_migrations_in_sync()`** L165+ — outer try/except 안전망 추가:
+  - assertion 자체 실패가 worker boot 막지 않도록 (HOTFIX-07 같은 사고 예방)
+  - 실패 시 `logger.error(exc_info=True)` + `sentry_sdk.capture_exception(e)` (best-effort)
+
+### Tests
+
+- pytest 회귀 0건
+- Railway log: worker boot 정상화, `[migration-assert] ✅ sync OK (12 migrations applied)` 정상 출력
+
+### Deploy
+
+- BE only — Railway 자동 (git push origin main)
+
+### Lesson
+
+- **assertion 도입 자체가 사고 발견 trigger 가 됨** — 5일간 silent 흡수된 row[0] KeyError 가 try/except 없는 호출 경로에서 즉시 노출. 향후 신규 assertion 도입 시 outer try/except 안전망 표준화 권장.
+
+---
+
 ## [2.10.8] - 2026-04-27 — 알람 시스템 사후 검증 마무리 3건 (BE only)
 
 > **Sprint**: OBSERV-RAILWAY-LOG-LEVEL-MAPPING + POST-REVIEW-MIGRATION-049-NOT-APPLIED + OBSERV-ALERT-SILENT-FAIL

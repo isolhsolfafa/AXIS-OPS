@@ -1467,6 +1467,56 @@ def seed_test_workers(db_conn):
             print(f"Warning: seed_test_workers cleanup failed: {e}")
 
 
+# ==================== FIX-PROCESS-VALIDATOR-TMS-MAPPING-20260428 격리 fixture ====================
+
+
+@pytest.fixture
+def seed_test_managers_for_partner(db_conn, seed_test_workers):
+    """
+    FIX-PROCESS-VALIDATOR-TMS-MAPPING-20260428 (옵션 D 격리 fixture):
+    TEST_WORKERS 의 partner worker (FNI/BAT/TMS(M)/TMS(E)/P&S/C&A) 를
+    본 Sprint TC 만 일시 매니저로 promote. teardown 에서 명시적 원복 → 다른 테스트 영향 0.
+
+    Codex 라운드 1 M1 합의 — TEST_WORKERS 원본은 is_manager=False (다른 테스트가
+    일반 worker 로 활용 가능) → 본 Sprint partner-based TC 만 매니저 필요 → 격리 fixture 가 안전.
+    """
+    if db_conn is None:
+        yield
+        return
+
+    cur = db_conn.cursor()
+    try:
+        cur.execute("""
+            UPDATE workers
+               SET is_manager = TRUE
+             WHERE company IN ('FNI', 'BAT', 'TMS(M)', 'TMS(E)', 'P&S', 'C&A')
+               AND email LIKE '%%@test.com'
+               AND approval_status = 'approved'
+        """)
+        db_conn.commit()
+    except Exception as e:
+        db_conn.rollback()
+        print(f"Warning: seed_test_managers_for_partner promote failed: {e}")
+
+    yield
+
+    # teardown — 명시적 원복 (GST관리자 보호)
+    if not db_conn.closed:
+        try:
+            cur = db_conn.cursor()
+            cur.execute("""
+                UPDATE workers
+                   SET is_manager = FALSE
+                 WHERE company IN ('FNI', 'BAT', 'TMS(M)', 'TMS(E)', 'P&S', 'C&A')
+                   AND email LIKE '%%@test.com'
+                   AND name != 'GST관리자'
+            """)
+            db_conn.commit()
+            cur.close()
+        except Exception as e:
+            print(f"Warning: seed_test_managers_for_partner teardown failed: {e}")
+
+
 # ==================== Sprint 9 픽스처 ====================
 
 

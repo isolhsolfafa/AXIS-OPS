@@ -25,25 +25,10 @@ from app.db_pool import put_conn, warmup_pool
 
 logger = logging.getLogger(__name__)
 
-# HOTFIX-ALERT-SCHEDULER-DELIVERY-20260422:
-# task_category → partner_field 매핑 (task_service.py L524-548 동일 규약 재사용)
-_CATEGORY_PARTNER_FIELD = {
-    'TMS':  'module_outsourcing',
-    'MECH': 'mech_partner',
-    'ELEC': 'elec_partner',
-}
-
-
-def _resolve_managers_for_category(serial_number: str, category: str) -> list:
-    """
-    task_category → 해당 관리자 worker_id 리스트.
-    Partner 기반 (TMS/MECH/ELEC) 또는 Role 기반 (PI/QI/SI) 자동 분기.
-    task_service.py L571 의 표준 알람 수신자 결정 패턴을 scheduler 에 적용.
-    """
-    from app.services.process_validator import get_managers_by_partner, get_managers_for_role
-    if category in _CATEGORY_PARTNER_FIELD:
-        return get_managers_by_partner(serial_number, _CATEGORY_PARTNER_FIELD[category])
-    return get_managers_for_role(category)
+# FIX-PROCESS-VALIDATOR-TMS-MAPPING-20260428:
+# 4-22 HOTFIX 의 resolve_managers_for_category / _CATEGORY_PARTNER_FIELD 가
+# process_validator.py 로 이전됨 (DRY). 본 모듈은 import 만 사용.
+from app.services.process_validator import resolve_managers_for_category
 
 # 전역 스케줄러 인스턴스
 _scheduler: Optional[BackgroundScheduler] = None
@@ -918,7 +903,7 @@ def check_orphan_relay_tasks_job() -> None:
             already_sent = {row['target_worker_id'] for row in cur.fetchall()}
 
             # 표준 패턴 (task_service.py L571) — 관리자별 개별 INSERT
-            managers = _resolve_managers_for_category(
+            managers = resolve_managers_for_category(
                 orphan['serial_number'], orphan['task_category']
             )
             message = (
@@ -1018,7 +1003,7 @@ def _check_not_started_tasks():
                     f"생성 후 {days_elapsed}일 경과, 아직 시작되지 않았습니다."
                 )
 
-                managers = _resolve_managers_for_category(sn, task_row['task_category'])
+                managers = resolve_managers_for_category(sn, task_row['task_category'])
                 for manager_id in managers:
                     if manager_id in already_sent:
                         continue
@@ -1107,7 +1092,7 @@ def _check_checklist_done_task_open():
                     f"{task_row['task_name']} 미종료 상태입니다. 완료 처리가 필요합니다."
                 )
 
-                managers = _resolve_managers_for_category(sn, 'ELEC')
+                managers = resolve_managers_for_category(sn, 'ELEC')
                 for manager_id in managers:
                     if manager_id in already_sent:
                         continue

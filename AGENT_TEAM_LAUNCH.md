@@ -32245,3 +32245,471 @@ OPEN → COMPLETED 전환
 ```
 
 ---
+
+## 🔧 FIX-PROCESS-VALIDATOR-TMS-MAPPING-20260428 프롬프트 — `resolve_managers_for_category` 표준 함수 도입 (옵션 D-2, 🔴 P1)
+
+> **등록일**: 2026-04-28 KST
+> **Sprint ID 정정**: 본 Sprint = `FIX-PROCESS-VALIDATOR-TMS-MAPPING-20260428` (BACKLOG 의 옛 ID `-ROLE-MAPPING-20260427` 폐기, 본 ID 로 통일)
+> **우선순위**: 🔴 P1 (Sentry 31 events / escalating, 매시간 ~10건 누적, 4-22 구조 silent failure 재발)
+> **상태**: 🔴 OPEN (즉시 착수, Codex 이관 후)
+> **예상 소요**: 1h (BE refactor + pytest + 배포)
+> **선행 의존성**: 없음
+> **병행 가능**: FIX-DB-POOL Phase B D+2/D+3 관성 관찰 (4-29/4-30, 코드 영역 무관)
+> **충돌 위험**: REFACTOR-SCHEDULER-SPLIT (BACKLOG OPEN 상태) 진행 중이면 scheduler_service.py 분할 merge conflict 가능 — **본 Sprint 선행 권고** (DRY 정리 후 분할이 자연스러움)
+> **트리거 근거**: 2026-04-28 03:00 KST (UTC 18:00) Sentry 가 Sentry 도입 8h 만에 자동 감지 — `Failed to get managers for role=TMS: invalid input value for enum role_enum: "TMS"` 31 events / escalating. 4-22 HOTFIX-ALERT-SCHEDULER-DELIVERY 의 `_resolve_managers_for_category` 표준 패턴이 scheduler_service 에만 도입되고 duration_validator 3곳에는 미도입 → TMS 매니저들이 REVERSE_COMPLETION (L74) / DURATION_EXCEEDED (L100) / UNFINISHED_AT_CLOSING (L179) 알람 받지 못함
+> **담당**: BE teammate (Codex 이관 후 Opus 리뷰 → 배포)
+> **Codex 이관**: ✅ 인증·권한 로직 영향 (알림 수신자 결정) + 4-22 동일 구조 silent failure 후속 + **5 파일 touch** → 자동 이관 권장
+> **Codex 라운드 1 advisory 반영 (2026-04-28)**: M=2 / A=2 / N=2 — M1 fixture 정합성 (`seed_test_workers` 정명 + is_manager 분기 검증 + duration_validator 직접 회귀 TC 추가) / M2 Rollback 5 파일 (task_service.py L403-410 의 `_resolve_managers_for_category` import 추가 발견) / A1 DRAGON gap 별건 BACKLOG / A2 helper-only TC 부족 → e2e 회귀 TC 1개 추가
+
+### ⚠️ 사실 정정 — Twin파파 fact-check 반영
+
+이전 BACKLOG 가설 (`'TMS' → 'TMS_M' / 'TMS_E'` enum 매핑) 은 **잘못된 추정**. 실측 정정:
+
+```
+DB role_enum (migrations/006_sprint6_schema_changes.sql L14):
+  'MECH' / 'ELEC' / 'TM' / 'PI' / 'QI' / 'SI' / 'ADMIN'
+  → 'TMS' 자체가 enum 에 없음
+  → 'TMS_M' / 'TMS_E' 도 없음 (옛 추정 폐기)
+
+CLAUDE.md L1131 의 'TMS(M)' / 'TMS(E)':
+  → workers.company 값 (role 아님)
+  → role=MECH/ELEC + company=TMS(M)/TMS(E) 조합
+
+Twin파파 실측 SQL (2026-04-28):
+  SELECT id FROM workers WHERE role = 'TM' AND is_manager = TRUE;
+  → 결과 0건 (role='TM' 매니저 0명) → 옵션 A ('TMS' → 'TM' 매핑) 폐기 확정
+```
+
+### 🎯 목적
+
+`process_validator.py` 에 **`resolve_managers_for_category(sn, category)`** public 함수 신설 — 4-22 HOTFIX 의 표준 패턴을 정식 위치로 이전 + duration_validator 3곳을 표준 함수로 통일. TMS task 매니저가 UNFINISHED_AT_CLOSING 등 4종 알람을 정상 수신.
+
+### 🔬 작동 중 vs 실패 중 알람 비교 (사용자 기여 분석)
+
+```
+✅ 작동 중인 TMS 알람 — partner-based 매핑 (기준 구현)
+  task_service.py L579: get_managers_by_partner(sn, 'mech_partner')
+    → product_info.mech_partner 조회
+    → workers WHERE company = mech_partner
+    → MECH 협력사 매니저 도착 ✅
+
+  scheduler_service.py L46 (_resolve_managers_for_category):
+    → if category in {TMS, MECH, ELEC}: get_managers_by_partner(sn, partner_field)
+    → else: get_managers_for_role(category)
+    → RELAY_ORPHAN / TASK_NOT_STARTED / CHECKLIST_DONE_TASK_OPEN 정상 ✅
+
+❌ 실패 중인 TMS 알람 — role-based 매핑 (구식, enum cast 실패)
+  duration_validator.py L74/L100/L179: get_managers_for_role(task.task_category)
+    → SQL WHERE role = 'TMS' → enum 없음 → []
+    → UNFINISHED_AT_CLOSING / DURATION_EXCEEDED / REVERSE_COMPLETION 매니저 미도착 ❌
+```
+
+→ **task_service + scheduler_service 는 partner-based 표준 패턴 적용, duration_validator 만 미적용**.
+
+### ⚠️ Limitation — Sentry 가치 입증 #3
+
+```
+Before (Sentry 미도입):
+  duration_validator 가 매시간 정각 ~10건 ERROR 출력
+  → Railway log 에서 사람이 grep 안 하면 무인지
+  → 4-22 와 동일 구조 5일+ silent failure 가능
+
+After (Sentry 도입 8h, 본 Sprint trigger):
+  31 events / escalating 자동 감지
+  → 도입 8시간만에 패턴 식별
+  → 30분 이내 fix 결정
+
+→ assertion + Sentry layer 의 가치 입증 #3 (HOTFIX-07/08 + TMS 매핑)
+```
+
+### 🧩 수정 범위 (Codex M2 정정 — 4 → **5 파일**)
+
+```
+1. process_validator.py (NEW function +30 LOC)
+   └─ resolve_managers_for_category(sn, category) public 함수 신설
+   └─ _CATEGORY_PARTNER_FIELD dict 신규 정의
+   
+2. scheduler_service.py (-15 / +5 LOC)
+   └─ _resolve_managers_for_category() 제거
+   └─ _CATEGORY_PARTNER_FIELD dict 제거 (process_validator 로 이동)
+   └─ from process_validator import resolve_managers_for_category 로 호출
+   
+3. ⚠️ task_service.py L403-410 (Codex M2 발견 — 누락됐던 5번째 파일, ~3 LOC)
+   └─ Before: from app.services.scheduler_service import _resolve_managers_for_category
+              managers = _resolve_managers_for_category(task.serial_number, task.task_category)
+   └─ After:  from app.services.process_validator import resolve_managers_for_category
+              managers = resolve_managers_for_category(task.serial_number, task.task_category)
+   └─ ORPHAN_ON_FINAL alert 경로 (Sprint 61-B) — 동일 1:1 교체
+   
+4. duration_validator.py (3곳 교체, ~6 LOC)
+   └─ L74:  get_managers_for_role(task.task_category)
+            → resolve_managers_for_category(task.serial_number, task.task_category)
+   └─ L100: 동일 패턴
+   └─ L179: get_managers_for_role(row['task_category'])
+            → resolve_managers_for_category(row['serial_number'], row['task_category'])
+   
+5. tests/backend/test_process_validator.py (NEW pytest, +95 LOC, M1+A2 반영, **TC 7개**)
+   ├─ ⭐ NEW fixture `seed_test_managers_for_partner` (옵션 D — 격리 매니저 promote)
+   ├─ test_resolve_managers_for_category_tms_gaia (TMS partner 정규)
+   ├─ test_resolve_managers_for_category_tms_dragon (DRAGON 회귀 — module_outsourcing=None 거동)
+   ├─ test_resolve_managers_for_category_mech (MECH partner 회귀)
+   ├─ test_resolve_managers_for_category_elec (ELEC partner 회귀)
+   ├─ test_resolve_managers_for_category_pi (role 매핑, GST 단일 회사)
+   ├─ test_resolve_managers_for_category_unknown_returns_empty (silent skip 거동)
+   └─ ⭐ test_duration_validator_tms_alert_creation_e2e (A2 — 원본 장애 경로 직접 재현)
+```
+
+**총 변경**: ~115 LOC touch / net +35 LOC.
+
+### 🛠️ 구현 (초안)
+
+#### Step 1 — `process_validator.py` 에 표준 함수 신설
+
+```python
+# process_validator.py 상단 (또는 적절한 위치)
+
+# task_category → partner_field 매핑 (4-22 HOTFIX-ALERT-SCHEDULER-DELIVERY 표준 규약 재사용)
+# 본래 scheduler_service._CATEGORY_PARTNER_FIELD 였던 것을 process_validator 로 이전
+_CATEGORY_PARTNER_FIELD = {
+    'TMS':  'module_outsourcing',
+    'MECH': 'mech_partner',
+    'ELEC': 'elec_partner',
+}
+
+
+def resolve_managers_for_category(serial_number: str, category: str) -> List[int]:
+    """
+    task_category → 해당 관리자 worker_id 리스트.
+    
+    Partner 기반 (TMS/MECH/ELEC) 또는 Role 기반 (PI/QI/SI) 자동 분기.
+    
+    원래 scheduler_service.py L37 의 _resolve_managers_for_category 였던 표준 패턴을
+    process_validator 로 이전 + public 화 (DRY, Sprint 4-22 HOTFIX 본의도).
+    
+    Args:
+        serial_number: S/N (예: 'GBWS-6798') — partner 조회용
+        category: task.task_category ('TMS', 'MECH', 'ELEC', 'PI', 'QI', 'SI', 'TM' 등)
+    
+    Returns:
+        매니저 worker_id 리스트. 매핑 실패/매니저 없음 시 빈 리스트.
+    """
+    if category in _CATEGORY_PARTNER_FIELD:
+        return get_managers_by_partner(serial_number, _CATEGORY_PARTNER_FIELD[category])
+    return get_managers_for_role(category)
+```
+
+#### Step 2 — `scheduler_service.py` 정리
+
+```python
+# Before (L28~46)
+_CATEGORY_PARTNER_FIELD = {
+    'TMS':  'module_outsourcing',
+    'MECH': 'mech_partner',
+    'ELEC': 'elec_partner',
+}
+
+def _resolve_managers_for_category(serial_number: str, category: str) -> list:
+    from app.services.process_validator import get_managers_by_partner, get_managers_for_role
+    if category in _CATEGORY_PARTNER_FIELD:
+        return get_managers_by_partner(serial_number, _CATEGORY_PARTNER_FIELD[category])
+    return get_managers_for_role(category)
+
+# After
+from app.services.process_validator import resolve_managers_for_category
+# (scheduler_service 내 모든 _resolve_managers_for_category 호출은 동일 시그니처라 그대로 작동)
+```
+
+scheduler_service 의 11개 job 안에서 `_resolve_managers_for_category(...)` 호출은 모두 `resolve_managers_for_category(...)` 로 1:1 교체 (private → public 이름 변경만).
+
+#### Step 2.5 — ⚠️ `task_service.py` L403 교체 (Codex M2 발견)
+
+```python
+# Before (L403, L410)
+from app.services.scheduler_service import _resolve_managers_for_category
+...
+managers = _resolve_managers_for_category(task.serial_number, task.task_category)
+
+# After
+from app.services.process_validator import resolve_managers_for_category
+...
+managers = resolve_managers_for_category(task.serial_number, task.task_category)
+```
+
+> ORPHAN_ON_FINAL alert (Sprint 61-B 도입) 경로. 누락됐던 호출자 — 부분 revert 시 ImportError 발생 가능 → Rollback 섹션에 명시.
+
+#### Step 3 — `duration_validator.py` 3곳 교체
+
+```python
+# L1 import 추가
+from app.services.process_validator import resolve_managers_for_category
+
+# L74 (REVERSE_COMPLETION)
+- managers = get_managers_for_role(task.task_category)
++ managers = resolve_managers_for_category(task.serial_number, task.task_category)
+
+# L100 (DURATION_EXCEEDED)
+- managers = get_managers_for_role(task.task_category)
++ managers = resolve_managers_for_category(task.serial_number, task.task_category)
+
+# L179 (UNFINISHED_AT_CLOSING — row 기반)
+- managers = get_managers_for_role(row['task_category'])
++ managers = resolve_managers_for_category(row['serial_number'], row['task_category'])
+```
+
+#### Step 4 — pytest TC 신규 (test_process_validator.py, **옵션 D 격리 fixture 채택**)
+
+> **fixture 재사용 + 옵션 D 격리 fixture 신설 (Codex M1 합의)**:
+> - 기존 활용: `tests/conftest.py` L1327~ TEST_WORKERS + L1318~ 6 모델 product fixture (TEST-GAIA-001 / TEST-DRAGON-001 / TEST-GALLANT-001 / TEST-MITHAS-001 / TEST-SDS-001 / TEST-SWS-001) + L709 `_create_product` helper
+> - **신규 fixture 1개**: `seed_test_managers_for_partner` — TEST_WORKERS 의 partner worker (FNI/BAT/TMS(M)/TMS(E)/P&S/C&A) 를 본 Sprint TC 만 일시 매니저로 promote (격리, 자동 teardown)
+> - 근거: TEST_WORKERS 원본은 `is_manager=False` (다른 테스트가 일반 worker 로 활용 가능) → 본 Sprint TC 만 매니저 필요 → 격리 fixture 가 안전 (Twin파파 결정 2026-04-28: "연쇄 반응 시퀀스 아니므로 격리 진행")
+
+##### NEW fixture — `seed_test_managers_for_partner`
+
+```python
+@pytest.fixture
+def seed_test_managers_for_partner(db_conn, seed_test_workers):
+    """본 Sprint 전용 — TEST_WORKERS partner worker 를 일시 매니저로 promote.
+    
+    적용 대상 company: FNI / BAT / TMS(M) / TMS(E) / P&S / C&A
+    teardown: 명시적 is_manager=FALSE 원복 (다른 테스트 영향 0 보장)
+    """
+    cur = db_conn.cursor()
+    cur.execute("""
+        UPDATE workers
+           SET is_manager = TRUE
+         WHERE company IN ('FNI', 'BAT', 'TMS(M)', 'TMS(E)', 'P&S', 'C&A')
+           AND email LIKE '%@test.com'
+           AND approval_status = 'approved'
+    """)
+    db_conn.commit()
+    
+    yield
+    
+    # teardown: 명시적 원복 (다른 테스트 영향 회피)
+    cur.execute("""
+        UPDATE workers
+           SET is_manager = FALSE
+         WHERE company IN ('FNI', 'BAT', 'TMS(M)', 'TMS(E)', 'P&S', 'C&A')
+           AND email LIKE '%@test.com'
+           AND name != 'GST관리자'
+    """)
+    db_conn.commit()
+```
+
+##### TC 본문 (각 partner-based TC 에 `seed_test_managers_for_partner` 추가)
+
+```python
+# 활용 fixture (모두 conftest.py 기존):
+#   - TEST-GAIA-001    (mech=FNI,  elec=TMS,   module=TMS)   ← TMS partner 매핑 검증
+#   - TEST-DRAGON-001  (mech=TMS,  elec=P&S,   module=None)  ← DRAGON tank_in_mech 회귀 검증
+#   - TEST-GALLANT-001 (mech=BAT,  elec=C&A,   module=None)  ← MECH partner 회귀
+#   - seed_workers     (FNI/BAT/TMS company 매니저 포함)
+
+def test_resolve_managers_for_category_tms_gaia(seed_test_workers, seed_test_products, seed_test_managers_for_partner):
+    """GAIA TMS task → module_outsourcing='TMS' 매니저 반환 (정규 케이스)"""
+    managers = resolve_managers_for_category('TEST-GAIA-001', 'TMS')
+    assert len(managers) > 0
+    # company='TMS' 매니저들 (is_manager=TRUE, approval_status='approved') 포함 검증
+
+def test_resolve_managers_for_category_tms_dragon(seed_test_workers, seed_test_products, seed_test_managers_for_partner):
+    """⭐ DRAGON 회귀 — module_outsourcing=None 인 DRAGON 의 TMS task 매니저 매핑 정확성.
+    CLAUDE.md L1100 'DRAGON: tank_in_mech=TRUE, 한 협력사가 탱크+MECH 일괄' 정합성 검증.
+    현재 구현 (`module_outsourcing` 매핑) 으로 DRAGON 케이스 동작 확인 — 빈 리스트 or fallback 거동 명시"""
+    managers = resolve_managers_for_category('TEST-DRAGON-001', 'TMS')
+    # module_outsourcing=None 이라 partner 매핑 결과 = 빈 리스트
+    # (DRAGON 정합성은 후속 BACKLOG `BUG-DRAGON-TMS-PARTNER-MAPPING` 으로 별건 처리)
+    assert isinstance(managers, list)
+
+def test_resolve_managers_for_category_mech(seed_test_workers, seed_test_products, seed_test_managers_for_partner):
+    """MECH task → mech_partner 매니저 반환 (회귀)"""
+    managers = resolve_managers_for_category('TEST-GALLANT-001', 'MECH')  # mech_partner='BAT'
+    assert len(managers) > 0
+    # company='BAT' 매니저 포함 검증
+
+def test_resolve_managers_for_category_elec(seed_test_workers, seed_test_products, seed_test_managers_for_partner):
+    """ELEC task → elec_partner 매니저 반환 (회귀)"""
+    managers = resolve_managers_for_category('TEST-GALLANT-001', 'ELEC')  # elec_partner='C&A'
+    assert len(managers) > 0
+
+def test_resolve_managers_for_category_pi(seed_test_workers):
+    """PI task → role='PI' 매니저 반환 (role 기반 fallback)"""
+    managers = resolve_managers_for_category('any-sn', 'PI')
+    # role='PI' AND is_manager=TRUE 매니저 검증 (sn 무시)
+    assert isinstance(managers, list)
+
+def test_resolve_managers_for_category_unknown_returns_empty():
+    """알 수 없는 category → role 기반 fallback → enum 없으면 빈 리스트 (silent skip 거동 유지)"""
+    managers = resolve_managers_for_category('any-sn', 'UNKNOWN')
+    assert managers == []
+
+
+# ⭐ Codex A2 — 원본 장애 경로 직접 재현 e2e TC
+def test_duration_validator_tms_alert_creation_e2e(seed_test_workers, seed_test_products, seed_test_managers_for_partner):
+    """원본 장애 경로 직접 재현 — duration_validator.validate_duration() 호출 시
+    TMS task → DURATION_EXCEEDED/REVERSE_COMPLETION 알람이 정상 생성되는지 검증.
+    
+    Before fix: get_managers_for_role('TMS') → enum 실패 → silent skip → alert_logs INSERT 0건
+    After fix:  resolve_managers_for_category(sn, 'TMS') → module_outsourcing 매니저 → alert_logs INSERT >0건
+    
+    helper-only TC 가 잡지 못하는 회귀 경로 보강."""
+    from app.services.duration_validator import validate_duration
+    from app.models.alert_log import get_alerts_by_serial_number
+    
+    # TMS task 셋업 — duration > 14h (DURATION_EXCEEDED trigger)
+    task_detail_id = _setup_tms_task_with_long_duration(sn='TEST-GAIA-001', duration_hours=15)
+    
+    # validate_duration() 직접 호출
+    result = validate_duration(task_detail_id)
+    
+    # 알람이 실제로 생성됐는지 검증 (silent skip 회귀 방지)
+    assert result['alerts_created'] > 0
+    alerts = get_alerts_by_serial_number(sn='TEST-GAIA-001')
+    duration_alerts = [a for a in alerts if a.alert_type == 'DURATION_EXCEEDED']
+    assert len(duration_alerts) > 0
+    # target_worker_id 가 module_outsourcing='TMS' 매니저인지 verify
+```
+
+**TC 7개 분류** (Codex M1 fixture 정합 + A2 e2e 회귀 반영):
+- 정규 partner 매핑: TMS-GAIA / MECH / ELEC (3 TC)
+- DRAGON 회귀: 1 TC (advisory 2 흡수 — `module_outsourcing=None` 거동 명시)
+- role 매핑 fallback: PI (1 TC)
+- 미정의 category 안전 거동: 1 TC
+- ⭐ e2e 원본 장애 재현 (Codex A2): 1 TC (validate_duration 직접 호출 + alert_logs INSERT 검증)
+
+### 🚦 Pre-deploy Gate (Codex 이관 후)
+
+| # | 항목 | 확인 |
+|:---:|:---|:---:|
+| 1 | `process_validator.py` 의 신규 `resolve_managers_for_category` public 함수 작성 | ☐ |
+| 2 | `scheduler_service.py` 의 `_resolve_managers_for_category` 호출 11곳 모두 새 함수로 교체 | ☐ |
+| 3 | `duration_validator.py` L74/L100/L179 새 함수 호출로 교체 | ☐ |
+| 4 | ⚠️ **`task_service.py` L403-410 의 `_resolve_managers_for_category` import 도 새 함수로 교체** (Codex M2) | ☐ |
+| 5 | `task_service.py` L583 의 `get_managers_for_role(target_source)` — 'PI'/'QI' 등 role 기반이라 변경 X 확인 | ☐ |
+| 6 | `process_validator.py` L93/L113 의 'MECH'/'ELEC' 하드코딩 — TMS 무관, 변경 X | ☐ |
+| 7 | `_CATEGORY_PARTNER_FIELD` dict 가 scheduler_service 가 아닌 process_validator 에 위치 | ☐ |
+| 8 | 신규 pytest TC **7개** 작성 + GREEN (M1 fixture 정합 + A2 e2e 회귀, 옵션 D 격리 fixture 포함) | ☐ |
+| 9 | 기존 pytest 회귀 (test_scheduler / test_duration_validator / test_task_service) GREEN | ☐ |
+| 10 | Codex 이관 결과 합의 + Opus 리뷰 완료 | ☐ |
+
+### 🔍 Post-deploy 검증
+
+#### 즉시 (배포 직후 1시간)
+
+```
+Railway logs grep:
+  "Failed to get managers for role=TMS"   ← 0건이어야 정상
+  "get_managers_by_partner: sn=*, module_outsourcing=*, company=*, managers=[*]"
+                                          ← TMS task 시 정상 호출 로그
+
+Sentry 대시보드 → PYTHON-FLASK-4 issue:
+  events 카운트 증가 멈춤 확인
+```
+
+#### 매시간 정각 후 (UTC 18:00 / 19:00 / ... 7건)
+
+```
+duration_validator 3종 알람 모두 정상 도착 (L74 REVERSE_COMPLETION + L100 DURATION_EXCEEDED + L179 UNFINISHED_AT_CLOSING):
+  - TMS task → module_outsourcing 매니저 정상 도착
+  - MECH task → mech_partner 매니저 정상 도착 (회귀 검증)
+  - ELEC task → elec_partner 매니저 정상 도착
+  - PI/QI/SI task → role 기반 매니저 정상 도착
+
+Sentry events 추세:
+  배포 전: 31 events / escalating
+  배포 후 1h: 31 (증가 없음) → 24h: 31 → 1주: 31 (정착)
+  → COMPLETED
+```
+
+#### 1주 후 D+7 종합 판정
+
+```
+Sentry PYTHON-FLASK-4 events 누적 카운트:
+  배포 전: 31 events
+  배포 후 D+7: 31 (그대로)
+  → 본 Sprint 효과 정량 입증 → COMPLETED
+```
+
+### 📦 Rollback (Codex M2 정정 — 5 파일 + 부분 revert 위험)
+
+```
+전체 revert (안전):
+  git revert <commit-sha>
+  → 5 파일 원복 (process_validator + scheduler + task_service + duration_validator + tests)
+  → Railway 자동 재배포 ~1분
+  → 이전 동작 (TMS enum cast 실패, silent skip) 복귀
+  
+위험:
+  - Sentry 31 events 다시 증가 시작
+  - 부분 revert 절대 금지 → ImportError 발생 가능
+    예) process_validator.py 만 revert → scheduler_service / duration_validator / task_service 가
+        존재하지 않는 resolve_managers_for_category import 시도 → 즉시 ModuleNotFoundError
+        → 앱 boot 실패 → Railway 503 폭주
+```
+
+**부분 revert 검토 필수**: Pre-deploy Gate #1~#4 가 한 commit 안에서 atomic 하게 처리되어야 함. 분리 commit 시 중간 단계에서 ImportError. 코드 변경 0 (refactor only) 이라 DB 영향 없음, 다만 import 경계 5 파일 atomic 보장 필수.
+
+### 📋 BACKLOG 동기화
+
+```
+FIX-PROCESS-VALIDATOR-TMS-MAPPING-20260428          🔴 P1  →  ✅ COMPLETED (v2.10.11, 2026-04-28, 옵션 D-2)
+  (옛 ID `-ROLE-MAPPING-20260427` 통일 폐기)
+  ├─ process_validator.resolve_managers_for_category 신규 (public + DRY)
+  ├─ scheduler_service _resolve_managers_for_category 흡수 (-15 LOC)
+  ├─ task_service.py L403-410 import 교체 (Codex M2 — 5번째 파일)
+  ├─ duration_validator 3곳 표준 함수 호출 통일
+  ├─ pytest TC 7개 GREEN + 격리 fixture seed_test_managers_for_partner (옵션 D)
+  └─ 회귀 0건 (test_duration_validator 1 fail = BUG-DURATION-VALIDATOR-API-FIELD 4-22 별건)
+
+### Codex 2 라운드 합의 trail
+
+- 라운드 1: M=2 (fixture / Rollback 5파일) + A=2 (DRAGON / e2e 회귀) + N=2 → 모두 반영
+- 라운드 2: 본 Sprint 후 pytest test_duration_validator 1 fail Q1/Q2 → A 라벨 합의 → 본 Sprint 회귀 0건 + BUG-DURATION-VALIDATOR-API-FIELD 별건 확정 + 별도 Sprint 처리
+```
+
+### 🤝 후속 Sprint 연계
+
+```
+PROACTIVE-AUDIT-GET-MANAGERS-FOR-ROLE-USAGE       🟢 P3 (선택, 1h)
+  └─ get_managers_for_role 잔여 호출자 (process_validator L93/L113 + task_service L583) 검토
+     - L93/L113: 'MECH'/'ELEC' 하드코딩 — task category 와 무관, 그대로 유지 OK
+     - L583: target_source='PI'/'QI' 등 role 기반 변수 — partner 변환 불필요, 그대로 유지 OK
+  → 결론: 현재 호출자 모두 정상. audit 만 기록.
+
+REFACTOR-SCHEDULER-SPLIT (이미 BACKLOG)              🟡 P2
+  └─ scheduler_service.py 분할 시 _CATEGORY_PARTNER_FIELD 가 이미 process_validator 로 이전됨
+  → DRY 원칙 적용된 상태에서 분할 진행 (이번 Sprint 가 선행 효과)
+
+⭐ BUG-DRAGON-TMS-PARTNER-MAPPING-20260428         🟢 P3 (Codex A1, prod 실측 후 우선순위 재평가)
+  └─ DRAGON 모델은 MECH 에 PRESSURE_TEST 가 있고 TMS 자체 task 가 없음 (task_seed.py L88~92)
+  → DRAGON 의 task_category='TMS' task 가 prod 에 존재하면 module_outsourcing 매핑 적정성 검증 필요
+  → 배포 후 즉시 prod DB 실측:
+     SELECT COUNT(*) FROM app_task_details td
+       JOIN qr_registry qr USING (serial_number)
+       JOIN plan.product_info pi USING (serial_number)
+       WHERE td.task_category='TMS' AND pi.model LIKE 'DRAGON%';
+     → 0건이면 P3 유지 / >0건이면 P1/P2 격상 + fix Sprint 즉시 등록
+```
+
+### 📝 사후 기록 양식 (배포 후)
+
+```
+✅ 배포 완료 (2026-04-XX HH:MM KST)
+  ├─ commit: <sha>
+  ├─ Railway logs: "Failed to get managers for role=TMS" 0건 확인 ✓
+  ├─ Sentry PYTHON-FLASK-4 events: 31 (이후 증가 없음) ✓
+  
+1시간 / 24h / 1주 관찰:
+  ├─ T+1h:   Sentry events ___ (기대 31 그대로)
+  ├─ T+24h:  Sentry events ___
+  └─ T+1주:  Sentry events ___ → COMPLETED 판정
+
+회귀 검증:
+  ├─ MECH task UNFINISHED_AT_CLOSING → mech_partner 매니저 도달 (Y/N): ___
+  ├─ ELEC task UNFINISHED_AT_CLOSING → elec_partner 매니저 도달 (Y/N): ___
+  ├─ PI/QI/SI task UNFINISHED_AT_CLOSING → role 매니저 도달 (Y/N): ___
+  └─ TMS task UNFINISHED_AT_CLOSING → module_outsourcing 매니저 도달 (Y/N): ___ ⭐ 핵심
+
+OPEN → COMPLETED 전환
+```
+
+---
