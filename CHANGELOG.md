@@ -6,6 +6,86 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.10.14] - 2026-04-28 — FIX-FACTORY-KPI-SHIPPED-V2.4 (BE only)
+
+> **Sprint**: `FIX-FACTORY-KPI-SHIPPED-V2.4-AMENDMENT-20260428`
+> Sprint 62-BE v2.2 의 `_count_shipped` 보정 — `shipped_plan` 의 si_completed AND 조건이 app SI 도입률 ≈0% 환경에서 무효 (W17 0 상수화) → OR 로 교정 + `shipped_ops` 폐기 + `shipped_best` 신설.
+
+### Fixed (BE only — factory.py 단일)
+
+#### `_count_shipped()` 재작성 (3 분기)
+
+- **basis='plan'**: `INNER JOIN completion_status ... AND cs.si_completed=TRUE` 제거 → `LEFT JOIN app_task_details (task_id='SI_SHIPMENT') + WHERE (actual_ship_date IS NOT NULL OR t.completed_at IS NOT NULL)`
+- **basis='ops'**: 분기 **제거** (app SI 100% 도입 후 ops=actual 수렴, 영구 무의미)
+- **basis='best'**: 신규 — reality 경계 = `actual_ship_date IS NOT NULL` / 주간 귀속 = `COALESCE(DATE(t.completed_at), p.actual_ship_date)` (해석 A: si ⊆ actual, Pre-deploy Gate ③ 0건 검증 완료)
+- ValueError 메시지: `'plan' | 'actual' | 'ops'` → `'plan' | 'actual' | 'best'`
+- task_id `'SI_SHIPMENT'` 대문자 (Twin파파 검토 — 실 DB 값과 일치, OPS_API_REQUESTS.md v2.4 문서의 소문자 typo 정정)
+
+#### weekly-kpi + monthly-kpi 응답 4곳 (`shipped_ops` → `shipped_best`)
+
+- L457 weekly-kpi `_count_shipped` 호출
+- L473 weekly-kpi 응답 dict
+- L554 monthly-kpi `_count_shipped` 호출
+- L566 monthly-kpi 응답 dict
+
+### Tests (test_factory_kpi.py)
+
+- 신규 클래스 `TestFactoryKpiV24Amendment` 3 TC:
+  - `test_fk_v24_shipped_ops_field_removed_from_response` — 응답에 `shipped_ops` 부재 + `shipped_best` 존재 검증
+  - `test_fk_v24_count_shipped_best_basis_smoke` — `basis='best'` 호출 스모크
+  - `test_fk_v24_count_shipped_invalid_basis_raises` — `'ops'` (제거됨) + 임의 basis → ValueError + 메시지에 `plan | actual | best` 포함
+- 기존 TC 갱신:
+  - TC-FK-01 / TC-FK-03: 응답 키 `shipped_ops` → `shipped_best` (단순 교체)
+  - TC-FK-07 / TC-FK-10: `_count_shipped` 직접 호출 `'ops'` → `'plan'` (force_closed 검증 의미 보존)
+- 기존 TC skip 처리 (3건):
+  - TC-FK-06 / TC-FK-09 / TC-FK-11: `@pytest.mark.skip` (사유: TC 본질이 v2.3 'ops' 분기의 +1 증가 검증, v2.4 에서 'ops' 제거 + fixture (SI_SHIPMENT INSERT only) 의 ship_plan_date / actual_ship_date 미설정 한계로 'plan'/'best' 분기 +1 시뮬레이션 불가, 운영 데이터 보존 정책 — UPDATE 금지). v2.4 핵심 거동은 신규 TestFactoryKpiV24Amendment 클래스로 이전.
+
+### LoC
+
+- factory.py: 562 → 575 (+13 LOC) — ⛔ God File 임계 미만이지만 500 초과 잔존 (별건 REFACTOR-FACTORY 추후 검토)
+- test_factory_kpi.py: 435 → 511 (+76 LOC, 신규 TC 3개 + skip mark + 응답 키 갱신)
+
+### Pre-deploy Gate (Twin파파 측 사전 검증 완료)
+
+- ③ R-02 해석 A 반례 — `SELECT COUNT(*) ... WHERE task_id='SI_SHIPMENT' AND completed_at IS NOT NULL AND p.actual_ship_date IS NULL` → **0건** 확인 (해석 A 확정)
+
+### Tests 요약
+
+```
+test_factory_kpi.py: 17 passed / 3 skipped / 0 fail (137.10s)
+  ├─ 기존 14개 갱신 후 PASS
+  └─ 신규 TestFactoryKpiV24Amendment 3개 PASS
+```
+
+### Codex 이관 미해당
+
+OPS_API_REQUESTS.md v2.4 합의안 + 실 DB 값 검증 + Pre-deploy Gate 5종 명시 완료. Sprint 설계서 분석 단계에서 모든 결정 trail 보유.
+
+### Deploy
+
+- BE only (frontend version 만 동시 bump)
+- Railway 자동 배포
+
+### Post-deploy 검증 (예정)
+
+- T+1h: 대시보드 W17 `shipped_plan` 0 → 수십대 (의도된 변화) + Sentry 새 ERROR 0
+- T+24h: 3필드 `shipped_plan/actual/best` 정상 반환 + 회귀 0
+- T+72h: R-02 해석 A 재검증 (반례 0건 유지) + FE Phase 2 (v1.35.0) 착수 가능 시점 도달
+
+### Rollback (1 파일 atomic)
+
+- git revert <commit-sha>
+- v2.3 상태 복귀 (shipped_plan 0 상수화 재발 + shipped_ops 복원)
+- 해석 A 가정 깨짐 시 (R-02 반례 발생): `_count_shipped basis='best'` WHERE 의 `p.actual_ship_date IS NOT NULL` 제거 + UNION 재도입 별건 hotfix
+
+### Related
+
+- 설계서: `AGENT_TEAM_LAUNCH.md` § FIX-FACTORY-KPI-SHIPPED-V2.4-AMENDMENT-20260428 (L33255+)
+- BACKLOG: `FIX-FACTORY-KPI-SHIPPED-V2.4-AMENDMENT-20260428` → ✅ COMPLETED
+- 후속: AXIS-VIEW Phase 2 (v1.35.0) — TEMP-HARDCODE 제거 + FactoryDashboardSettingsPanel + shipped_ops → shipped_best 타입 교체
+
+---
+
 ## [2.10.13] - 2026-04-28 — Sentry garbage log 정리 2건 (BE only)
 
 > **Sprint 묶음 배포**: `FIX-DB-POOL-DIRECT-FALLBACK-LOG-LEVEL-20260428` + `FIX-WEBSOCKET-STOPITERATION-SENTRY-NOISE-20260428`

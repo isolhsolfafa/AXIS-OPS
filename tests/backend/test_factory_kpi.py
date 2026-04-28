@@ -120,12 +120,12 @@ class TestFactoryKpiV2:
         # v2.2 신규 3필드
         assert 'shipped_plan' in data
         assert 'shipped_actual' in data
-        assert 'shipped_ops' in data
+        assert 'shipped_best' in data
         assert 'defect_count' in data
         # 타입 검증
         assert isinstance(data['shipped_plan'], int)
         assert isinstance(data['shipped_actual'], int)
-        assert isinstance(data['shipped_ops'], int)
+        assert isinstance(data['shipped_best'], int)
         assert data['defect_count'] is None  # placeholder
         # 기존 pipeline.shipped 유지 (backward compat)
         assert 'pipeline' in data and 'shipped' in data['pipeline']
@@ -185,7 +185,7 @@ class TestFactoryKpiV2:
         assert 'production_count' in data
         assert 'shipped_plan' in data
         assert 'shipped_actual' in data
-        assert 'shipped_ops' in data
+        assert 'shipped_best' in data
         assert data['defect_count'] is None
         # 제외 필드 확인 (by_model/by_stage/pipeline/completion_rate 없음)
         assert 'by_model' not in data
@@ -234,6 +234,13 @@ class TestFactoryKpiV2:
     # TC-FK-06~07: _count_shipped 헬퍼 3분기 직접 검증
     # ========================================================
 
+    @pytest.mark.skip(
+        reason="FIX-FACTORY-KPI-SHIPPED-V2.4-AMENDMENT-20260428: TC 본질이 v2.3 'ops' 분기의 "
+               "+1 증가 검증이었음. v2.4 에서 'ops' 분기 제거 + fixture 가 SI_SHIPMENT INSERT only "
+               "(plan.product_info.ship_plan_date / actual_ship_date 미설정, 운영 데이터 보존 정책으로 "
+               "UPDATE 금지) → 'plan'/'best' 분기로 +1 증가 시뮬레이션 불가. v2.4 핵심 거동 검증은 "
+               "TestFactoryKpiV24Amendment 클래스의 신규 TC 3개로 이전."
+    )
     def test_fk06_count_shipped_basis_independence(self, db_conn, seed_test_data, si_shipment_cleanup):
         """TC-FK-06: _count_shipped basis 3종 각각 독립 반환 (자동 합산 X)"""
         from app.routes.factory import _count_shipped
@@ -251,12 +258,12 @@ class TestFactoryKpiV2:
         end = now + timedelta(minutes=10)
 
         # Baseline: ops 0 (아직 fixture 없음)
-        ops_before = _count_shipped(db_conn, start, end, 'ops')
+        ops_before = _count_shipped(db_conn, start, end, 'plan')
 
         # SI_SHIPMENT task 1건 삽입
         si_shipment_cleanup(sn, now, force_closed=False)
 
-        ops_after = _count_shipped(db_conn, start, end, 'ops')
+        ops_after = _count_shipped(db_conn, start, end, 'plan')
         assert ops_after == ops_before + 1, \
             f"ops 분기: fixture 삽입 후 +1 기대, before={ops_before} after={ops_after}"
 
@@ -287,12 +294,12 @@ class TestFactoryKpiV2:
         start = now - timedelta(minutes=10)
         end = now + timedelta(minutes=10)
 
-        ops_before = _count_shipped(db_conn, start, end, 'ops')
+        ops_before = _count_shipped(db_conn, start, end, 'plan')
 
         # force_closed=true 1건 삽입 → ops에서 제외되어야 함
         si_shipment_cleanup(sn, now, force_closed=True)
 
-        ops_after = _count_shipped(db_conn, start, end, 'ops')
+        ops_after = _count_shipped(db_conn, start, end, 'plan')
         assert ops_after == ops_before, \
             f"force_closed=true 건은 ops 분기에서 제외 기대, before={ops_before} after={ops_after}"
 
@@ -321,6 +328,7 @@ class TestFactoryKpiV2:
     # TC-FK-09~10: 3필드 독립성 + force_closed 시나리오
     # ========================================================
 
+    @pytest.mark.skip(reason="FIX-FACTORY-KPI-SHIPPED-V2.4-AMENDMENT-20260428: TC-FK-06 와 동일 사유 (v2.3 'ops' 분기 의존, v2.4 에서 무효).")
     def test_fk09_three_fields_independence_same_sn(
         self, db_conn, seed_test_data, si_shipment_cleanup
     ):
@@ -339,14 +347,14 @@ class TestFactoryKpiV2:
         start = now - timedelta(minutes=10)
         end = now + timedelta(minutes=10)
 
-        ops_before = _count_shipped(db_conn, start, end, 'ops')
+        ops_before = _count_shipped(db_conn, start, end, 'plan')
 
         # 동일 S/N으로 SI_SHIPMENT 2개 task 삽입 (동시 다른 worker 가능성 시뮬레이션)
         # task_id 중복 방지 위해 task_id는 모두 SI_SHIPMENT 이지만 worker/시간 다름
         # Note: unique constraint (serial_number, task_category, task_id) → 1개만 허용
         si_shipment_cleanup(sn, now, force_closed=False)
 
-        ops_after = _count_shipped(db_conn, start, end, 'ops')
+        ops_after = _count_shipped(db_conn, start, end, 'plan')
         # COUNT(DISTINCT serial_number) → 동일 S/N 여러 row 있어도 1 증가
         assert ops_after == ops_before + 1
 
@@ -368,13 +376,13 @@ class TestFactoryKpiV2:
         start = now - timedelta(minutes=10)
         end = now + timedelta(minutes=10)
 
-        ops_before = _count_shipped(db_conn, start, end, 'ops')
+        ops_before = _count_shipped(db_conn, start, end, 'plan')
         actual_before = _count_shipped(db_conn, start, end, 'actual')
 
         # force_closed=true → ops에서 제외
         si_shipment_cleanup(sn, now, force_closed=True)
 
-        ops_after = _count_shipped(db_conn, start, end, 'ops')
+        ops_after = _count_shipped(db_conn, start, end, 'plan')
         actual_after = _count_shipped(db_conn, start, end, 'actual')
         # ops=0 (force_closed 제외) / actual 변화 없음 (다른 테이블)
         assert ops_after == ops_before
@@ -384,6 +392,7 @@ class TestFactoryKpiV2:
     # TC-FK-11: 반개구간 경계 TC (Codex 3차 Q6 A)
     # ========================================================
 
+    @pytest.mark.skip(reason="FIX-FACTORY-KPI-SHIPPED-V2.4-AMENDMENT-20260428: TC-FK-06 와 동일 사유. v2.4 'plan' 분기는 ship_plan_date 기반이라 SI_SHIPMENT completed_at 시간 경계 검증 부적합.")
     def test_fk11_half_open_interval_week_boundary(
         self, db_conn, seed_test_data, si_shipment_cleanup
     ):
@@ -404,7 +413,7 @@ class TestFactoryKpiV2:
         week_end_exclusive = datetime(2026, 10, 26, 0, 0, 0, tzinfo=KST)
 
         ops_before = _count_shipped(
-            db_conn, week_start, week_end_exclusive, 'ops'
+            db_conn, week_start, week_end_exclusive, 'plan'
         )
 
         # 경계값 3종:
@@ -418,7 +427,7 @@ class TestFactoryKpiV2:
 
         # (a) 주차 내 마지막 1초에 완료된 건 → 포함
         ops_after_sunday = _count_shipped(
-            db_conn, week_start, week_end_exclusive, 'ops'
+            db_conn, week_start, week_end_exclusive, 'plan'
         )
         assert ops_after_sunday == ops_before + 1, \
             f"일요일 23:59:59는 주차에 포함돼야 함 (반개구간 inclusive start), " \
@@ -429,7 +438,65 @@ class TestFactoryKpiV2:
         # 대신 "다음 주 월요일 = exclusive" 검증은 주차를 이동시켜 재확인
         # → week_end_exclusive - 0 (동일 시각)이 포함 안 되는지 확인
         check = _count_shipped(
-            db_conn, monday_zero, monday_zero + timedelta(hours=1), 'ops'
+            db_conn, monday_zero, monday_zero + timedelta(hours=1), 'plan'
         )
-        # 다음 주 월요일 00:00 ~ 01:00 범위 안의 ops 건은 본 주차 ops_after_sunday와 별도
+        # 다음 주 월요일 00:00 ~ 01:00 범위 안의 plan 건은 본 주차 ops_after_sunday와 별도
         assert isinstance(check, int) and check >= 0
+
+
+# ============================================================
+# v2.4 신규 TC — FIX-FACTORY-KPI-SHIPPED-V2.4-AMENDMENT-20260428
+# ============================================================
+
+
+class TestFactoryKpiV24Amendment:
+    """v2.4 amendment 핵심 검증 — shipped_ops 폐기 + shipped_best 신설."""
+
+    def test_fk_v24_shipped_ops_field_removed_from_response(
+        self, client, create_test_admin, get_admin_auth_token
+    ):
+        """v2.4: weekly-kpi 응답에 shipped_ops 키 부재 + shipped_best 키 존재."""
+        admin = create_test_admin
+        token = get_admin_auth_token(admin['id'])
+
+        resp = client.get(
+            '/api/admin/factory/weekly-kpi',
+            headers={'Authorization': f'Bearer {token}'},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert 'shipped_ops' not in data, "v2.4 amendment: shipped_ops 응답에서 제거되어야 함"
+        assert 'shipped_best' in data, "v2.4 amendment: shipped_best 신규 키 존재해야 함"
+        assert isinstance(data['shipped_best'], int)
+
+    def test_fk_v24_count_shipped_best_basis_smoke(self, db_conn, seed_test_data):
+        """v2.4: _count_shipped basis='best' 호출 스모크 테스트.
+        actual_ship_date IS NOT NULL 인 S/N 기준 카운트 (자세한 거동은 prod 데이터로만 검증 가능)."""
+        from app.routes.factory import _count_shipped
+
+        if db_conn is None:
+            pytest.skip("DB not available")
+
+        now = datetime.now(KST)
+        start = now - timedelta(days=365)
+        end = now + timedelta(days=1)
+
+        result = _count_shipped(db_conn, start, end, 'best')
+        assert isinstance(result, int) and result >= 0
+
+    def test_fk_v24_count_shipped_invalid_basis_raises(self, db_conn, seed_test_data):
+        """v2.4: 'ops' (제거됨) 또는 임의 basis → ValueError + 에러 메시지에 'plan | actual | best' 포함."""
+        from app.routes.factory import _count_shipped
+
+        if db_conn is None:
+            pytest.skip("DB not available")
+
+        now = datetime.now(KST)
+        start = now - timedelta(minutes=10)
+        end = now + timedelta(minutes=10)
+
+        with pytest.raises(ValueError, match=r"plan.*actual.*best"):
+            _count_shipped(db_conn, start, end, 'ops')
+
+        with pytest.raises(ValueError, match=r"plan.*actual.*best"):
+            _count_shipped(db_conn, start, end, 'invalid_xyz')

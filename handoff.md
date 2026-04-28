@@ -1,11 +1,77 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-04-28 17:30 KST (Sentry 잡음 정리 2 Sprint v2.10.13 묶음 배포)
+> 마지막 업데이트: 2026-04-28 18:30 KST (FIX-FACTORY-KPI-SHIPPED-V2.4 v2.10.14 배포)
 
 ---
 
-## 🟢 2026-04-28 세션 요약 (4/4) — Sentry garbage log 정리 v2.10.13 (2 Sprint 묶음)
+## 🟢 2026-04-28 세션 요약 (5/5) — FIX-FACTORY-KPI-SHIPPED-V2.4 v2.10.14
+
+> **한 줄 요약**: Sprint 62-BE v2.2 의 `_count_shipped` 3 분기 보정 — `shipped_plan` AND→OR (W17 0 상수화 해소) + `shipped_ops` 폐기 + `shipped_best` 신설. Pre-deploy Gate ③ R-02 반례 0건 검증 완료. pytest 17 passed / 3 skipped (v2.3 'ops' 의존 TC 무효).
+
+### 코드 변경 (v2.10.14, BE only — factory.py 단일)
+
+| 분기 | Before (v2.3) | After (v2.4) |
+|---|---|---|
+| `plan` | `INNER JOIN cs ON ... AND cs.si_completed=TRUE` | `LEFT JOIN app_task_details (task_id='SI_SHIPMENT') + WHERE (actual_ship_date IS NOT NULL OR t.completed_at IS NOT NULL)` |
+| `ops` | `app_task_details task_id='SI_SHIPMENT' completed_at` | **제거** (app SI 100% 후 ops=actual 수렴) |
+| `best` | (없음) | **신규** — `WHERE actual_ship_date IS NOT NULL` + 주간 귀속 `COALESCE(DATE(t.completed_at), p.actual_ship_date)` |
+
+응답 4곳 (weekly-kpi L457/L473 + monthly-kpi L554/L566): `shipped_ops` → `shipped_best`.
+
+### Pre-deploy Gate ③ R-02 해석 A 반례 검증 완료
+
+```
+SELECT COUNT(*) FROM app_task_details t
+LEFT JOIN plan.product_info p ON t.serial_number = p.serial_number
+WHERE t.task_id='SI_SHIPMENT' AND t.completed_at IS NOT NULL
+  AND COALESCE(t.force_closed, FALSE) = FALSE
+  AND p.actual_ship_date IS NULL;
+→ 0건 (Twin파파 실측, 2026-04-28)
+→ 해석 A (si ⊆ actual) 확정, v2.4 그대로 진행 OK
+```
+
+### Twin파파 검토 1건 반영
+
+OPS_API_REQUESTS.md v2.4 문서 SQL 의 `task_id='si_shipment'` (소문자) → `'SI_SHIPMENT'` (대문자, 실 DB 값) 4곳 정정. 문서 그대로 구현 시 LEFT JOIN 매칭 0건 → shipped_plan/best 영구 0 (의도와 정반대).
+
+### pytest 결과
+
+```
+test_factory_kpi.py: 17 passed / 3 skipped / 0 fail (137.10s)
+  ✅ 신규 TestFactoryKpiV24Amendment 3 TC (응답 키 / best 스모크 / invalid basis)
+  ✅ 기존 14 TC 갱신 후 PASS (응답 키 ops→best, _count_shipped 'ops'→'plan')
+  ⏸ 3 TC skip (TC-FK-06/09/11): v2.3 'ops' 분기 의존 TC, v2.4 에서 fixture 한계로 TC 본질 무효
+     → 운영 데이터 보존 정책 (plan.product_info UPDATE 금지) 으로 actual_ship_date 시뮬레이션 불가
+     → v2.4 핵심 거동은 TestFactoryKpiV24Amendment 클래스로 이전
+```
+
+### LoC
+
+- factory.py: 562 → 575 (+13 LOC, God File 잔존 but 별건 REFACTOR-FACTORY)
+- test_factory_kpi.py: 435 → 511 (+76 LOC)
+
+### Sprint 설계서 vs 실제 변경 차이
+
+| 항목 | Sprint 설계서 권장 | 실제 |
+|---|---|---|
+| TC 개수 | 14개 (8 재정렬 + 6 신규) | 17 passed (14 기존 + 3 신규) + 3 skip — fixture 한계로 신규 TC 일부 단순화 |
+| Codex 이관 | ❌ 불필요 | ❌ 불필요 (Pre-deploy Gate ③ 0건 검증 완료) |
+
+### Post-deploy 검증 (예정)
+
+- **T+1h**: 대시보드 W17 `shipped_plan` 0 → 수십대 (의도된 변화) + Sentry 새 ERROR 0
+- **T+24h**: 3필드 `shipped_plan/actual/best` 정상 반환 + 회귀 0
+- **T+72h**: R-02 해석 A 재검증 (반례 0건 유지) + FE Phase 2 (v1.35.0) 착수 가능 시점 도달
+
+### BACKLOG 동기화
+
+- `FIX-FACTORY-KPI-SHIPPED-V2.4-AMENDMENT-20260428` → ✅ COMPLETED
+- 후속: AXIS-VIEW Phase 2 (v1.35.0) 착수 가능 (별 repo)
+
+---
+
+## 🟢 2026-04-28 세션 요약 (4/5) — Sentry garbage log 정리 v2.10.13 (2 Sprint 묶음)
 
 > **한 줄 요약**: Sentry 대시보드 잡음 분리 — (1) db_pool direct fallback ERROR (22 events) → warning 강등 + counter (2) flask-sock wsgi StopIteration (302 events) → before_send hook 으로 drop. 진짜 ERROR 추적성 회복. pytest 7/7 PASS.
 

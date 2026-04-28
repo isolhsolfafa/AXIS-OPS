@@ -33252,6 +33252,380 @@ OPEN → COMPLETED 전환
 
 ---
 
+## 🔧 FIX-FACTORY-KPI-SHIPPED-V2.4-AMENDMENT-20260428 프롬프트 — Sprint 62-BE v2.4 (`_count_shipped` plan AND→OR + `ops` 폐기 + `best` 신설) (🟡 P2)
+
+> **등록일**: 2026-04-28 KST (4-23~24 논의 → 4-28 Sprint 화)
+> **Sprint ID**: `FIX-FACTORY-KPI-SHIPPED-V2.4-AMENDMENT-20260428`
+> **BACKLOG 연계**: `FIX-FACTORY-KPI-SHIPPED-V2.4-AMENDMENT-20260428` (4-28 신규 등록)
+> **선행 Sprint**: Sprint 62-BE v2.2 (배포 완료 — `_count_shipped` 단일 함수 + 3 basis 도입) / v2.3 (배포 완료 — weekly-kpi WHERE 절 `ship_plan_date` → `finishing_plan_end` 교정)
+> **우선순위**: 🟡 P2 (사용자 영향 있음 — `shipped_plan` 상수 0 으로 W17 KPI 무의미 + ops 토글 혼란 해소)
+> **상태**: 🔴 OPEN (즉시 착수 가능 — 분석 완료, OPS_API_REQUESTS.md v2.4 합의안 + Twin파파 검토 1건 반영)
+> **예상 소요**: 1h (BE ~10 LOC net + 사전 검증 SQL 5종 5분 + pytest TC 14개 +60 LOC + 검증)
+> **선행 의존성**: 없음 (BE 단독 배포 가능, FE Phase 2 v1.35.0 은 본 Sprint 배포 후 진행)
+> **병행 가능**: v2.10.13 묶음 배포 후보였던 FIX-DB-POOL-DIRECT-FALLBACK + FIX-WEBSOCKET-STOPITERATION 와 코드 영역 무관 (factory.py vs db_pool/__init__) — 단독 또는 묶음 모두 가능
+> **충돌 위험**: 없음 (`factory.py` 단일 함수 + 응답 4곳 교체, 다른 라우트/모델 무수정)
+> **트리거 근거**: 2026-04-23 W17 검증 쿼리 결과 `shipped_plan=0` 상수화 → `cs.si_completed=TRUE` AND 조건이 app SI 도입률 ≈0% 환경에서 무효 + 4-23~24 Twin파파↔Claude 합의 (OPS_API_REQUESTS.md v2.4 AMENDMENT)
+> **담당**: BE teammate (또는 Lead 직접) — Twin파파 검토 1건 (task_id 케이스 typo) 반영 완료
+> **Codex 이관**: ❌ 불필요 — OPS_API_REQUESTS.md v2.4 합의안 + 실 DB 값 검증 완료 + 사전 검증 5종 명시
+
+### 🔬 v2.3 → v2.4 변경 근거 + Twin파파 검토 1건 반영
+
+```
+배경 ① shipped_plan 상수 0 현상 (4-23 W17 검증):
+  v2.3 SQL:
+    SELECT COUNT(*) FROM plan.product_info p
+    INNER JOIN completion_status cs ON p.serial_number = cs.serial_number
+    WHERE p.ship_plan_date >= %s AND p.ship_plan_date < %s
+      AND cs.si_completed = TRUE              -- ⚠️ app SI flow 도입 전엔 전 DB 1건 뿐
+  W17 ship_plan_date 32건 / cs.si_completed=TRUE 사실상 0건 → shipped_plan=0 상수 → KPI 무의미.
+
+배경 ② ops 토글 혼란:
+  - 현재 app SI flow 도입률 ≈ 0% / 2026 상반기 100% 목표
+  - ops 선택 시 실제의 10% 수준 표시 → 사용자 혼란
+  - 100% 후 ops = best = actual 수렴 → 영구 무의미
+
+해결 (v2.4 AMENDMENT):
+  ① shipped_plan AND → OR 교정:
+     LEFT JOIN app_task_details (task_id='SI_SHIPMENT' ⭐ 대문자) + WHERE OR
+     → actual 또는 si_shipment 둘 중 하나라도 있으면 카운트 → 과도기에도 정상 작동.
+
+  ② shipped_ops 폐기 + shipped_best 신설:
+     reality 카운트 = actual_ship_date 있는 전체 S/N
+     주간 귀속 = COALESCE(DATE(si_shipment.completed_at), p.actual_ship_date)
+     해석 A (si ⊆ actual): si 이벤트는 app 도입 영역 subset, 전체 unique 수량은 actual 기준.
+
+⚠️ Twin파파 검토 1건 반영 — task_id 케이스 typo:
+  OPS_API_REQUESTS.md v2.4 문서 (L4810 / L4853) SQL 이 `'si_shipment'` 소문자.
+  실 DB 값:
+    - factory.py L73 (현재 v2.2 운영 코드): `task_id = 'SI_SHIPMENT'` (대문자)
+    - task_seed.py L115: `TaskTemplate('SI_SHIPMENT', ...)` (대문자)
+  문서 그대로 구현 시: LEFT JOIN 매칭 0건 → shipped_plan/shipped_best 영구 0 (의도와 정반대).
+  → 구현 시 4곳 모두 **대문자 'SI_SHIPMENT'** 로 정정 필수.
+```
+
+### 📐 변경 범위 (1 파일 + 1 신규/확장 테스트)
+
+#### 1) `backend/app/routes/factory.py` — `_count_shipped()` 재작성 + 응답 4곳 교체 (~+10 LOC net)
+
+##### 1-1. `_count_shipped()` basis='plan' 재작성 (L53-62)
+
+```python
+# v2.4: si_completed 의존 제거 → actual_ship_date OR si_shipment 둘 중 하나
+elif basis == 'plan':
+    cur.execute(
+        """SELECT COUNT(DISTINCT p.serial_number) AS cnt
+           FROM plan.product_info p
+           LEFT JOIN app_task_details t
+             ON p.serial_number = t.serial_number
+            AND t.task_id       = 'SI_SHIPMENT'           -- ⭐ 대문자 (Twin파파 검토 반영)
+            AND t.completed_at  IS NOT NULL
+            AND COALESCE(t.force_closed, FALSE) = FALSE
+           WHERE p.ship_plan_date >= %s AND p.ship_plan_date < %s
+             AND (p.actual_ship_date IS NOT NULL OR t.completed_at IS NOT NULL)""",
+        (start, end)
+    )
+```
+
+##### 1-2. `_count_shipped()` basis='ops' 분기 **제거** (L69-78 함수 본체 통째 삭제)
+
+##### 1-3. `_count_shipped()` basis='best' 분기 **신규**
+
+```python
+elif basis == 'best':
+    # v2.4 신규: reality 경계 = actual_ship_date 있는 전체 / 주간 귀속 = si 우선
+    # 해석 A (si ⊆ actual) 채택 — Pre-deploy Gate ③ 에서 반례 0건 확인.
+    cur.execute(
+        """SELECT COUNT(DISTINCT p.serial_number) AS cnt
+           FROM plan.product_info p
+           LEFT JOIN app_task_details t
+             ON p.serial_number = t.serial_number
+            AND t.task_id       = 'SI_SHIPMENT'           -- ⭐ 대문자
+            AND t.completed_at  IS NOT NULL
+            AND COALESCE(t.force_closed, FALSE) = FALSE
+           WHERE p.actual_ship_date IS NOT NULL
+             AND COALESCE(DATE(t.completed_at), p.actual_ship_date) >= %s
+             AND COALESCE(DATE(t.completed_at), p.actual_ship_date) <  %s""",
+        (start, end)
+    )
+```
+
+##### 1-4. ValueError 메시지 갱신 (L80)
+
+```python
+else:
+    raise ValueError(f"Invalid basis: {basis} (must be 'plan' | 'actual' | 'best')")
+```
+
+##### 1-5. weekly-kpi 응답 (L442-444 + L458-460)
+
+```python
+# Before (v2.3)
+shipped_plan = _count_shipped(conn, week_start, week_end_exclusive, 'plan')
+shipped_actual = _count_shipped(conn, week_start, week_end_exclusive, 'actual')
+shipped_ops = _count_shipped(conn, week_start, week_end_exclusive, 'ops')        # ❌ 제거
+
+# After (v2.4)
+shipped_plan = _count_shipped(conn, week_start, week_end_exclusive, 'plan')
+shipped_actual = _count_shipped(conn, week_start, week_end_exclusive, 'actual')
+shipped_best = _count_shipped(conn, week_start, week_end_exclusive, 'best')     # ⭐ 신규
+
+# 응답 dict (L458-460)
+'shipped_plan': shipped_plan,
+'shipped_actual': shipped_actual,
+'shipped_best': shipped_best,                                                    # ⭐ 신규 (ops 자리)
+```
+
+##### 1-6. monthly-kpi 응답 (L539-541 + L551-553) — 동일 교체
+
+#### 2) `tests/backend/test_factory_kpi.py` — TC 14개 (기존 8개 재정렬 + 6개 신규)
+
+```
+tests/backend/test_factory_kpi.py (v2.4 기준 재정렬)
+├─ TC-FK-01: weekly-kpi 기본 응답 + shipped_plan/actual/best 3필드 포함 확인
+├─ TC-FK-02: weekly-kpi WHERE 절 finishing_plan_end 적용 확인 (v2.3 유지)
+├─ TC-FK-03: monthly-kpi 기본 (date_field=mech_start, 기본값 적용)
+├─ TC-FK-04: monthly-kpi date_field=finishing_plan_end
+├─ TC-FK-05: monthly-kpi date_field=ship_plan_date
+├─ TC-FK-06: monthly-kpi date_field=actual_ship_date
+├─ TC-FK-07: monthly-kpi 잘못된 date_field → 400 응답
+├─ TC-FK-08: shipped_plan OR 조건 — actual 있으면 카운트 (si 없어도)
+├─ TC-FK-09: shipped_plan OR 조건 — si_shipment 있고 actual 없어도 카운트
+├─ TC-FK-10: shipped_best — si 날짜 우선 귀속 (si in W17, actual in W10 → W17에만 카운트)
+├─ TC-FK-11: shipped_best — si 없으면 actual 날짜 귀속
+├─ TC-FK-12: shipped_best — actual IS NULL 인 S/N은 카운트 제외
+├─ TC-FK-13: shipped_* force_closed=TRUE 전부 제외 확인
+└─ TC-FK-14: shipped_ops 필드 응답에 포함 안 됨 (v2.4 제거 확인)
+```
+
+⚠️ **Fixture seeding 케이스 일관성 필수**: TC-FK-09/10/11 의 `app_task_details` seed 가 `task_id='SI_SHIPMENT'` 대문자 사용해야 SQL 매칭 (TC-FK-08 도 actual 단독 케이스 검증으로 fixture 무관).
+
+### ✅ Pre-deploy Gate (사전 검증 SQL 5종 — 5분)
+
+#### ① finishing_plan_end NULL 비율 (v2.3 사후 확인, v2.4 영향 없음)
+
+```sql
+SELECT
+  COUNT(*) AS total,
+  COUNT(*) FILTER(WHERE finishing_plan_end IS NULL) AS null_cnt,
+  ROUND(COUNT(*) FILTER(WHERE finishing_plan_end IS NULL) * 100.0 / COUNT(*), 1) AS null_pct
+FROM plan.product_info;
+```
+
+기대: 20% 미만 (v2.3 배포 후 정상 운영 중이므로 통상 OK). 20%+ 면 별건 OBSERV / COALESCE fallback 검토.
+
+#### ② DATE(completed_at) timezone 검증
+
+```sql
+-- KST 기준 변환 일관성 확인
+SELECT
+  completed_at,
+  DATE(completed_at) AS kst_date,
+  DATE(completed_at AT TIME ZONE 'UTC') AS utc_date
+FROM app_task_details
+WHERE task_id = 'SI_SHIPMENT' AND completed_at IS NOT NULL
+ORDER BY completed_at DESC LIMIT 5;
+```
+
+기대: db_pool.py L47 `options="-c timezone=Asia/Seoul"` 설정으로 자동 KST 변환 → kst_date 가 의도. UTC 자정 근방 row 가 다른 날짜로 나오면 명시 필요 (별건 fix).
+
+#### ③ R-02 해석 A 가정 — si 있는데 actual NULL 반례 (배포 **전** 미리 1회)
+
+```sql
+SELECT COUNT(*) AS counterexamples
+FROM app_task_details t
+LEFT JOIN plan.product_info p ON t.serial_number = p.serial_number
+WHERE t.task_id = 'SI_SHIPMENT'
+  AND t.completed_at IS NOT NULL
+  AND COALESCE(t.force_closed, FALSE) = FALSE
+  AND p.actual_ship_date IS NULL;
+```
+
+- **0건** → 해석 A 확정, v2.4 그대로 진행 ✓
+- **>0건** → `_count_shipped_best` WHERE 의 `p.actual_ship_date IS NOT NULL` 제거 + UNION 재도입 검토 (Rollback 표 5-016 항목)
+
+#### ④ 부분 인덱스 존재 확인
+
+```sql
+SELECT indexname, indexdef
+FROM pg_indexes
+WHERE tablename = 'app_task_details'
+  AND (indexdef ILIKE '%task_id%serial_number%'
+       OR indexdef ILIKE '%serial_number%task_id%');
+```
+
+없으면 추가 권장 (별건 또는 본 Sprint 묶음):
+```sql
+CREATE INDEX IF NOT EXISTS idx_app_task_details_si_lookup
+ON app_task_details (task_id, serial_number, completed_at)
+WHERE task_id = 'SI_SHIPMENT';
+```
+부분 인덱스 (`WHERE task_id = 'SI_SHIPMENT'`) 로 작게 유지.
+
+#### ⑤ W17 기준 v2.4 vs v2.3 shipped_plan 차이 미리보기
+
+```sql
+-- v2.3 (현재 운영) shipped_plan W17
+SELECT COUNT(*)
+FROM plan.product_info p
+INNER JOIN completion_status cs ON p.serial_number = cs.serial_number
+WHERE p.ship_plan_date >= '2026-04-20' AND p.ship_plan_date < '2026-04-27'
+  AND cs.si_completed = TRUE;
+
+-- v2.4 shipped_plan W17 (예상)
+SELECT COUNT(DISTINCT p.serial_number)
+FROM plan.product_info p
+LEFT JOIN app_task_details t
+  ON p.serial_number = t.serial_number
+ AND t.task_id = 'SI_SHIPMENT'
+ AND t.completed_at IS NOT NULL
+ AND COALESCE(t.force_closed, FALSE) = FALSE
+WHERE p.ship_plan_date >= '2026-04-20' AND p.ship_plan_date < '2026-04-27'
+  AND (p.actual_ship_date IS NOT NULL OR t.completed_at IS NOT NULL);
+```
+
+기대: v2.3 = 0~1 / v2.4 = 수십대 (의도된 변화 — Rollback 표 5-015 항목과 일치).
+
+### 🚀 배포 순서
+
+```
+1. 사전 검증 SQL 5종 실행 (5분, Twin파파 또는 Lead Railway DB Console)
+   → ③ 반례 0건 / ④ 인덱스 없으면 추가 결정
+2. commit: "fix(factory): Sprint 62-BE v2.4 — _count_shipped plan AND→OR + ops→best
+
+  - basis='plan': INNER JOIN completion_status 제거 → LEFT JOIN app_task_details + OR
+  - basis='ops': 분기 제거
+  - basis='best': 신규 (해석 A: si 우선 귀속, actual reality 경계)
+  - weekly-kpi/monthly-kpi 응답 shipped_ops → shipped_best 교체
+  - test_factory_kpi.py TC 14개 (재정렬 + 신규 6개)
+  - Refs: FIX-FACTORY-KPI-SHIPPED-V2.4-AMENDMENT-20260428"
+
+3. git push origin main → Railway 자동 재배포 ~1분
+   → Railway logs 정상 boot 확인
+
+4. Sentry 새 ERROR 0건 확인 (5분)
+
+5. FE Phase 2 (v1.35.0) 착수 알림 — TEMP-HARDCODE 제거 + FactoryDashboardSettingsPanel 신규
+```
+
+### 📊 Post-deploy 관찰 (1h / 24h / 72h)
+
+#### T+1h
+```
+Railway logs:
+  - factory.py boot 정상 ✓
+  - Sentry 새 ERROR 0건 ✓
+
+대시보드 (Twin파파 직접 확인):
+  - W17 shipped_plan: 0 → 수십대 (정상 변화) ✓
+  - shipped_actual: v2.3 그대로 ✓
+  - shipped_best: 신규 표시 (FE 토글 미배포라 응답에만 포함, 카드 표시는 Phase 2 후)
+```
+
+#### T+24h
+```
+weekly-kpi / monthly-kpi 응답 모니터링:
+  - shipped_plan / shipped_actual / shipped_best 3필드 정상 반환 ✓
+  - shipped_ops 필드 부재 확인 ✓ (FE v1.35.1 degrade safe — actual fallback 자동)
+
+회귀 검증:
+  - test_factory.py + test_factory_kpi.py GREEN 유지
+  - 다른 라우트 무영향
+```
+
+#### T+72h 종합 판정
+```
+R-02 해석 A 검증 (재실행):
+  Pre-deploy Gate ③ 쿼리 → 0건 유지 ✓
+  → 해석 A 확정, v2.4 설계 유지
+
+shipped_plan W17 / W18 시계열:
+  - 사용자 피드백 "이행률 카드 의미 있는 숫자" → COMPLETED
+  - 0건 상수화 재발 0 → COMPLETED
+
+FE Phase 2 (v1.35.0) 착수 가능 시점 도달
+```
+
+### 📦 Rollback
+
+```
+git revert <commit-sha>
+→ 1 파일 원복 (factory.py)
+→ Railway 자동 재배포 ~1분
+→ v2.3 상태 복귀 (shipped_plan 0 상수화 재발 + shipped_ops 복원)
+
+부분 rollback 위험:
+  - basis='plan' 만 rollback 시 응답 키 (shipped_best) 유지되면 FE breakage X 안전
+  - basis='best' 만 rollback 은 의미 없음 (전체 v2.4 의 핵심)
+  → 전체 revert 권장 (1 commit atomic)
+
+해석 A 가정 깨짐 (R-02 반례 발생) 대응:
+  - _count_shipped basis='best' WHERE 절에서 `p.actual_ship_date IS NOT NULL` 제거
+  - UNION 재도입 (5-016 항목) — 별건 hotfix Sprint 30분
+```
+
+### 📋 BACKLOG 동기화
+
+```
+FIX-FACTORY-KPI-SHIPPED-V2.4-AMENDMENT-20260428          🟡 P2
+  → ✅ COMPLETED (v2.10.X 예정, 2026-04-28)
+  ├─ factory.py _count_shipped basis='plan' OR 조건 교정
+  ├─ factory.py basis='ops' 제거 + basis='best' 신설
+  ├─ weekly-kpi / monthly-kpi 응답 shipped_ops → shipped_best 교체
+  ├─ test_factory_kpi.py TC 14개 재정렬/신규
+  ├─ R-02 해석 A 반례 0건 확인
+  └─ 회귀 0건 (test_factory + test_factory_kpi GREEN 유지)
+
+선행 의존성 해소 → AXIS-VIEW Phase 2 (v1.35.0) 착수 가능
+```
+
+### 🤝 후속 Sprint 연계
+
+```
+AXIS-VIEW Phase 2 — v1.35.0 (FE)          🔴 본 Sprint 배포 후 즉시
+  └─ DESIGN_FIX_SPRINT.md L15153 Phase 2 4개 작업
+      ├─ (a) TEMP-HARDCODE 3개 제거
+      ├─ (b) api/factory.ts 타입 — shipped_ops → shipped_best 교체
+      ├─ (c) FactoryDashboardSettingsPanel.tsx 신규 (3옵션 plan/actual/best)
+      └─ (d) KpiSwipeDeck + FactoryDashboardPage 연동
+  └─ localStorage 'ops' 잔존 마이그레이션 1줄: stored==='ops' → 'actual' or 'best'
+
+BIZ-KPI-SHIPPING-01 (BACKLOG)             🟢 P3 (app 베타 100% 후)
+  └─ 3필드 (plan / actual / best) 차이 기반 이행률·정합성 분석
+  └─ 본 Sprint 의 응답 3필드를 source of truth 로 활용
+
+SI-BACKFILL-01 (BACKLOG)                  🟡 LOW (생산관리 플랫폼 선행 블로커)
+  └─ Teams Excel Graph API cron 스크립트로 actual_ship_date 백필
+  └─ 본 Sprint 의 OR 조건이 정상 작동 보장
+```
+
+### 📝 사후 기록 양식 (배포 후)
+
+```
+✅ 배포 완료 (2026-04-XX HH:MM KST, v2.10.X)
+  ├─ commit: <sha>
+  ├─ Railway logs: factory.py boot 정상 ✓
+  ├─ pytest test_factory_kpi: 14/14 PASS ✓
+  └─ Sentry 새 ERROR 0건 ✓
+
+사전 검증 SQL 5종 결과:
+  ├─ ① finishing_plan_end NULL 비율: ___% (기대 < 20%)
+  ├─ ② DATE(completed_at) KST 변환 일관성: ___ (Y/N)
+  ├─ ③ R-02 해석 A 반례: ___건 (기대 0건)
+  ├─ ④ task_id 부분 인덱스: ___ (존재 / 추가 / 미추가)
+  └─ ⑤ W17 v2.4 shipped_plan: ___ 대 (기대 수십대)
+
+1h / 24h / 72h 관찰:
+  ├─ T+1h:   대시보드 shipped_plan 정상 ___ / Sentry 새 ERROR ___
+  ├─ T+24h:  3필드 응답 일관성 ___ / 회귀 ___
+  └─ T+72h:  R-02 재검증 ___ → COMPLETED 판정
+
+FE Phase 2 (v1.35.0) 착수 시점: ___ KST
+
+OPEN → COMPLETED 전환
+```
+
+---
+
 ## 🔧 FIX-WEBSOCKET-STOPITERATION-SENTRY-NOISE-20260428 프롬프트 — flask-sock wsgi generator drain StopIteration 필터 (🟢 P3)
 
 > **등록일**: 2026-04-28 KST

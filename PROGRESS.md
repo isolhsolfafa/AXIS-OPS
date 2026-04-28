@@ -3,7 +3,7 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.10.13 (Sentry 잡음 정리 2 Sprint 묶음 — FIX-DB-POOL-DIRECT-FALLBACK-LOG-LEVEL + FIX-WEBSOCKET-STOPITERATION-SENTRY-NOISE, 2026-04-28) + Sentry DSN 활성화 완료
+> **현재 버전**: v2.10.14 (FIX-FACTORY-KPI-SHIPPED-V2.4 — `_count_shipped` plan AND→OR + ops→best + R-02 해석 A 검증, 2026-04-28) + Sentry DSN 활성화 완료
 > **최근 인프라**: FIX-DB-POOL-MAX-SIZE-20260427 — Railway env DB_POOL_MAX 20→30 (2026-04-27, 코드 변경 0)
 > **D+1 운영 검증 (2026-04-28)**: 출근 peak 측정 PASS — Pool exhausted 0 / direct conn fallback 0 / OPS conn 6~7 안정 / Sentry 새 issue 0 → 옵션 X1 유지, OBSERV-WARMUP COMPLETED 확정, v2.10.11 HOTFIX-06b 불필요
 

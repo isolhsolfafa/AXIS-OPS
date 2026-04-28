@@ -37,27 +37,35 @@ _ALLOWED_DATE_FIELDS_MONTHLY_KPI = {
 
 
 def _count_shipped(conn, start, end, basis: str) -> int:
-    """주간/월간 출하 카운트 3분기 헬퍼 (Sprint 62-BE v2.2).
+    """주간/월간 출하 카운트 3분기 헬퍼 (Sprint 62-BE v2.4 — FIX-FACTORY-KPI-SHIPPED-V2.4-AMENDMENT-20260428).
 
-    basis: 'plan' | 'actual' | 'ops'
+    basis: 'plan' | 'actual' | 'best'
 
     3개 소스는 자동 합산되지 않음 — FE 또는 경영 대시보드 레이어에서 비교 분석.
-      - plan   : ship_plan_date + si_completed (계획 기준 완료)
-      - actual : actual_ship_date (Teams 엑셀 수기 → cron)
-      - ops    : SI_SHIPMENT.completed_at (OPS 앱 실시간, 베타 전환 중)
+      - plan   : ship_plan_date + (actual_ship_date OR SI_SHIPMENT) (계획 대비 실제 출하)
+      - actual : actual_ship_date (Teams 엑셀 수기 → cron, 진실의 source)
+      - best   : reality 경계 = actual_ship_date 있는 전체 / 주간 귀속 = si 우선 (해석 A: si ⊆ actual)
+
+    v2.3 → v2.4 변경 근거:
+      - shipped_plan 의 cs.si_completed=TRUE AND 조건이 app SI 도입률 ≈0% 환경에서 무효 → OR 로 교정.
+      - shipped_ops 폐기 (app SI 100% 도입 후 ops=actual 수렴, 영구 무의미) → shipped_best 신설.
+      - task_id 'SI_SHIPMENT' 대문자 (실 DB 값, task_seed.py L115).
 
     반개구간 [start, end) 사용 — 경계 중복 제거.
-    경영 KPI (이행률 = actual/plan, 정합성 = ops/actual) 계산은 BACKLOG-BIZ-KPI-SHIPPING-01.
     """
     cur = conn.cursor()
     if basis == 'plan':
-        # Codex 3차 Q2 A 반영: si_completed=TRUE가 null-rejecting이라 INNER JOIN 의도 명시
+        # v2.4: si_completed 의존 제거 → actual_ship_date OR SI_SHIPMENT 둘 중 하나라도 있으면 카운트
         cur.execute(
-            """SELECT COUNT(*) AS cnt
+            """SELECT COUNT(DISTINCT p.serial_number) AS cnt
                FROM plan.product_info p
-               INNER JOIN completion_status cs ON p.serial_number = cs.serial_number
+               LEFT JOIN app_task_details t
+                 ON p.serial_number = t.serial_number
+                AND t.task_id       = 'SI_SHIPMENT'
+                AND t.completed_at  IS NOT NULL
+                AND COALESCE(t.force_closed, FALSE) = FALSE
                WHERE p.ship_plan_date >= %s AND p.ship_plan_date < %s
-                 AND cs.si_completed = TRUE""",
+                 AND (p.actual_ship_date IS NOT NULL OR t.completed_at IS NOT NULL)""",
             (start, end)
         )
     elif basis == 'actual':
@@ -66,22 +74,27 @@ def _count_shipped(conn, start, end, basis: str) -> int:
                WHERE actual_ship_date >= %s AND actual_ship_date < %s""",
             (start, end)
         )
-    elif basis == 'ops':
+    elif basis == 'best':
+        # v2.4 신규: reality 경계 = actual_ship_date 있는 전체 / 주간 귀속 = SI_SHIPMENT 우선
+        # 해석 A (si ⊆ actual) — Pre-deploy Gate ③ 0건 검증 완료 (2026-04-28).
         cur.execute(
-            """SELECT COUNT(DISTINCT serial_number) AS cnt
-               FROM app_task_details
-               WHERE task_id = 'SI_SHIPMENT'
-                 AND completed_at IS NOT NULL
-                 AND completed_at >= %s AND completed_at < %s
-                 AND force_closed = false""",
+            """SELECT COUNT(DISTINCT p.serial_number) AS cnt
+               FROM plan.product_info p
+               LEFT JOIN app_task_details t
+                 ON p.serial_number = t.serial_number
+                AND t.task_id       = 'SI_SHIPMENT'
+                AND t.completed_at  IS NOT NULL
+                AND COALESCE(t.force_closed, FALSE) = FALSE
+               WHERE p.actual_ship_date IS NOT NULL
+                 AND COALESCE(DATE(t.completed_at), p.actual_ship_date) >= %s
+                 AND COALESCE(DATE(t.completed_at), p.actual_ship_date) <  %s""",
             (start, end)
         )
     else:
-        raise ValueError(f"Invalid basis: {basis} (must be 'plan' | 'actual' | 'ops')")
+        raise ValueError(f"Invalid basis: {basis} (must be 'plan' | 'actual' | 'best')")
     row = cur.fetchone()
     if row is None:
         return 0
-    # DictCursor/RealDictCursor + 일반 tuple cursor 양쪽 호환
     return row['cnt'] if isinstance(row, dict) else row[0]
 
 
@@ -441,7 +454,7 @@ def get_weekly_kpi() -> Tuple[Dict[str, Any], int]:
         week_end_exclusive = week_end + timedelta(days=1)
         shipped_plan = _count_shipped(conn, week_start, week_end_exclusive, 'plan')
         shipped_actual = _count_shipped(conn, week_start, week_end_exclusive, 'actual')
-        shipped_ops = _count_shipped(conn, week_start, week_end_exclusive, 'ops')
+        shipped_best = _count_shipped(conn, week_start, week_end_exclusive, 'best')
 
         return jsonify({
             'week': week,
@@ -457,7 +470,7 @@ def get_weekly_kpi() -> Tuple[Dict[str, Any], int]:
             'pipeline': pipeline,
             'shipped_plan': shipped_plan,
             'shipped_actual': shipped_actual,
-            'shipped_ops': shipped_ops,
+            'shipped_best': shipped_best,
             'defect_count': None,
         }), 200
 
@@ -538,7 +551,7 @@ def get_monthly_kpi() -> Tuple[Dict[str, Any], int]:
         # shipped 3필드 (plan/actual/ops)
         shipped_plan = _count_shipped(conn, start_date, end_date, 'plan')
         shipped_actual = _count_shipped(conn, start_date, end_date, 'actual')
-        shipped_ops = _count_shipped(conn, start_date, end_date, 'ops')
+        shipped_best = _count_shipped(conn, start_date, end_date, 'best')
 
         return jsonify({
             'month': month_str,
@@ -550,7 +563,7 @@ def get_monthly_kpi() -> Tuple[Dict[str, Any], int]:
             'production_count': production_count,
             'shipped_plan': shipped_plan,
             'shipped_actual': shipped_actual,
-            'shipped_ops': shipped_ops,
+            'shipped_best': shipped_best,
             'defect_count': None,
         }), 200
 
