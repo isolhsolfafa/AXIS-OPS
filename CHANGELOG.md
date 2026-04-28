@@ -6,6 +6,79 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.10.13] - 2026-04-28 — Sentry garbage log 정리 2건 (BE only)
+
+> **Sprint 묶음 배포**: `FIX-DB-POOL-DIRECT-FALLBACK-LOG-LEVEL-20260428` + `FIX-WEBSOCKET-STOPITERATION-SENTRY-NOISE-20260428`
+> Sentry 대시보드 잡음 분리 → 진짜 ERROR 추적성 회복.
+
+### Fixed (BE only — 4 파일)
+
+#### Sprint 1 — db_pool direct conn fallback log level 강등 + counter
+
+- `backend/app/db_pool.py`:
+  - `_direct_fallback_count: int = 0` 모듈 변수 신설 + `get_direct_fallback_count()` getter 추가
+  - L171-173 `logger.error("All pool connections unusable, ...")` → `logger.warning(... cumulative fallback=%d)` 강등 + counter 증가
+  - 의미론 정합 (fallback 자체는 의도된 안전망 → warning 적정)
+- `tests/backend/test_db_pool.py` 신규 (+~60 LOC, TC 3개):
+  - `test_fallback_increments_counter` — 3 retry 모두 unusable → counter 증가 + warning level
+  - `test_normal_path_no_counter_increment` — 정상 conn 획득 시 무변화
+  - `test_pool_exhausted_does_not_increment_fallback_counter` — exhausted 경로는 별도 (counter 분리)
+- 효과: Sentry `[db_pool] All pool connections unusable` issue (16h 22 events) 동결, ERROR level 미발생
+
+#### Sprint 2 — flask-sock wsgi StopIteration Sentry 필터
+
+- `backend/app/__init__.py`:
+  - `_sentry_before_send(event, hint)` 모듈 top-level 함수 신설 (~30 LOC)
+  - 매칭 조건 3개 모두 성립 시 `None` 반환 (drop): `exc_type='StopIteration'` + `mechanism.type='wsgi'` + `transaction='websocket_route'`
+  - try/except 안전 fallback (필터 자체 실패 시 정상 capture)
+  - `sentry_sdk.init()` 에 `before_send=_sentry_before_send` 등록
+- `tests/backend/test_sentry_filter.py` 신규 (+~50 LOC, TC 4개):
+  - `test_filters_websocket_stopiteration` — 3 조건 매칭 시 drop
+  - `test_passes_other_transaction_stopiteration` — 다른 transaction 의 StopIteration 정상 전달
+  - `test_passes_non_stopiteration_at_websocket` — websocket_route 의 다른 exception 정상 전달
+  - `test_safe_on_malformed_event` — 이상한 event 구조 안전 fallback
+- 효과: Sentry PYTHON-FLASK-2 issue (16h 302 events / Escalating) 동결, 정상 종료 시그널 분리
+
+### Tests
+
+- pytest tests/backend/test_db_pool.py: 3/3 PASS ✅
+- pytest tests/backend/test_sentry_filter.py: 4/4 PASS ✅
+- 총 7/7 PASS (0.09s, 회귀 0건)
+
+### LoC
+
+- db_pool.py: 286 → 297 (+11 LOC) — 🟢 500 미만 Pass
+- __init__.py: ~190 → ~225 (+35 LOC) — 🟢 500 미만 Pass
+
+### Codex 이관 미해당
+
+두 Sprint 모두 표준 패턴 (log level 강등 + counter / Sentry SDK before_send hook). Sprint 설계서에서 분석 완료, Codex 이관 불필요.
+
+### Deploy
+
+- BE only (frontend version 만 동시 bump)
+- Railway 자동 배포
+
+### Post-deploy 검증 (예정)
+
+- T+1h: Sentry 본 issue 2건 events 카운트 증가 멈춤 (22 / 302 동결)
+- T+24h: 다른 issue 정상 capture 확인 (PYTHON-FLASK-1 4-22 enum cast / PYTHON-FLASK-4 TMS mapping 후속)
+- T+7d: 본 Sprint 효과 정량 입증 → COMPLETED
+- Railway logs `cumulative fallback=N` 추세 → 별건 OBSERV-WARMUP-INTERVAL-TUNE 우선순위 결정
+
+### Rollback (4 파일 atomic)
+
+- git revert <commit-sha>
+- 부분 revert 안전 (각 Sprint 독립 작동)
+- 영향 범위 0 (잡음 분리 only, 비즈니스 로직 무관)
+
+### Related
+
+- Sprint 1: `AGENT_TEAM_LAUNCH.md` § FIX-DB-POOL-DIRECT-FALLBACK-LOG-LEVEL-20260428 (L32942+)
+- Sprint 2: `AGENT_TEAM_LAUNCH.md` § FIX-WEBSOCKET-STOPITERATION-SENTRY-NOISE-20260428 (L33255+)
+
+---
+
 ## [2.10.12] - 2026-04-28 — FIX-26 DURATION_WARNINGS 응답 키 일관성 (BE only)
 
 > **Sprint**: `FIX-26-DURATION-WARNINGS-FORWARD-20260428`

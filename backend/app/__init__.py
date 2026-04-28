@@ -20,6 +20,41 @@ logger = logging.getLogger(__name__)
 sock = Sock()
 
 
+# FIX-WEBSOCKET-STOPITERATION-SENTRY-NOISE-20260428:
+# flask-sock wsgi generator drain 시 발생하는 StopIteration 정상 종료 시그널을
+# Sentry capture 에서 분리. 매칭 조건 3개 모두 성립 시만 drop 하므로 다른 곳의
+# StopIteration 추적은 보존됨. 모듈 top-level 정의 (test 가 import 가능하도록).
+def _sentry_before_send(event, hint):
+    """
+    Sentry event 필터.
+
+    매칭 조건 (모두 성립 시 None 반환 → Sentry 미전송):
+      - exception.values[0].type == 'StopIteration'
+      - exception.values[0].mechanism.type == 'wsgi'
+      - event.transaction == 'websocket_route'
+
+    한 조건이라도 어긋나면 정상 capture (false negative 방지).
+    필터 자체 실패 시에도 정상 capture (안전 fallback).
+    """
+    try:
+        exc_info = event.get('exception', {}).get('values', [])
+        if not exc_info:
+            return event
+        first = exc_info[0]
+        exc_type = first.get('type', '')
+        mechanism = first.get('mechanism', {}) or {}
+        mechanism_type = mechanism.get('type', '')
+        transaction = event.get('transaction', '')
+
+        if (exc_type == 'StopIteration'
+                and mechanism_type == 'wsgi'
+                and transaction == 'websocket_route'):
+            return None  # 잡음 → drop
+    except Exception:
+        pass  # 필터 자체 실패 시 정상 capture (안전 fallback)
+    return event
+
+
 # OBSERV-ALERT-SILENT-FAIL-20260427: Sentry 정식 연동
 # DSN 환경변수 없으면 graceful skip (로컬/test 환경 호환).
 # 4-22 알람 silent failure 5일 누적 사례 (HOTFIX-ALERT-SCHEDULER-DELIVERY) 의
@@ -56,6 +91,7 @@ def _init_sentry() -> None:
             environment=environment,
             release=_release,
             send_default_pii=False,  # PII 보호 (이메일/IP 등 자동 차단)
+            before_send=_sentry_before_send,  # FIX-WEBSOCKET-STOPITERATION-SENTRY-NOISE-20260428
         )
         logger.info(f"[sentry] initialized (env={environment}, release={_release})")
     except ImportError:

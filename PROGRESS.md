@@ -3,9 +3,75 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.10.10 (HOTFIX-08 db_pool transaction 정리 + 046a 자동 적용, 2026-04-27) + Sentry DSN 활성화 완료
+> **현재 버전**: v2.10.13 (Sentry 잡음 정리 2 Sprint 묶음 — FIX-DB-POOL-DIRECT-FALLBACK-LOG-LEVEL + FIX-WEBSOCKET-STOPITERATION-SENTRY-NOISE, 2026-04-28) + Sentry DSN 활성화 완료
 > **최근 인프라**: FIX-DB-POOL-MAX-SIZE-20260427 — Railway env DB_POOL_MAX 20→30 (2026-04-27, 코드 변경 0)
 > **D+1 운영 검증 (2026-04-28)**: 출근 peak 측정 PASS — Pool exhausted 0 / direct conn fallback 0 / OPS conn 6~7 안정 / Sentry 새 issue 0 → 옵션 X1 유지, OBSERV-WARMUP COMPLETED 확정, v2.10.11 HOTFIX-06b 불필요
+
+---
+
+## v2.10.12 (FIX-26-DURATION-WARNINGS-FORWARD): /api/app/work/complete 응답 키 일관성 (2026-04-28)
+
+**Sprint**: `FIX-26-DURATION-WARNINGS-FORWARD-20260428` (BACKLOG L362 `BUG-DURATION-VALIDATOR-API-FIELD` 4-22 등록 → 4-28 fix)
+
+**원인**: 응답 키 생성 경로 (`duration_validator.py:70-93` REVERSE_COMPLETION 브랜치 → `task_service.py:361-363,496-498` → `work.py:261-266`) 의 conditional layer 가 빈 리스트 `[]` 일 때 키 자체를 응답에서 제거. FE 가 `data.duration_warnings` 안전 접근 불가.
+
+**자동 감지 경로**: v2.10.11 (FIX-PROCESS-VALIDATOR-TMS-MAPPING) pytest 회귀 시 동일 fail 재출현 → Codex 라운드 2 Q1/Q2 모두 A 라벨 합의 → 별건 fix Sprint 시작.
+
+**코드 변경 (BE 2 파일 + test 1 파일 — 옵션 C 양 끝 unconditional)**:
+- `backend/app/services/task_service.py` L497-499 — `if duration_warnings:` 조건 제거 → 항상 응답에 키 추가 (빈 리스트라도)
+- `backend/app/routes/work.py` L265-266 — `if 'duration_warnings' in response:` 조건 제거 → `response.get('duration_warnings', [])` default 빈 리스트 forward
+- `tests/backend/test_duration_validator.py`:
+  - L75-76 `test_normal_duration_no_warnings` assertion 갱신 (`'duration_warnings' not in data` → `'duration_warnings' in data` + `== []`)
+  - 신규 TC `TestDurationWarningsAlwaysPresent::test_normal_completion_returns_empty_duration_warnings` 추가
+  - `TestReverseDuration::test_reverse_completion` `@pytest.mark.skip` 추가 — 시작/종료 timestamp 서버 `datetime.now(Config.KST)` 자동 기록 (`task_service.py:146/256`, `work.py:448`), 운영 발생 불가, prod 0건 실측 (4-04~4-28 24일), 인프라 사고 시나리오만
+- `backend/version.py` v2.10.11 → 2.10.12
+- `frontend/lib/utils/app_version.dart` v2.10.11 → 2.10.12
+
+**검증**:
+- pytest test_duration_validator.py: **4 passed / 1 skipped / 0 fail** ✅
+- LoC: task_service / work ±0 (refactor only) — Line 규칙 통과
+- git commit: `5e17026`
+
+**핵심 인사이트 — 사용자 정정으로 단순화**:
+- 시작/종료 timestamp 가 서버 측 `datetime.now()` 자동 기록 → 클라이언트 시간 입력 path 0
+- REVERSE_COMPLETION 운영 발생 불가 (인프라 사고 차원만)
+- 처음 우려한 silent failure / 4-22 유사 구조 → **모두 무의미한 우려**
+- 본 Sprint 는 응답 contract 일관성만 fix 하고 종결
+
+**BACKLOG 동기화**:
+- L362 `BUG-DURATION-VALIDATOR-API-FIELD` → ✅ COMPLETED
+
+---
+
+## v2.10.11 (FIX-PROCESS-VALIDATOR-TMS-MAPPING): 옵션 D-2 표준 함수 도입 (2026-04-28)
+
+**Sprint**: `FIX-PROCESS-VALIDATOR-TMS-MAPPING-20260428` (옛 ID `-ROLE-MAPPING-20260427` 통일)
+
+**원인**: 4-22 HOTFIX-ALERT-SCHEDULER-DELIVERY 의 `_resolve_managers_for_category` 표준 패턴이 scheduler_service 에만 도입되고 duration_validator 3곳 (L74/L100/L179) + task_service L403 에는 미적용 → `get_managers_for_role(task.task_category)` 호출 → SQL `WHERE role='TMS'` → enum cast 실패 → silent skip → TMS 매니저 알람 미수신.
+
+**자동 감지 경로**: 2026-04-28 03:00 KST cron 실행 중 Sentry 가 `Failed to get managers for role=TMS: invalid input value for enum role_enum: "TMS"` 에러를 도입 8시간만에 31 events / escalating 으로 자동 감지 → Sentry 가치 입증 #3.
+
+**코드 변경 (BE 5 파일 atomic — 옵션 D-2)**:
+- `backend/app/services/process_validator.py` (+30 LOC) — `_CATEGORY_PARTNER_FIELD` dict + `resolve_managers_for_category()` public 함수 신설
+- `backend/app/services/scheduler_service.py` (-15 LOC) — private helper + dict 제거 + import 교체 + 3 호출 site 1:1
+- `backend/app/services/task_service.py` (±0 LOC) — L403 import + L410 호출 1:1 (Codex M2 5번째 파일)
+- `backend/app/services/duration_validator.py` (±0 LOC) — L16 import + L74/L100/L179 호출 1:1
+- `tests/conftest.py` (+50 LOC) — `seed_test_managers_for_partner` 격리 fixture (옵션 D, Codex M1)
+- `tests/backend/test_process_validator.py` (+130 LOC) — TC 7개 (TMS-GAIA / DRAGON 회귀 / MECH / ELEC / PI / unknown / e2e)
+
+**Codex 합의 trail**:
+- 라운드 1 (Sprint 설계 검증): M=2 / A=2 / N=2 — M1 fixture 정합성 (옵션 D 격리 fixture) + M2 Rollback 5 파일 (task_service.py L403-410 누락 발견) + A1 DRAGON gap (별건 BACKLOG `BUG-DRAGON-TMS-PARTNER-MAPPING-20260428`) + A2 e2e 회귀 TC. 모두 반영
+- 라운드 2 (pytest 회귀 라벨링): Q1/Q2 모두 A — test_duration_validator 1 fail = BACKLOG L362 BUG-DURATION-VALIDATOR-API-FIELD 4-22 별건 확정 → v2.10.12 처리
+
+**검증**:
+- pytest 신규 TC: 7/7 PASS (TestResolveManagersForCategory + e2e)
+- pytest 회귀: 51 passed / 5 skipped / 0 fail (test_scheduler / test_scheduler_integration / test_task_seed)
+- LoC: scheduler **-15** / task_service ±0 / duration ±0 / process_validator +30 — Line 규칙 통과
+- git commit: `a1829cb`
+
+**BACKLOG 동기화**:
+- L352 `FIX-PROCESS-VALIDATOR-TMS-MAPPING-20260428` → ✅ COMPLETED
+- L353 `BUG-DRAGON-TMS-PARTNER-MAPPING-20260428` → 🟢 OPEN P3 (prod 실측 후 우선순위 재평가)
 
 ---
 

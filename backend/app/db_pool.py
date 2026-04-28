@@ -36,6 +36,15 @@ _pool = None
 # 커넥션별 생성 시각 추적
 _conn_created_at: dict = {}
 
+# FIX-DB-POOL-DIRECT-FALLBACK-LOG-LEVEL-20260428:
+# direct conn fallback 누적 카운트 (관찰성용, /admin/db-pool-status 등 후속 활용 가능).
+_direct_fallback_count: int = 0
+
+
+def get_direct_fallback_count() -> int:
+    """direct conn fallback 누적 카운트 (관찰성용)."""
+    return _direct_fallback_count
+
 
 def _create_pool():
     """Connection Pool 생성."""
@@ -168,8 +177,15 @@ def get_conn():
         )
         _discard_conn(conn)
 
-    # 모든 재시도 실패
-    logger.error("[db_pool] All pool connections unusable, creating direct connection")
+    # 모든 재시도 실패 — fallback 자체는 의도된 안전망이라 warning 으로 출력 (Sentry capture 회피).
+    # FIX-DB-POOL-DIRECT-FALLBACK-LOG-LEVEL-20260428: error → warning 강등 + cumulative counter.
+    global _direct_fallback_count
+    _direct_fallback_count += 1
+    logger.warning(
+        "[db_pool] All pool connections unusable after %d retries, "
+        "creating direct connection (cumulative fallback=%d)",
+        retries, _direct_fallback_count,
+    )
     return _create_direct_conn()
 
 

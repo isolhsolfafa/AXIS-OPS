@@ -1,11 +1,56 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-04-28 16:00 KST (FIX-26 DURATION_WARNINGS v2.10.12 배포)
+> 마지막 업데이트: 2026-04-28 17:30 KST (Sentry 잡음 정리 2 Sprint v2.10.13 묶음 배포)
 
 ---
 
-## 🟢 2026-04-28 세션 요약 (3/3) — FIX-26-DURATION-WARNINGS-FORWARD v2.10.12
+## 🟢 2026-04-28 세션 요약 (4/4) — Sentry garbage log 정리 v2.10.13 (2 Sprint 묶음)
+
+> **한 줄 요약**: Sentry 대시보드 잡음 분리 — (1) db_pool direct fallback ERROR (22 events) → warning 강등 + counter (2) flask-sock wsgi StopIteration (302 events) → before_send hook 으로 drop. 진짜 ERROR 추적성 회복. pytest 7/7 PASS.
+
+### Sprint 1 — FIX-DB-POOL-DIRECT-FALLBACK-LOG-LEVEL-20260428
+
+- `db_pool.py`:
+  - `_direct_fallback_count: int = 0` + `get_direct_fallback_count()` getter 신설
+  - L171-173 `logger.error` → `logger.warning("[db_pool] All pool connections unusable after %d retries, creating direct connection (cumulative fallback=%d)", retries, _direct_fallback_count)` 강등
+- `tests/backend/test_db_pool.py` 신규 — TC 3개 (counter / normal / exhausted 분리)
+- 효과: Sentry `[db_pool] All pool connections unusable` 22 events 동결
+
+### Sprint 2 — FIX-WEBSOCKET-STOPITERATION-SENTRY-NOISE-20260428
+
+- `__init__.py`:
+  - 모듈 top-level `_sentry_before_send(event, hint)` 신규 (~30 LOC)
+  - 매칭 3조건 (`exc_type='StopIteration'` + `mechanism.type='wsgi'` + `transaction='websocket_route'`) 모두 성립 시 drop
+  - try/except 안전 fallback (필터 실패 시 정상 capture)
+  - `sentry_sdk.init()` 에 `before_send=_sentry_before_send` 등록
+- `tests/backend/test_sentry_filter.py` 신규 — TC 4개 (drop / pass other transaction / pass other exc / malformed event)
+- 효과: Sentry PYTHON-FLASK-2 302 events 동결
+
+### pytest 결과
+
+```
+✅ test_db_pool.py 3/3 PASS
+✅ test_sentry_filter.py 4/4 PASS
+   총 7/7 PASS in 0.09s — 회귀 0건
+```
+
+### LoC 변경
+
+| 파일 | Before | After | 차이 |
+|---|---:|---:|---:|
+| db_pool.py | 286 | 297 | +11 (🟢 500 미만) |
+| __init__.py | ~190 | ~225 | +35 (🟢 500 미만) |
+
+### Post-deploy 검증 (예정)
+
+- T+1h: Sentry 2 issue events 카운트 증가 멈춤 (22 / 302 동결)
+- T+24h: 다른 issue 정상 capture 확인 (PYTHON-FLASK-1 / PYTHON-FLASK-4)
+- T+7d: 본 Sprint 효과 정량 입증 + Railway `cumulative fallback=N` 추세 → 별건 OBSERV-WARMUP-INTERVAL-TUNE 우선순위 결정
+
+---
+
+## 🟢 2026-04-28 세션 요약 (3/4) — FIX-26-DURATION-WARNINGS-FORWARD v2.10.12
 
 > **한 줄 요약**: 4-22 등록 BACKLOG L362 `BUG-DURATION-VALIDATOR-API-FIELD` 본격 fix. `/api/app/work/complete` 응답에 `duration_warnings` 키 항상 존재 보장 (옵션 C — 양 끝 unconditional). test_reverse_completion 은 시작/종료 timestamp 서버 자동 기록 + prod 0건 실측 입증으로 `@pytest.mark.skip` 처리.
 
