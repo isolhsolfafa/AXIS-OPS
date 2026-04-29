@@ -15,6 +15,11 @@
 >   ├─ v2.10.13: 묶음 (FIX-DB-POOL-DIRECT-FALLBACK-LOG-LEVEL + FIX-WEBSOCKET-STOPITERATION-SENTRY-NOISE) — 잡음 분리, 진짜 ERROR 추적성 회복
 >   └─ v2.10.14: FIX-FACTORY-KPI-SHIPPED-V2.4-AMENDMENT — Sprint 62-BE v2.2 `_count_shipped` 보정, W17 0 상수화 해소, AXIS-VIEW Phase 2 선행 해소
 >
+> 🟢 **4-29 D+2 검증 + 자연 종결 plan**:
+>   ├─ FIX-DB-POOL Phase B D+2: conn 5~6 안정 (warmup MIN=5 정확 작동) → 내일 4-30 D+3 자동 COMPLETED
+>   ├─ FIX-PIN-FLAG baseline: BE endpoint 통합 본질적 한계 → 5-04 D+7 사용자 신고 0건 시 정성 close
+>   └─ 4-28 4 배포 post-deploy 검증 완료 (TMS 32건 / 5xx 0건 / W17 31건 / Sentry resolve 후 0 신규)
+>
 > 🎉 **4-27 누적 달성**: 7 배포 (v2.10.4~v2.10.10) + Sentry 활성화 + assertion 자동 감지 layer 가치 입증 3건 (HOTFIX-07/08 + TMS enum cast)
 
 ---

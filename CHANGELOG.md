@@ -6,6 +6,38 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.10.15] - 2026-04-29 — FIX-ACCESS-LOG-RETENTION-90D (BE only, 1줄)
+
+> **Sprint**: `FIX-ACCESS-LOG-RETENTION-90D-20260429`
+> Sprint 32 (v1.9.0, 2026-03-19) 도입 access log 30일 자동 삭제 정책을 90일로 완화. 분기 추세 분석 + 사고 사후 검증 윈도우 확보.
+
+### Changed (BE only)
+
+- `backend/app/services/scheduler_service.py`:
+  - L1128 `INTERVAL '30 days'` → `INTERVAL '90 days'`
+  - L111 주석 + L116 job name 동기 갱신
+
+### 결정 근거
+
+- 현재 (4-29 기준): 89,076 rows / 30 MB (table 14 + index 15) / 348 bytes/row / 일평균 ~2,144 rows
+- 시뮬레이션 (90일): ~193,000 rows / **64 MB** — Railway Hobby plan 0.5 GB 한도 12.8% (무시 가능)
+- 4-22 silent failure 5일 누적 사고 같은 사례에서 사후 1~2개월 분석 윈도우 확보 (이전 30일 부족)
+
+### 회귀 위험 0
+
+- 1줄 변경 (cron 빈도 동일, 삭제 조건만 완화)
+- pytest 신규 TC 불필요 (행동 차이 자명)
+
+### Deploy
+
+- BE only — Railway 자동 배포
+
+### Related
+
+- BACKLOG: `FIX-ACCESS-LOG-RETENTION-90D-20260429` → COMPLETED (1줄 수정)
+
+---
+
 ## [2.10.14] - 2026-04-28 — FIX-FACTORY-KPI-SHIPPED-V2.4 (BE only)
 
 > **Sprint**: `FIX-FACTORY-KPI-SHIPPED-V2.4-AMENDMENT-20260428`

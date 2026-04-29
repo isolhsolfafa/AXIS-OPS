@@ -108,12 +108,12 @@ def init_scheduler() -> BackgroundScheduler:
         replace_existing=True
     )
 
-    # ── Sprint 32: Access Log 정리 — 매일 03:00 (30일 이상 삭제) ──
+    # ── Sprint 32 + FIX-ACCESS-LOG-RETENTION-90D-20260429: Access Log 정리 — 매일 03:00 (90일 이상 삭제) ──
     _scheduler.add_job(
         func=_cleanup_access_logs,
         trigger=CronTrigger(hour=3, minute=0),
         id='cleanup_access_logs',
-        name='Access Log 정리 (30일+)',
+        name='Access Log 정리 (90일+)',
         replace_existing=True
     )
 
@@ -1120,15 +1120,17 @@ def _check_checklist_done_task_open():
 
 
 def _cleanup_access_logs():
-    """Sprint 32: 30일 이상 된 access log 삭제"""
+    """Sprint 32: access log 보관 + 자동 정리.
+    FIX-ACCESS-LOG-RETENTION-90D-20260429: 30일 → 90일 보관 (분기 추세 분석 + 사고 사후 검증 윈도우 확보).
+    Railway plan 한도 0.5 GB 대비 90일 시뮬레이션 64 MB (12.8%) 로 디스크 부담 무시 가능."""
     conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("DELETE FROM app_access_log WHERE created_at < NOW() - INTERVAL '30 days'")
+        cur.execute("DELETE FROM app_access_log WHERE created_at < NOW() - INTERVAL '90 days'")
         deleted = cur.rowcount
         conn.commit()
-        logger.info(f"[cleanup] Access log: {deleted} rows deleted (30d+)")
+        logger.info(f"[cleanup] Access log: {deleted} rows deleted (90d+)")
     except Exception as e:
         logger.error(f"[cleanup] Access log cleanup failed: {e}")
         if conn:

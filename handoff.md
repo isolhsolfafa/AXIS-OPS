@@ -1,7 +1,19 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-04-28 18:30 KST (FIX-FACTORY-KPI-SHIPPED-V2.4 v2.10.14 배포)
+> 마지막 업데이트: 2026-04-29 12:50 KST (FIX-ACCESS-LOG-RETENTION-90D v2.10.15 배포 — 분기 추세 분석 + 사고 사후 검증 윈도우 확보)
+>
+> ✅ **4-29 검증 결과 (T+18~24h)**:
+>   ├─ v2.10.11: TMS UNFINISHED_AT_CLOSING **Before 0 → After 32건 / target 100%** + Sentry PYTHON-FLASK-1 resolve 후 신규 0 → COMPLETED
+>   ├─ v2.10.13 #1/#2: HTTP 5xx 0건 + Sentry db_pool/websocket 2 issue resolve 후 신규 0 → COMPLETED
+>   ├─ v2.10.14: W17 v2.3 0건 → v2.4 **31건** (plan/actual/best 3축 일치) + R-02 반례 0건 유지 → COMPLETED
+>   └─ migration_history: 39 migrations, latest 050 — assertion layer 정상
+>
+> 🟢 **4-29 D+2 (FIX-DB-POOL Phase B)**: conn **5~6 안정** (Worker A pool MIN=5 정확 작동 입증) → D+1/D+2 동일 추세, per-worker 함정 영향 무 → 옵션 X1 유지 재확정
+>
+> 🟢 **자연 종결 plan (옵션 A)**:
+>   ├─ #26 FIX-DB-POOL-MAX Phase B → 내일 4-30 D+3 Twin파파 측 5분 측정 후 자동 COMPLETED (변경 없음 → MAX=30 충분 확정)
+>   └─ #29 FIX-PIN-FLAG baseline → BE endpoint 통합 (`/auth/login` 단일) 본질적 한계 → 5-04 (D+7) 까지 사용자 PIN 화면 손실 신고 0건이면 정성 close. 정량 baseline 측정 인프라는 별건 (FEAT-PIN-LOGIN-ANALYTICS, 필요 시 등록)
 
 ---
 
