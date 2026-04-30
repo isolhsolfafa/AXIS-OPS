@@ -46,6 +46,24 @@ def test_normal_path_no_counter_increment():
     assert db_pool.get_direct_fallback_count() == before  # 무변화
 
 
+def test_warmup_logs_error_when_pool_none(caplog):
+    """FIX-DB-POOL-WARMUP-WATCHDOG-20260430:
+    warmup cron 호출됐는데 _pool=None 이면 silent failure → logger.error 호출 검증.
+    4-29 23:31 사고 (1.5시간+ silent) 재발 방지.
+    LoggingIntegration(event_level=ERROR) 가 자동 Sentry capture → 알림 받음."""
+    with patch.object(db_pool, '_pool', None):
+        with caplog.at_level(logging.ERROR, logger='app.db_pool'):
+            warmed, total = db_pool.warmup_pool()
+
+    # 거동 검증
+    assert warmed == 0
+    assert total == 0
+    # error level + pid context 검증
+    pool_death_logs = [r for r in caplog.records if 'gunicorn worker pool died' in r.message]
+    assert len(pool_death_logs) >= 1, "pool=None 시 logger.error 호출 누락"
+    assert pool_death_logs[-1].levelno == logging.ERROR
+
+
 def test_pool_exhausted_does_not_increment_fallback_counter():
     """pool.PoolError (exhausted) 경로는 별도 — direct fallback counter 증가 X."""
     before = db_pool.get_direct_fallback_count()

@@ -6,6 +6,66 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.10.16] - 2026-04-30 — FIX-DB-POOL-WARMUP-WATCHDOG (BE only, watchdog log 격상)
+
+> **Sprint**: `FIX-DB-POOL-WARMUP-WATCHDOG-20260430`
+> 4-29 23:31 ~ 4-30 09:30 사이 1.5h+ silent failure 사고 재발 방지. warmup cron 은 살아있는데 `_pool=None` 인 silent failure 가 `logger.debug` 로 묻혀 있던 사각지대 fix.
+
+### 사고 배경
+
+```
+4-29 23:21 [pool_warmup] 5/5 conn warmed   ✅ 정상
+4-29 23:26 [pool_warmup] 5/5 conn warmed   ✅ 정상
+4-29 23:31 [pool_warmup] 0/0 conn warmed   ❌ silent 시작
+... (1.5h+ 0/0 지속)
+4-30 09:30 사용자 측 conn=2 측정으로 발견
+```
+
+### 원인
+
+scheduler 가 도는 gunicorn worker 의 메모리 변수 `_pool` 이 None 으로 변환됨 (gunicorn worker 재시작 후 init_pool() 미호출 가능성). warmup cron 은 살아있어 5분마다 함수 호출 → `_pool is None` 분기 → `logger.debug(...)` → `return (0, 0)`. **Railway logs `--log-level=info` 라 미출력 + Sentry capture 안 됨** → silent failure.
+
+### Fixed (BE only — 1줄 격상 + pid context)
+
+- `backend/app/db_pool.py warmup_pool()` L266-268:
+  - `logger.debug("[db_pool] warmup skipped — pool not initialized")` → `logger.error("[db_pool] warmup called but _pool=None — gunicorn worker pool died (pid=%d)", os.getpid())`
+  - `LoggingIntegration(event_level=ERROR)` 가 자동 Sentry event capture (`__init__.py` L87) → Twin파파 1분 안에 알림
+  - pid context 포함 — Worker A/B 어느 쪽이 죽었는지 식별
+
+### Tests
+
+- `tests/backend/test_db_pool.py`:
+  - 신규 TC `test_warmup_logs_error_when_pool_none` — `_pool=None` 시 logger.error 호출 + 'gunicorn worker pool died' 메시지 검증
+- pytest test_db_pool.py: **4/4 PASS** ✅ (신규 1 + 기존 3 회귀 0)
+
+### LoC
+
+- db_pool.py: 297 → 305 (+8 LOC, 1 분기 격상 + 주석)
+- test_db_pool.py: ~70 → ~85 (+15 LOC, TC 1개)
+
+### 효과 — silent failure 재발 방지
+
+```
+Before: warmup cron 0/0 출력 1.5h+ 지속 → 사용자 우연 발견
+After:  warmup cron 0/0 발생 시점 logger.error → Sentry alert → 1분 안에 알림
+```
+
+### Codex 이관 미해당
+
+단순 log level 격상 + Sentry 자동 capture (LoggingIntegration). 표준 패턴 (v2.10.13 동일).
+
+### Deploy
+
+- BE only (frontend version 만 동시 bump)
+- Railway 자동 배포
+
+### Related
+
+- 사고 trail: 4-29 23:31 ~ 4-30 09:30 (1.5h+ silent)
+- 후속 (선택): HOTFIX-06b per-worker warmup — Worker A/B 모두 자체 warmup + _pool=None 자동 재초기화 (영구 해결)
+
+---
+
 ## [2.10.15] - 2026-04-29 — FIX-ACCESS-LOG-RETENTION-90D (BE only, 1줄)
 
 > **Sprint**: `FIX-ACCESS-LOG-RETENTION-90D-20260429`

@@ -1,7 +1,22 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-04-29 12:50 KST (FIX-ACCESS-LOG-RETENTION-90D v2.10.15 배포 — 분기 추세 분석 + 사고 사후 검증 윈도우 확보)
+> 마지막 업데이트: 2026-04-30 10:00 KST (FIX-DB-POOL-WARMUP-WATCHDOG v2.10.16 배포 — silent failure 재발 방지)
+>
+> 🚨 **4-29 23:31 ~ 4-30 09:30 silent failure 사고**:
+>   ├─ warmup cron 은 살아있는데 `_pool=None` (gunicorn worker pool death) 으로 1.5h+ `[pool_warmup] 0/0 conn warmed`
+>   ├─ 사용자 측 conn=2 측정으로 우연 발견 (logger.debug 라 Sentry 미포착 = 사각지대)
+>   ├─ 응급 조치: Railway Restart → conn 10 회복 (Worker A 5 + Worker B 5 fresh init)
+>   └─ 근본 fix: v2.10.16 — `logger.debug` → `logger.error` 격상 + pid context, Sentry 자동 capture 활성화 (다음 발생 1분 알림)
+>
+> 🎯 **다음 우선 작업**: **MECH 체크리스트 (Sprint 63 후보)** — TM(Sprint 52~v2.6.0) / ELEC(Sprint 57~v2.9.0) 도입 후 MECH 자주검사 체크리스트 전개
+>
+> 🟢 **DB Pool 모니터링 인프라 — 후순위로 BACKLOG 등록 (4-29 23:00)**:
+>   ├─ OBSERV-DB-POOL-STATUS-ENDPOINT-20260429 (P3, 30분) — `/api/admin/db-pool-status` 실시간 조회
+>   ├─ OBSERV-DB-POOL-CONN-THRESHOLD-ALERT-20260429 (P3, 20분) — Sentry capture_message 임계 alert (5분 cron)
+>   └─ OBSERV-SENTRY-TRACES-APM-ENABLE-20260429 (P3, 5분) — Railway env `SENTRY_TRACES_SAMPLE_RATE=0.1` 1줄
+>
+> 🟡 **잔존 Sentry SMTP issue** (4-28 work.request_deactivation 7 events): 옵션 A (logger.warning 강등 + SMTPRecipientsRefused 분리) 별건 BACKLOG 등록 검토 중
 >
 > ✅ **4-29 검증 결과 (T+18~24h)**:
 >   ├─ v2.10.11: TMS UNFINISHED_AT_CLOSING **Before 0 → After 32건 / target 100%** + Sentry PYTHON-FLASK-1 resolve 후 신규 0 → COMPLETED

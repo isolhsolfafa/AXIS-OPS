@@ -264,7 +264,16 @@ def warmup_pool() -> tuple:
         tuple (warmed: int, requested: int) — 성공한 conn 수 / 요청한 conn 수.
     """
     if _pool is None:
-        logger.debug("[db_pool] warmup skipped — pool not initialized")
+        # WATCHDOG (FIX-DB-POOL-WARMUP-WATCHDOG-20260430):
+        # warmup cron 이 돌고 있다는 건 scheduler 가 살아있다는 의미. 그런데도 _pool=None 이면
+        # 해당 gunicorn worker 의 pool 만 죽은 silent failure (4-29 23:31 사고 같은 패턴).
+        # logger.debug → logger.error 격상 — LoggingIntegration(event_level=ERROR) 가
+        # 자동으로 Sentry event 캡처 → 1분 안에 Twin파파 알림.
+        # pid 포함 — Worker A/B 중 어느 쪽이 죽었는지 식별.
+        logger.error(
+            "[db_pool] warmup called but _pool=None — gunicorn worker pool died (pid=%d)",
+            os.getpid(),
+        )
         return (0, 0)
 
     conns = []
