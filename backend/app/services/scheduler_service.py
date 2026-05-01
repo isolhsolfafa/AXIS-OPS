@@ -1122,7 +1122,14 @@ def _check_checklist_done_task_open():
 def _cleanup_access_logs():
     """Sprint 32: access log 보관 + 자동 정리.
     FIX-ACCESS-LOG-RETENTION-90D-20260429: 30일 → 90일 보관 (분기 추세 분석 + 사고 사후 검증 윈도우 확보).
-    Railway plan 한도 0.5 GB 대비 90일 시뮬레이션 64 MB (12.8%) 로 디스크 부담 무시 가능."""
+    Railway plan 한도 0.5 GB 대비 90일 시뮬레이션 64 MB (12.8%) 로 디스크 부담 무시 가능.
+
+    HOTFIX-09 (v2.10.17, 2026-05-01): get_db_connection import 누락 fix.
+      Sprint 32 (v1.9.0, 3-19) 도입 후 43일간 매일 03:00 NameError silent failure.
+      Sentry 도입 (v2.10.8, 4-27) 후 capture 시작 → 5-01 발견. 본 함수 한 번도
+      작동 안 했음 입증 (4-29 측정 89,076 rows / 41일 = cleanup 0회).
+    """
+    from app.models.worker import get_db_connection
     conn = None
     try:
         conn = get_db_connection()

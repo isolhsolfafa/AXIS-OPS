@@ -6,6 +6,75 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.10.17] - 2026-05-01 — HOTFIX-09 access_log cleanup `get_db_connection` import 누락 (BE only, 1 line)
+
+> Sprint 32 (v1.9.0, 2026-03-19) 도입 access_log cleanup cron 이 **43일간 매일 03:00 NameError silent failure**. 사용자 영향 0 (access_log 30 MB 누적, DB 한도 6%) but cleanup 자체 작동 0회.
+
+### 사고 trail (Sentry 가치 입증 #4)
+
+```
+2026-03-19  Sprint 32 (v1.9.0) — _cleanup_access_logs cron 등록
+              get_db_connection import 누락 → 매일 03:00 NameError
+              ↓
+2026-03-19 ~ 04-27  Sentry 미도입 → silent failure (40일)
+              ↓
+2026-04-27  Sentry 정식 활성화 (v2.10.8)
+2026-04-28  03:00 cron 첫 capture
+2026-04-29 ~ 05-01  4 events 누적
+              ↓
+2026-05-01  Sentry dashboard 우연 발견 → 본 fix
+```
+
+**확정 증거**: 4-29 측정 시 89,076 rows / 41일 누적 (3-19 ~ 4-29) — cleanup 한 번도 작동 안 했음.
+
+### Fixed (BE only — import 1줄 추가)
+
+- `backend/app/services/scheduler_service.py L1122 _cleanup_access_logs()`:
+  - 함수 본체에 `from app.models.worker import get_db_connection` 1줄 추가
+  - 다른 11개 함수 (L370/L418/L468/L654/L756/...) 와 동일 패턴 (lazy import)
+  - docstring 에 HOTFIX-09 trail 추가
+
+### 효과 (5-02 03:00 cron 부터)
+
+```
+다음 5-02 03:00 cron 실행 시:
+  - 90일+ rows 삭제 대상 = 0건 (43일 누적이라)
+  - 정상 작동 logger.info 출력
+  
+6-17 (3-19 + 90일) 이후:
+  - 90일+ rows 삭제 시작 (정상 운영)
+```
+
+### Tests
+
+- syntax check ✅
+- pytest test_scheduler.py 회귀 (선택, 본 함수 직접 TC 없음 — 신규 TC 1개 추가 가능)
+
+### Sentry 가치 입증 #4 — assertion + Sentry layer
+
+```
+이전 가치 입증:
+  #1 HOTFIX-07 (v2.10.9): assertion 첫 호출 시 row[0] KeyError 즉시 노출
+  #2 HOTFIX-08 (v2.10.10): db_pool transaction 정리 + 046a 자동 적용
+  #3 v2.10.11 FIX-PROCESS-VALIDATOR-TMS-MAPPING: 4-22 silent failure 후속 8h 자동 감지
+
+본 사례 #4:
+  43일간 silent 였던 cleanup cron NameError 가 Sentry 도입 후 자동 capture
+  → assertion + Sentry layer 가 운영 잠재 결함 자동 발견 (사용자 영향 0 시점에)
+```
+
+### Deploy
+
+- BE only (frontend version 만 동시 bump)
+- Railway 자동 배포
+
+### Related
+
+- 사고 trail: 본 issue Sentry "[cleanup] Access log cleanup failed: name 'get_db_connection' is not defined" 4 events / 3 days
+- v2.10.15 (FIX-ACCESS-LOG-RETENTION-90D) 가 사실상 효과 0 였음 (cleanup 자체 미작동) → 본 fix 후 정상 작동
+
+---
+
 ## [2.10.16] - 2026-04-30 — FIX-DB-POOL-WARMUP-WATCHDOG (BE only, watchdog log 격상)
 
 > **Sprint**: `FIX-DB-POOL-WARMUP-WATCHDOG-20260430`

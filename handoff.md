@@ -3,6 +3,12 @@
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
 > 마지막 업데이트: 2026-04-30 10:00 KST (FIX-DB-POOL-WARMUP-WATCHDOG v2.10.16 배포 — silent failure 재발 방지)
 >
+> ✅ **4-30 INFRA-COLLATION-REFRESH 완료** — `ALTER DATABASE railway REFRESH COLLATION VERSION;` 218ms, 2.36 → 2.41, WARNING 0건. BACKLOG L337 COMPLETED.
+>
+> 🚨 **5-01 HOTFIX-09 v2.10.17** — Sprint 32 도입 (3-19) access_log cleanup cron 의 `get_db_connection` import 누락 발견. **43일간 매일 03:00 NameError silent failure** — 4-29 측정 89,076 rows / 41일 누적 = cleanup 0회 입증. Sentry 도입 후 4-28 부터 capture (4 events). 1줄 import 추가로 fix → 5-02 03:00 cron 부터 정상. **Sentry 가치 입증 #4** (사용자 영향 0 시점에 자동 발견).
+>
+> 🤝 **4-30 cross-repo Codex 워크플로우 동기화** — VIEW CLAUDE.md ⑦ 빌드·테스트 GREEN 섹션에 OPS 표준 "실패 발견 시 강제 절차 a~e" 추가 (805 → 822 LoC). 4-22 HOTFIX-ALERT-SCHEDULER-DELIVERY 사고 trail 양 repo 일관성 확보.
+>
 > 🚨 **4-29 23:31 ~ 4-30 09:30 silent failure 사고**:
 >   ├─ warmup cron 은 살아있는데 `_pool=None` (gunicorn worker pool death) 으로 1.5h+ `[pool_warmup] 0/0 conn warmed`
 >   ├─ 사용자 측 conn=2 측정으로 우연 발견 (logger.debug 라 Sentry 미포착 = 사각지대)
