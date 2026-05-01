@@ -5,7 +5,9 @@
 >
 > ✅ **4-30 INFRA-COLLATION-REFRESH 완료** — `ALTER DATABASE railway REFRESH COLLATION VERSION;` 218ms, 2.36 → 2.41, WARNING 0건. BACKLOG L337 COMPLETED.
 >
-> 🚨 **5-01 HOTFIX-09 v2.10.17** — Sprint 32 도입 (3-19) access_log cleanup cron 의 `get_db_connection` import 누락 발견. **43일간 매일 03:00 NameError silent failure** — 4-29 측정 89,076 rows / 41일 누적 = cleanup 0회 입증. Sentry 도입 후 4-28 부터 capture (4 events). 1줄 import 추가로 fix → 5-02 03:00 cron 부터 정상. **Sentry 가치 입증 #4** (사용자 영향 0 시점에 자동 발견).
+> 🚨 **5-01 HOTFIX-09 v2.10.17** — Sprint 32 도입 (3-19) access_log cleanup cron 의 `get_db_connection` import 누락 발견. **43일간 매일 03:00 NameError silent failure** — 4-29 측정 89,076 rows / 41일 누적 = cleanup 0회 입증. Sentry 도입 후 4-28 부터 capture (4 events). 1줄 import 추가로 fix → 5-02 03:00 cron 부터 정상.
+>
+> 🤝 **Codex 라운드 1 사후 검토 합의** (HOTFIX-09): M=2 / A=3 / N=1 — Q1 S3 적정 / Q2-Q3 별 BACKLOG 등록 (`OBSERV-SCHEDULER-IMPORT-AUDIT-20260501` + `INFRA-LINT-PRECOMMIT-HOOK-20260501`) / Q4 TC 4개 보강 (import / SQL / 정상 흐름 / 예외 rollback 모두 PASS) / Q5 framing 정정 — "Sprint 32 design/QA 부족 + Sentry 는 latent defect 탐지 layer" / Q6 CHANGELOG TC trail sync.
 >
 > 🤝 **4-30 cross-repo Codex 워크플로우 동기화** — VIEW CLAUDE.md ⑦ 빌드·테스트 GREEN 섹션에 OPS 표준 "실패 발견 시 강제 절차 a~e" 추가 (805 → 822 LoC). 4-22 HOTFIX-ALERT-SCHEDULER-DELIVERY 사고 trail 양 repo 일관성 확보.
 >

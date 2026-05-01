@@ -48,19 +48,38 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 ### Tests
 
 - syntax check ✅
-- pytest test_scheduler.py 회귀 (선택, 본 함수 직접 TC 없음 — 신규 TC 1개 추가 가능)
+- 신규 TC 4개 (Codex Q4 advisory 보강 후, 5-01 동일일 commit 전 추가):
+  - `test_cleanup_access_logs_imports_get_db_connection_correctly` — import 회귀 catch (mock patch)
+  - `test_cleanup_access_logs_uses_90_days_interval` — v2.10.15 90일 retention 정적 검증
+  - `test_cleanup_access_logs_full_flow_execute_commit_put_conn` — execute SQL + commit + put_conn 정상 흐름
+  - `test_cleanup_access_logs_rollback_on_exception` — 예외 시 rollback + put_conn (예외 흡수)
+- pytest 4/4 PASS (37.05s)
 
-### Sentry 가치 입증 #4 — assertion + Sentry layer
+### Codex 라운드 1 합의 trail (5-01 사후 검토)
+
+- Q1 (Severity S3): N (적정)
+- Q2 (Proactive audit): **M** — `services/` 전체 grep audit + `_get_db_connection()` helper 통일 검토 → **별 BACKLOG `OBSERV-SCHEDULER-IMPORT-AUDIT-20260501` 등록**
+- Q3 (lint pre-commit): **M** — flake8/pyflakes/ruff 도입으로 F821/E0602 차단 → **별 BACKLOG `INFRA-LINT-PRECOMMIT-HOOK-20260501` 등록**
+- Q4 (TC 충분성): A → 본 commit 에서 TC 2개 → 4개로 보강 ✅
+- Q5 (framing): A → "Sentry 가치 입증 #4" 보다 "Sprint 32 design/QA 부족 + Sentry 는 latent defect 탐지 layer" 가 정확. **결함 원인은 Sprint 32, Sentry 는 탐지 성공**
+- Q6 (CHANGELOG sync): A → 본 commit 에서 "TC 없음" 표기 정정 ✅
+
+### 정확한 framing — Sprint 32 design/QA 부족 + Sentry 탐지 성공
 
 ```
-이전 가치 입증:
-  #1 HOTFIX-07 (v2.10.9): assertion 첫 호출 시 row[0] KeyError 즉시 노출
-  #2 HOTFIX-08 (v2.10.10): db_pool transaction 정리 + 046a 자동 적용
-  #3 v2.10.11 FIX-PROCESS-VALIDATOR-TMS-MAPPING: 4-22 silent failure 후속 8h 자동 감지
+이전 latent defect 탐지 trail:
+  #1 HOTFIX-07 (v2.10.9): row[0] KeyError 5일 silent → assertion 도입 첫 호출 시 즉시 노출
+  #2 HOTFIX-08 (v2.10.10): db_pool transaction 정리 + 046a Docker artifact silent gap
+  #3 v2.10.11 FIX-PROCESS-VALIDATOR-TMS-MAPPING: 4-22 silent failure 후속 Sentry 8h 자동 감지
 
 본 사례 #4:
-  43일간 silent 였던 cleanup cron NameError 가 Sentry 도입 후 자동 capture
-  → assertion + Sentry layer 가 운영 잠재 결함 자동 발견 (사용자 영향 0 시점에)
+  결함 원인: Sprint 32 (3-19) design/QA 부족 — module-top import 또는 lazy import 표준 부재
+  → 다른 11개 함수는 lazy import 사용 but _cleanup_access_logs() 만 누락
+  → flake8/pyflakes pre-commit hook 부재 (lint-time F821 catch 가능했음)
+  → 단위 test 부재 (43일간 한 번도 호출 안 됨 검증)
+
+탐지 성공: Sentry layer 가 latent defect 를 4-28 부터 자동 capture
+  → 사용자 영향 0 시점에 발견, 5-01 fix
 ```
 
 ### Deploy

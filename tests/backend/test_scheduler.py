@@ -673,3 +673,99 @@ class TestSchedulerNoFalseAlerts:
         # 이상적으로는 count == 0이어야 하나, BE에서 duration >= 1h 필터 미구현 상태.
         # → 발송되거나 안되거나 모두 허용 (구현 완료 시 count == 0으로 강화)
         assert count >= 0, "TASK_REMINDER 발송 여부 확인 (1시간 필터 미구현 상태)"
+
+
+# ============================================================
+# HOTFIX-09 (v2.10.17, 2026-05-01): _cleanup_access_logs() import 누락 재발 방지
+# ============================================================
+
+
+def test_cleanup_access_logs_imports_get_db_connection_correctly():
+    """HOTFIX-09: Sprint 32 (v1.9.0, 3-19) 도입 후 43일간 NameError silent failure
+    재발 방지 — `from app.models.worker import get_db_connection` 함수 본체 import 검증.
+
+    이전 사고: scheduler_service.py 의 다른 11개 함수는 lazy import 사용했지만
+    _cleanup_access_logs() 만 누락 → 매일 03:00 NameError → Sentry 도입 (v2.10.8) 후 자동 capture.
+    """
+    from unittest.mock import patch, MagicMock
+    from app.services import scheduler_service
+
+    # Mock chain: get_db_connection() → conn → cursor() → execute / commit
+    fake_conn = MagicMock()
+    fake_cur = MagicMock()
+    fake_cur.rowcount = 42
+    fake_conn.cursor.return_value = fake_cur
+
+    with patch('app.models.worker.get_db_connection', return_value=fake_conn) as mock_conn:
+        with patch.object(scheduler_service, 'put_conn') as mock_put:
+            scheduler_service._cleanup_access_logs()
+
+            # 검증 1: get_db_connection 호출됨 (NameError 안 남)
+            assert mock_conn.called, "HOTFIX-09: get_db_connection import + 호출 필수"
+            # 검증 2: cursor + execute 흐름 정상
+            assert fake_conn.cursor.called
+            # 검증 3: put_conn 으로 반납
+            assert mock_put.called
+
+
+def test_cleanup_access_logs_uses_90_days_interval():
+    """v2.10.15 FIX-ACCESS-LOG-RETENTION-90D: 30일 → 90일 변경 검증.
+    실제 SQL 의 INTERVAL 값이 90 일치하는지 정적 검증."""
+    import inspect
+    from app.services.scheduler_service import _cleanup_access_logs
+
+    src = inspect.getsource(_cleanup_access_logs)
+    assert "INTERVAL '90 days'" in src, "v2.10.15 90일 retention 정책 유지 확인"
+    assert "INTERVAL '30 days'" not in src, "옛 30일 잔존 X"
+
+
+def test_cleanup_access_logs_full_flow_execute_commit_put_conn():
+    """Codex Q4 advisory 보강 — execute / commit / put_conn 흐름 정상 호출 검증.
+    HOTFIX-09 의 첫 TC 가 import 만 검증, 본 TC 가 SQL 실행 + 트랜잭션 commit + 풀 반납 검증."""
+    from unittest.mock import patch, MagicMock
+    from app.services import scheduler_service
+
+    fake_conn = MagicMock()
+    fake_cur = MagicMock()
+    fake_cur.rowcount = 100  # 가상 100 rows 삭제
+    fake_conn.cursor.return_value = fake_cur
+
+    with patch('app.models.worker.get_db_connection', return_value=fake_conn):
+        with patch.object(scheduler_service, 'put_conn') as mock_put:
+            scheduler_service._cleanup_access_logs()
+
+    # 1) cursor.execute 호출 + SQL 패턴 확인
+    assert fake_cur.execute.called
+    sql_arg = fake_cur.execute.call_args[0][0]
+    assert "DELETE FROM app_access_log" in sql_arg
+    assert "INTERVAL '90 days'" in sql_arg
+
+    # 2) commit 호출
+    assert fake_conn.commit.called, "정상 흐름에서 commit 호출 필수"
+    assert not fake_conn.rollback.called, "예외 없이 rollback X"
+
+    # 3) put_conn 으로 풀 반납 (finally)
+    assert mock_put.called
+    assert mock_put.call_args[0][0] is fake_conn
+
+
+def test_cleanup_access_logs_rollback_on_exception():
+    """예외 발생 시 rollback + put_conn 정상 호출 검증."""
+    from unittest.mock import patch, MagicMock
+    from app.services import scheduler_service
+
+    fake_conn = MagicMock()
+    fake_cur = MagicMock()
+    fake_cur.execute.side_effect = Exception("SQL fail")
+    fake_conn.cursor.return_value = fake_cur
+
+    with patch('app.models.worker.get_db_connection', return_value=fake_conn):
+        with patch.object(scheduler_service, 'put_conn') as mock_put:
+            # 예외 raise X (try/except 흡수)
+            scheduler_service._cleanup_access_logs()
+
+    # 예외 발생 시 commit X / rollback O
+    assert not fake_conn.commit.called
+    assert fake_conn.rollback.called, "예외 발생 시 rollback 필수"
+    # finally 에서 put_conn 호출
+    assert mock_put.called
