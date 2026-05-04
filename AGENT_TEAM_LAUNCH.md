@@ -33727,6 +33727,57 @@ def _normalize_qr_doc_id(serial_number: str, hint: str | None = None) -> str:
 
 ELEC 패턴 복제 — GET `/api/checklist/mech/{serial_number}` + POST `/api/checklist/mech/upsert`. 응답 schema 는 ELEC 와 동일 (`scope_rule` + `trigger_task_id` + `select_options` 필드 추가).
 
+##### R2-1 정정 (Codex 라운드 2, 2026-05-04) — `tank_in_mech` 응답 노출 (옵션 A)
+
+> **트리거**: Sprint 63-FE 의 `_isScopeMatched` helper 가 `tank_in_mech` boolean 필요. FE 가 model_config 별도 호출 회피 + API 호출 N→1 단순화.
+> **변경**: `get_mech_checklist()` 응답 dict 에 `tank_in_mech: bool` 추가 (1줄). 회귀 위험 0 (응답 키 추가만, 기존 클라이언트 무영향).
+> **버전**: v2.11.1 patch 또는 v2.11.0 hotfix (Sprint 63-BE squash merge 후 즉시 patch)
+
+```python
+# checklist_service.py get_mech_checklist() 수정 (~5 LOC)
+
+def get_mech_checklist(
+    serial_number: str,
+    judgment_phase: int = 1,
+    qr_doc_id: str = '',
+) -> Dict[str, Any]:
+    """MECH 체크리스트 조회 (Sprint 63-BE + R2-1 v2.11.1 patch)."""
+
+    # 기존 active_ids + items 조회 ...
+
+    # R2-1 정정: model + tank_in_mech 한 번에 lookup (FE 활용)
+    cur.execute(
+        """
+        SELECT pi.model, COALESCE(mc.tank_in_mech, FALSE) AS tank_in_mech
+        FROM plan.product_info pi
+        LEFT JOIN model_config mc ON pi.model LIKE mc.model_prefix || '%%'
+        WHERE pi.serial_number = %s
+        ORDER BY length(mc.model_prefix) DESC NULLS LAST
+        LIMIT 1
+        """,
+        (serial_number,)
+    )
+    row = cur.fetchone()
+    conn.rollback()  # HOTFIX-08
+
+    return {
+        "items": [...],          # 기존
+        "model": row['model'] if row else None,
+        "tank_in_mech": bool(row['tank_in_mech']) if row else False,  # ⭐ R2-1 신규
+        "qr_doc_id": qr_doc_id,
+    }
+```
+
+**FE 측 활용**:
+```dart
+// mech_checklist_screen.dart — FE 가 별도 model_config 호출 불필요
+final response = await fetchMechChecklist(serial_number, phase);
+_productModel = response['model'];
+_tankInMech = response['tank_in_mech'];  // ⭐ R2-1 활용
+_isDualModel = _productModel?.toUpperCase().contains('DUAL') ?? false;  // R2-3
+// 이후 _isScopeMatched(scope, _productModel, _tankInMech) 호출 정합
+```
+
 #### 6) `_check_sn_checklist_complete()` MECH 분기 활성화 (L26184 주석 → 코드)
 
 ```python
@@ -34052,12 +34103,14 @@ MechChecklistScreen (StatefulWidget)
    ├─ Group List (20 그룹, scope_rule 적용된 항목만):
    │   ├─ Group Header (item_group, 체크 진행률)
    │   └─ Item List per group:
-   │       ├─ if scope_rule + 비매칭 모델 → Disabled NA UI (회색, '해당없음 (Tank Ass'y 미적용)')
-   │       ├─ if phase=1 + phase1_applicable=False → Phase 1 NA UI (회색, 'N/A')
-   │       └─ else → Active item:
-   │           ├─ item_type='CHECK' → PASS / NA 라디오 버튼
-   │           ├─ item_type='SELECT' → DropdownButton (select_options 활용)
-   │           └─ item_type='INPUT' → TextField (INLET 8개는 #1~#4 L/R 명확 표시)
+   │       ├─ if scope_rule + 비매칭 모델 → Disabled NA UI (회색, 'N/A' — Codex Q2-B 통일)
+   │       ├─ (M1 정정: BE 가 phase=1 시 phase1_applicable=False 자동 필터링 → FE 분기 dead code 제거)
+   │       └─ Active item:
+   │           ├─ item_type='CHECK' → PASS / NA 라디오 버튼 (debounce 500ms — Q6-C)
+   │           ├─ item_type='SELECT' → DropdownButton (select_options 활용, onChanged 즉시 PUT — M4 + Q6-C)
+   │           │                       빈 select_options 시 '운영자 미설정 안내' (Q7-B)
+   │           └─ item_type='INPUT' → TextField (INLET 8개는 Left/Right subgroup 분리 — Q1-B)
+   │                                  + PASS/NA 라디오 (M5: 둘 다 필수, 번들 PUT)
    ├─ Floating Action: 일괄 PASS 버튼 (관리자 phase=2 시점)
    └─ WebSocket Listener: CHECKLIST_MECH_READY alert 수신 → Toast + 화면 자동 진입 유도
 ```
@@ -34074,10 +34127,10 @@ Widget _buildInputWidget(Map<String, dynamic> item) {
   // scope_rule 비매칭 → disabled NA UI
   if (!modelMatched) return _buildScopeDisabledNA(item);
 
-  // judgment_phase=1 + phase1_applicable=False → Phase 1 NA UI
-  if (_judgmentPhase == 1 && item['phase1_applicable'] == false) {
-    return _buildPhase1NA(item);
-  }
+  // M1 정정 (Codex 라운드 1, L34272 trail 반영):
+  // BE get_mech_checklist() 가 phase=1 시 phase1_applicable=False 항목 자동 필터링.
+  // → FE phase1_applicable 분기는 dead code. 받은 항목만 그대로 렌더.
+  // (옛 _buildPhase1NA 분기 제거)
 
   switch (itemType) {
     case 'CHECK':
@@ -34125,16 +34178,287 @@ Widget _buildInputField(Map<String, dynamic> item) {
             hintText: 'S/N 또는 수량 입력',
             border: OutlineInputBorder(),
           ),
-          onChanged: (value) => _scheduleUpsert(item['master_id'], value),
+          // M4 + M5 + Q6 정정 (Codex 라운드 1, L34275-34276 + Q6-C trail):
+          // - debounce 500ms (PUT 폭발 방지)
+          // - input_value + check_result 번들 전송 (BE upsert_mech_check 가 check_result 필수, 누락 시 400)
+          onChanged: (value) {
+            _debouncedUpsert(
+              masterId: item['master_id'] as int,
+              inputValue: value,
+              checkResult: _getCurrentCheckResult(item['master_id']),  // 현재 PASS/NA 상태 동시 전송
+            );
+          },
         ),
         const SizedBox(height: 4),
-        Row(  // PASS / NA 라디오는 INPUT 도 동일 (입력값 + check_result 둘 다 저장)
+        Row(  // PASS / NA 라디오 — INPUT 도 동일 (M5: 입력값 + check_result 둘 다 필수, 번들 PUT)
           children: [
             _passRadio(item), _naRadio(item),
           ],
         ),
       ],
     ),
+  );
+}
+```
+
+### 📋 SELECT type 위젯 (MFC / Flow Sensor)
+
+> **A3 정정 (Codex 라운드 1 추가 검토)**: 본 위젯 코드 샘플 부재 → 신규 추가.
+> M4 (onChanged 즉시 PUT, 화면 refresh 시 값 소실 방지) + Q6-C (debounce 500ms) + Q7-B (빈 select_options '운영자 미설정 안내') 모두 반영.
+
+```dart
+Widget _buildSelectDropdown(Map<String, dynamic> item) {
+  final masterId = item['master_id'] as int;
+  final selectedValue = item['selected_value'] as String?;
+  final options = (item['select_options'] as List?)?.cast<String>() ?? [];
+
+  // Q7-B 정정: select_options 빈 master 시 자유 텍스트 fallback 금지 → 운영자 미설정 안내
+  if (options.isEmpty) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      child: Row(
+        children: [
+          Expanded(child: Text(item['item_name'] as String)),
+          const Text(
+            '운영자가 옵션을 설정하지 않았습니다',
+            style: TextStyle(fontSize: 11, color: GxColors.warning),
+          ),
+        ],
+      ),
+    );
+  }
+
+  return Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(item['item_name'] as String, style: const TextStyle(fontWeight: FontWeight.w500)),
+        const SizedBox(height: 6),
+        DropdownButtonFormField<String>(
+          value: selectedValue,
+          isExpanded: true,
+          items: options.map((opt) => DropdownMenuItem(
+            value: opt,
+            child: Text(opt, overflow: TextOverflow.ellipsis),
+          )).toList(),
+          // M4 + Q6 정정 (Codex 라운드 1, L34275 trail):
+          // - onChanged 즉시 _debouncedUpsert (debounce 500ms)
+          // - selected_value + check_result 번들 PUT (M5 동일 패턴)
+          // → 화면 refresh 시 7개 SELECT 값 소실 방지
+          onChanged: (value) {
+            if (value == null) return;
+            _debouncedUpsert(
+              masterId: masterId,
+              selectedValue: value,
+              checkResult: _getCurrentCheckResult(masterId),  // 현재 PASS/NA 동시 전송
+            );
+          },
+        ),
+        const SizedBox(height: 4),
+        Row(children: [_passRadio(item), _naRadio(item)]),
+      ],
+    ),
+  );
+}
+
+// Q6-C 정정: debounce 500ms 표준 helper (CHECK / SELECT / INPUT 공통 사용)
+Timer? _upsertDebounce;
+void _debouncedUpsert({
+  required int masterId,
+  String? inputValue,
+  String? selectedValue,
+  required String checkResult,  // M5: 필수
+}) {
+  _upsertDebounce?.cancel();
+  _upsertDebounce = Timer(const Duration(milliseconds: 500), () {
+    upsertMechCheckApi(
+      serialNumber: widget.serialNumber,
+      masterId: masterId,
+      checkResult: checkResult,
+      inputValue: inputValue,
+      selectedValue: selectedValue,
+      judgmentPhase: _judgmentPhase,
+      qrDocId: _normalizeQrDocId(widget.serialNumber, _isDualModel),  // INLET 8 항목 정합
+    );
+  });
+}
+
+// A4-F2 정정: dispose 시 controller + timer 정리
+@override
+void dispose() {
+  _upsertDebounce?.cancel();
+  for (final c in _inputControllers.values) {
+    c.dispose();
+  }
+  _inputControllers.clear();
+  super.dispose();
+}
+```
+
+### 📋 R2-2~5 보조 helper 정의 (Codex 라운드 2, 2026-05-04)
+
+> **트리거**: Sprint 63-FE 본문에 helper 호출 (`_normalizeQrDocId` / `_isDualModel` / `_getCurrentCheckResult`) 만 있고 정의 부재. 라운드 2 catch.
+
+#### R2-2: `_normalizeQrDocId` Dart helper
+
+> Sprint 63-BE 4-A 의 Python `_normalize_qr_doc_id` 패턴 직접 차용. SINGLE/DUAL 분기 일관 처리.
+
+```dart
+String _normalizeQrDocId(String serialNumber, bool isDual, {String? hint}) {
+  // R2-2 정정: Sprint 63-BE _normalize_qr_doc_id Dart 변환 (idempotent + L/R suffix)
+  if (serialNumber.isEmpty) return '';
+
+  final sn = serialNumber.trim();
+
+  // hint 가 이미 정규화 형태면 그대로 (idempotent)
+  if (hint != null && hint.startsWith('DOC_$sn')) {
+    return hint.trim();
+  }
+
+  // hint 가 'L' / 'R' suffix 만 주어진 경우 (INLET 8개 항목 입력 시)
+  if (hint != null && (hint.toUpperCase() == 'L' || hint.toUpperCase() == 'R')) {
+    return 'DOC_$sn-${hint.toUpperCase()}';
+  }
+
+  // DUAL 모델 + INLET 8 항목 시: 호출자가 hint='L'/'R' 명시
+  // SINGLE 모델: 'DOC_{S/N}' (hint 무관)
+  return 'DOC_$sn';
+}
+```
+
+**INLET 8 호출 시점 (Minor 2 정정)**:
+```dart
+// _buildInletGroup 안 INPUT 위젯 onChanged 호출 시 hint 명시
+// item_name 에 'Left'/'Right' 포함 → hint 'L'/'R' 자동 추출
+String _inletHintFromItemName(String itemName) {
+  if (itemName.contains('Left')) return 'L';
+  if (itemName.contains('Right')) return 'R';
+  return '';  // 도면 항목 (1개) 은 hint 없음 → SINGLE 'DOC_{S/N}'
+}
+
+// INLET INPUT TextField onChanged 안:
+final hint = _inletHintFromItemName(item['item_name']);
+final qrDocId = _normalizeQrDocId(widget.serialNumber, _isDualModel, hint: hint);
+_debouncedUpsert(masterId: ..., inputValue: value, checkResult: ..., qrDocId: qrDocId);
+```
+
+#### R2-3: `_isDualModel` 추론 (Sprint 59-BE `_is_report_dual_model` 패턴 차용)
+
+```dart
+// State 멤버 + 화면 진입 시 판정
+bool _isDualModel = false;
+
+void _evaluateDualModel(String? model) {
+  // R2-3 정정: model 명에 'DUAL' 포함 시 True (Sprint 59-BE _is_report_dual_model 패턴)
+  // 예: 'GAIA-I DUAL' → true / 'DRAGON LE DUAL' → true / 'GAIA-I' → false
+  _isDualModel = (model?.toUpperCase().contains('DUAL')) ?? false;
+}
+```
+
+#### R2-4: `_getCurrentCheckResult` helper
+
+```dart
+// State 멤버 — 현재 PASS/NA 라디오 + SELECT 드롭다운 상태 추적
+final Map<int, String> _checkResultMap = {};  // {master_id: 'PASS' | 'NA'}
+final Map<int, String> _selectValueMap = {};  // {master_id: selected_value} — Minor 1 정정 (SELECT type lookup)
+
+String _getCurrentCheckResult(int masterId) {
+  // R2-4 정정: 현재 PASS/NA 상태 lookup (M5 번들 PUT 시 활용)
+  // 라디오 미선택 시 빈 문자열 반환 → BE 측 default 처리
+  return _checkResultMap[masterId] ?? '';
+}
+
+// SELECT 위젯 onChanged 시 _selectValueMap 갱신 (M4 + R2-4 패턴 정합):
+//   onChanged: (value) {
+//     setState(() => _selectValueMap[masterId] = value!);
+//     _debouncedUpsert(masterId: masterId, selectedValue: value, checkResult: _getCurrentCheckResult(masterId));
+//   }
+
+// PASS/NA 라디오 onChanged 시 _checkResultMap 갱신
+Widget _passRadio(Map<String, dynamic> item) {
+  return Radio<String>(
+    value: 'PASS',
+    groupValue: _checkResultMap[item['master_id']],
+    onChanged: (value) {
+      setState(() => _checkResultMap[item['master_id']] = value!);
+      _debouncedUpsert(
+        masterId: item['master_id'],
+        checkResult: value!,
+        // input/select 값은 기존 state 에서 lookup
+        inputValue: _inputControllers[item['master_id']]?.text,
+        selectedValue: _selectValueMap[item['master_id']],
+      );
+    },
+  );
+}
+```
+
+#### R2-5: INLET 8개 Left/Right subgroup 시각 분리 (Q1-B 결정)
+
+> **트리거**: 본문에 'item_name 자체에 포함' 으로만 명시 → 위젯 grouping UI 코드 미명시 (라운드 2 catch).
+> Q1-B 결정 = Left subgroup 4 + Right subgroup 4 → 스캔 오류 감소 + 시각적 구분.
+
+```dart
+Widget _buildInletGroup(List<Map<String, dynamic>> inletItems) {
+  // R2-5 정정 (Q1-B): INLET 8개 Left/Right subgroup 시각 분리
+
+  // INLET 항목 분류:
+  //   - 도면 항목 (CHECK 1개) → 그대로
+  //   - S/N 입력 8개 (INPUT) → Left 4 + Right 4 분리
+  final designItems = inletItems.where((i) => i['item_type'] == 'CHECK').toList();
+  final leftItems = inletItems
+      .where((i) => i['item_type'] == 'INPUT' && (i['item_name'] as String).contains('Left'))
+      .toList();
+  final rightItems = inletItems
+      .where((i) => i['item_type'] == 'INPUT' && (i['item_name'] as String).contains('Right'))
+      .toList();
+
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      _GroupHeader('INLET'),
+
+      // 도면 일치 여부 (1 item)
+      ...designItems.map((item) => _buildItemWidget(item)),
+
+      // Left subgroup
+      if (leftItems.isNotEmpty) ...[
+        const Padding(
+          padding: EdgeInsets.fromLTRB(14, 8, 14, 4),
+          child: Text(
+            'Left 측 배관 (#1 ~ #4)',
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: GxColors.steel),
+          ),
+        ),
+        ...leftItems.map((item) => _buildItemWidget(item)),
+      ],
+
+      // Right subgroup
+      if (rightItems.isNotEmpty) ...[
+        const Padding(
+          padding: EdgeInsets.fromLTRB(14, 8, 14, 4),
+          child: Text(
+            'Right 측 배관 (#1 ~ #4)',
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: GxColors.steel),
+          ),
+        ),
+        ...rightItems.map((item) => _buildItemWidget(item)),
+      ],
+    ],
+  );
+}
+
+// Group List 렌더 시 INLET 그룹만 _buildInletGroup 사용, 나머지는 일반 grouping
+Widget _buildGroupList() {
+  final groups = _groupBy(_items, (item) => item['item_group']);
+  return Column(
+    children: groups.entries.map((entry) {
+      final groupName = entry.key;
+      final groupItems = entry.value;
+      if (groupName == 'INLET') return _buildInletGroup(groupItems);
+      return _buildStandardGroup(groupName, groupItems);
+    }).toList(),
   );
 }
 ```
@@ -34157,7 +34481,7 @@ Widget _buildScopeDisabledNA(Map<String, dynamic> item) {
           ),
         ),
         const Text(
-          '해당없음 (Tank Ass\'y 미적용)',  // ⚠️ Codex Q: 텍스트 후보 — '해당없음' / 'N/A' / '—' 중 결정 필요
+          'N/A',  // M2 정정 (Codex 라운드 1 Q2-B, L34273 trail 반영): tank_in_mech + 모델명 scope 양쪽 범용 + 짧고 표준
           style: TextStyle(fontSize: 11, color: GxColors.silver),
         ),
       ],
@@ -34168,13 +34492,45 @@ Widget _buildScopeDisabledNA(Map<String, dynamic> item) {
 
 ### 📋 WebSocket CHECKLIST_MECH_READY 핸들러
 
+> **A6-F1 정정 (Codex 라운드 1, L34283 trail 반영)**: WebSocket 핸들러를 `alert_provider.dart` 레이어로 이동.
+> 기존 `new_alert` 이벤트 패턴 일관 — `websocket_service.dart` 는 raw 이벤트 dispatch 만, 비즈니스 로직 X.
+> Q4-B (Codex 라운드 1) 반영: 토스트 클릭 진입 (자동 진입 X, 진행 중 작업 흐름 보존).
+
 ```dart
-// websocket_service.dart 에 alert_type 'CHECKLIST_MECH_READY' 라우팅 추가
-void _handleAlert(Map<String, dynamic> data) {
-  final alertType = data['alert_type'] as String?;
-  if (alertType == 'CHECKLIST_MECH_READY') {
-    _showToast(data['message'] as String);
-    // 사용자 액션: 토스트 클릭 시 MechChecklistScreen 진입 (라우터 push)
+// websocket_service.dart — raw 이벤트 dispatch 만 (비즈니스 로직 X)
+void _onMessage(Map<String, dynamic> data) {
+  final eventType = data['event_type'] as String?;
+  // 기존 new_alert 패턴 재활용
+  if (eventType == 'new_alert') {
+    AlertProvider.instance.onAlertReceived(data);
+  }
+}
+
+// alert_provider.dart 확장 — alert_type 별 분기
+class AlertProvider with ChangeNotifier {
+  void onAlertReceived(Map<String, dynamic> data) {
+    final alertType = data['alert_type'] as String?;
+
+    if (alertType == 'CHECKLIST_MECH_READY') {
+      // Q4-B: 토스트 클릭 진입 (자동 화면 전환 X, 작업 흐름 보존)
+      _showToastWithAction(
+        message: data['message'] as String,
+        actionLabel: '체크리스트 입력',
+        onAction: () => navigatorKey.currentState?.pushNamed(
+          '/checklist/mech',
+          arguments: {'serial_number': data['serial_number']},
+        ),
+      );
+    }
+    // 다른 alert_type 분기 (기존 동작 유지) ...
+  }
+
+  void _showToastWithAction({
+    required String message,
+    required String actionLabel,
+    required VoidCallback onAction,
+  }) {
+    // SnackBar / Toast UI 구현 ...
   }
 }
 ```
@@ -34182,22 +34538,43 @@ void _handleAlert(Map<String, dynamic> data) {
 ### 📋 judgment_phase 토글 + (c)안 동작
 
 ```dart
-// AppBar 에 1차/2차 토글
-SegmentedButton<int>(
-  segments: const [
-    ButtonSegment(value: 1, label: Text('1차 (작업자)')),
-    ButtonSegment(value: 2, label: Text('2차 (관리자)')),
-  ],
-  selected: {_judgmentPhase},
-  onSelectionChanged: (set) {
-    setState(() => _judgmentPhase = set.first);
-    _fetchChecklist();  // phase 변경 시 재로딩
-  },
-);
+// M3 정정 (Codex 라운드 1 Q5-B, L34274 + L34289 trail 반영):
+// role gate 필수 — 일반 작업자는 1차 고정, 2차 토글 비표시.
+// 권한 위반 (작업자가 2차 record 생성) 차단.
+
+Widget _buildPhaseToggle() {
+  final user = context.watch<AuthProvider>().user;
+  final canAccessPhase2 = user.isManager || user.isAdmin;
+
+  if (!canAccessPhase2) {
+    // 작업자 — 1차 고정 표시 (토글 비노출)
+    return const Padding(
+      padding: EdgeInsets.symmetric(horizontal: 8),
+      child: Text(
+        '1차 (작업자)',
+        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+      ),
+    );
+  }
+
+  // is_manager 또는 is_admin — 1차/2차 토글 노출
+  return SegmentedButton<int>(
+    segments: const [
+      ButtonSegment(value: 1, label: Text('1차 (작업자)')),
+      ButtonSegment(value: 2, label: Text('2차 (관리자)')),
+    ],
+    selected: {_judgmentPhase},
+    onSelectionChanged: (set) {
+      setState(() => _judgmentPhase = set.first);
+      _fetchChecklist();  // phase 변경 시 재로딩
+    },
+  );
+}
 
 // (c)안 동작:
-// - phase=1: phase1_applicable=False 항목은 자동 N/A 표시 (작업자가 입력 안 해도 됨)
-// - phase=2: 모든 항목 활성. 1차 record 미입력 항목도 관리자가 직접 입력 가능 (cover)
+// - phase=1: BE 가 phase1_applicable=False 항목 자동 필터링 (FE M1 dead code 제거)
+// - phase=2: 모든 항목 활성 + read-only 라디오 (A3-F2 — 작업자 1차 입력값 표시)
+//   1차 record 미입력 항목도 관리자가 직접 입력 가능 (cover)
 //   → BE check_mech_completion() (c)안 = 1차 record 강제 안 함, phase=2 record 만으로 완료 판정
 ```
 
@@ -34298,6 +34675,18 @@ Q6. 저장 시점                  → C (debounce 500ms, Q3 번들 PUT 포함)
 Q7. select_options 빈 master   → B ('운영자 미설정 안내', 자유 텍스트 강등 금지)
 ```
 
+### ✅ Codex 라운드 2 정정 trail (2026-05-04, R2-1~5)
+
+| # | 항목 | 처리 결과 |
+|---|------|----------|
+| **R2-1** | tank_in_mech BE 응답 노출 | ✅ 옵션 A 채택 — `get_mech_checklist()` 응답에 `tank_in_mech: bool` 추가 (1줄, v2.11.1 patch). FE 별도 model_config 호출 회피, API 호출 N→1 |
+| **R2-2** | `_normalizeQrDocId` Dart helper 정의 | ✅ Sprint 63-BE 4-A Python 패턴 직접 변환 — idempotent + L/R suffix + DUAL 분기 일관 |
+| **R2-3** | `_isDualModel` 추론 로직 | ✅ Sprint 59-BE `_is_report_dual_model` 패턴 차용 — `model.toUpperCase().contains('DUAL')` 1줄 |
+| **R2-4** | `_getCurrentCheckResult` helper 정의 | ✅ `_checkResultMap` State + lookup helper. PASS/NA 라디오 onChanged 시 setState 갱신 + 번들 PUT 시 활용 |
+| **R2-5** | INLET 8개 Q1-B subgroup 시각 분리 | ✅ `_buildInletGroup()` 신규 — Left 4 + Right 4 명시 subgroup header + 도면 항목 별도 처리 |
+
+→ **본문 vs trail 모순 0건 + 보조 helper 4개 정의 보강 + INLET subgroup UI 명시**.
+
 ### 📋 정정 후 화면 구성 (M1+M2+M3 반영)
 
 ```
@@ -34319,15 +34708,19 @@ MechChecklistScreen (StatefulWidget) — 정정 trail 5건 적용:
    └─ Alert provider 레이어에서 CHECKLIST_MECH_READY → 토스트 (A6-F1, Q4-B)
 ```
 
-### 📋 라운드 1 미해결 (라운드 2 의뢰 대상 후보)
+### ✅ 라운드 1 미해결 → 라운드 2 에서 모두 해결 (2026-05-04)
 
 ```
-- model_config 의 tank_in_mech boolean 을 FE 가 어떻게 받는지 — BE 응답에 명시 노출 필요?
-  현재 BE get_mech_checklist 는 product_info 의 model 만 응답. tank_in_mech 추론은 FE 가 model_prefix 매칭 해야 함.
-  → 옵션 A: BE 응답에 tank_in_mech bool 추가 (1줄 변경)
-  → 옵션 B: FE 가 product_info 별 API 로 model_config 조회 (2 API 호출)
-  → 결정 필요 (라운드 2)
-- INLET DUAL 모델의 record 생성 — BE 의 _normalize_qr_doc_id() 가 SINGLE/DUAL 분기. FE 도 동일 normalizer 작성 권장 (Sprint 63-BE 4-A 섹션 cross-ref).
+[1] tank_in_mech boolean FE 활용
+  → ✅ R2-1 옵션 A 채택 — get_mech_checklist() 응답에 tank_in_mech: bool 추가 (v2.11.1 patch, 1줄)
+  → FE 가 별도 model_config 호출 회피, API 호출 N→1 단순화
+  → trail: 본 섹션 위 R2-1 정정 + 라운드 2 trail 표 (R2-1 행)
+
+[2] INLET DUAL 모델 _normalize_qr_doc_id Dart 정합 helper
+  → ✅ R2-2 채택 — Sprint 63-BE 4-A Python 패턴 직접 변환 (15 LoC, idempotent + L/R suffix)
+  → R2-3 _evaluateDualModel 으로 isDual boolean 추론
+  → R2-5 _buildInletGroup 안 _inletHintFromItemName 으로 hint='L'/'R' 자동 추출 (Minor 2 보강)
+  → trail: R2-2 / R2-3 / R2-5 본문 + 라운드 2 trail 표
 ```
 
 ---
