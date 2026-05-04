@@ -1,7 +1,35 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-04 KST (Sprint 63-BE Step 1~5 진행 — branch `sprint-63-be-mech-checklist`, micro-commit 4건 완료)
+> 마지막 업데이트: 2026-05-04 KST (✅ **v2.11.0 — Sprint 63-BE squash merge 완료**, pytest 21/21 PASS, +1,415 LoC, 다음 단계: Sprint 63-FE Codex 라운드 1)
+
+## ✅ Sprint 63-BE — 정식 종료 (v2.11.0 release, 2026-05-04)
+
+```
+commit f59e1be (main) — feat: v2.11.0 Sprint 63-BE MECH 체크리스트 BE 인프라
+tag    v2.11.0
+branch sprint-63-be-mech-checklist (squash merged, 11 commits)
+```
+
+### 검증 결과 ✅
+- pytest tests/backend/test_mech_checklist.py — **21/21 PASS** (186.84s)
+- 회귀 영향 0건 (TM/ELEC 응답에 새 필드 scope_rule/trigger_task_id 추가만, 기존 키 무변경)
+- rg "_check_tm_completion" backend/ tests/ → **0 hits**
+- Pre-deploy Gate 7건 모두 통과
+
+### Pre-deploy 이후 (Twin파파 측 진행 예정)
+1. ⏳ git push (⑦.5 배포 승인 후)
+2. ⏳ Railway 자동 배포 + migration 051/051a 자동 적용
+3. ⏳ DB 검증: SELECT COUNT(*) FROM checklist.checklist_master WHERE category='MECH' → 73
+4. ⏳ T+1d Sentry 새 ERROR 0건 확인
+5. ⏳ 1주 운영 관찰 (1차 입력률 + 2차 검수 완료율)
+
+### 후속 별 sprint (BE 배포 완료 후 착수)
+- **Sprint 63-FE** — `mech_checklist_screen.dart` 신규 (~1,000~1,200 LoC, 2~3d) — **Codex 라운드 1 진입 예정**
+- **AXIS-VIEW Sprint 39** — BLUR 해제 + AddModal 토글 (~0.5d, 별 repo)
+- **FIX-ELEC-QR-DOC-ID-HARDCODE-20260502** — ELEC qr_doc_id='' 하드코딩 마이그레이션 (P2, 1h)
+
+---
 
 ## 🚧 Sprint 63-BE 진행 상태 (세션 1 Step 1~9 완료, 2026-05-04)
 

@@ -2,11 +2,44 @@
 
 > 세션 간 누적되는 의사결정, 아키텍처 판단, 감사 결과를 기록합니다.
 > CLAUDE.md = 프로젝트 고정 정보 / memory.md = 누적 학습 / handoff.md = 세션 인계
-> 마지막 업데이트: 2026-04-27 (ADR-019 Sentry + assertion 자동 감지 layer)
+> 마지막 업데이트: 2026-05-04 (ADR-020 Sprint 63-BE MECH 체크리스트 + qr_doc_id normalizer 표준 패턴)
 
 ---
 
 ## 1. 아키텍처 의사결정 기록 (ADR)
+
+### ADR-020: Sprint 63-BE MECH 체크리스트 + qr_doc_id 공유 normalizer 표준 (2026-05-04, v2.11.0)
+
+**맥락**:
+- TM(Sprint 52) / ELEC(Sprint 57) 후 MECH 자주검사 체크리스트 디지털화 (양식 73 항목 / 20 그룹)
+- Sprint 59-BE 사례: TM SINGLE 분기가 `qr_doc_id=''` 하드코딩 → LEFT JOIN 매칭 실패
+- Codex 라운드 1+2+3 합의 (M=10 / A=11 / 추가 11) — 핵심 통찰 "설계서 정정 ≠ 실코드 미구현"
+
+**결정**:
+1. **schema 패턴 (재사용 가능)**: `scope_rule` (모델 분기 매크로) + `trigger_task_id` (1차 입력 토스트 발화 시점) + `item_type` enum 'INPUT' 추가 — 향후 다른 카테고리 도입 시 동일 패턴 활용
+2. **qr_doc_id 공유 normalizer**: `_normalize_qr_doc_id(serial_number, hint)` 표준 함수 — TM/ELEC/MECH 모두 사용. SINGLE='DOC_{S/N}', DUAL='DOC_{S/N}-L|R' 일관 처리
+3. **public 인터페이스 통일**: `check_tm_completion` / `check_elec_completion` / `check_mech_completion` 모두 public (private `_` prefix 제거)
+4. **judgment_phase=2 (c)안**: 1차 record 강제 안 함 — 관리자가 phase=2 record 만으로 cover 가능 (작업자 미체크 시 관리자가 직접 입력)
+5. **Python helper 우선**: stored function `_is_in_scope` 보류 → Python helper `_resolve_active_master_ids()` 채택 (단순성 + migration 부담 0)
+
+**결과**:
+- pytest 21/21 PASS (186.84s) ✅
+- +1,415 LoC (BE only, 회귀 영향 0건)
+- branch sprint-63-be-mech-checklist 11 commits squash merge → main v2.11.0
+- migration 051/051a Railway 자동 적용 예정
+
+**잔존 + 후속**:
+- ELEC 의 `qr_doc_id=''` 하드코딩 (운영 record 31건) → 별 sprint `FIX-ELEC-QR-DOC-ID-HARDCODE-20260502` (P2)
+- Sprint 63-FE: `mech_checklist_screen.dart` 신규 (~1,000~1,200 LoC, 2~3d)
+- AXIS-VIEW Sprint 39: BLUR 해제 + AddModal 토글 (별 repo, 0.5d)
+
+**적용 가능 영역**:
+- 향후 PI/QI/SI 체크리스트 도입 시 동일 schema 패턴 (`scope_rule` + `trigger_task_id` + `item_type` 3종)
+- `_normalize_qr_doc_id()` 는 모든 SINGLE/DUAL 모델 분기 코드의 표준 진입점
+
+---
+
+
 
 ### ADR-001: FK CASCADE → RESTRICT 전환 (2026-03-15)
 - **맥락**: 초기 migration(001-005)이 전부 CASCADE로 생성됨. worker 삭제 시 출퇴근/작업이력 전부 소실 위험

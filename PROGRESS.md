@@ -3,9 +3,76 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: v2.10.14 (FIX-FACTORY-KPI-SHIPPED-V2.4 — `_count_shipped` plan AND→OR + ops→best + R-02 해석 A 검증, 2026-04-28) + Sentry DSN 활성화 완료
+> **현재 버전**: **v2.11.0 (Sprint 63-BE MECH 체크리스트 BE 인프라, 2026-05-04)** — 양식 73 항목 / 20 그룹 / pytest 21/21 PASS / +1,415 LoC
 > **최근 인프라**: FIX-DB-POOL-MAX-SIZE-20260427 — Railway env DB_POOL_MAX 20→30 (2026-04-27, 코드 변경 0)
 > **D+1 운영 검증 (2026-04-28)**: 출근 peak 측정 PASS — Pool exhausted 0 / direct conn fallback 0 / OPS conn 6~7 안정 / Sentry 새 issue 0 → 옵션 X1 유지, OBSERV-WARMUP COMPLETED 확정, v2.10.11 HOTFIX-06b 불필요
+
+---
+
+## v2.11.0 (Sprint 63-BE MECH 체크리스트 BE 인프라): 양식 73 항목 / 20 그룹 도입 (2026-05-04)
+
+**Sprint**: `SPRINT-63-BE-MECH-CHECKLIST-20260429` (4-29 등록 → 5-01 v2 INLET 8개 분리 → 5-04 squash merge)
+
+**배경**: TM(Sprint 52, v2.6.0) / ELEC(Sprint 57, v2.9.0) 후 MECH 자주검사 체크리스트 디지털화. Sprint 32 도입 (3-19) silent failure 사고 trail 으로 정정 trail 11건 (Codex 라운드 1+2+3 + 사용자 결정 4건) 모두 적용.
+
+**완료 사항 (Step 1~9, branch sprint-63-be-mech-checklist 11 commits squash merge)**:
+
+### Step 1: migration 051/051a + seed CSV git add (+253 LoC)
+- `migrations/051_mech_checklist_extension.sql`: scope_rule + trigger_task_id 컬럼, item_type CHECK 'INPUT', alert_type_enum 'CHECKLIST_MECH_READY'
+- `migrations/051a_mech_checklist_seed.sql`: 73 INSERT (CHECK 56 / INPUT 10 / SELECT 7, all 56 / tank_in_mech 9 / DRAGON 8)
+
+### Step 2: `_normalize_qr_doc_id()` 공유 helper (+42 LoC)
+- TM/ELEC/MECH 공유 normalizer (Sprint 59-BE 재발 방지, ADR-020)
+- SINGLE='DOC_{S/N}' / DUAL='DOC_{S/N}-L|R' / idempotent / edge case (hint=None, 공백, mixed-case full-id, 빈 serial)
+
+### Step 3+4: `_resolve_active_master_ids()` + `check_mech_completion()` (+152 LoC)
+- scope_rule 'all' / 'tank_in_mech' (DRAGON·GALLANT·SWS) / 'DRAGON' (INLET S/N L/R 8개) 분기
+- judgment_phase=2 (c)안 — 1차 record 강제 안 함, 관리자 phase=2 record 만으로 cover
+- HOTFIX-08 표준 conn.rollback() 2곳 적용
+
+### Step 5: `_check_tm_completion` → `check_tm_completion` rename (9 hits)
+- private→public 일관 인터페이스
+- 영향: checklist_service 5 + production 2 + test_alert_all20 2
+
+### Step 6: routes/checklist.py MECH 분기 + service 함수 2개 (+257 LoC)
+- GET / PUT / GET status 3 endpoints
+- get_mech_checklist() / upsert_mech_check() — ELEC 패턴 + INPUT type 지원
+- _get_checklist_by_category() SELECT 절에 scope_rule + trigger_task_id 추가 (FE 무영향, 신규 필드)
+
+### Step 7+8: task_service hook + production MECH 분기 (+69 LoC)
+- _trigger_mech_checklist_alert() — UTIL_LINE_1/UTIL_LINE_2/WASTE_GAS_LINE_2 시작 시 'CHECKLIST_MECH_READY' alert
+- _check_sn_checklist_complete() MECH 분기 활성화
+
+### Step 9: pytest 21 TC 신규 (+554 LoC) — 21/21 PASS (186.84s)
+- [A] _normalize_qr_doc_id pure function 6 TC (DB 불필요)
+- [B] scope_rule + phase1 7 TC (all/tank_in_mech/DRAGON × 모델별 매핑)
+- [C] trigger_task_id 매핑 3 TC (Speed 4 / MFC+FS 7 / INLET 8)
+- [D] seed count 1 TC (51a 실파일 분포 자동 검증)
+- [E] rename gate 1 TC (rg "_check_tm_completion" = 0)
+- [F] phase=2 (c)안 2 TC (1차 record 미강제)
+- [G] WebSocket emit 1 TC (mock create_alert 호출 검증)
+
+**검증 (Pre-deploy Gate 7건 통과)**:
+1. pytest test_mech_checklist 21/21 PASS ✅
+2. SELECT scope_rule, COUNT(*) → all=56 / tank_in_mech=9 / DRAGON=8 정합 ✅
+3. resolve_managers_for_category('MECH') 표준 패턴 활용 ✅
+4. CHECKLIST_MECH_READY alert 발화 검증 ✅
+5. rg "_check_tm_completion" = 0 hits ✅
+6. AXIS-VIEW cross-repo schema 정합 ✅
+7. ALTER TYPE ADD VALUE non-transactional 보증 (migration_runner autocommit=True) ✅
+
+**회귀 영향**: 0건 (TM/ELEC 응답에 새 필드 추가만, 기존 키 무변경).
+
+**파일 변경 (16 파일, +1,415 LoC)**:
+- migration 신규 2 (051 / 051a) + CSV 신규 1
+- service: checklist_service.py +365 / task_service.py +65
+- routes: checklist.py +96 / production.py +5
+- test: test_mech_checklist.py 신규 +554 / test_alert_all20_verify.py rename
+- doc: handoff +130 / memory +50 / CHANGELOG +52 / BACKLOG status
+
+**후속 별 sprint**:
+- Sprint 63-FE: `mech_checklist_screen.dart` 신규 (~1,000~1,200 LoC, 2~3d, BE 배포 후)
+- AXIS-VIEW Sprint 39: BLUR 해제 + AddModal 토글 (~0.5d, 별 repo)
 
 ---
 

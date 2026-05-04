@@ -34995,3 +34995,348 @@ def start_work_batch(
 - 다른 task 화이트리스트 확장 (가압검사 등) — Sprint 40 화이트리스트 일반화 시 동시 변경
 - pause-batch / resume-batch — Tank Module 작업 중단 일괄 처리 필요 시 (현재 미요청)
 - worker_ids 명시 batch (admin proxy mode) — 다른 worker 명의 일괄 처리 필요 시 신규 endpoint 분리
+
+---
+
+## 🔧 FIX-DB-POOL-SELF-RECOVERY-20260504 프롬프트 — DB Pool 자가 회복 메커니즘 (5일 주기 재발 차단, 🔴 P1)
+
+> **등록일**: 2026-05-04 KST
+> **Sprint ID**: `FIX-DB-POOL-SELF-RECOVERY-20260504`
+> **BACKLOG 연계**: `FIX-DB-POOL-SELF-RECOVERY-20260504` (5-04 신규 등록)
+> **선행 Sprint**: OBSERV-DB-POOL-IDLE-DISCONNECT-WARMUP-20260427 ✅ / FIX-DB-POOL-DIRECT-FALLBACK-LOG-LEVEL-20260428 ✅
+> **우선순위**: 🔴 P1 (5-09 ± 1d 재발 예상 — 사용자 영향 새벽이면 0, 출근 peak 7:30~9:00 KST 도달 시 burst exhausted)
+> **상태**: 🔴 OPEN — 사고 분석 완료 (조사 5/6/7) → BE 구현 1.5h 즉시 착수 가능
+> **예상 소요**: 1.5h (코드 ~30 LOC + pytest 3 TC + staging 검증 + 배포)
+> **선행 의존성**: 없음 (BE 단독, db_pool.py 단일 파일)
+> **충돌 위험**: Sprint 30-B 의 Railway proxy TCP_OVERWINDOW 충돌 패턴 (4-30+ tier 변동으로 해결됐을 가능성 — staging 검증 필수)
+> **트리거 근거**: 2026-05-04 11:38~12:32 KST 사고 + 4-29 23:31 KST 사고 5일 주기 재발 패턴 확립
+
+### 🔬 사고 분석 — 2단계 root cause
+
+#### Timeline (UTC → KST 변환)
+
+| UTC | KST | warmup 결과 | 상태 |
+|-----|-----|-------------|------|
+| 01:38 ~ 02:38 | 10:38 ~ 11:38 | 5/5 ✅ (1h 안정) | 정상 |
+| **02:43:35** | **11:43:35** | **2/2 ⚠️ 첫 degrade** | 5분 안 conn 3개 lost |
+| 02:48:35 | 11:48:35 | 0/0 🔴 | 모든 conn lost |
+| 02:53 ~ 03:28 | 11:53 ~ 12:28 (40분) | 0/0 🔴 지속 | 자가 회복 X |
+| 02:57:12 | **11:57:12** | Pool exhausted burst (사용자 영향 시작) | — |
+| 03:32:50 | **12:32:50** | 5/5 ✅ 회복 | Restart 완료 |
+
+#### 1단계 (트리거): Railway network proxy idle TCP disconnect
+
+```
+조사 5 결과 (pg_settings):
+  idle_in_transaction_session_timeout: 0    ← Postgres 안 끊음
+  idle_session_timeout:                0    ← Postgres 안 끊음
+  statement_timeout:                   0    ← Postgres 안 끊음
+  tcp_keepalives_idle:                 7200초 (2시간)  ← 너무 길음
+  tcp_keepalives_interval:             75초
+  tcp_keepalives_count:                9
+
+db_pool.py 의 _CONN_KWARGS:
+  # Railway public proxy용: keepalive OFF (프록시와 충돌 방지)
+  _CONN_KWARGS = {'connect_timeout': 5}   ← keepalive OFF (Sprint 30-B 정책)
+
+→ Railway network proxy 가 5~10분 idle TCP 끊으면 client 모름 (silent disconnect)
+```
+
+#### 2단계 (확산): ThreadedConnectionPool 자가 회복 부재 ⭐
+
+```
+KST 11:38 ~ 11:43 (5분):  Railway proxy 가 5 conn idle 끊음 (silent)
+KST 11:43:           warmup → 2/2 (3개 dead 감지 → discard)
+KST 11:48:           warmup → 0/0 (모든 conn dead, _used dict 에 5 dead 잔존)
+KST 11:48 ~ 12:28 (40분):  warmup 8 cycles 모두 0/0 → 새 conn 생성 자체 fail
+                          ← _used 의 dead conn 5개 정리 메커니즘 부재
+                          ← _pool.getconn() 시 PoolError exhausted → break → 0/0
+                          ← Restart 외 회복 불가
+KST 12:32:           Restart → init_pool() → 정상화
+```
+
+**WATCHDOG 영역 외 (Sentry 0 event 의 의미)**:
+- 기존 WATCHDOG (db_pool.py:267-277) 은 `_pool=None` 만 감지
+- 본 사고는 `_pool` object 살아있고 internal `_used` dict 만 깨짐
+- → WATCHDOG 미발화 → Sentry 자동 capture 0 event (사용자 실측 통과)
+
+조사 7 결과: 신규 MECH 코드 (Sprint 63-BE) 의 `_resolve_active_master_ids` / `check_mech_completion` / `_normalize_qr_doc_id` 모두 leak 패턴 0 (HOTFIX-08 정합 + try/finally put_conn). 본 사고와 무관.
+
+### 📐 변경 범위 (1 파일, ~30 LOC net)
+
+#### 1) `backend/app/db_pool.py` — `_CONN_KWARGS` 에 keepalive 활성화
+
+```python
+# Before (Sprint 30-B Railway 정책)
+_CONN_KWARGS = {
+    'connect_timeout': 5,
+}
+
+# After (Sprint 63-BE 후속 hotfix)
+# Sprint 63-BE 후속 (FIX-DB-POOL-SELF-RECOVERY-20260504):
+# Railway network proxy idle disconnect 회피 — psycopg2 client 측 keepalive 활성화.
+# 4-30+ Railway tier 변동으로 Sprint 30-B 의 TCP_OVERWINDOW 충돌 해결됐을 가능성 (staging 검증 후 적용).
+_CONN_KWARGS = {
+    'connect_timeout': 5,
+    'keepalives': 1,                # OS 레벨 TCP keepalive 활성화
+    'keepalives_idle': 60,          # 60초 idle 후 probe 시작 (vs 기존 OS 7200초)
+    'keepalives_interval': 10,      # 10초 간격 probe
+    'keepalives_count': 3,          # 3회 fail 시 dead 판정
+}
+# 효과: 60초 idle 후 30초 안 dead 감지 → 90초 안 끊김 발견 → 새 conn 만들기
+```
+
+#### 2) `backend/app/db_pool.py` — 자가 회복 메커니즘 신설
+
+```python
+# 모듈 상단 변수 추가 (L37 _conn_created_at 근처)
+_consecutive_zero_warmup: int = 0  # 0/0 conn warmed 연속 카운터
+
+# warmup_pool() 마지막 부분 수정
+def warmup_pool() -> tuple:
+    global _consecutive_zero_warmup
+    # ... 기존 _pool=None 체크 + getconn loop + SELECT 1 로직 그대로 ...
+
+    # (신규) 0/0 연속 감지 시 자가 회복
+    if warmed == 0 and len(conns) == 0:
+        _consecutive_zero_warmup += 1
+        if _consecutive_zero_warmup >= 3:  # 15분 연속 (5분 cron × 3)
+            logger.error(
+                "[db_pool] 0/0 warmed for %d consecutive cycles — re-initializing pool (pid=%d)",
+                _consecutive_zero_warmup, os.getpid()
+            )
+            try:
+                close_pool()
+                init_pool()
+                _consecutive_zero_warmup = 0
+                logger.info("[db_pool] pool re-initialized successfully (self-recovery)")
+            except Exception as e:
+                logger.error("[db_pool] pool re-init failed: %s", e)
+    else:
+        _consecutive_zero_warmup = 0  # 정상 cycle 시 리셋
+
+    return (warmed, len(conns))
+```
+
+⚠️ **함정 1**: `global _consecutive_zero_warmup` 선언 누락 시 UnboundLocalError. increment 직전 명시 필수.
+
+⚠️ **함정 2**: per-worker 구조라 각 worker 의 `_consecutive_zero_warmup` 카운터 독립. Worker A 가 자가 회복 trigger 해도 Worker B 는 별개. 정합 (의도된 설계).
+
+#### 3) WATCHDOG 확장 — logger.error 격상 (변경 0, 자동 효과)
+
+```
+변경 2 의 logger.error("[db_pool] 0/0 warmed for ... — re-initializing pool")
+  → LoggingIntegration(event_level=ERROR) 자동 Sentry capture
+  → Twin파파 알람 1분 안 도달 (Sentry alert rule 의 level=error 필터 정확 작동)
+  → 추가 작업 0 — Sprint 30-B + Sentry 통합 효과 그대로 활용
+```
+
+### ✅ pytest 신규 TC 3개
+
+```python
+# tests/backend/test_db_pool.py 확장
+
+def test_keepalive_args_passed_to_psycopg2():
+    """psycopg2 connect 시 keepalive 4 args 전달 검증."""
+    from unittest.mock import patch
+    with patch('psycopg2.pool.ThreadedConnectionPool') as mock_pool:
+        from app.db_pool import _create_pool
+        _create_pool()
+        kwargs = mock_pool.call_args.kwargs
+        assert kwargs.get('keepalives') == 1
+        assert kwargs.get('keepalives_idle') == 60
+        assert kwargs.get('keepalives_interval') == 10
+        assert kwargs.get('keepalives_count') == 3
+
+
+def test_consecutive_zero_warmup_triggers_init_pool():
+    """0/0 conn warmed 3회 연속 시 close_pool + init_pool 자동 호출."""
+    from unittest.mock import patch, MagicMock
+    from app import db_pool
+
+    db_pool._consecutive_zero_warmup = 0  # 초기화
+    fake_pool = MagicMock()
+    fake_pool.getconn.side_effect = Exception("PoolError exhausted")
+
+    with patch.object(db_pool, '_pool', fake_pool), \
+         patch.object(db_pool, 'close_pool') as mock_close, \
+         patch.object(db_pool, 'init_pool') as mock_init:
+
+        # 1차 cycle — 0/0
+        db_pool.warmup_pool()
+        assert db_pool._consecutive_zero_warmup == 1
+        mock_init.assert_not_called()
+
+        # 2차 cycle — 0/0
+        db_pool.warmup_pool()
+        assert db_pool._consecutive_zero_warmup == 2
+        mock_init.assert_not_called()
+
+        # 3차 cycle — 0/0 → 자가 회복 trigger
+        db_pool.warmup_pool()
+        mock_close.assert_called_once()
+        mock_init.assert_called_once()
+        assert db_pool._consecutive_zero_warmup == 0  # 리셋 검증
+
+
+def test_zero_warmup_logger_error_captured(caplog):
+    """0/0 연속 3회 시 logger.error 발생 (Sentry capture 자동 보장)."""
+    import logging
+    from unittest.mock import patch, MagicMock
+    from app import db_pool
+
+    db_pool._consecutive_zero_warmup = 2  # 마지막 cycle 직전 상태
+    fake_pool = MagicMock()
+    fake_pool.getconn.side_effect = Exception("PoolError")
+
+    with patch.object(db_pool, '_pool', fake_pool), \
+         patch.object(db_pool, 'close_pool'), \
+         patch.object(db_pool, 'init_pool'):
+
+        with caplog.at_level(logging.ERROR, logger='app.db_pool'):
+            db_pool.warmup_pool()
+
+    error_logs = [r for r in caplog.records
+                  if 're-initializing pool' in r.message]
+    assert len(error_logs) == 1
+    assert error_logs[0].levelno == logging.ERROR
+```
+
+### ✅ Pre-deploy Gate (3건)
+
+```
+1. Staging 환경 1h 운영 후 keepalive 패킷 정합:
+   - tcpdump 또는 Postgres logs 에서 60초 간격 keepalive 패킷 확인
+   - Railway proxy TCP_OVERWINDOW WARN 0건 (Sprint 30-B 충돌 패턴 재발 검증)
+   - 정상 운영 시 keepalive 부작용 0
+
+2. 자가 회복 trigger 강제 시뮬레이션:
+   - psql 로 Worker A 의 5 conn 강제 종료 (pg_terminate_backend)
+   - warmup cron 5분 × 3 = 15분 후 [db_pool] 0/0 warmed for 3 consecutive cycles 로그 확인
+   - close_pool() + init_pool() 호출 logs 확인
+   - 다음 warmup cycle 5/5 정상 회복 확인
+
+3. WATCHDOG ERROR Sentry capture 검증:
+   - 위 시뮬레이션 시점 Sentry 대시보드 → 신규 issue 발생 확인
+   - issue 제목 "[db_pool] 0/0 warmed for N consecutive cycles" 자동 catch 정상
+   - alert rule (level=error) 정확 작동 → Twin파파 알람 1분 안 도달
+```
+
+### 🚀 배포 순서
+
+```
+1. commit:
+   "fix(db_pool): self-recovery — keepalive + consecutive-zero-warmup re-init
+
+    Root cause: Railway proxy idle TCP disconnect (5-04 11:38~12:32 KST 사고)
+                 + ThreadedConnectionPool _used dict dead conn 정리 부재
+
+    Changes:
+      - _CONN_KWARGS: keepalives=1, idle=60, interval=10, count=3 (Sprint 30-B 정책 update)
+      - warmup_pool: _consecutive_zero_warmup counter + 3 cycles 시 close+init
+      - logger.error 자동 Sentry capture (WATCHDOG 확장)
+
+    pytest: 3 TC 신규 + 회귀 0건
+    Refs: FIX-DB-POOL-SELF-RECOVERY-20260504"
+
+2. git push origin main → Railway 자동 재배포 ~1분
+   → Railway logs 정상 boot 확인
+   → [db_pool] Connection pool initialized: min=5, max=30, max_age=300s, connect_timeout=5s
+     (※ keepalive logs 추가 — Pre-deploy Gate 1 보강 권장)
+
+3. 1h staging 관찰 → TCP_OVERWINDOW WARN 0건 확인
+4. prod 적용 (위 commit 동일)
+5. 5-09 ± 1d 시점 자가 회복 작동 검증
+```
+
+### 📊 Post-deploy 관찰 (1h / 24h / 1주)
+
+#### T+1h
+```
+Railway logs:
+  - [db_pool] Connection pool initialized 정상 ✓
+  - keepalive 관련 ERROR 0건 ✓
+  - Sentry 신규 issue 0 ✓
+```
+
+#### T+24h
+```
+warmup cron 정상 5/5 패턴 유지 (288 cycles = 24h × 12)
+_consecutive_zero_warmup 카운터 누적 0 (정상 운영 시)
+Railway proxy TCP_OVERWINDOW WARN 부재 (Sprint 30-B 회귀 0)
+```
+
+#### T+1주 (5-11 KST 도달 시점)
+```
+5-09 ± 1d 재발 예상 시점 자가 회복 작동 검증:
+  - 만약 재발 발생 시 → close+init 자동 호출 logs + Sentry event 발화
+  - 사용자 영향 0 (15분 안 자동 복구) → COMPLETED
+  - 만약 재발 0건 → keepalive 자체로 차단됨 (이상적) → COMPLETED
+  - Restart 수동 처리 빈도 0회 도달 → 본 Sprint 효과 정량 입증
+```
+
+### 📦 Rollback
+
+```
+git revert <commit-sha>
+→ 1 파일 원복 (db_pool.py)
+→ Railway 자동 재배포 ~1분
+→ 이전 동작 (keepalive OFF + 자가 회복 X) 복귀
+
+위험:
+  - 5-09 ± 1d 재발 시 Restart 수동 처리 필요 (이전 패턴)
+  - Sprint 30-B Railway proxy 충돌 재발 시 keepalive 옵션만 제거 (변경 1) + 자가 회복 (변경 2/3) 만 유지 가능 — 부분 rollback OK
+```
+
+### 📋 BACKLOG 동기화
+
+```
+FIX-DB-POOL-SELF-RECOVERY-20260504          🔴 P1
+  → ✅ COMPLETED (v2.10.X 예정, 2026-05-XX)
+  ├─ db_pool.py keepalive 4 args 활성화
+  ├─ warmup_pool() _consecutive_zero_warmup counter + 자가 회복
+  ├─ logger.error 자동 Sentry capture (WATCHDOG 확장)
+  ├─ test_db_pool.py 신규 TC 3개 (keepalive / 자가 회복 / WATCHDOG)
+  └─ 회귀 0건 (정상 warmup cycle 무영향)
+
+5-04 사고 timeline trail:
+  KST 10:38~11:38: 정상 5/5 (1h)
+  KST 11:43:      5/5 → 2/2 (Railway proxy idle disconnect 시작)
+  KST 11:48~12:28: 0/0 8 cycles (40분, 자가 회복 X)
+  KST 12:32:      Restart 수동 회복
+
+5-09 ± 1d 검증:
+  자가 회복 trigger 시 init_pool() 호출 + Sentry capture + Twin파파 알람
+  사용자 영향 ≤ 15분 (자가 회복 max 시간)
+```
+
+### 🤝 후속 Sprint 연계
+
+```
+INFRA-RAILWAY-PROXY-IDLE-INVESTIGATION-20260504    🟢 P3 (선택, 별 BACKLOG)
+  └─ Railway tier 의 정확한 proxy idle timeout 정책 조사
+  └─ 만약 5분 미만이면 keepalives_idle 더 짧게 (60→30초) 조정
+  └─ Railway 측 documentation 또는 support ticket
+
+OBSERV-WARMUP-LOGGER-CLARIFY-20260504             🟢 P3 (선택)
+  └─ logger 메시지 개선: "[pool_warmup] 0/0 conn warmed (MIN=5)" 형식
+  → 0/0 의미 (5개 시도 못 함) 즉시 식별
+```
+
+### 📝 사후 기록 양식 (배포 후)
+
+```
+✅ 배포 완료 (2026-05-XX HH:MM KST, v2.10.X)
+  ├─ commit: <sha>
+  ├─ Railway logs: keepalive 정상 boot ✓
+  ├─ pytest test_db_pool: 6/6 PASS (기존 3 + 신규 3) ✓
+  └─ Staging 1h 검증: TCP_OVERWINDOW WARN 0 ✓
+
+1h / 24h / 1주 관찰:
+  ├─ T+1h:    keepalive 정상 / Sentry 새 issue 0 ✓
+  ├─ T+24h:   _consecutive_zero_warmup 누적 0 / 정상 5/5 cycles 288회 ✓
+  └─ T+1주 (5-09 ± 1d): 재발 0 (keepalive 차단) 또는 자가 회복 작동 → COMPLETED 판정
+
+OPEN → COMPLETED 전환
+```
+

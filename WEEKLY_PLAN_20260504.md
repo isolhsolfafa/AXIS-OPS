@@ -8,35 +8,35 @@
 
 ---
 
-## 🧭 한눈에 (현재 상태, 2026-05-04)
+## 🧭 한눈에 (현재 상태, 2026-05-04 월요일 마감)
 
 ```
-현재 버전 : v2.10.17 (2026-05-01, main 배포 — HOTFIX-09 access_log cleanup)
-최근 작업 : v2.10.17 HOTFIX-09 — _cleanup_access_logs `get_db_connection` import 1줄 추가 (43일 silent failure 종결, Sentry 가치 입증 #4)
-이전 트랙 : v2.10.16 FIX-DB-POOL-WARMUP-WATCHDOG (BE only, watchdog log 격상) / v2.10.15 access_log retention 90d / v2.10.14 KPI shipped v2.4 / v2.10.13 묶음 / v2.10.12 DURATION_WARNINGS / v2.10.11 PROCESS-VALIDATOR-TMS-MAPPING
-진행 중   : (없음 — 이번 주 시작)
-대기 중   : Sprint 64-BE Tank Module Batch 3 endpoint (VIEW Sprint 40 동반) / Sentry 운영 1주 결과 검토 / Railway DB rotation / GitHub repo private
+현재 버전 : v2.11.0 (2026-05-04, main commit — Sprint 63-BE MECH 체크리스트 BE 인프라)
+최근 작업 : ✅ v2.11.0 — Sprint 63-BE MECH 체크리스트 BE 인프라 (양식 73 항목 / 20 그룹 / +1,415 LoC / pytest 21/21 PASS / 회귀 0건 / migration 051+051a)
+이전 트랙 : v2.10.17 HOTFIX-09 (43일 silent fail 종결) / v2.10.16 watchdog / v2.10.15 access_log 90d / v2.10.14 KPI v2.4 / v2.10.13 묶음 / v2.10.12 DURATION_WARNINGS / v2.10.11 PROCESS-VALIDATOR-TMS-MAPPING
+진행 중   : Sprint 63-FE Codex 라운드 1 검증 진입 예정 (mech_checklist_screen.dart 설계서 작성 후)
+대기 중   : Sprint 63-FE 구현 (~2~3d, BE 배포 후) / AXIS-VIEW Sprint 39 (~0.5d, 별 repo) / FIX-ELEC-QR-DOC-ID-HARDCODE (P2, 1h)
 ```
 
-→ 이번 주는 **새 주 시작** (월요일 자동 시드). 지난 주 11 배포 (v2.10.4~v2.10.17 누적, 사용자 영향 0) + Sentry 활성화 (가치 입증 4건) → 이번 주 핵심 트랙은 회고 후 1~2줄 추가 권장.
+→ 5-04 (월) **Sprint 63-BE 정식 종료** — 양식 73 항목 디지털화 + qr_doc_id 공유 normalizer 표준 패턴 확립 (ADR-020). 하루 안에 코드 + 21 TC + squash merge + version bump 완료.
 
 ---
 
 ## 🎯 이번 주 핵심 3가지
 
 ```
-1. (TBD)
-2. (TBD)
-3. (TBD)
+1. ✅ Sprint 63-BE MECH 체크리스트 BE 인프라 (5-04 v2.11.0 release)
+2. ⏳ Sprint 63-FE Codex 라운드 1 + 설계서 → 구현 (5-05~07, 2~3d)
+3. ⏳ AXIS-VIEW Sprint 39 BLUR 해제 + AddModal 토글 (5-08, 0.5d, 별 repo)
 ```
 
-→ 시드 후보 (지난 주 잔존 + BACKLOG 상단):
-- Sprint 64-BE Tank Module Batch 3 endpoint (VIEW Sprint 40 동반)
-- Sentry 운영 1주 결과 검토 + alert rule 미세 조정
-- Railway DB 자격증명 갱신 (보안)
-- GitHub repo private 전환 (보안)
+→ Sprint 63 전체 (BE + FE + VIEW) 한 주 안에 마무리 가능. 후속 잔존:
+- Sprint 64-BE Tank Module Batch 3 endpoint (다음 주 또는 여유 시)
+- FIX-ELEC-QR-DOC-ID-HARDCODE-20260502 (P2, 1h, Sprint 63-BE 후속 HOTFIX)
+- Sentry 운영 1주 결과 검토 (5-04 이후 누적 검토)
 - AUDIT-PWA-SW-INDEXEDDB-PRESERVE (PIN 후속, 30분)
 - UX-LOGIN-FALLBACK-PIN-RESET-LINK (UX, 1h)
+- Railway DB rotation / GitHub repo private (보안)
 
 ---
 
