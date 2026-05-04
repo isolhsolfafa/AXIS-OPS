@@ -3,9 +3,66 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: **v2.11.0 (Sprint 63-BE MECH 체크리스트 BE 인프라, 2026-05-04)** — 양식 73 항목 / 20 그룹 / pytest 21/21 PASS / +1,415 LoC
+> **현재 버전**: **v2.11.1 (Sprint 63-FE Flutter UI + R2-1 patch, 2026-05-04)** — Sprint 63 전체 (BE 인프라 v2.11.0 + FE UI v2.11.1) 종료 / pytest 24/24 PASS / +2,453 LoC 누적
 > **최근 인프라**: FIX-DB-POOL-MAX-SIZE-20260427 — Railway env DB_POOL_MAX 20→30 (2026-04-27, 코드 변경 0)
 > **D+1 운영 검증 (2026-04-28)**: 출근 peak 측정 PASS — Pool exhausted 0 / direct conn fallback 0 / OPS conn 6~7 안정 / Sentry 새 issue 0 → 옵션 X1 유지, OBSERV-WARMUP COMPLETED 확정, v2.10.11 HOTFIX-06b 불필요
+
+---
+
+## v2.11.1 (Sprint 63-FE Flutter UI + R2-1 BE patch + N1/N2): Sprint 63 전체 종료 (2026-05-04)
+
+**Sprint**: `SPRINT-63-FE-MECH-CHECKLIST-20260501` (5-01 등록 → 5-04 v2.11.1 release)
+
+**배경**: Sprint 63-BE (v2.11.0) squash merge 직후 FE piece 통합 release. Codex 라운드 1+2 + N1/N2 정정 trail 14건 모두 실코드 반영.
+
+**완료 사항**:
+
+### BE patch (R2-1, ~10 LoC)
+- `services/checklist_service.py` `get_mech_checklist()` 응답에 `tank_in_mech: bool` 추가
+- model_config LEFT JOIN longest-prefix 매칭 + HOTFIX-08 rollback
+
+### FE 신규 (mech_checklist_screen.dart 844 LoC)
+- 입력 UI 3종 분기 (CHECK 라디오 / SELECT 드롭다운 / INPUT TextField + PASS/NA)
+- DUAL split-token 매칭 — `RegExp(r'[\s\-]').contains('DUAL')` (M-R2-A/B 'DUAL-300' false-positive 차단)
+- `_qrDocIdForItem` — DRAGON+INPUT+DUAL 만 hint 강제 (M-R2-C, ArgumentError 안전망)
+- INLET Left/Right subgroup (Q1-B) + role gate (M3) + debounce 500ms (Q6-C)
+- helper: `_normalizeQrDocId` / `_evaluateDualModel` / `_checkResultMap` / `_selectValueMap` / `_getCurrentCheckResult`
+
+### N1: WebSocket CHECKLIST_MECH_READY 핸들러 (A6-F1)
+- `models/alert_log.dart` priority + iconName CHECKLIST_MECH_READY 추가
+- `screens/admin/alert_list_screen.dart` `_handleAlertTap` MECH 분기 + title/color 매핑
+- `alert_provider.dart` 의 `_handleNewAlert` 가 alert_type 무관 자동 처리 → MECH 자동 등록 + 탭 시 MechChecklistScreen 진입
+
+### N2: pytest 3 TC 신규 (M-R2-D)
+- `TestR21TankInMechResponse`:
+  * `test_get_mech_checklist_response_has_tank_in_mech_key` (모든 모델 키 존재)
+  * `test_..._tank_in_mech_true_for_dragon_gallant_sws`
+  * `test_..._tank_in_mech_false_for_gaia_mithas_sds`
+- 결과: **3/3 PASS** (85.54s)
+- 누적: 21 → 24 TC
+
+### 라우팅
+- `screens/task/task_management_screen.dart`: MechChecklistScreen 진입 라우팅
+
+**검증**:
+- pytest 24/24 PASS (Sprint 63-BE 21 + R2-1 patch 3)
+- 회귀 영향: 0건 (BE 응답 additive 키 + FE 신규 파일 + alert 분기 추가만)
+
+**파일 변경 (10 파일, +1,038 LoC)**:
+- BE: checklist_service.py +18
+- FE: mech_checklist_screen.dart 신규 +844
+- FE: alert_log.dart +2 / alert_list_screen.dart +19 / task_management_screen.dart +6
+- Test: test_mech_checklist.py +47
+- Doc: CHANGELOG +46 / version.py + app_version.dart 2.11.0→2.11.1 / AGENT_TEAM_LAUNCH +다수
+
+**Sprint 63 전체 통계 (BE v2.11.0 + FE v2.11.1)**:
+- BE 인프라 +1,415 LoC + FE UI +1,038 LoC = **+2,453 LoC**
+- pytest 24/24 PASS
+- 정정 trail 14건 (라운드 1 5 + 라운드 2 9 + N1/N2 2)
+
+**후속 별 sprint**:
+- AXIS-VIEW Sprint 39: BLUR 해제 + AddModal 토글 (~0.5d, 별 repo)
+- BUG-TM-CHECKLIST-AUTO-FINALIZE-STALE-TC-20260504 (P3, 1h, Sprint 63 무관)
 
 ---
 

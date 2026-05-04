@@ -2,11 +2,36 @@
 
 > 세션 간 누적되는 의사결정, 아키텍처 판단, 감사 결과를 기록합니다.
 > CLAUDE.md = 프로젝트 고정 정보 / memory.md = 누적 학습 / handoff.md = 세션 인계
-> 마지막 업데이트: 2026-05-04 (ADR-020 Sprint 63-BE MECH 체크리스트 + qr_doc_id normalizer 표준 패턴)
+> 마지막 업데이트: 2026-05-04 (ADR-021 Sprint 63-FE Flutter UI + R2-1 patch + WebSocket alert 통합 — Sprint 63 전체 종료 v2.11.1)
 
 ---
 
 ## 1. 아키텍처 의사결정 기록 (ADR)
+
+### ADR-021: Sprint 63-FE Flutter UI + R2-1 BE patch + WebSocket 통합 (2026-05-04, v2.11.1)
+
+**맥락**:
+- Sprint 63-BE (v2.11.0) BE 인프라 squash merge 완료 직후 후속 piece
+- Codex 라운드 1 (M=5/A=5/Q1~Q7) → 라운드 2 (R2-1~5/M=4) → 본 세션 N1/N2 모두 정정 후 release
+- 누적 정정 trail 14건 (라운드 1 5건 + 라운드 2 9건 + N1/N2 2건) 모두 실코드 반영
+
+**결정 (FE 패턴 표준 5건)**:
+1. **DUAL 모델 추론**: `model.toUpperCase().split(RegExp(r'[\s\-]')).contains('DUAL')` — 'DUAL-300' / 'GAIA-DUAL-X' 같은 prefix/substring 충돌 차단. Sprint 59-BE `'DUAL' in model.upper().split()` 패턴 정합 + Dart RegExp 으로 하이픈도 split.
+2. **DUAL 도면 qr_doc_id 정책**: `_qrDocIdForItem` 의 `requiresLrHint = (scope=='DRAGON' && type=='INPUT' && _isDualModel)` — DRAGON+INPUT+DUAL 만 hint 강제, 도면 항목은 SINGLE-style fallback. ArgumentError 안전망으로 누락 시 명시적 throw.
+3. **judgment_phase 토글 권한**: `is_manager OR is_admin` 만 2차 토글 노출 — 일반 작업자는 1차 고정 (잘못된 record 생성 차단).
+4. **debounce 500ms + 번들 PUT**: `_debouncedUpsert` per-master Timer + check_result + selected_value + input_value 항상 동시 전송 (BE upsert_mech_check check_result 필수 정합).
+5. **WebSocket alert 처리 패턴**: `_handleNewAlert` 가 alert_type 무관 자동 state 등록 + `_handleAlertTap` 이 alert_type 별 화면 분기 (TM/MECH 같은 패턴). 즉시 토스트 X, 알림 목록 + 탭 시 진입.
+
+**결과**:
+- pytest test_mech_checklist 24/24 PASS (21 기존 + 3 신규 R2-1 회귀)
+- +1,038 LoC (BE 18 + FE 844 + 라우팅 6 + alert 21 + pytest 47 + doc)
+- 회귀 영향 0건
+
+**적용 가능 영역**:
+- 향후 PI/QI/SI Flutter UI 도입 시 동일 패턴 (`_isDualModel` split / role gate / debounce / alert 분기)
+- DUAL 분기 코드의 표준 — `RegExp(r'[\s\-]').contains('DUAL')`
+
+---
 
 ### ADR-020: Sprint 63-BE MECH 체크리스트 + qr_doc_id 공유 normalizer 표준 (2026-05-04, v2.11.0)
 

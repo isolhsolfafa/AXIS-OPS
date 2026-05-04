@@ -11,14 +11,14 @@
 ## 🧭 한눈에 (현재 상태, 2026-05-04 월요일 마감)
 
 ```
-현재 버전 : v2.11.0 (2026-05-04, main commit — Sprint 63-BE MECH 체크리스트 BE 인프라)
-최근 작업 : ✅ v2.11.0 — Sprint 63-BE MECH 체크리스트 BE 인프라 (양식 73 항목 / 20 그룹 / +1,415 LoC / pytest 21/21 PASS / 회귀 0건 / migration 051+051a)
-이전 트랙 : v2.10.17 HOTFIX-09 (43일 silent fail 종결) / v2.10.16 watchdog / v2.10.15 access_log 90d / v2.10.14 KPI v2.4 / v2.10.13 묶음 / v2.10.12 DURATION_WARNINGS / v2.10.11 PROCESS-VALIDATOR-TMS-MAPPING
-진행 중   : Sprint 63-FE Codex 라운드 1 검증 진입 예정 (mech_checklist_screen.dart 설계서 작성 후)
-대기 중   : Sprint 63-FE 구현 (~2~3d, BE 배포 후) / AXIS-VIEW Sprint 39 (~0.5d, 별 repo) / FIX-ELEC-QR-DOC-ID-HARDCODE (P2, 1h)
+현재 버전 : v2.11.1 (2026-05-04, main commit — Sprint 63-FE Flutter UI + R2-1 BE patch + N1/N2)
+최근 작업 : ✅ v2.11.1 — Sprint 63-FE Flutter UI 완성 (+844 LoC) + R2-1 BE patch (tank_in_mech 응답) + alert 핸들러 + pytest 3 TC. Sprint 63 전체 (BE v2.11.0 + FE v2.11.1) 정식 종료
+이전 트랙 : v2.11.0 Sprint 63-BE / v2.10.17 HOTFIX-09 / v2.10.16 watchdog / v2.10.15 access_log 90d / v2.10.14 KPI v2.4 / v2.10.13 묶음 / v2.10.12 DURATION_WARNINGS
+진행 중   : (없음 — Sprint 63 종료)
+대기 중   : push (퇴근 후 main + v2.11.0 + v2.11.1 + Netlify deploy) / AXIS-VIEW Sprint 39 (~0.5d, 별 repo) / BUG-TM-...-STALE-TC (P3, 1h)
 ```
 
-→ 5-04 (월) **Sprint 63-BE 정식 종료** — 양식 73 항목 디지털화 + qr_doc_id 공유 normalizer 표준 패턴 확립 (ADR-020). 하루 안에 코드 + 21 TC + squash merge + version bump 완료.
+→ 5-04 (월) **Sprint 63 전체 정식 종료** — 양식 73 항목 디지털화 + Flutter UI + qr_doc_id 공유 normalizer 표준 (ADR-020) + DUAL split-token 패턴 (ADR-021). 하루 안에 BE 인프라 + FE UI + Codex 라운드 1+2 + N1/N2 모두 완료.
 
 ---
 
@@ -26,11 +26,11 @@
 
 ```
 1. ✅ Sprint 63-BE MECH 체크리스트 BE 인프라 (5-04 v2.11.0 release)
-2. ⏳ Sprint 63-FE Codex 라운드 1 + 설계서 → 구현 (5-05~07, 2~3d)
-3. ⏳ AXIS-VIEW Sprint 39 BLUR 해제 + AddModal 토글 (5-08, 0.5d, 별 repo)
+2. ✅ Sprint 63-FE Flutter UI + R2-1 BE patch (5-04 v2.11.1 release) — 라운드 1+2+N1+N2 모두 정정
+3. ⏳ AXIS-VIEW Sprint 39 BLUR 해제 + AddModal 토글 (5-05~08, 0.5d, 별 repo)
 ```
 
-→ Sprint 63 전체 (BE + FE + VIEW) 한 주 안에 마무리 가능. 후속 잔존:
+→ Sprint 63 OPS repo 전체 (BE + FE) 1일 만에 마무리. AXIS-VIEW 만 별 repo 잔존. 후속 잔존:
 - Sprint 64-BE Tank Module Batch 3 endpoint (다음 주 또는 여유 시)
 - FIX-ELEC-QR-DOC-ID-HARDCODE-20260502 (P2, 1h, Sprint 63-BE 후속 HOTFIX)
 - Sentry 운영 1주 결과 검토 (5-04 이후 누적 검토)
