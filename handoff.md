@@ -3,6 +3,37 @@
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
 > 마지막 업데이트: 2026-05-04 KST (✅ **v2.11.0 — Sprint 63-BE squash merge 완료**, pytest 21/21 PASS, +1,415 LoC, 다음 단계: Sprint 63-FE Codex 라운드 1)
 
+## ✅ Sprint 63 BE+FE — 정식 종료 (v2.11.1 release, 2026-05-04)
+
+```
+commit c70babd (main) — feat: v2.11.1 Sprint 63-FE Flutter UI + R2-1 BE patch + N1/N2
+tag    v2.11.1
+```
+
+### v2.11.1 추가 변경
+- BE patch (R2-1): get_mech_checklist() 응답에 tank_in_mech: bool (~10 LoC)
+- FE 신규: mech_checklist_screen.dart 844 LoC + alert_log/alert_list 분기 + 라우팅
+- N1: WebSocket CHECKLIST_MECH_READY 핸들러 (alert_provider 자동 + 탭 시 MECH 진입)
+- N2: pytest TestR21TankInMechResponse 3 TC PASS (총 21→24 TC)
+- 회귀 영향: 0건
+
+### 다음 단계 (퇴근 후 직접 실행)
+
+```bash
+cd /Users/twinfafa/Desktop/GST/AXIS-OPS
+git push origin main
+git push origin v2.11.0
+git push origin v2.11.1
+
+cd frontend
+flutter build web --release
+npx netlify-cli deploy --prod --dir=build/web --site=ab8041c3-dc51-40c6-96e4-9966222aeda3
+```
+
+Railway 자동 배포 (~2분) + Netlify 자동 배포 → migration 051/051a 자동 적용 + FE Mech 화면 활성화.
+
+---
+
 ## ✅ Sprint 63-BE — 정식 종료 (v2.11.0 release, 2026-05-04)
 
 ```
