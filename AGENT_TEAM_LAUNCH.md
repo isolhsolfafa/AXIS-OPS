@@ -34675,6 +34675,40 @@ Q6. 저장 시점                  → C (debounce 500ms, Q3 번들 PUT 포함)
 Q7. select_options 빈 master   → B ('운영자 미설정 안내', 자유 텍스트 강등 금지)
 ```
 
+### ✅ Codex 라운드 2 후속 검증 결과 (2026-05-04, M=4 / A=7 / N=6)
+
+> 라운드 2 정정 (R2-1~5) + Minor 3건 본문 반영 후 재검증 결과. **Must 4건 추가 정정 필요**.
+
+**🔴 Must 4건 (FE 구현 진입 전 필수)**:
+
+| # | 항목 | 정정안 |
+|---|------|--------|
+| M-R2-A | DUAL 추론 BE 정합 | `_evaluateDualModel`: `model.contains('DUAL')` → `model.toUpperCase().split(RegExp(r'\s+')).contains('DUAL')` (Sprint 59-BE `'DUAL' in model.upper().split()` 패턴 정합) |
+| M-R2-B | 'DUAL-300' / 'GAIA-DUAL-X' false-positive 차단 | M-R2-A 정정과 동일 — split 기반 토큰 매칭으로 prefix/substring 충돌 방지 |
+| M-R2-C | DUAL 도면 항목 qr_doc_id 정책 | INLET 도면 1 항목 (CHECK) 의 DUAL 모델 시 record qr_doc_id 결정 필요. 권장: BE `check_mech_completion()` 의 DUAL loop 가 도면 항목도 L+R 양쪽 완료 검증 → FE 도 도면 항목 record 2건 (`DOC_{S/N}-L`, `DOC_{S/N}-R`) 동시 입력 시 동일 라디오 양쪽 적용 (또는 BE 별 single record 처리 결정 후 FE 따라감) |
+| M-R2-D | pytest 강화 | `test_mech_checklist_response_has_tank_in_mech_key` 1건 외 추가: (1) DUAL 모델 응답 검증 (2) tank_in_mech=True 모델 별 응답 (3) BE patch 자체 회귀 — 합 3 TC 권장 |
+
+**🟠 Advisory 7건** (사후/별건):
+- v2.11.1 별 commit+tag 권장 (squash merge 후 deployment hygiene)
+- Dart `mech_checklist_screen.dart` 실파일 부재 — FE 구현 진입 시점 검증 대상
+- timer/controller dispose 명시 (Map 자체 dispose 불필요)
+- rapid 입력 시 stale bundled value 가능 (full bundle PUT 보장 필수)
+- INLET 8 record 분기 FE hinting 구현 후 검증
+- 5 모델 gate 에 tank_in_mech 활용 검증 명시 추가
+
+**🟢 Note 6건 (정합 확인)**:
+- tank_in_mech additive 키 → 기존 클라이언트 영향 0
+- model_config longest-prefix 매칭 정확
+- 'Left #1' / 'Right #1' seed naming 정확
+- 배포 순서 BE → FE → VIEW OK
+
+**⚠️ 최우선 prerequisite (추가 advisory)**:
+1. **R2-1 BE patch 실 구현** — `mech_checklist_screen.dart` build 전 `get_mech_checklist()` 응답에 `tank_in_mech` 실제 노출 (현재 미반영)
+2. **DUAL 감지 패턴 통일** (M-R2-A/B) — BE/FE 동일 split 기반 토큰 매칭
+3. **DUAL 도면 qr_doc_id 정책 사전 합의** (M-R2-C) — BE 동작 결정 후 FE 따라감
+
+→ Sprint 63-FE 구현 진입 전 위 4 Must 본문 코드 정정 필요. R2-1 BE patch 구현은 별 v2.11.1 commit.
+
 ### ✅ Codex 라운드 2 정정 trail (2026-05-04, R2-1~5)
 
 | # | 항목 | 처리 결과 |
