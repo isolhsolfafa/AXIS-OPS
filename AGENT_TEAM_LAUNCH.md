@@ -36138,3 +36138,383 @@ OBSERV-WARMUP-LOGGER-CLARIFY-20260504             🟢 P3 (선택)
 OPEN → COMPLETED 전환
 ```
 
+
+---
+
+## 🐛 FIX-SPRINT-63-MECH-CHECKLIST-ENTRY-POINT-20260504 프롬프트 — Sprint 63 후속 BUGFIX (체크리스트 진입점 누락) (🔴 P0)
+
+> **등록일**: 2026-05-04 KST (v2.11.1 prod 배포 직후 사용자 운영 검증)
+> **Sprint ID**: `FIX-SPRINT-63-MECH-CHECKLIST-ENTRY-POINT-20260504`
+> **BACKLOG 연계**: `FIX-SPRINT-63-MECH-CHECKLIST-ENTRY-POINT-20260504` (5-04 신규 등록)
+> **선행 Sprint**: Sprint 63-BE v2.11.0 ✅ + Sprint 63-FE v2.11.1 ✅ (prod 배포 완료)
+> **우선순위**: 🔴 P0 — Sprint 63 가시 기능 차단 해소 필수 (사용자 진입 경로 0)
+> **상태**: 🔴 OPEN — 즉시 착수 가능 (분석 완료, 변경 범위 명확)
+> **예상 소요**: **30분** (BE 5분 + FE 4 위치 mechanical 정정 10분 + flutter analyze 5분 + 검증 10분 + commit + push) — Codex 라운드 1 검증 시 FE 위치 4건 명시 보강으로 grep 시간 제거
+> **선행 의존성**: 없음 (Sprint 63 BE+FE prod 배포 완료 전제)
+> **충돌 위험**: 없음 (response key 추가 + UI 버튼 분기, additive)
+> **트리거 근거**: 2026-05-04 KST v2.11.1 prod 배포 후 사용자 운영 검증 — "체크리스트 자동 전환 안 됨" + "task 상세에 체크리스트 메뉴 버튼 없음"
+
+### 🔬 Root cause 분석 — Sprint 63-BE 설계 catch 누락
+
+```
+Sprint 63-BE 설계 시점:
+  ✅ trigger_task_id 의 토스트 알림 (CHECKLIST_MECH_READY) 명시
+  ✅ check_mech_completion / _resolve_active_master_ids / _normalize_qr_doc_id 신설
+  ❌ work/start 응답 분기 (checklist_ready + checklist_category='MECH') 미반영
+  ❌ FE task 상세 화면 체크리스트 진입 버튼 분기 미반영
+
+→ ELEC 패턴 차용 시 toast 알림 영역 만 매핑, **진입점 (entry point) 영역 누락**.
+```
+
+**ELEC 동등 영역 비교**:
+
+| 진입점 | ELEC | MECH (Sprint 63) | 결과 |
+|--------|------|-----------------|------|
+| toast 알림 (CHECKLIST_*_READY) | ✅ Sprint 57 | ✅ Sprint 63-BE | OK |
+| WebSocket alert 분기 (alert_log/alert_list) | ✅ | ✅ Sprint 63-FE N1 | OK |
+| **work/start 응답 분기** | ✅ Sprint 57 (work.py L177) | ❌ **누락** | 자동 전환 0 |
+| **work/complete 응답 분기** | ✅ Sprint 57 (task_service.py L488) | ❌ **누락** (선택) | 완료 후 진입 X |
+| **task 상세 메뉴 버튼** | ✅ ELEC/TM | ❌ **누락** | 수동 진입 0 |
+| `_navigateToChecklist` MECH 분기 | ✅ Sprint 63-FE | ✅ | 함수 자체는 OK |
+
+→ `_navigateToChecklist` 함수는 작성됐지만 **호출자가 없음** = dead code 상태.
+
+### 📐 변경 범위 (2 파일 + 선택 1)
+
+#### 1) `backend/app/routes/work.py` L177~ MECH 분기 추가 (~6 LoC)
+
+```python
+# 기존 (L177-184)
+# Sprint 57: ELEC INSPECTION 시작 → 체크리스트 팝업
+if updated_task.task_category == 'ELEC' and updated_task.task_id == 'INSPECTION':
+    result['checklist_ready'] = True
+    result['checklist_category'] = 'ELEC'
+# Sprint 57-E: QI 공정검사 시작 → ELEC 체크리스트 Phase 2 팝업
+if updated_task.task_category == 'QI' and updated_task.task_id == 'QI_INSPECTION':
+    result['checklist_ready'] = True
+    result['checklist_category'] = 'ELEC'
+
+# 신규 추가 (Sprint 63-FE 후속 BUGFIX)
+# Sprint 63-FE: MECH 체크리스트 진입 task 분기 — UTIL_LINE_1/2 + WASTE_GAS_LINE_2 + SELF_INSPECTION
+MECH_CHECKLIST_TASK_IDS = {
+    'UTIL_LINE_1',         # Speed Controller (4 항목, phase=1 우선)
+    'UTIL_LINE_2',         # MFC + Flow Sensor (7 항목)
+    'WASTE_GAS_LINE_2',    # INLET S/N (8 항목, DRAGON 전용)
+    'SELF_INSPECTION',     # 2차 관리자 검수 (전체 73 항목)
+}
+if updated_task.task_category == 'MECH' and updated_task.task_id in MECH_CHECKLIST_TASK_IDS:
+    result['checklist_ready'] = True
+    result['checklist_category'] = 'MECH'
+```
+
+⚠️ **함정 1** (Codex 라운드 1 AV1 + 추가 검토 정정 2026-05-04): task_category='MECH' 와 task_id 매칭 검증 — **권위 소스 두 곳 분리**.
+- **trigger_task_id 권위 소스**: `backend/migrations/051a_mech_checklist_seed.sql` L106 (master 데이터, 실 DB)
+  → 분포 (실측): UTIL_LINE_1=4 / UTIL_LINE_2=7 / WASTE_GAS_LINE_2=8 / **SELF_INSPECTION=0 (NULL 54)**
+  → SELF_INSPECTION 은 trigger_task_id NULL 이지만 hotfix `MECH_CHECKLIST_TASK_IDS` 에 포함 — **의도적** (관리자 phase=2 검수 진입용, 토스트 알림과 별개)
+- **task 카테고리/ID 정의 소스**: `backend/app/services/task_seed.py` L62-69 MECH_TASKS — 4 hotfix task_id 모두 정확 매칭
+- **BE Step 7 hook 비교** (`task_service.py:740`): `MECH_TRIGGER_TASK_IDS = {UTIL_LINE_1, UTIL_LINE_2, WASTE_GAS_LINE_2}` (3개, 토스트 한정) vs hotfix work.py 4개 (자동 진입) — **의도적 차이** (토스트 3 / 자동 진입 4, SELF_INSPECTION 은 토스트 안 보냄)
+
+#### 2) FE `task_detail_screen.dart` **5 위치** 정정 (~20 LoC, Codex 라운드 1 + 추가 검토 5번째 catch 2026-05-04)
+
+> **Codex 검증 catch**: 본 파일 안에 `_navigateToChecklist` 함수가 **별도 정의** 되어 있음 (task_management_screen.dart 의 동일 이름 함수와 다름).
+> Sprint 63-FE 시점에 task_management_screen.dart 의 _navigateToChecklist 만 MECH 분기 추가, task_detail_screen.dart 의 동일 이름 함수는 누락.
+> → 두 곳 모두 정정 또는 공통 함수 추출 필요 (본 hotfix 는 두 곳 정정 채택).
+
+| # | 위치 | 현재 (Sprint 57-FE) | 정정 |
+|---|------|---------------------|------|
+| **1** | L7-8 import | tm_checklist + elec_checklist | + `mech_checklist_screen.dart` |
+| **2** | L760-765 `_hasChecklistAccess` | ELEC + TMS TANK_MODULE + QI QI_INSPECTION | + MECH 4 trigger task_id |
+| **3** | L737-746 `_buildChecklistButton` onTap (in_progress 시) | ELEC / QI / TM 분기 | + MECH 분기 |
+| **4** | L767-776 `_navigateToChecklist` | ELEC / TM 분기 | + MECH 분기 |
+| **5** ⭐ | **L658-672 `_buildCompletedBadge` onTap (completed 시)** | **ELEC / QI / TM 분기** | **+ MECH 분기** (추가 검토 5번째 catch) |
+
+##### 정정 코드 샘플 (4 위치)
+
+```dart
+// 1. L7-8 import 추가 (Sprint 63-FE 후속 BUGFIX)
+import '../checklist/tm_checklist_screen.dart';
+import '../checklist/elec_checklist_screen.dart';
+import '../checklist/mech_checklist_screen.dart';  // Sprint 63-FE 후속
+
+// 2. L760-765 _hasChecklistAccess — MECH 4 task_id 추가
+bool _hasChecklistAccess(TaskItem task) {
+  if (task.taskCategory == 'ELEC') return true;
+  if (task.taskId == 'TANK_MODULE' && task.taskCategory == 'TMS') return true;
+  if (task.taskId == 'QI_INSPECTION' && task.taskCategory == 'QI') return true;
+  // Sprint 63-FE 후속 BUGFIX: MECH 체크리스트 진입 task 4개 (BE work.py 분기와 정합)
+  if (task.taskCategory == 'MECH' &&
+      {'UTIL_LINE_1', 'UTIL_LINE_2', 'WASTE_GAS_LINE_2', 'SELF_INSPECTION'}
+        .contains(task.taskId)) return true;
+  return false;
+}
+
+// 3. L737-746 _buildChecklistButton onTap — MECH 분기 추가
+onTap: () {
+  final sn = ref.read(taskProvider).currentSerialNumber;
+  if (sn != null) {
+    if (task.taskCategory == 'QI') {
+      _navigateToChecklist('ELEC', sn, initialPhase: 2);
+    } else if (task.taskCategory == 'MECH') {
+      // Sprint 63-FE 후속 BUGFIX
+      _navigateToChecklist('MECH', sn);
+    } else {
+      _navigateToChecklist(
+        task.taskCategory == 'ELEC' ? 'ELEC' : 'TM',
+        sn,
+        qrDocId: task.qrDocId,
+      );
+    }
+  }
+}
+
+// 4. L767-776 _navigateToChecklist — MECH 분기 추가
+//    (task_management_screen.dart L698-700 의 동일 이름 함수와 별도 — 두 곳 모두 정정 필요)
+void _navigateToChecklist(String category, String serialNumber, {String? qrDocId, int? initialPhase}) {
+  Widget screen;
+  if (category == 'ELEC') {
+    screen = ElecChecklistScreen(serialNumber: serialNumber, initialPhase: initialPhase);
+  } else if (category == 'MECH') {
+    // Sprint 63-FE 후속 BUGFIX
+    screen = MechChecklistScreen(serialNumber: serialNumber, initialPhase: initialPhase);
+  } else {
+    screen = TmChecklistScreen(serialNumber: serialNumber, qrDocId: qrDocId);
+  }
+  Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
+}
+
+// 5. ⭐ L658-672 _buildCompletedBadge onTap — MECH 분기 추가 (추가 검토 5번째 catch)
+//    task 완료 후 "체크리스트 검수" 버튼 클릭 시 — completed 시점의 진입 경로 (in_progress 와 별 분기)
+//    누락 시 MECH 완료 task → "체크리스트 검수" 클릭 → TM 화면으로 잘못 이동 (사용자 영향)
+onTap: () {
+  final taskState = ref.read(taskProvider);
+  final serialNumber = taskState.currentSerialNumber;
+  if (serialNumber != null) {
+    if (task.taskCategory == 'QI') {
+      _navigateToChecklist('ELEC', serialNumber, initialPhase: 2);
+    } else if (task.taskCategory == 'MECH') {
+      // Sprint 63-FE 후속 BUGFIX — 완료 시 MECH 체크리스트 검수 진입
+      _navigateToChecklist('MECH', serialNumber);
+    } else {
+      _navigateToChecklist(
+        task.taskCategory == 'ELEC' ? 'ELEC' : 'TM',
+        serialNumber,
+        qrDocId: task.qrDocId,
+      );
+    }
+  }
+}
+```
+
+⚠️ **함정 2** (Codex 검증 정합): 진입 버튼 노출 조건 = 기존 `task.status == 'in_progress'` 조건 (task_detail_screen.dart L340) 그대로 적용. MECH 도 동일 시점 노출 OK.
+
+⚠️ **함정 3** (Codex 신규 catch): `_navigateToChecklist` **두 파일에 별도 정의**:
+- `task_management_screen.dart` L698-700: ✅ Sprint 63-FE 시점 MECH 분기 추가됨
+- `task_detail_screen.dart` L767-776: ❌ MECH 분기 누락 (본 hotfix 영역)
+- 권장: 두 곳 모두 정정 또는 별 후속 sprint 로 공통 helper 추출 (REFACTOR-CHECKLIST-NAVIGATE-COMMON-20260504)
+
+⚠️ **함정 4** ⭐ (추가 검토 5번째 catch 2026-05-04): `task_detail_screen.dart` 의 체크리스트 진입 onTap **두 곳 별도 정의**:
+- L737-746 `_buildChecklistButton` onTap (in_progress 시) — hotfix 라운드 1 명시 ✅
+- **L658-672 `_buildCompletedBadge` onTap (completed 시)** — 라운드 1 누락 → 추가 검토 catch 🔴
+- 두 onTap 은 **같은 분기 패턴** 이지만 별도 정의 — 둘 다 정정 필수
+- 누락 시 사용자 영향: MECH task 완료 후 "체크리스트 검수" 버튼 클릭 → TM 화면으로 잘못 이동
+- 위치 5 (`_buildCompletedBadge` onTap) 누락 catch 후 hotfix 본문 4 → 5 위치로 갱신 (위 표 참조)
+
+#### 3) work/complete MECH 분기 — **본 hotfix 에서 제거 → 별 sprint 분리** (Codex 라운드 1 AV2 정정)
+
+> **AV2 정정 사유**: 본 hotfix 는 P0 = "사용자 진입 경로 0 해소" 영역. work/complete MECH 분기 (task 완료 후 체크리스트 미완료 시 자동 진입 유도) 는 **추가 UX 개선** 영역 — UX 검증 + ELEC 패턴과 동작 차이 추적 필요. P0 hotfix 에 포함 시 트래킹 어려움.
+> → **별 sprint 분리**:
+
+```
+FEAT-MECH-WORK-COMPLETE-CHECKLIST-NUDGE-20260504  🟢 P3 (별 sprint)
+  - task_service.py L488 영역에 ELEC IF_2 패턴 차용 MECH 분기 추가
+  - check_mech_completion(judgment_phase=1) 미완료 시 응답에 checklist_ready=True
+  - UX 검증 + ELEC 동작 비교 + UI 메시지 결정 필요
+  - 본 hotfix (P0 진입점) 안정 운영 1주 후 진행 권장
+  - 추정: 30분 (BE 분기 + UI 메시지 + pytest TC 1개)
+```
+
+→ 본 hotfix 변경 = **2 파일 (work.py + task_detail_screen.dart)** 만, 추정 30분 유지.
+
+### ✅ Codex 라운드 1 + 추가 검토 정정 trail (2026-05-04, M=1 / A=3 / N=1 + AV=2 + 추가 catch 1)
+
+| # | 항목 | 라벨 | 정정 결과 |
+|---|------|------|----------|
+| **M-R1** | `_hasChecklistAccess` taskCategory + taskId 양쪽 매칭 | M (risk) | ✅ 본문 코드 샘플 이미 정합 (L36239-36241 두 조건 모두) — 구현 시 단축 금지 명시 |
+| **A1** | trigger_task_id 권위 소스 → 051a seed | A | ✅ 함정 1 정정 + Pre-deploy Gate 1 명시 |
+| **A2** | pytest 신규 TC `test_work_start_mech_checklist_ready` 6 assertions | A | ✅ Pre-deploy Gate 2 코드 샘플 추가 |
+| **A3** | BE+FE 단일 atomic commit (Railway half-state 차단) | A | ✅ 배포 순서 섹션 명시 |
+| **N-R1** | ELEC/QI 패턴 (separate `if` + in-place + status gate) 정합 | N | ✅ 정합 확인 |
+| **AV1** | task_seed.py → 051a seed 인용 경로 정정 | AV | ✅ 함정 1 정정 (A1 동일) |
+| **AV2** | 선택 3 (work/complete MECH) 별 sprint 분리 | AV | ✅ FEAT-MECH-WORK-COMPLETE-CHECKLIST-NUDGE-20260504 (P3) 분리 |
+| **추가 catch 5** ⭐ | `_buildCompletedBadge` onTap MECH 분기 누락 (5번째 위치) | 🔴 본 세션 신규 | ✅ 4 → 5 위치로 갱신 + 코드 샘플 추가 + 함정 4 명시 |
+
+→ **본 hotfix 변경 = BE 1 파일 + FE 1 파일 (5 위치) = 2 파일 ~25 LoC**, 추정 1h 유지.
+
+### ✅ Pre-deploy Gate
+
+```
+1. BE 변경 검증:
+   - work.py L177~ MECH 분기 추가 + flask_app boot 정상
+   - **trigger_task_id 권위 소스 = `migrations/051a_mech_checklist_seed.sql:106`** (Codex 라운드 1 A1 정정 — task_seed.py 는 task_id 정의만, trigger_task_id 는 51a seed 가 권위) — UTIL_LINE_1/2 + WASTE_GAS_LINE_2 + SELF_INSPECTION 4개 정확 매칭
+
+2. **pytest 신규 TC** (Codex 라운드 1 A2 보강 — `tests/backend/test_mech_checklist.py` 또는 `test_work_api.py`):
+
+```python
+def test_work_start_mech_checklist_ready(client, dragon_serial_with_util_line_1_task):
+    """Sprint 63-FE 후속 BUGFIX: MECH 체크리스트 진입 task 시작 → 응답에 checklist_ready + category='MECH'"""
+    serial_number, task_detail_id = dragon_serial_with_util_line_1_task
+
+    # UTIL_LINE_1 task 시작
+    response = client.post(
+        '/api/app/work/start',
+        json={'task_detail_id': task_detail_id},
+        headers={'Authorization': f'Bearer {worker_token}'},
+    )
+
+    # 6 assertions
+    assert response.status_code == 200                             # (1)
+    body = response.get_json()
+    assert body['task_category'] == 'MECH'                          # (2)
+    assert body['task_id'] in {                                     # (3) 4 task_id 매칭
+        'UTIL_LINE_1', 'UTIL_LINE_2', 'WASTE_GAS_LINE_2', 'SELF_INSPECTION'
+    }
+    assert body['checklist_ready'] is True                          # (4)
+    assert body['checklist_category'] == 'MECH'                     # (5)
+    assert 'WASTE_GAS_LINE_1' not in body.get('task_id', '')        # (6) WASTE_GAS_LINE_1 의도적 제외 검증
+```
+
+3. FE 변경 검증:
+   - flutter analyze 0 error
+   - flutter build web 빌드 성공
+   - mech_checklist_screen.dart 의 import 경로 정합
+
+4. 수동 시나리오 검증 (DRAGON 모델 S/N 사용):
+   - UTIL_LINE_1 task 시작 → MechChecklistScreen 자동 진입 (응답 checklist_category='MECH')
+   - WASTE_GAS_LINE_2 task 시작 → 자동 진입
+   - task 상세 화면 → MECH 체크리스트 메뉴 버튼 노출 + 클릭 시 진입 (in_progress 시점, 위치 3)
+   - SELF_INSPECTION task 시작 → 관리자 진입 (role gate 정합)
+   - ⭐ **MECH task 완료 후 "체크리스트 검수" 버튼 클릭 → MechChecklistScreen 진입** (completed 시점, 위치 5, 추가 검토 catch)
+
+5. 회귀 검증 (negative case):
+   - WASTE_GAS_LINE_1 task 시작 → checklist_ready=False (의도적 제외 — trigger_task_id NULL)
+   - ELEC INSPECTION 시작 → 여전히 ElecChecklistScreen 진입 (회귀 0)
+   - TM TANK_MODULE 시작 → 여전히 TmChecklistScreen 진입 (회귀 0)
+```
+
+### 🚀 배포 순서 — **BE+FE 단일 atomic commit** (Codex 라운드 1 A3 보강)
+
+> **A3 명시**: BE+FE 분리 commit 시 Railway auto-deploy 가 BE 만 먼저 배포 → FE 미배포 상태에서 사용자가 work/start 호출 → 응답에 `checklist_category='MECH'` 받아도 `MechChecklistScreen` 진입 시 빌드 안 된 화면 = half-state prod 노출.
+> → **단일 atomic commit** 으로 Railway + Netlify 동시 시점 배포 보장.
+
+```
+1. 단일 atomic commit (BE work.py + FE task_detail_screen.dart 동시):
+   git add backend/app/routes/work.py
+   git add frontend/lib/screens/task/task_detail_screen.dart
+   git commit -m "fix(sprint-63): MECH 체크리스트 진입점 추가 (work/start 응답 + task 상세 메뉴)
+
+    Sprint 63 후속 BUGFIX — v2.11.1 prod 배포 후 사용자 검증에서 발견:
+      - work/start 응답에 MECH 분기 부재 → 자동 전환 0
+      - task 상세 화면에 MECH 체크리스트 메뉴 버튼 부재 → 수동 진입 0
+
+    변경:
+      - work.py L177~ MECH 분기 추가 (UTIL_LINE_1/2 + WASTE_GAS_LINE_2 + SELF_INSPECTION)
+      - task_detail_screen.dart 4 위치 정정 (import + _hasChecklistAccess + _buildChecklistButton + _navigateToChecklist)
+
+    회귀 위험: 0 (response key + UI 버튼 추가, 기존 무영향)
+    pytest: test_work_start_mech_checklist_ready 신규 (6 assertions)
+    Refs: FIX-SPRINT-63-MECH-CHECKLIST-ENTRY-POINT-20260504"
+
+2. git push origin main → Railway 자동 배포 + Netlify FE 빌드 동시
+3. 1~2분 후 prod 검증 (위 Pre-deploy Gate #4 시나리오)
+```
+
+⚠️ **half-state 회피**: BE 단독 push 시 응답에 `checklist_category='MECH'` 만 있고 FE 화면 미배포 → 사용자 진입 깨짐. **반드시 atomic** 진행.
+
+### 📊 Post-deploy 검증 (15분)
+
+```
+✅ DRAGON S/N 의 UTIL_LINE_1 task 시작 → MechChecklistScreen 자동 진입 ✓
+✅ task 상세 화면에서 MECH 체크리스트 버튼 클릭 → 진입 ✓
+✅ 73 항목 정상 표시 ✓
+✅ INLET 8개 L/R subgroup 표시 ✓
+✅ Sentry 새 ERROR 0건 ✓
+```
+
+### 📦 Rollback
+
+```
+git revert <commit-sha>
+→ 2 파일 원복 (work.py + FE task 상세)
+→ Railway 자동 재배포 ~1분 + Netlify rebuild
+→ 이전 상태 (자동 전환 X / 메뉴 버튼 X) 복귀
+
+위험: 0 (rollback 후 사용자 영향 = 이전과 동일, 추가 손실 없음)
+```
+
+### 📋 BACKLOG 동기화
+
+```
+FIX-SPRINT-63-MECH-CHECKLIST-ENTRY-POINT-20260504  🔴 P0
+  → ✅ COMPLETED (v2.11.2 예정, 2026-05-XX)
+  ├─ work.py L177~ MECH 분기 추가
+  ├─ FE task 상세 체크리스트 메뉴 버튼 MECH 분기
+  ├─ (선택) task_service.py work/complete 응답 분기
+  └─ Sprint 63 가시 기능 활성화
+
+후속 권장:
+  - memory.md ADR 추가 — 신규 카테고리 도입 시 진입점 검증 절차 표준화
+  - Sprint 63-BE/FE 설계 review checklist 갱신
+```
+
+### 🤝 Cowork 책임 + 재발 방지 명시
+
+**Cowork 책임 인정**:
+- Sprint 63-BE 설계 시 ELEC 패턴 차용 영역에서 trigger_task_id 의 토스트 알림 (CHECKLIST_MECH_READY) 만 매핑
+- work/start 응답 분기 (checklist_ready + checklist_category) + FE task 상세 진입 버튼 = **prerequisite 검증 누락**
+- Codex 라운드 1+2+후속 검토 영역에서도 진입점 (entry point) 영역 catch 못 함
+
+**재발 방지 — `memory.md` ADR 추가 권장**:
+```
+## ADR-022: 신규 체크리스트 카테고리 도입 시 진입점 검증 표준 (Sprint 63 후속, 2026-05-04)
+
+신규 체크리스트 카테고리 도입 시 (예: 미래 PI/QI/SI Flutter UI), 다음 진입점 영역 명시 검증 필수:
+
+### BE 측
+1. work/start 응답 분기 (work.py) — checklist_ready + checklist_category
+2. work/complete 응답 분기 (task_service.py) — 완료 후 진입 유도
+3. trigger_task_id 토스트 알림 (CHECKLIST_*_READY enum)
+4. WebSocket emit 핸들러 (alert_service)
+
+### FE 측
+1. _navigateToChecklist 함수 분기 (task_management_screen)
+2. task 상세 화면 체크리스트 메뉴 버튼 (task_detail_screen / task_card)
+3. alert_log 분기 (alert_list_screen 의 _handleAlertTap)
+
+### 검증 절차
+- ELEC 패턴 동등 영역 grep 으로 모든 진입점 위치 확인
+- 신규 카테고리 분기 추가 시 prerequisite 명시 (Sprint 설계서)
+- prod 배포 직후 수동 시나리오 검증 (자동 전환 + 메뉴 버튼 클릭)
+```
+
+### 📝 사후 기록 양식 (배포 후)
+
+```
+✅ 배포 완료 (2026-05-XX HH:MM KST, v2.11.2)
+  ├─ commit: <sha>
+  ├─ Railway logs: boot 정상 ✓
+  ├─ Netlify FE 빌드 성공 ✓
+  └─ Sentry 새 ERROR 0건 ✓
+
+수동 검증 (15분):
+  ├─ UTIL_LINE_1 자동 진입: ___ (Y/N)
+  ├─ UTIL_LINE_2 자동 진입: ___ (Y/N)
+  ├─ WASTE_GAS_LINE_2 자동 진입: ___ (Y/N)
+  ├─ SELF_INSPECTION 관리자 진입 + role gate: ___ (Y/N)
+  ├─ task 상세 메뉴 버튼 노출 + 클릭 진입: ___ (Y/N)
+  └─ 73 항목 표시 + INLET 8개 L/R subgroup: ___ (Y/N)
+
+→ 모두 Y → COMPLETED 전환 + Sprint 63 가시 기능 정식 활성화
+
+memory.md ADR-022 추가: ___ (Y/N) — 재발 방지 표준 등록
+```
+
