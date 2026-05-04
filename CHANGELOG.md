@@ -6,6 +6,48 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.11.2] - 2026-05-04 — Sprint 63 후속 BUGFIX: 체크리스트 진입점 누락 fix (BE+FE, P0 hotfix)
+
+> v2.11.1 prod 배포 직후 사용자 검증 — "체크리스트 자동 전환 안 됨" + "task 상세 메뉴 버튼 없음" 발견. Sprint 63-BE 설계 시 ELEC 패턴 차용 영역에서 토스트만 매핑하고 진입점(entry point) 영역 누락. P0 hotfix.
+
+### Root cause
+- Sprint 63-BE 설계 catch 누락: trigger_task_id 토스트만 매핑 + work/start 응답 분기 + task 상세 메뉴 버튼 누락
+- Sprint 63-FE `_navigateToChecklist` 함수는 task_management_screen 에만 MECH 분기 추가, task_detail_screen 의 동일 이름 함수는 누락 (dead code 상태)
+
+### 변경 (BE 1 파일 + FE 1 파일, 2 파일 ~25 LoC)
+
+**BE (`backend/app/routes/work.py`)**:
+- L177~ MECH 분기 추가: `MECH_CHECKLIST_TASK_IDS = {UTIL_LINE_1, UTIL_LINE_2, WASTE_GAS_LINE_2, SELF_INSPECTION}`
+- 4 task 시작 시 응답에 `checklist_ready=True + checklist_category='MECH'`
+
+**FE (`frontend/lib/screens/task/task_detail_screen.dart`) — 5 위치**:
+1. L7-8 import: `mech_checklist_screen.dart` 추가
+2. L760-770 `_hasChecklistAccess`: MECH 4 trigger task_id 분기
+3. L737-746 `_buildChecklistButton` onTap (in_progress 시): MECH 분기
+4. L767-780 `_navigateToChecklist`: MECH 분기 (`MechChecklistScreen`)
+5. **L658-672 `_buildCompletedBadge` onTap (completed 시)**: MECH 분기 (추가 검토 5번째 catch)
+
+### Codex 라운드 1 + 추가 검토 (M=1 / A=3 / N=1 + AV=2 + 추가 catch 1)
+- M-R1: `_hasChecklistAccess` taskCategory + taskId 양쪽 매칭 risk indicator (현재 코드 OK)
+- A1+AV1: trigger_task_id 권위 소스 정정 — `task_seed.py` → `migrations/051a_mech_checklist_seed.sql:106`
+- A2: pytest TC 신규 6 assertions
+- A3: BE+FE 단일 atomic commit (Railway half-state 차단)
+- AV2: 선택 3 (work/complete MECH) → 별 sprint `FEAT-MECH-WORK-COMPLETE-CHECKLIST-NUDGE-20260504` (P3) 분리
+- 추가 검토: 5번째 위치 (`_buildCompletedBadge` onTap) 누락 — 4 → 5 위치로 갱신
+
+### Test
+- `tests/backend/test_mech_checklist.py` `TestWorkStartMechChecklistEntry` 6 TC 신규:
+  - UTIL_LINE_1/2 + WASTE_GAS_LINE_2 + SELF_INSPECTION 시작 시 checklist_ready=True
+  - WASTE_GAS_LINE_1 (의도적 제외) negative 검증
+  - ELEC INSPECTION 회귀 검증 (category='ELEC' 유지)
+- 누적 24 → 30 TC
+
+### 회귀 영향
+- 0건 (BE response 키 추가 + FE 분기 추가만, additive)
+- migration/DB 변경 없음 → git revert 1건으로 v2.11.1 복귀 가능
+
+---
+
 ## [2.11.1] - 2026-05-04 — Sprint 63-FE Flutter UI + R2-1 BE patch + N1/N2 정정 (BE+FE)
 
 > Sprint 63 전체 종료 piece. v2.11.0 (BE 인프라) + R2-1 BE patch + Flutter UI 통합 release.

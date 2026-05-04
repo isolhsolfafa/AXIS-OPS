@@ -6,6 +6,7 @@ import '../../providers/auth_provider.dart';
 import '../../utils/design_system.dart';
 import '../checklist/tm_checklist_screen.dart';
 import '../checklist/elec_checklist_screen.dart';
+import '../checklist/mech_checklist_screen.dart';  // Sprint 63-FE 후속 BUGFIX (v2.11.2)
 
 /// Task 상세 화면
 ///
@@ -661,6 +662,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                   if (serialNumber != null) {
                     if (task.taskCategory == 'QI') {
                       _navigateToChecklist('ELEC', serialNumber, initialPhase: 2);
+                    } else if (task.taskCategory == 'MECH') {
+                      // Sprint 63-FE 후속 BUGFIX (v2.11.2): 완료 시 MECH 체크리스트 검수 진입
+                      _navigateToChecklist('MECH', serialNumber);
                     } else {
                       _navigateToChecklist(
                         task.taskCategory == 'ELEC' ? 'ELEC' : 'TM',
@@ -736,6 +740,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
             if (sn != null) {
               if (task.taskCategory == 'QI') {
                 _navigateToChecklist('ELEC', sn, initialPhase: 2);
+              } else if (task.taskCategory == 'MECH') {
+                // Sprint 63-FE 후속 BUGFIX (v2.11.2)
+                _navigateToChecklist('MECH', sn);
               } else {
                 _navigateToChecklist(
                   task.taskCategory == 'ELEC' ? 'ELEC' : 'TM',
@@ -756,19 +763,30 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     );
   }
 
-  /// Sprint 57-E: 체크리스트 접근 가능 여부 (ELEC / TMS TANK_MODULE / QI)
+  /// Sprint 57-E + Sprint 63-FE 후속 BUGFIX: 체크리스트 접근 가능 여부
+  /// (ELEC / TMS TANK_MODULE / QI / MECH 4 trigger task_id)
   bool _hasChecklistAccess(TaskItem task) {
     if (task.taskCategory == 'ELEC') return true;
     if (task.taskId == 'TANK_MODULE' && task.taskCategory == 'TMS') return true;
     if (task.taskId == 'QI_INSPECTION' && task.taskCategory == 'QI') return true;
+    // Sprint 63-FE 후속 BUGFIX (v2.11.2): MECH 체크리스트 진입 task 4개 (BE work.py 정합)
+    if (task.taskCategory == 'MECH' &&
+        const {'UTIL_LINE_1', 'UTIL_LINE_2', 'WASTE_GAS_LINE_2', 'SELF_INSPECTION'}
+            .contains(task.taskId)) {
+      return true;
+    }
     return false;
   }
 
-  /// Sprint 57-FE: 카테고리별 체크리스트 화면 분기
+  /// Sprint 57-FE + Sprint 63-FE 후속 BUGFIX (v2.11.2): 카테고리별 체크리스트 화면 분기
+  /// task_management_screen.dart L698-700 의 동일 이름 함수와 별도 — 두 곳 모두 정합 필요
   void _navigateToChecklist(String category, String serialNumber, {String? qrDocId, int? initialPhase}) {
     Widget screen;
     if (category == 'ELEC') {
       screen = ElecChecklistScreen(serialNumber: serialNumber, initialPhase: initialPhase);
+    } else if (category == 'MECH') {
+      // Sprint 63-FE 후속 BUGFIX (v2.11.2)
+      screen = MechChecklistScreen(serialNumber: serialNumber, initialPhase: initialPhase);
     } else {
       screen = TmChecklistScreen(serialNumber: serialNumber, qrDocId: qrDocId);
     }

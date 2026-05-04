@@ -599,3 +599,119 @@ class TestAlertEmit:
             ts._trigger_mech_checklist_alert(task, self.worker_id)
             assert mock_create.call_count == 0, \
                 "TANK_DOCKING 은 trigger 미매칭인데 create_alert 호출됨 (오류)"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# [H] v2.11.2 hotfix — work/start MECH 체크리스트 진입 응답 (6 TC)
+#     Sprint 63-FE 후속 BUGFIX (FIX-SPRINT-63-MECH-CHECKLIST-ENTRY-POINT-20260504)
+#     Codex 라운드 1 A2 보강 — work.py L177~ MECH 분기 회귀 검증
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _insert_task(db_conn, sn, category, task_id, task_name, worker_id):
+    """work/start 호출 가능한 task 삽입 (test_sprint57 패턴 차용)"""
+    cur = db_conn.cursor()
+    cur.execute("""
+        INSERT INTO app_task_details (serial_number, qr_doc_id, task_category, task_id, task_name, is_applicable, worker_id)
+        VALUES (%s, %s, %s, %s, %s, TRUE, %s)
+        ON CONFLICT (serial_number, qr_doc_id, task_category, task_id) DO UPDATE
+        SET is_applicable = TRUE
+        RETURNING id
+    """, (sn, f'DOC_{sn}', category, task_id, task_name, worker_id))
+    row = cur.fetchone()
+    db_conn.commit()
+    cur.close()
+    return row[0] if row else None
+
+
+class TestWorkStartMechChecklistEntry:
+    """v2.11.2 hotfix — work/start API 응답에 MECH 체크리스트 분기 검증.
+
+    설계 trail (AGENT_TEAM_LAUNCH.md FIX-SPRINT-63-MECH-CHECKLIST-ENTRY-POINT-20260504):
+    - work.py L177~ 의 ELEC INSPECTION + QI QI_INSPECTION 패턴 + MECH 4 task 분기
+    - MECH_CHECKLIST_TASK_IDS = {UTIL_LINE_1, UTIL_LINE_2, WASTE_GAS_LINE_2, SELF_INSPECTION}
+    - WASTE_GAS_LINE_1 (PRE_DOCKING) 의도적 제외 — trigger_task_id NULL (51a seed 정합)
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, db_conn, seed_test_data, create_test_worker, get_auth_token, client):
+        self.db_conn = db_conn
+        self.client = client
+        self.sn = f'{_PREFIX}WORK-START'
+        self.worker_id = create_test_worker(
+            email='sp63_workstart@test.axisos.com', password='Test1234!',
+            name='SP63 Work Start', role='MECH', company='FNI'
+        )
+        self.token = get_auth_token(self.worker_id, role='MECH')
+        # DRAGON 모델 (UTIL_LINE_1 + WASTE_GAS_LINE_2 활성)
+        _insert_product(db_conn, self.sn, model='DRAGON-V', mech_partner='FNI')
+        yield
+        _cleanup(db_conn, self.sn)
+
+    def _start_task(self, task_category, task_id, task_name):
+        task_detail_id = _insert_task(self.db_conn, self.sn, task_category, task_id, task_name, self.worker_id)
+        return self.client.post(
+            '/api/app/work/start',
+            json={'qr_doc_id': f'DOC_{self.sn}', 'task_category': task_category, 'task_id': task_id},
+            headers={'Authorization': f'Bearer {self.token}'}
+        )
+
+    def test_work_start_mech_util_line_1_checklist_ready(self):
+        """TC-H-01: UTIL_LINE_1 시작 → checklist_ready=True + category='MECH'."""
+        resp = self._start_task('MECH', 'UTIL_LINE_1', 'Util LINE 1')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data.get('checklist_ready') is True, \
+            f"UTIL_LINE_1 응답 checklist_ready={data.get('checklist_ready')} (True 기대)"
+        assert data.get('checklist_category') == 'MECH', \
+            f"UTIL_LINE_1 응답 checklist_category={data.get('checklist_category')} (MECH 기대)"
+
+    def test_work_start_mech_util_line_2_checklist_ready(self):
+        """TC-H-02: UTIL_LINE_2 시작 → checklist_ready=True + category='MECH'."""
+        resp = self._start_task('MECH', 'UTIL_LINE_2', 'Util LINE 2')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data.get('checklist_ready') is True
+        assert data.get('checklist_category') == 'MECH'
+
+    def test_work_start_mech_waste_gas_line_2_checklist_ready(self):
+        """TC-H-03: WASTE_GAS_LINE_2 (DRAGON INLET S/N 8) 시작 → checklist_ready=True + category='MECH'."""
+        resp = self._start_task('MECH', 'WASTE_GAS_LINE_2', 'Waste Gas LINE 2')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data.get('checklist_ready') is True
+        assert data.get('checklist_category') == 'MECH'
+
+    def test_work_start_mech_self_inspection_checklist_ready(self):
+        """TC-H-04: SELF_INSPECTION 시작 → checklist_ready=True + category='MECH'.
+
+        SELF_INSPECTION 은 trigger_task_id NULL 이지만 의도적 포함 (관리자 phase=2 검수 진입용).
+        """
+        resp = self._start_task('MECH', 'SELF_INSPECTION', '자주검사')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data.get('checklist_ready') is True
+        assert data.get('checklist_category') == 'MECH'
+
+    def test_work_start_mech_waste_gas_line_1_no_checklist_ready(self):
+        """TC-H-05: WASTE_GAS_LINE_1 (PRE_DOCKING, trigger NULL) 시작 → checklist_ready 부재 또는 False (의도적 제외).
+
+        51a seed 의 trigger_task_id NULL 인 task 는 자동 진입 미포함.
+        """
+        resp = self._start_task('MECH', 'WASTE_GAS_LINE_1', 'Waste Gas LINE 1')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        # checklist_ready 키가 없거나 False 여야 함
+        assert not data.get('checklist_ready'), \
+            f"WASTE_GAS_LINE_1 은 trigger_task_id NULL → 자동 진입 미포함 기대 (응답: {data.get('checklist_ready')})"
+        # checklist_category 'MECH' 가 응답에 없어야
+        assert data.get('checklist_category') != 'MECH', \
+            f"WASTE_GAS_LINE_1 응답에 category='MECH' 안 됨 (실제: {data.get('checklist_category')})"
+
+    def test_work_start_elec_inspection_regression(self):
+        """TC-H-06 (regression): ELEC INSPECTION 시작 → 여전히 checklist_category='ELEC' (회귀 0)."""
+        resp = self._start_task('ELEC', 'INSPECTION', '자주검사 (검수)')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data.get('checklist_ready') is True
+        assert data.get('checklist_category') == 'ELEC', \
+            f"ELEC INSPECTION 회귀 발생 — category={data.get('checklist_category')} (ELEC 기대)"

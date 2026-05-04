@@ -182,6 +182,18 @@ def start_work() -> Tuple[Dict[str, Any], int]:
             if updated_task.task_category == 'QI' and updated_task.task_id == 'QI_INSPECTION':
                 result['checklist_ready'] = True
                 result['checklist_category'] = 'ELEC'
+            # Sprint 63-FE 후속 BUGFIX (v2.11.2): MECH 체크리스트 진입 task 4개
+            #   trigger_task_id 권위 소스: migrations/051a_mech_checklist_seed.sql:106
+            #     - UTIL_LINE_1 (Speed Controller 4 항목)
+            #     - UTIL_LINE_2 (MFC + Flow Sensor 7 항목)
+            #     - WASTE_GAS_LINE_2 (INLET S/N 8 항목, DRAGON 전용)
+            #     - SELF_INSPECTION (trigger NULL 이지만 관리자 phase=2 검수 진입용 — 의도적)
+            MECH_CHECKLIST_TASK_IDS = {
+                'UTIL_LINE_1', 'UTIL_LINE_2', 'WASTE_GAS_LINE_2', 'SELF_INSPECTION',
+            }
+            if updated_task.task_category == 'MECH' and updated_task.task_id in MECH_CHECKLIST_TASK_IDS:
+                result['checklist_ready'] = True
+                result['checklist_category'] = 'MECH'
             return jsonify(result), 200
 
     return jsonify(response), status_code
