@@ -34263,16 +34263,71 @@ REFACTOR-CHECKLIST-FILE-SPLIT 🟡 P2 (BACKLOG REF-BE-12)
   └─ checklist_service.py 1,440 LoC + checklist.py 1,288 LoC 카테고리별 분리 (TM/ELEC/MECH)
 ```
 
-### ⚠️ 결정 필요 사항 (Codex 라운드 1 의뢰 대상)
+### ✅ Codex 라운드 1 결과 (2026-05-04, M=5 / A=5 / N=2)
+
+**🔴 Must 5건 (구현 전 필수 해결)**:
+
+| # | Area | 내용 | 정정 안 |
+|---|------|------|---------|
+| M1 | A1 phase 분기 | `phase=1 + phase1_applicable=False UI` 분기 dead code — BE `get_mech_checklist()` 가 phase 1 에서 이미 필터링 | 분기 삭제, 클라이언트는 받은 항목만 렌더 |
+| M2 | A2 scope text | scope_rule disabled UI 텍스트 일괄 — DRAGON/GALLANT/SWS 다른 맥락에 동일 copy 부적절 | Q2 = 'N/A' 일관 |
+| M3 | A3 권한 | judgment_phase 토글 무권한 노출 — 일반 작업자가 2차 판정 record 생성 가능 | FE `is_manager` / `is_admin` role gate 필수 |
+| M4 | A5 SELECT | SELECT DropdownButton onChanged PUT 누락 — 화면 refresh 시 7개 SELECT 값 소실 | onChanged 안에 `upsert_mech_check_api` PUT 호출 추가 |
+| M5 | A5 INPUT | INPUT 자동저장 시 `check_result` 동시 전송 누락 시 400 에러 | Q3 = 입력값 + PASS/NA 둘 다 필수, 번들 PUT |
+
+**🟠 Advisory 5건**:
+- A1-F2: "20 그룹" 고정 문구 → "phase 별 applicable 그룹만" 으로 정정
+- A3-F2: 2차 조회 시 read-only 라디오 vs 편집 UI 명확 구분
+- A4-F1: PUT 폭발 가능 (debounce 500ms 명시 필요, Q6 = C 채택)
+- A4-F2: 화면 dispose 시 `_inputControllers` 전체 정리 명시 (메모리 누수 방지)
+- A6-F1: WebSocket 핸들러 → alert provider 레이어 이동 (기존 `new_alert` 이벤트 패턴 일관성)
+
+**🟢 Note 2건 (정합 확인)**:
+- A2-F2 N: BE seed/config 에 'DRAGONFLY' 같은 prefix 충돌 모델 없음 → false-positive 위험 0
+- A6-F2 N: 토스트 클릭 진입 (Q4-B) 이 기존 foreground alert 흐름 일관
+
+### ✅ Q1~Q7 결정 (Codex 라운드 1 합의)
 
 ```
-Q1. INLET 8개 입력 위젯 grouping — 단일 그룹 8 row vs 'Left' subgroup 4 + 'Right' subgroup 4 로 시각 분리?
-Q2. scope_rule disabled UI 텍스트 — '해당없음 (Tank Ass'y 미적용)' / 'N/A' / '—' 중 어느 게 가독성 ↑?
-Q3. INPUT type + check_result 동시 처리 — '입력값만 있으면 자동 PASS' vs '입력값 + 라디오 둘 다 필수' 정책?
-Q4. WebSocket alert 수신 시 자동 화면 진입 vs 토스트 클릭 시 진입 (사용자 작업 흐름 방해 vs 가시성)?
-Q5. judgment_phase 토글 권한 — 1차 작업자가 2차 토글 클릭 가능한가? (관리자 권한 검증 필요?)
-Q6. 데이터 저장 시점 — TextField onChanged 즉시 vs onSubmitted vs debounce 500ms?
-Q7. select_options 가 비어있는 master 처리 — '편집 가능' vs '운영자 미설정 안내'?
+Q1. INLET 8개 grouping        → B (Left subgroup 4 + Right subgroup 4 분리, 스캔 오류 감소)
+Q2. scope_rule disabled 텍스트 → B ('N/A', tank_in_mech + 모델명 scope 양쪽 범용)
+Q3. INPUT + check_result      → B (입력값 + PASS/NA 둘 다 필수, BE 정합)
+Q4. Alert 진입 방식            → B (토스트 클릭 진입, 작업 흐름 보존)
+Q5. judgment_phase 권한        → B (role gate 필수, M3 해소)
+Q6. 저장 시점                  → C (debounce 500ms, Q3 번들 PUT 포함)
+Q7. select_options 빈 master   → B ('운영자 미설정 안내', 자유 텍스트 강등 금지)
+```
+
+### 📋 정정 후 화면 구성 (M1+M2+M3 반영)
+
+```
+MechChecklistScreen (StatefulWidget) — 정정 trail 5건 적용:
+├─ AppBar: '기구 체크리스트 — {S/N}'
+│   └─ judgment_phase 토글 (M3): is_manager=TRUE 인 경우만 노출, 일반 작업자는 1차 고정
+├─ FetchChecklist: GET /api/app/checklist/mech/{sn}?phase={1|2}
+└─ Body:
+   ├─ Group List (BE 가 이미 phase별 필터링한 항목만 — M1 dead code 제거):
+   │   └─ Item rendering:
+   │       ├─ if scope_rule + 비매칭 모델 → 'N/A' 회색 (M2: 일관 텍스트)
+   │       └─ else → item_type 분기:
+   │           ├─ 'CHECK': PASS/NA 라디오 (debounce 500ms)
+   │           ├─ 'SELECT': DropdownButton onChanged 즉시 PUT (M4: 값 소실 방지)
+   │           │   └─ select_options 빈 경우 '운영자 미설정 안내' (Q7-B)
+   │           └─ 'INPUT': TextField + PASS/NA 라디오 (M5: 둘 다 필수, 번들 PUT)
+   │               └─ INLET 8 항목은 'Left 4 + Right 4' subgroup 분리 (Q1-B)
+   │   └─ 2차 조회 + role 부족 → read-only 라디오 (A3-F2)
+   └─ Alert provider 레이어에서 CHECKLIST_MECH_READY → 토스트 (A6-F1, Q4-B)
+```
+
+### 📋 라운드 1 미해결 (라운드 2 의뢰 대상 후보)
+
+```
+- model_config 의 tank_in_mech boolean 을 FE 가 어떻게 받는지 — BE 응답에 명시 노출 필요?
+  현재 BE get_mech_checklist 는 product_info 의 model 만 응답. tank_in_mech 추론은 FE 가 model_prefix 매칭 해야 함.
+  → 옵션 A: BE 응답에 tank_in_mech bool 추가 (1줄 변경)
+  → 옵션 B: FE 가 product_info 별 API 로 model_config 조회 (2 API 호출)
+  → 결정 필요 (라운드 2)
+- INLET DUAL 모델의 record 생성 — BE 의 _normalize_qr_doc_id() 가 SINGLE/DUAL 분기. FE 도 동일 normalizer 작성 권장 (Sprint 63-BE 4-A 섹션 cross-ref).
 ```
 
 ---
