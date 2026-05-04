@@ -34011,7 +34011,268 @@ REFACTOR-CHECKLIST-FILE-SPLIT     🟡 P2 (BACKLOG REF-BE-12)
   ├─ INLET-SN-OCR-20260XXX 우선순위 결정 (1차 텍스트 입력 vs OCR 정확도)
   └─ REF-BE-12 (checklist.py 분할) 재평가
 
-OPEN → COMPLETED 전환
+OPEN → COMPLETED 전환 (✅ 2026-05-04 v2.11.0 완료)
+```
+
+---
+
+## 🚀 Sprint 63-FE — MECH 체크리스트 Flutter UI (mech_checklist_screen.dart 신규, 2026-05-04 등록, 🟡 P2)
+
+> **등록일**: 2026-05-04 KST (Sprint 63-BE v2.11.0 squash merge 완료 직후)
+> **Sprint ID**: `Sprint 63-FE — MECH 체크리스트 Flutter UI`
+> **BACKLOG 연계**: `SPRINT-63-FE-MECH-CHECKLIST-20260501`
+> **선행 Sprint**: Sprint 63-BE ✅ (v2.11.0, 2026-05-04 squash merge, BE 응답 schema scope_rule + trigger_task_id + select_options 보장)
+> **우선순위**: 🟡 P2 (Sprint 63 의 마지막 piece — BE 인프라만 존재 시 사용자 가시 기능 0)
+> **상태**: 🔴 OPEN — Codex 라운드 1 검증 진입 예정
+> **예상 소요**: 2~3d (mech_checklist_screen.dart 신규 ~1,000~1,200 LoC, ELEC 패턴 차용 + INPUT/SELECT/CHECK 3종 분기 + scope_rule disabled UI + judgment_phase 토글)
+> **선행 의존성**: Sprint 63-BE 배포 완료 (Twin파파 측 git push + Railway 배포 + migration 051/051a 자동 적용 후 착수)
+> **충돌 위험**: 낮음 (신규 파일 1개 + 라우팅 1줄 추가, 기존 ELEC/TM 화면 무영향)
+> **담당**: AXIS-OPS FE teammate
+> **Codex 이관**: ⭐ **권장** — Sprint 63-BE 와 동일 영역 (체크리스트 + scope_rule + INPUT type) + 신규 파일 1,000+ LoC + 사용자 가시 UI
+
+### 🎯 핵심 차이점 (ELEC 패턴 vs MECH 신규)
+
+```
+ELEC (elec_checklist_screen.dart 1,076 LoC) → MECH (mech_checklist_screen.dart 신규 ~1,000~1,200 LoC) 4가지 차이:
+
+[1] INPUT type 입력 위젯 분기 (ELEC 미사용, MECH 10 항목 사용 — INLET 8 + Speed 2)
+[2] scope_rule disabled NA UI (DRAGON/GALLANT/SWS 외 모델은 13/14/19 그룹 회색 disabled)
+[3] WebSocket CHECKLIST_MECH_READY 토스트 핸들러 (ELEC 미사용, MECH UTIL_LINE_1/2 + WASTE_GAS_LINE_2 task 시작 시 발화)
+[4] INLET 8개 L/R 명확 구분 입력 필드 (Left #1, Right #1, Left #2, Right #2, Left #3, Right #3, Left #4, Right #4)
+```
+
+### 📐 화면 구성 (위젯 트리)
+
+```
+MechChecklistScreen (StatefulWidget)
+├─ AppBar: '기구 체크리스트 — {S/N}' + judgment_phase 토글 (1차 작업자 / 2차 관리자)
+├─ FetchChecklist (FutureBuilder): GET /api/app/checklist/mech/{sn}?phase={1|2}
+└─ Body (RefreshIndicator):
+   ├─ Summary Card: total / checked / percent / is_complete
+   ├─ Group List (20 그룹, scope_rule 적용된 항목만):
+   │   ├─ Group Header (item_group, 체크 진행률)
+   │   └─ Item List per group:
+   │       ├─ if scope_rule + 비매칭 모델 → Disabled NA UI (회색, '해당없음 (Tank Ass'y 미적용)')
+   │       ├─ if phase=1 + phase1_applicable=False → Phase 1 NA UI (회색, 'N/A')
+   │       └─ else → Active item:
+   │           ├─ item_type='CHECK' → PASS / NA 라디오 버튼
+   │           ├─ item_type='SELECT' → DropdownButton (select_options 활용)
+   │           └─ item_type='INPUT' → TextField (INLET 8개는 #1~#4 L/R 명확 표시)
+   ├─ Floating Action: 일괄 PASS 버튼 (관리자 phase=2 시점)
+   └─ WebSocket Listener: CHECKLIST_MECH_READY alert 수신 → Toast + 화면 자동 진입 유도
+```
+
+### 📋 입력 UI 3종 분기 (코드 샘플)
+
+```dart
+Widget _buildInputWidget(Map<String, dynamic> item) {
+  final itemType = item['item_type'] as String? ?? 'CHECK';
+  final masterId = item['master_id'] as int;
+  final scopeRule = item['scope_rule'] as String?;
+  final modelMatched = _isScopeMatched(scopeRule, _productModel, _tankInMech);
+
+  // scope_rule 비매칭 → disabled NA UI
+  if (!modelMatched) return _buildScopeDisabledNA(item);
+
+  // judgment_phase=1 + phase1_applicable=False → Phase 1 NA UI
+  if (_judgmentPhase == 1 && item['phase1_applicable'] == false) {
+    return _buildPhase1NA(item);
+  }
+
+  switch (itemType) {
+    case 'CHECK':
+      return _buildCheckRadio(item);     // PASS / NA 라디오 (ELEC 패턴)
+    case 'SELECT':
+      return _buildSelectDropdown(item); // select_options 드롭다운 (ELEC 패턴)
+    case 'INPUT':
+      return _buildInputField(item);     // 신규 — TextField + 'PASS/NA + 입력값' 동시 처리
+    default:
+      return _buildCheckRadio(item);
+  }
+}
+
+bool _isScopeMatched(String? scopeRule, String? model, bool tankInMech) {
+  if (scopeRule == null || scopeRule == 'all') return true;
+  if (scopeRule == 'tank_in_mech') return tankInMech;
+  // 직접 모델 매칭 (예: scope_rule='DRAGON')
+  return model?.toUpperCase().startsWith(scopeRule.toUpperCase()) ?? false;
+}
+```
+
+### 📋 INPUT type 위젯 (신규 — INLET 8개 + Speed 등)
+
+```dart
+Widget _buildInputField(Map<String, dynamic> item) {
+  final itemName = item['item_name'] as String;
+  final inputValue = item['input_value'] as String?;
+  final checkResult = item['check_result'] as String?;
+  final controller = _inputControllers.putIfAbsent(
+    item['master_id'] as int,
+    () => TextEditingController(text: inputValue ?? ''),
+  );
+
+  return Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // INLET 8개는 'Left #1', 'Right #1' 등 명확 표시 (item_name 자체에 포함됨)
+        Text(itemName, style: const TextStyle(fontWeight: FontWeight.w500)),
+        const SizedBox(height: 6),
+        TextField(
+          controller: controller,
+          decoration: InputDecoration(
+            hintText: 'S/N 또는 수량 입력',
+            border: OutlineInputBorder(),
+          ),
+          onChanged: (value) => _scheduleUpsert(item['master_id'], value),
+        ),
+        const SizedBox(height: 4),
+        Row(  // PASS / NA 라디오는 INPUT 도 동일 (입력값 + check_result 둘 다 저장)
+          children: [
+            _passRadio(item), _naRadio(item),
+          ],
+        ),
+      ],
+    ),
+  );
+}
+```
+
+### 📋 scope_rule disabled UI
+
+```dart
+Widget _buildScopeDisabledNA(Map<String, dynamic> item) {
+  return Container(
+    color: GxColors.mistLight,
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+    child: Row(
+      children: [
+        const Icon(Icons.block, size: 16, color: GxColors.silver),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            item['item_name'] as String,
+            style: const TextStyle(color: GxColors.silver, decoration: TextDecoration.lineThrough),
+          ),
+        ),
+        const Text(
+          '해당없음 (Tank Ass\'y 미적용)',  // ⚠️ Codex Q: 텍스트 후보 — '해당없음' / 'N/A' / '—' 중 결정 필요
+          style: TextStyle(fontSize: 11, color: GxColors.silver),
+        ),
+      ],
+    ),
+  );
+}
+```
+
+### 📋 WebSocket CHECKLIST_MECH_READY 핸들러
+
+```dart
+// websocket_service.dart 에 alert_type 'CHECKLIST_MECH_READY' 라우팅 추가
+void _handleAlert(Map<String, dynamic> data) {
+  final alertType = data['alert_type'] as String?;
+  if (alertType == 'CHECKLIST_MECH_READY') {
+    _showToast(data['message'] as String);
+    // 사용자 액션: 토스트 클릭 시 MechChecklistScreen 진입 (라우터 push)
+  }
+}
+```
+
+### 📋 judgment_phase 토글 + (c)안 동작
+
+```dart
+// AppBar 에 1차/2차 토글
+SegmentedButton<int>(
+  segments: const [
+    ButtonSegment(value: 1, label: Text('1차 (작업자)')),
+    ButtonSegment(value: 2, label: Text('2차 (관리자)')),
+  ],
+  selected: {_judgmentPhase},
+  onSelectionChanged: (set) {
+    setState(() => _judgmentPhase = set.first);
+    _fetchChecklist();  // phase 변경 시 재로딩
+  },
+);
+
+// (c)안 동작:
+// - phase=1: phase1_applicable=False 항목은 자동 N/A 표시 (작업자가 입력 안 해도 됨)
+// - phase=2: 모든 항목 활성. 1차 record 미입력 항목도 관리자가 직접 입력 가능 (cover)
+//   → BE check_mech_completion() (c)안 = 1차 record 강제 안 함, phase=2 record 만으로 완료 판정
+```
+
+### 📋 라우팅 추가 (app_navigation.dart)
+
+```dart
+// 1줄 추가
+case '/checklist/mech':
+  return MechChecklistScreen(serialNumber: args['serial_number']);
+```
+
+### ✅ Pre-deploy Gate (FE 빌드 검증)
+
+```
+1. flutter analyze (lint 오류 0건)
+2. flutter test (위젯 테스트 — _buildInputWidget / _isScopeMatched 단위 테스트 권장)
+3. flutter build web --release (빌드 오류 0건)
+4. 브라우저 manual 테스트 (5 모델 시나리오):
+   ├─ GAIA-I (tank_in_mech=FALSE) → 13/14/19 disabled, INLET DRAGON-only disabled
+   ├─ DRAGON-V (tank_in_mech=TRUE, scope='DRAGON') → 13/14/19 활성, INLET 8 활성
+   ├─ GALLANT-50 (tank_in_mech=TRUE) → 13/14/19 활성, INLET DRAGON-only disabled
+   ├─ SWS-100 (tank_in_mech=TRUE) → 13/14/19 활성, INLET DRAGON-only disabled
+   └─ MITHAS / SDS (tank_in_mech=FALSE) → 13/14/19 disabled, INLET disabled
+5. WebSocket alert 수신 manual 테스트 (UTIL_LINE_1 task 시작 → 토스트 발화)
+6. judgment_phase 토글 동작 (1차 → 2차 전환 시 재로딩 + (c)안 동작 검증)
+7. INPUT type 입력값 저장 + 재진입 시 보존 확인
+```
+
+### 🚀 배포 순서
+
+```
+1. 본 Sprint 63-FE 구현 완료 → flutter build web --release
+2. Netlify 배포 (gaxis-ops.netlify.app)
+3. 배포 직후 manual 테스트 6 시나리오 검증
+4. 1주 운영 관찰 (1차 입력률 + 사용자 신고 0건)
+5. AXIS-VIEW Sprint 39 (별 repo) 착수
+```
+
+### 📋 BACKLOG 동기화
+
+```
+SPRINT-63-FE-MECH-CHECKLIST-20260501          🟡 P2  (별 Sprint, BE v2.11.0 배포 후 착수)
+  → 🔴 OPEN
+  ├─ mech_checklist_screen.dart 신규 (~1,000~1,200 LOC)
+  ├─ 입력 UI 3종 분기 (CHECK 라디오 / SELECT 드롭다운 / INPUT 텍스트)
+  ├─ scope_rule disabled NA UI (5 모델 시나리오 검증)
+  ├─ judgment_phase 토글 + (c)안 동작
+  ├─ WebSocket CHECKLIST_MECH_READY 토스트 핸들러
+  ├─ INLET 8개 L/R 명확 구분 입력 필드
+  └─ flutter analyze + build web 0건 + manual 6 시나리오 PASS
+```
+
+### 🤝 후속 Sprint 연계
+
+```
+AXIS-VIEW Sprint 39   🟡 P2 (별 repo, ~0.5d)
+  └─ ChecklistManagePage.tsx BLUR 해제 + ChecklistAddModal.tsx TYPE_OPTIONS.MECH 토글
+
+INLET-SN-OCR-20260XXX 🟢 P3 (별건, ~30분~1h)
+  └─ INLET S/N 8 항목 input_type='INPUT' → 'SN_OCR' 전환 (Flutter google_mlkit_text_recognition 도입)
+
+REFACTOR-CHECKLIST-FILE-SPLIT 🟡 P2 (BACKLOG REF-BE-12)
+  └─ checklist_service.py 1,440 LoC + checklist.py 1,288 LoC 카테고리별 분리 (TM/ELEC/MECH)
+```
+
+### ⚠️ 결정 필요 사항 (Codex 라운드 1 의뢰 대상)
+
+```
+Q1. INLET 8개 입력 위젯 grouping — 단일 그룹 8 row vs 'Left' subgroup 4 + 'Right' subgroup 4 로 시각 분리?
+Q2. scope_rule disabled UI 텍스트 — '해당없음 (Tank Ass'y 미적용)' / 'N/A' / '—' 중 어느 게 가독성 ↑?
+Q3. INPUT type + check_result 동시 처리 — '입력값만 있으면 자동 PASS' vs '입력값 + 라디오 둘 다 필수' 정책?
+Q4. WebSocket alert 수신 시 자동 화면 진입 vs 토스트 클릭 시 진입 (사용자 작업 흐름 방해 vs 가시성)?
+Q5. judgment_phase 토글 권한 — 1차 작업자가 2차 토글 클릭 가능한가? (관리자 권한 검증 필요?)
+Q6. 데이터 저장 시점 — TextField onChanged 즉시 vs onSubmitted vs debounce 500ms?
+Q7. select_options 가 비어있는 master 처리 — '편집 가능' vs '운영자 미설정 안내'?
 ```
 
 ---
