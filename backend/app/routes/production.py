@@ -268,11 +268,15 @@ def _is_sn_process_confirmable(
 def _check_sn_checklist_complete(serial_number: str, process_type: str) -> bool:
     """S/N별 공정 체크리스트 완료 확인. 체크리스트 미구현 공정은 True (통과)."""
     if process_type == 'TMS':
-        from app.services.checklist_service import _check_tm_completion
-        return _check_tm_completion(serial_number)
+        from app.services.checklist_service import check_tm_completion
+        return check_tm_completion(serial_number)
     elif process_type == 'ELEC':
         from app.services.checklist_service import check_elec_completion
         return check_elec_completion(serial_number)
+    elif process_type == 'MECH':
+        # Sprint 63-BE: MECH 체크리스트 활성화
+        from app.services.checklist_service import check_mech_completion
+        return check_mech_completion(serial_number)
     else:
         return True  # 체크리스트 미구현 공정은 통과
 

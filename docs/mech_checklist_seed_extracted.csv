@@ -1,0 +1,70 @@
+order_no,item_group,item_name,sub_label,spec,method,jp1_label,input_type,phase1_na,scope,is_sub_row,notes
+1,3Way V/V,3Way V/V Spec 확인,,조립 도면과 현물 1:1 확인,육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+2,3Way V/V,볼트 체결,,조립 유동 여부,촉수 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+3,WASTE GAS,배관 도면 일치 여부,,조립 도면과 현물 1:1 확인,육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+4,WASTE GAS,클램프 체결,,조립 유동 여부,촉수 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+5,INLET,배관 도면 일치 여부,,조립 도면과 현물 1:1 확인,육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+6,INLET,배관 S/N 확인 ※DRAGON  2중관Bellows적용 해당,,Left #1 || Right #1,육안 검사,S/N                         □N,SN_OCR,False,DRAGON,False,※DRAGON 2중관 Bellows — OCR 카메라 입력
+7,INLET,,Left #2 || Right #2,,육안 검사,S/N                         □N,SN_OCR,False,DRAGON,True,※DRAGON 2중관 Bellows — OCR 카메라 입력
+8,INLET,,Left #3 || Right #3,,육안 검사,S/N                         □N,SN_OCR,False,DRAGON,True,※DRAGON 2중관 Bellows — OCR 카메라 입력
+9,INLET,,Left #4 || Right #4,,육안 검사,S/N                         □N,SN_OCR,False,DRAGON,True,※DRAGON 2중관 Bellows — OCR 카메라 입력
+10,BURNER,SUS Fitting 조임 상태,,GAP GAUGE,촉수 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+11,BURNER,Gas Nozzle Cover 휨 여부,,Jig 활용 Center 확인,육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+12,BURNER,클램프 체결,,조립 유동 여부,촉수 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+13,REACTOR,Fitting 조임 상태,,조립 유동 여부,촉수 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+14,REACTOR,Tube 조립 상태,,조립 유동 여부,촉수 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+15,REACTOR,클램프 체결,,조립 유동 여부,촉수 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+16,REACTOR,Cir Line Tubing,,조립 유동 여부,촉수 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+17,GN2,"Sol V/V Spec, Flow 방향",,조립 도면과 현물 1:1 확인,육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+18,GN2,SUS Fitting 조임 상태,,GAP GAUGE,촉수 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+19,GN2,Tube 조립 상태,,"Tube In/Out, 넘버링 확인","육안, 촉수 검사",□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+20,GN2,Speed Controller 방향,,조립 도면과 현물 1:1 확인,육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+21,GN2,Speed Controller 수량,,조립 도면과 현물 1:1 확인,육안 검사,EA,COUNT_EA,False,all,False,수량 입력 (EA)
+22,GN2,MFC Spec :,,,,,SELECT_MFC,False,all,False,MFC 드롭다운 — 옵션 list 별도 입력 필요
+23,LNG,"MFC Spec, Flow 방향",,조립 도면과 현물 1:1 확인,육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+24,LNG,SUS Fitting 조임 상태,,GAP GAUGE,촉수 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+25,LNG,Part 조립 상태,,"Part In/Out, Flow 확인",육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+26,LNG,MFC Maker: ▶            MFC Spec: ▶Flow Rate            ▶Working Pressure            ▶Pressure Range,,,,,SELECT_MFC,False,all,False,MFC 드롭다운 — 옵션 list 별도 입력 필요
+27,O2,"MFC Spec, Flow 방향",,조립 도면과 현물 1:1 확인,육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+28,O2,SUS Fitting 조임 상태,,GAP GAUGE,촉수 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+29,O2,Part 조립 상태,,"Part In/Out, Flow 확인",육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+30,O2,MFC Maker: ▶            MFC Spec: ▶Flow Rate            ▶Working Pressure            ▶Pressure Range,,,,,SELECT_MFC,False,all,False,MFC 드롭다운 — 옵션 list 별도 입력 필요
+31,CDA,"Sol V/V Spec, Flow 방향",,조립 도면과 현물 1:1 확인,육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+32,CDA,SUS Fitting 조임 상태,,GAP GAUGE,촉수 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+33,CDA,Part 조립 상태,,"Part In/Out, Flow 확인",육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+34,CDA,Speed Controller 방향,,조립 도면과 현물 1:1 확인,육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+35,CDA,Speed Controller 수량,,조립 도면과 현물 1:1 확인,육안 검사,EA,COUNT_EA,False,all,False,수량 입력 (EA)
+36,CDA,MFC Maker: ▶            MFC Spec: ▶Flow Rate            ▶Working Pressure            ▶Pressure Range,,,,,SELECT_MFC,False,all,False,MFC 드롭다운 — 옵션 list 별도 입력 필요
+37,BCW,"Flow Sensor Spec, 방향",,조립 도면과 현물 1:1 확인,육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+38,BCW,Flow Sensor Spec :,,,,,SELECT_FLOW_SENSOR,False,all,False,Flow Sensor 드롭다운 — 옵션 list 별도 입력 필요
+39,BCW,공압 밸브 Flow 방향,,"A→IN B→OUT,넘버링 확인",육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+40,BCW,SUS Fitting 조임 상태,,GAP GAUGE,촉수 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+41,BCW,Part 조립 상태,,"Part In/Out, Flow 확인",육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+42,PCW-S,"Flow Sensor Spec, 방향",,조립 도면과 현물 1:1 확인,육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+43,PCW-S,Flow Sensor Spec :,,,,,SELECT_FLOW_SENSOR,False,all,False,Flow Sensor 드롭다운 — 옵션 list 별도 입력 필요
+44,PCW-S,공압 밸브 Flow 방향,,"A→IN B→OUT,넘버링 확인",육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+45,PCW-S,SUS Fitting 조임 상태,,GAP GAUGE,촉수 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+46,PCW-S,Part 조립 상태,,"Part In/Out, Flow 확인",육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+47,PCW-R,"Flow Sensor Spec, 방향",,조립 도면과 현물 1:1 확인,육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+48,PCW-R,Flow Sensor Spec :,,,,,SELECT_FLOW_SENSOR,False,all,False,Flow Sensor 드롭다운 — 옵션 list 별도 입력 필요
+49,PCW-R,공압 밸브 Flow 방향,,"A→IN B→OUT,넘버링 확인",육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+50,PCW-R,SUS Fitting 조임 상태,,GAP GAUGE,촉수 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+51,PCW-R,Part 조립 상태,,"Part In/Out, Flow 확인",육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+52,Exhaust,Packing 조립 확인,,적용 여부,육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+53,Exhaust,Packing Guide 고정 확인,,유동 여부,육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+54,Exhaust,SUS Fitting 조임 상태,,GAP GAUGE,촉수 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+55,Exhaust,BCW Nozzle Spray 방향,,아래 방향,육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+56,TANK,Cir Pump Spec 확인,,조립 도면과 현물 1:1 확인,육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+57,TANK,Flow Sensor Swirl Orifice,,Swirl Orifice 적용 조립,육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+58,TANK,Tank 내부 이물질 확인,,Tank 투시창 이용 확인,육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+59,PU,버너 및 이그저스트 위치,,"위치 별 방향, 넘버링 확인","육안, 촉수 검사",□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+60,설비 상부,SUS Fitting 조임 상태,,GAP GAUGE,촉수 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+61,설비 상부,Drain Nut 조립 상태,,조립 유동 여부,촉수 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+62,설비 상부,미사용 Hole 막음 처리,,미사용 Hole 막음 확인,육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+63,설비 전면부,Interface 스티커 부착,,LNG 가압 스티커 옆 부착,육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+64,H/J,배관 H/J 완전체 조립,,"Bypass, 3Way V/v, Inlet",육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+65,H/J,벨크로 체결 상태,,벨크로 덜조임 및 이탈 확인,육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+66,H/J,케이블 정리 및 체결,,곡률 반경 및 체결 확인,육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+67,Quenching,"Flow Sensor Spec, 방향",,조립 도면과 현물 1:1 확인,육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+68,Quenching,Flow Sensor 위치 확인,,Quenching / Quenching T,육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크
+69,눈관리,눈관리 스티커 위치,,부착 상태 및 위치 확인,육안 검사,□Pass □NA,PASS_NA,True,all,False,2차(관리자)만 체크

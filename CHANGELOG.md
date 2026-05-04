@@ -6,6 +6,58 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.11.0] - 2026-05-04 — Sprint 63-BE MECH 체크리스트 BE 인프라 (BE only, +1,415 LoC)
+
+> 양식 73 항목 / 20 그룹 도입 — TM(Sprint 52)/ELEC(Sprint 57) 후 MECH 자주검사 체크리스트 디지털화. BE 단독 배포, FE/VIEW 별 sprint.
+
+### 추가 (Schema)
+- `migrations/051_mech_checklist_extension.sql`: `scope_rule` + `trigger_task_id` 컬럼 + `item_type` CHECK constraint 'INPUT' 추가 + `alert_type_enum` 'CHECKLIST_MECH_READY' ADD VALUE
+- `migrations/051a_mech_checklist_seed.sql`: 73 INSERT (CHECK 56 / INPUT 10 / SELECT 7, all 56 / tank_in_mech 9 / DRAGON 8, INLET S/N L/R 8개 분리 v2)
+
+### 추가 (BE)
+- `services/checklist_service.py` 신규 함수 5개:
+  - `_normalize_qr_doc_id()` — TM/ELEC/MECH 공유 normalizer (Sprint 59-BE 재발 방지)
+  - `_resolve_active_master_ids()` — scope_rule + phase1_applicable Python helper
+  - `check_mech_completion()` — SINGLE/DUAL 분기 + (c)안 phase=2 record-only 카운트
+  - `get_mech_checklist()` — 73 항목 + scope_rule/trigger_task_id 응답
+  - `upsert_mech_check()` — INPUT type 지원
+- `_get_checklist_by_category()` SELECT 절에 `scope_rule` + `trigger_task_id` 추가 (TM/ELEC 응답에도 새 필드, 기존 키 무변경)
+- `routes/checklist.py` MECH endpoints 3개: GET / PUT / GET status
+- `task_service.py` `_trigger_mech_checklist_alert()` hook — UTIL_LINE_1/UTIL_LINE_2/WASTE_GAS_LINE_2 시작 시 `CHECKLIST_MECH_READY` alert
+- `production.py` `_check_sn_checklist_complete()` MECH 분기 활성화
+
+### 변경 (Refactor)
+- `_check_tm_completion` → `check_tm_completion` rename (9 hits, private→public 일관 인터페이스): checklist_service 5 + production 2 + test_alert_all20 2
+
+### 추가 (Test)
+- `tests/backend/test_mech_checklist.py` 21 TC 신규 (+554 LoC):
+  - `[A]` _normalize_qr_doc_id pure function 6 TC (DB 불필요)
+  - `[B]` scope_rule + phase1 7 TC (all/tank_in_mech/DRAGON × 모델별 매핑)
+  - `[C]` trigger_task_id 매핑 3 TC (Speed 4 / MFC+FS 7 / INLET 8)
+  - `[D]` seed count 1 TC (51a 실파일 분포 자동 검증)
+  - `[E]` rename gate 1 TC (rg "_check_tm_completion" = 0)
+  - `[F]` phase=2 (c)안 2 TC (1차 record 미강제)
+  - `[G]` WebSocket emit 1 TC (mock create_alert 호출 검증)
+- 결과: **21/21 PASS** (186.84s)
+
+### 검증
+- pytest test_mech_checklist 21/21 PASS ✅
+- rename gate `rg "_check_tm_completion" backend/ tests/` → 0 hits ✅
+- syntax `ast.parse` 4 modified files OK ✅
+- 회귀 영향: 0건 (신규 응답 필드 추가만, 기존 키 무변경)
+
+### 정정 trail 11건 적용 (Codex 라운드 1+2+3 + 사용자 결정 4건)
+- 라운드 1 (M=4 / A=2 / 추가 3): CLAUDE drift / rename grep / qr_doc_id normalizer / seed 총계+pytest / INLET 표 / enum / Python helper 통일
+- 라운드 2 (M=3 / A=2 / N=1 / 추가 6): 핵심 통찰 "설계서 정정 ≠ 실코드 미구현" / atomic / silent failure / ELEC qr_doc_id 별 BACKLOG / models drift / lint hook / cross-repo
+- 라운드 3 (M=3 / A=7 / N=8 / 추가 2): ALTER TYPE non-transactional 보증 (migration_runner autocommit=True 확인) / test 파일 경로 정정 / Pre-deploy Gate #7 신규
+- 사용자 결정 v2: INLET S/N L/R 8 master 분리 (옵션 A 변형) / judgment_phase=2 (c)안 / BE/FE 분리 / Minor 3건
+
+### 후속 Sprint (별 sprint, BE 배포 후 착수)
+- Sprint 63-FE: `mech_checklist_screen.dart` 신규 (~1,000~1,200 LoC, 2~3d)
+- AXIS-VIEW Sprint 39: BLUR 해제 + AddModal 토글 (~0.5d, 별 repo)
+
+---
+
 ## [2.10.17] - 2026-05-01 — HOTFIX-09 access_log cleanup `get_db_connection` import 누락 (BE only, 1 line)
 
 > Sprint 32 (v1.9.0, 2026-03-19) 도입 access_log cleanup cron 이 **43일간 매일 03:00 NameError silent failure**. 사용자 영향 0 (access_log 30 MB 누적, DB 한도 6%) but cleanup 자체 작동 0회.

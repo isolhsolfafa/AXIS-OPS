@@ -168,6 +168,9 @@ class TaskService:
                     'message': '작업 시작 실패'
                 }, 500
 
+            # Sprint 63-BE: MECH 체크리스트 1차 입력 토스트 (UTIL_LINE_1/UTIL_LINE_2/WASTE_GAS_LINE_2)
+            self._trigger_mech_checklist_alert(task, worker_id)
+
         logger.info(
             f"Work started: task_id={task_detail_id}, worker_id={worker_id}, "
             f"is_first_worker={is_first_worker}"
@@ -724,6 +727,68 @@ class TaskService:
             # 알림 실패해도 task 완료는 정상 처리
             logger.error(f"_trigger_tm_checklist_alert failed (non-blocking): {e}")
             return False
+
+    def _trigger_mech_checklist_alert(self, task, worker_id: int) -> None:
+        """MECH 체크리스트 1차 입력 토스트 알림 (Sprint 63-BE).
+
+        UTIL_LINE_1 / UTIL_LINE_2 / WASTE_GAS_LINE_2 task 시작 시점에 발화.
+        매칭 master 항목 (trigger_task_id = 해당 task_id) 1개 이상 존재 시
+        시작한 작업자 본인에게 alert INSERT + WebSocket emit.
+
+        ⚠️ try-except 로 감싸기 — 알림 실패해도 task 시작 정상 처리.
+        """
+        MECH_TRIGGER_TASK_IDS = {'UTIL_LINE_1', 'UTIL_LINE_2', 'WASTE_GAS_LINE_2'}
+        if task.task_category != 'MECH' or task.task_id not in MECH_TRIGGER_TASK_IDS:
+            return
+
+        try:
+            from app.models.worker import get_db_connection
+            from app.db_pool import put_conn
+            from app.models.alert_log import create_alert
+            from app.services.alert_service import sn_label as _sn_label
+
+            conn = get_db_connection()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS cnt
+                    FROM checklist.checklist_master
+                    WHERE category = 'MECH'
+                      AND trigger_task_id = %s
+                      AND is_active = TRUE
+                    """,
+                    (task.task_id,)
+                )
+                row = cur.fetchone()
+                item_count = row['cnt'] if row else 0
+            finally:
+                put_conn(conn)
+
+            if item_count == 0:
+                return
+
+            label = _sn_label(task.serial_number)
+            alert_id = create_alert(
+                alert_type='CHECKLIST_MECH_READY',
+                message=(
+                    f"{label} {task.task_name} 작업 시작 — "
+                    f"MECH 체크리스트 {item_count}개 항목 입력 가능"
+                ),
+                serial_number=task.serial_number,
+                qr_doc_id=task.qr_doc_id,
+                triggered_by_worker_id=worker_id,
+                target_worker_id=worker_id,
+                target_role='MECH',
+            )
+            if alert_id:
+                logger.info(
+                    f"CHECKLIST_MECH_READY alert: task_id={task.id}, "
+                    f"worker_id={worker_id}, items={item_count}, alert_id={alert_id}"
+                )
+
+        except Exception as e:
+            logger.error(f"_trigger_mech_checklist_alert failed (non-blocking): {e}")
 
     def get_tasks_by_product(
         self,

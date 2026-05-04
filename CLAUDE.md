@@ -1067,13 +1067,19 @@ CREATE INDEX idx_gst_att_worker ON hr.gst_attendance(worker_id, check_time DESC)
 |-------------|------------|--------|-------------|------|
 | GAIA        | TRUE       | TRUE   | FALSE       | TMS(M) 탱크 별도 → MECH 도킹 |
 | DRAGON      | FALSE      | FALSE  | TRUE        | 한 협력사가 탱크+MECH 일괄 |
-| GALLANT     | FALSE      | FALSE  | FALSE       | 탱크/도킹 없음 |
+| GALLANT     | FALSE      | FALSE  | TRUE        | 탱크 일체형 (MECH 패키지 포함, migration 024 flip) |
 | MITHAS      | FALSE      | FALSE  | FALSE       | 탱크/도킹 없음 |
 | SDS         | FALSE      | FALSE  | FALSE       | 탱크/도킹 없음 |
-| SWS         | FALSE      | FALSE  | FALSE       | 탱크/도킹 없음 |
+| SWS         | FALSE      | FALSE  | TRUE        | 탱크 일체형 (MECH 패키지 포함, migration 024 flip) |
+| IVAS        | TRUE       | TRUE   | FALSE       | 항상 2탱크(L/R), TMS 별도, 도킹 있음 |
 ```
 - DRAGON: tank~mech 일괄 처리. 주로 TMS(M)이지만 **반드시 product_info.mech_partner 확인**
 - product_info 단위 override 가능하도록 설계
+- **migration trail (Sprint 63-BE 정정 2026-04-30 — Codex 라운드 1 Q1 반영)**:
+  - migration 006 (Sprint 6 schema): GALLANT/SWS `tank_in_mech=FALSE` 초기 seed
+  - migration 024 (multi-model support, L20-21): GALLANT/SWS `tank_in_mech=TRUE` flip + UPSERT
+  - **현재 운영 DB 정합 = `tank_in_mech=TRUE` 3개 모델: DRAGON / GALLANT / SWS**
+- **Sprint 63-BE MECH 체크리스트 scope_rule='tank_in_mech'** 매칭 = 위 3개 모델 (Exhaust/TANK/Quenching 그룹 9 항목)
 
 ### workers.company (7개 — product_info 실제 값과 동일)
 ```

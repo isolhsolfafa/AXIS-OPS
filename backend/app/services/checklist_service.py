@@ -79,6 +79,8 @@ def _get_checklist_by_category(
             COALESCE(cm.phase1_applicable, TRUE) AS phase1_applicable,
             COALESCE(cm.qi_check_required, FALSE) AS qi_check_required,
             cm.select_options,
+            cm.scope_rule,
+            cm.trigger_task_id,
             cr.check_result,
             cr.checked_by,
             w.name         AS checked_by_name,
@@ -139,6 +141,8 @@ def _get_checklist_by_category(
             'phase1_applicable': phase1_applicable,
             'qi_check_required': row.get('qi_check_required', False),
             'select_options': select_options,
+            'scope_rule': row.get('scope_rule'),
+            'trigger_task_id': row.get('trigger_task_id'),
             'check_result': check_result,
             'checked_by_name': row['checked_by_name'],
             'checked_at': row['checked_at'].isoformat() if row['checked_at'] else None,
@@ -285,6 +289,48 @@ def _is_report_dual_model(model: Optional[str]) -> bool:
     if not model:
         return False
     return 'DUAL' in model.upper().split()
+
+
+def _normalize_qr_doc_id(serial_number: str, hint: Optional[str] = None) -> str:
+    """qr_doc_id 정규화 — SINGLE/DUAL 모델 일관 처리 (Sprint 63-BE).
+
+    TM/ELEC/MECH 공유 normalizer (Sprint 59-BE 재발 방지).
+
+    Rules:
+      - SINGLE: 'DOC_{serial_number}'   (예: DOC_GBWS-6905)
+      - DUAL Left:  'DOC_{serial_number}-L'
+      - DUAL Right: 'DOC_{serial_number}-R'
+
+    Args:
+      serial_number: S/N (예: 'GBWS-6905')
+      hint: 클라이언트 전송 hint ('L' / 'R' / None / 'DOC_GBWS-7043-L' 같은 full id)
+
+    Returns:
+      정규화된 qr_doc_id (string).
+
+    Examples:
+      _normalize_qr_doc_id('GBWS-6905')                      → 'DOC_GBWS-6905'
+      _normalize_qr_doc_id('GBWS-7043', 'L')                 → 'DOC_GBWS-7043-L'
+      _normalize_qr_doc_id('GBWS-7043', 'DOC_GBWS-7043-R')   → 'DOC_GBWS-7043-R' (idempotent)
+    """
+    if not serial_number:
+        return ''
+
+    sn = serial_number.strip()
+    if not sn:
+        return ''
+
+    if hint:
+        h = hint.strip()
+        # 이미 정규화 형태면 그대로 (idempotent)
+        if h.startswith(f'DOC_{sn}'):
+            return h
+        # 'L' / 'R' suffix only
+        if h.upper() in ('L', 'R'):
+            return f'DOC_{sn}-{h.upper()}'
+
+    # 기본 SINGLE
+    return f'DOC_{sn}'
 
 
 def get_checklist_report(serial_number: str, judgment_phase: int = 1) -> Dict[str, Any]:
@@ -460,7 +506,7 @@ def upsert_tm_check(
     TM 체크리스트 항목 체크 (UPSERT)
 
     check_result는 'PASS' 또는 'NA'만 허용.
-    UPSERT 후 _check_tm_completion() 호출하여 전체 완료 여부 판정.
+    UPSERT 후 check_tm_completion() 호출하여 전체 완료 여부 판정.
 
     Args:
         serial_number: 제품 시리얼 번호
@@ -520,7 +566,7 @@ def upsert_tm_check(
         )
 
         # 완료 판정
-        is_complete = _check_tm_completion(serial_number, judgment_phase)
+        is_complete = check_tm_completion(serial_number, judgment_phase)
 
         return {
             'master_id': master_id,
@@ -538,7 +584,7 @@ def upsert_tm_check(
             put_conn(conn)
 
 
-def _check_tm_completion(serial_number: str, judgment_phase: int = 1) -> bool:
+def check_tm_completion(serial_number: str, judgment_phase: int = 1) -> bool:
     """
     TM 체크리스트 전체 완료 여부 판정 (Sprint 59-BE: qr_doc_id 리스트 기반).
 
@@ -656,12 +702,12 @@ def _check_tm_completion(serial_number: str, judgment_phase: int = 1) -> bool:
                             'target_role': 'MECH',
                         })
                     except Exception as ae:
-                        logger.error(f"_check_tm_completion: CHECKLIST_ISSUE alert failed: {ae}")
+                        logger.error(f"check_tm_completion: CHECKLIST_ISSUE alert failed: {ae}")
 
         return True
 
     except PsycopgError as e:
-        logger.error(f"_check_tm_completion failed: serial={serial_number}, error={e}")
+        logger.error(f"check_tm_completion failed: serial={serial_number}, error={e}")
         return False
     finally:
         if conn:
@@ -1080,6 +1126,315 @@ def _try_elec_close(serial_number: str) -> bool:
             conn.rollback()
         logger.error(f"_try_elec_close failed (non-blocking): serial={serial_number}, error={e}")
         return False
+    finally:
+        if conn:
+            put_conn(conn)
+
+
+# ═══════════════════════════════════════════════════════
+#  Sprint 63-BE: MECH 체크리스트 (양식 73항목 / 20그룹)
+# ═══════════════════════════════════════════════════════
+
+def _resolve_active_master_ids(serial_number: str, judgment_phase: int = 1) -> List[int]:
+    """MECH 체크리스트 활성 master id list 반환 (Sprint 63-BE).
+
+    scope_rule + phase1_applicable 필터 적용:
+      - scope='all': 모든 모델 활성
+      - scope='tank_in_mech': model_config.tank_in_mech=TRUE 모델 (DRAGON/GALLANT/SWS) 만
+      - scope='DRAGON' (또는 직접 모델명): model.startswith(scope.upper()) 매칭
+      - judgment_phase=1: phase1_applicable=TRUE 항목만
+      - judgment_phase=2: 전체 (관리자 (c)안)
+
+    HOTFIX-08 표준: SELECT 후 conn.rollback() 으로 INTRANS 정리.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # (1) model + tank_in_mech 한 번에 조회 (longest-prefix-first)
+        cur.execute(
+            """
+            SELECT pi.model, COALESCE(mc.tank_in_mech, FALSE) AS tank_in_mech
+            FROM plan.product_info pi
+            LEFT JOIN model_config mc ON pi.model LIKE mc.model_prefix || '%%'
+            WHERE pi.serial_number = %s
+            ORDER BY length(mc.model_prefix) DESC NULLS LAST
+            LIMIT 1
+            """,
+            (serial_number,)
+        )
+        row = cur.fetchone()
+        conn.rollback()  # HOTFIX-08
+        if not row:
+            return []
+        model = (row['model'] or '').upper()
+        tank_in_mech = bool(row['tank_in_mech'])
+
+        # (2) MECH 활성 항목 list
+        cur.execute(
+            """
+            SELECT cm.id, cm.scope_rule, cm.phase1_applicable
+            FROM checklist.checklist_master cm
+            WHERE cm.category = 'MECH'
+              AND cm.product_code = 'COMMON'
+              AND cm.is_active = TRUE
+            """
+        )
+        rows = cur.fetchall()
+        conn.rollback()  # HOTFIX-08
+
+        # (3) Python 측 필터링
+        out: List[int] = []
+        for r in rows:
+            if judgment_phase == 1 and not r['phase1_applicable']:
+                continue
+            scope = (r['scope_rule'] or 'all').lower()
+            if scope == 'all':
+                out.append(r['id'])
+            elif scope == 'tank_in_mech':
+                if tank_in_mech:
+                    out.append(r['id'])
+            else:
+                # 직접 모델 매칭 (예: scope_rule='DRAGON')
+                if model.startswith(scope.upper()):
+                    out.append(r['id'])
+        return out
+
+    except PsycopgError as e:
+        logger.error(f"_resolve_active_master_ids failed: serial={serial_number}, error={e}")
+        return []
+    finally:
+        if conn:
+            put_conn(conn)
+
+
+def check_mech_completion(serial_number: str, judgment_phase: int = 1) -> bool:
+    """MECH 체크리스트 완료 여부 (Sprint 63-BE).
+
+    judgment_phase=1: phase1_applicable=TRUE 19개 (v2 INLET 8개 분리 후) scope 적용분 모두 입력 완료.
+    judgment_phase=2: 관리자 phase=2 record 충족만 판정 ((c)안 2026-05-01).
+                     - 1차 미입력 항목도 관리자가 phase=2 record 입력 시 cover.
+                     - 1차 record 강제 안 함.
+
+    SINGLE/DUAL 분기:
+      - SINGLE: qr_doc_id='DOC_{S/N}' 한 개 record 만 검증
+      - DUAL: 'DOC_{S/N}-L', 'DOC_{S/N}-R' 두 개 모두 완료 시 True
+    """
+    active_ids = _resolve_active_master_ids(serial_number, judgment_phase)
+    if not active_ids:
+        return False
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # SINGLE/DUAL 판별 (TM 패턴 차용)
+        cur.execute(
+            "SELECT model FROM plan.product_info WHERE serial_number = %s",
+            (serial_number,)
+        )
+        product_row = cur.fetchone()
+        if not product_row:
+            return False
+        model = product_row['model']
+
+        is_dual = _is_report_dual_model(model)
+        if is_dual:
+            qr_doc_ids = [
+                _normalize_qr_doc_id(serial_number, 'L'),
+                _normalize_qr_doc_id(serial_number, 'R'),
+            ]
+        else:
+            qr_doc_ids = [_normalize_qr_doc_id(serial_number)]
+
+        # qr_doc_id별 loop — 각각 active_ids 모두 채워져야 함
+        for qr in qr_doc_ids:
+            cur.execute(
+                """
+                SELECT COUNT(*) AS checked
+                FROM checklist.checklist_record
+                WHERE master_id = ANY(%(ids)s)
+                  AND serial_number = %(serial_number)s
+                  AND judgment_phase = %(judgment_phase)s
+                  AND qr_doc_id = %(qr_doc_id)s
+                  AND check_result IS NOT NULL
+                """,
+                {
+                    'ids': active_ids,
+                    'serial_number': serial_number,
+                    'judgment_phase': judgment_phase,
+                    'qr_doc_id': qr,
+                }
+            )
+            row = cur.fetchone()
+            checked = row['checked'] if row else 0
+            if checked < len(active_ids):
+                return False
+
+        return True
+
+    except PsycopgError as e:
+        logger.error(f"check_mech_completion failed: serial={serial_number}, error={e}")
+        return False
+    finally:
+        if conn:
+            put_conn(conn)
+
+
+def get_mech_checklist(serial_number: str, judgment_phase: int = 1, qr_doc_id: str = '') -> Dict[str, Any]:
+    """MECH 체크리스트 조회 (Sprint 63-BE) — ELEC 패턴 + scope_rule + trigger_task_id 응답.
+
+    73 항목 모두 반환 (FE 가 scope_rule 보고 disabled NA 처리).
+    judgment_phase=1 시 phase1_applicable=False 항목은 자동 NA 처리 (기존 ELEC 동작 동일).
+    qr_doc_id 빈 문자열 시 _normalize_qr_doc_id() 로 'DOC_{S/N}' SINGLE 자동 채움.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            "SELECT pi.product_code, pi.sales_order, pi.model "
+            "FROM plan.product_info pi WHERE pi.serial_number = %s",
+            (serial_number,)
+        )
+        product_row = cur.fetchone()
+        product_code = product_row['product_code'] if product_row else None
+        sales_order = product_row['sales_order'] if product_row else None
+        model = product_row['model'] if product_row else None
+
+        # qr_doc_id 정규화 (Sprint 59-BE 재발 방지)
+        normalized_qr = _normalize_qr_doc_id(serial_number, qr_doc_id) if qr_doc_id else _normalize_qr_doc_id(serial_number)
+
+        data = _get_checklist_by_category(
+            cur, serial_number, 'MECH', product_code, 'all', judgment_phase,
+            qr_doc_id=normalized_qr
+        )
+
+        # Phase 1: phase1_applicable=False 항목 제외 (Sprint 60 ELEC 패턴 동일)
+        items = data['items']
+        if judgment_phase == 1:
+            items = [i for i in items if i.get('phase1_applicable', True)]
+
+        from collections import OrderedDict
+        groups_dict: OrderedDict = OrderedDict()
+        for item in items:
+            g = item['item_group']
+            if g not in groups_dict:
+                groups_dict[g] = []
+            groups_dict[g].append(item)
+
+        groups = [{'group_name': k, 'items': v} for k, v in groups_dict.items()]
+
+        # summary 재계산 (Phase 1 제외 반영)
+        total = len(items)
+        checked = sum(1 for i in items if i['check_result'] in ('PASS', 'NA'))
+        percent = round(checked / total * 100, 1) if total > 0 else 0.0
+        summary = {
+            'total': total,
+            'checked': checked,
+            'percent': percent,
+            'remaining': total - checked,
+            'is_complete': (total - checked == 0 and total > 0),
+        }
+
+        return {
+            'serial_number': serial_number,
+            'sales_order': sales_order,
+            'model': model,
+            'judgment_phase': judgment_phase,
+            'qr_doc_id': normalized_qr,
+            'groups': groups,
+            'summary': summary,
+        }
+
+    except PsycopgError as e:
+        logger.error(f"get_mech_checklist failed: serial={serial_number}, error={e}")
+        raise
+    finally:
+        if conn:
+            put_conn(conn)
+
+
+def upsert_mech_check(
+    serial_number: str,
+    master_id: int,
+    check_result: str,
+    note: Optional[str],
+    worker_id: int,
+    judgment_phase: int = 1,
+    selected_value: Optional[str] = None,
+    input_value: Optional[str] = None,
+    qr_doc_id: str = '',
+) -> Dict[str, Any]:
+    """MECH 체크리스트 항목 체크 UPSERT (Sprint 63-BE) — ELEC 패턴 복제.
+
+    item_type='CHECK': PASS/NA 라디오
+    item_type='SELECT': selected_value (드롭다운 값)
+    item_type='INPUT': input_value (자유 텍스트)
+    """
+    if check_result not in ('PASS', 'NA'):
+        raise ValueError(f"INVALID_CHECK_RESULT: '{check_result}'")
+
+    # qr_doc_id 정규화
+    normalized_qr = _normalize_qr_doc_id(serial_number, qr_doc_id) if qr_doc_id else _normalize_qr_doc_id(serial_number)
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            "SELECT id FROM checklist.checklist_master WHERE id = %s AND category = 'MECH'",
+            (master_id,)
+        )
+        if not cur.fetchone():
+            raise ValueError(f"MASTER_NOT_FOUND: master_id={master_id} (MECH)")
+
+        cur.execute(
+            """
+            INSERT INTO checklist.checklist_record
+                (serial_number, master_id, judgment_phase, check_result,
+                 checked_by, checked_at, note, selected_value, input_value,
+                 qr_doc_id, updated_at)
+            VALUES (%s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s, NOW())
+            ON CONFLICT (serial_number, master_id, judgment_phase, qr_doc_id) DO UPDATE
+            SET check_result   = EXCLUDED.check_result,
+                checked_by     = EXCLUDED.checked_by,
+                checked_at     = EXCLUDED.checked_at,
+                note           = EXCLUDED.note,
+                selected_value = EXCLUDED.selected_value,
+                input_value    = EXCLUDED.input_value,
+                updated_at     = NOW()
+            RETURNING id
+            """,
+            (serial_number, master_id, judgment_phase, check_result,
+             worker_id, note, selected_value, input_value, normalized_qr)
+        )
+        conn.commit()
+
+        logger.info(
+            f"MECH checklist upserted: serial={serial_number}, master_id={master_id}, "
+            f"check_result={check_result}, worker_id={worker_id}, phase={judgment_phase}, "
+            f"qr_doc_id={normalized_qr}"
+        )
+
+        is_complete = check_mech_completion(serial_number, judgment_phase)
+
+        return {
+            'master_id': master_id,
+            'check_result': check_result,
+            'is_complete': is_complete,
+            'qr_doc_id': normalized_qr,
+        }
+
+    except PsycopgError as e:
+        if conn:
+            conn.rollback()
+        logger.error(f"upsert_mech_check failed: serial={serial_number}, master_id={master_id}, error={e}")
+        raise
     finally:
         if conn:
             put_conn(conn)

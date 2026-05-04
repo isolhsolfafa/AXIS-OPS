@@ -516,9 +516,9 @@ class TestChecklistIssue:
         # 여기서는 직접 service 함수 호출로 검증
 
         try:
-            from app.services.checklist_service import _check_tm_completion
+            from app.services.checklist_service import check_tm_completion
         except ImportError:
-            pytest.skip("checklist_service._check_tm_completion을 import할 수 없습니다.")
+            pytest.skip("checklist_service.check_tm_completion을 import할 수 없습니다.")
 
         before = _count_alerts(self.db_conn, 'CHECKLIST_ISSUE', self.sn)
 

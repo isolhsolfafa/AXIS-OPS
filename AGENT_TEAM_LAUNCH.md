@@ -33252,6 +33252,770 @@ OPEN → COMPLETED 전환
 
 ---
 
+## 🚀 Sprint 63-BE — MECH 체크리스트 BE 인프라 (양식 73항목 / 20그룹, 2026-04-29 등록 / 2026-05-01 v2, 🟡 P2)
+
+> **2026-05-01 사용자 결정 반영 (3건)**:
+> 1. INLET S/N L/R **master 8개로 분리** (옵션 A 변형) — 총 69 → **73 항목**
+> 2. judgment_phase=2 = **(c)안 채택** — 관리자 phase=2 record 만 판정, 1차 record 강제 안 함
+> 3. **BE/FE 분리** — Sprint 63-BE (BE) / Sprint 63-FE (Flutter) / AXIS-VIEW Sprint 39 (별 repo) 3트랙
+
+> **등록일**: 2026-04-29 KST (4-30 Advisory 7건 정정 + BE/FE Sprint 분리 결정)
+> **Sprint ID**: `Sprint 63-BE — MECH 체크리스트 도입` (BE 단독)
+> **연계 Sprint**: `Sprint 63-FE — MECH 체크리스트 Flutter UI` (별 Sprint, BE 배포 완료 후 착수)
+> **BACKLOG 연계**: `SPRINT-63-BE-MECH-CHECKLIST-20260429` + `SPRINT-63-FE-MECH-CHECKLIST-20260430`
+> **선행 Sprint**: Sprint 52 (TM 체크리스트) ✅ / Sprint 60-BE (ELEC 정규화) ✅ / v2.10.11 FIX-PROCESS-VALIDATOR-TMS-MAPPING (`resolve_managers_for_category` 표준 정리) ✅
+> **우선순위**: 🟡 P2 (현장 가치 — 수기 양식 디지털화 + 1차/2차 분리 검수 + Tank Ass'y 모델 분기 자동)
+> **상태**: 🔴 OPEN — 모든 결정 확정 + Advisory 7건 정정 완료 → Codex 이관 후 착수 가능
+> **예상 소요 (BE 단독)**: 1.5d (migration 051 + 051a + checklist_service + routes + task_service hook + pytest 16 TC, v2 보강 후)
+> **연계 Sprint 예상 소요**:
+>   - Sprint 63-FE (Flutter): **2~3d** (mech_checklist_screen.dart 신규 ~1,000~1,200 LoC, ELEC 패턴 + INPUT/SELECT/CHECK 3종 분기 + scope_rule disabled UI + judgment_phase 토글 — Advisory A1 추정 갱신)
+>   - AXIS-VIEW Sprint 39 (~0.5d, BE 배포 완료 후 BLUR 해제 + AddModal 토글)
+> **선행 의존성**: 없음 (BE 단독 배포 가능)
+> **충돌 위험**: 낮음 (`checklist_master` 컬럼 추가만, 기존 TM/ELEC 데이터 무영향)
+> **트리거 근거**: 2026-04-29 Twin파파 양식 공유 (현황판 Excel + model_config + 기존 checklist schema CSV) → 5단계 결정 trail 완료
+> **담당**: BE teammate (별 Sprint 63-FE 는 AXIS-OPS FE teammate)
+> **Codex 이관**: ✅ **라운드 1+2 완료** (2026-04-30 ~ 05-01) — M=4+3 / A=2+2 / N=1 + 추가 advisory 6+3 모두 정정 반영. 라운드 3 = 사용자 측 진행 예정 (BE 구현 직전).
+
+### 📋 Codex 라운드 1+2 Trail (Important I1 보강)
+
+| 라운드 | 일자 | 발견 | 처리 결과 |
+|--------|------|------|----------|
+| **라운드 1** | 2026-04-30 | M=4 (Q1 CLAUDE drift / Q3 rename grep / Q4 qr_doc_id normalizer / Q6 seed 총계+pytest) + A=2 (Q2 INLET 표 / Q5 enum 위험) + 추가 advisory 3 (CLAUDE drift / Python helper 모순 / 051a untracked) | Cowork 정정 7건 모두 반영 — CLAUDE.md drift fix + INLET 표 + Python helper 통일 + qr_doc_id helper + rename 9곳 명시 + pytest 보강 + enum 표기 |
+| **라운드 2** | 2026-05-01 | **핵심 통찰**: "설계서 정정 ≠ 실코드 미구현" + M=3 (Q1 정정 완결성 / Q3 ELEC qr_doc_id 하드코딩 / Q4 pytest 미작성) + A=2 (Q5 cross-repo / Q6 lint hook) + 추가 advisory 6 (atomic commit / silent failure 잔존 / ELEC qr_doc_id 별 BACKLOG / models drift / lint hook / cross-repo 대조) | Step 1+2 정리 (BACKLOG 2건 + Pre-deploy Gate 보강 2건) + BE/FE 분리 + 51a v2 (INLET 8개 분리) — Step 3 BE 구현은 사용자 결정에 따라 진행 |
+
+### 🔴 본 Sprint 진행 단계 명시 (Important I2 보강)
+
+```
+✅ 완료 (설계 + 정정 + migration 작성):
+  - 설계서 (Sprint 63-BE) 작성 완료
+  - migration 051 (extension SQL) 작성 — backend/migrations/051_*.sql (untracked)
+  - migration 051a v2 (seed 73 INSERT) 작성 — backend/migrations/051a_*.sql (untracked)
+  - CLAUDE.md drift fix
+  - BACKLOG entry 3건 등록 (Sprint 63-BE/63-FE + 후속 2건)
+  - AXIS-VIEW Sprint 39 별 repo 분리 작성
+  - Codex 라운드 1+2 정정 모두 반영
+
+🔴 미완료 (BE 구현 단계 — 본 Sprint 의 진짜 작업):
+  - migration 051/051a → git add (현재 untracked)
+  - checklist_service.py: check_mech_completion() / _resolve_active_master_ids() / _normalize_qr_doc_id() 신설
+  - _check_tm_completion → check_tm_completion rename (**9 hits**, Codex 라운드 2 rg + 라운드 3 A4 concrete 확정 — checklist_service 5 + production 2 + tests/backend/test_alert_all20_verify.py 2)
+  - routes/checklist.py: GET + POST/upsert MECH 분기
+  - task_service.py: _trigger_mech_checklist_alert() hook
+  - _check_sn_checklist_complete() L26184 MECH 분기 활성화 (placeholder 주석 → 코드)
+  - tests/backend/test_mech_checklist.py: 16 TC 신규
+  - rg "_check_tm_completion" = 0건 gate 통과
+  - atomic commit (migration + 서비스 + tests + rename 모두 한 번에)
+```
+
+→ **본 Sprint 의 진짜 작업 = BE 구현 (1.5d)**. 설계 단계 완료 + 라운드 1+2 합의 + migration 파일 작성까지 진행. 사용자 측 Codex 라운드 3 검증 후 BE 구현 commit 단계로 진입.
+
+### ⭐ Advisory 7건 정정 (2026-04-30, Sprint 검토 + CSV 검증 후)
+
+```
+[1] 양식 표 합계 mismatch 정정:
+    Before: "합계 66 (sub-rows 4 추가하면 69)"
+    v1 (2026-04-30): "main 66 + sub 3 = 69" (CSV 실측, sub-row INLET 만 3개)
+    v2 (2026-05-01): "main 65 + INLET L/R 분리 8 = 73" (사용자 결정 옵션 A 변형 — INLET S/N master 8개 분리)
+    INLET 표: v2 9 (CHECK 1 도면 + INPUT 8 S/N L/R 분리)
+
+[2] scope_rule 명시적 매핑 (Critical):
+    CSV 모든 항목이 scope='all' 로 추출 → 설계 결정 (4-29) 후속 매핑 필요
+    seed INSERT 시 다음 변환 명시:
+      - 그룹 13 'Exhaust' (4 항목) → scope_rule='tank_in_mech'
+      - 그룹 14 'TANK' (3 항목) → scope_rule='tank_in_mech'
+      - 그룹 19 'Quenching' (2 항목) → scope_rule='tank_in_mech'
+      - **v2 (2026-05-01)**: INLET S/N **8 master 분리** (Left #1~#4 + Right #1~#4) → scope_rule='DRAGON' (도면 항목 1개는 all)
+      - 나머지 60 항목 → scope_rule='all'
+
+[3] input_type 변환 매핑 (Critical):
+    CSV 4종 → DB 3종 통합:
+      - CSV 'PASS_NA' → DB 'CHECK' (54건)
+      - CSV 'SN_TEXT' / 'COUNT_EA' → DB 'INPUT' (8건 + sub 3건)
+      - CSV 'SELECT' → DB 'SELECT' (4건 MFC + 3건 Flow Sensor)
+
+[4] 함정 1 결정 명확화:
+    PostgreSQL stored function `_is_in_scope` 보류 → Python helper 채택
+    근거: 단순성 + migration 부담 0 + stored function 등록 작업 회피.
+
+[5] Rollback enum drop 위험 보강:
+    'CHECKLIST_MECH_READY' 는 PostgreSQL enum DROP VALUE 비표준 (사실상 불가).
+    다만 사용 안 하면 무해 (잔존 OK), 재배포 시 ADD VALUE IF NOT EXISTS 멱등성 ✅.
+    실질 위험 0.
+
+[6] pytest TC 10개 list 명시 (FIX-PROCESS-VALIDATOR-TMS-MAPPING 패턴 차용):
+    - test_mech_checklist_get_master_filtered_by_scope
+    - test_mech_checklist_create_record_check_type
+    - test_mech_checklist_create_record_select_type
+    - test_mech_checklist_create_record_input_type
+    - test_check_mech_completion_phase1_15_items
+    - test_check_mech_completion_phase2_69_items
+    - test_scope_rule_tank_in_mech_dragon (DRAGON 13/14/19 활성)
+    - test_scope_rule_tank_in_mech_gaia_excluded (GAIA 비활성 NA 자동)
+    - test_alert_trigger_util_line_1_speed_controller (4 항목 alert)
+    - test_check_tm_completion_rename_backward_compat (private→public 호출자 무영향)
+
+[7] BE/FE Sprint 분리 (Twin파파 결정 2026-04-30):
+    Sprint 63-BE (본 Sprint, BE 단독, 1.5d): migration + service + routes + hook + pytest
+    Sprint 63-FE (별 Sprint, FE 별도, 2d): mech_checklist_screen.dart 신규
+    분리 근거: ELEC Sprint 57 패턴 (BE/FE 묶음) 의 1,000 LOC 분량 부담 회피 + 회귀 검증 분리
+    배포 순서: BE → FE → AXIS-VIEW Sprint 39 (BLUR 해제)
+```
+
+### 🔬 5단계 결정 Trail (2026-04-28 → 4-29)
+
+```
+① 양식 분석:
+   Excel '공정진행현황-2행' 시트 col 5/18/42/66/78 (page 1) + col 134/147/171/195/207 (page 2)
+   → 69 항목 / 20 그룹 정확 추출 (CSV: AXIS-OPS/docs/mech_checklist_seed_extracted.csv)
+
+② input_type 3종 통합 (VIEW 코드 호환):
+   당초 4종 (PASS_NA / SN_OCR / COUNT_EA / SELECT) → VIEW TYPE_OPTIONS.MECH = ['CHECK','INPUT'] 호환
+   → 'CHECK' / 'SELECT' / 'INPUT' 3종 통합. SN_TEXT/COUNT_EA 모두 'INPUT' 흡수.
+   → 후속 OCR 도입 시 'SN_OCR' enum 1줄 추가만 (점진적 호환).
+
+③ 13/14/19 모델 분기 = `tank_in_mech=TRUE` 3개:
+   model_config.csv 검증 → DRAGON / GALLANT / SWS (`tank_in_mech=TRUE` 3개 모두)
+   당초 'DRAGON+SWS' 추정 → GALLANT 도 정합 (description '탱크/도킹 없음' 이지만 컬럼 TRUE)
+   → scope_rule='tank_in_mech' 매크로 + 런타임 model_config lookup
+
+④ product_code='COMMON' 단일 + scope_rule 신규:
+   Twin파파: 100+ product_code 분기는 미래 MTO 시점 대비 미리 구현 (현재 미사용)
+   → product_code='COMMON' 모든 항목 통일
+   → 모델 분기는 별도 scope_rule 컬럼 ('all' / 'tank_in_mech' / 'DRAGON')
+
+⑤ 토스트 trigger_task_id 4종 매핑:
+   task_seed.py L63-69 의 task_id 와 정확히 매칭
+   - UTIL_LINE_1 (PRE_DOCKING) → Speed Controller 4 항목
+   - WASTE_GAS_LINE_2 (POST_DOCKING) → INLET S/N 4 항목
+   - UTIL_LINE_2 (POST_DOCKING) → MFC 4 + Flow Sensor 3 = 7 항목
+   - SELF_INSPECTION (FINAL) → 일반 CHECK 54 항목 + 2차 관리자 일괄 검수
+```
+
+### 📐 schema 변경 (3건)
+
+#### 1) `migrations/051_mech_checklist_extension.sql` 신규
+
+```sql
+-- Sprint 63-BE: MECH 체크리스트 도입 — schema 확장
+-- 신규 컬럼 2개 + enum 2개 (item_type 'INPUT' 추가 + alert_type 'CHECKLIST_MECH_READY')
+
+-- (1) scope_rule — 모델 분기 매크로 (default 'all')
+ALTER TABLE checklist.checklist_master
+    ADD COLUMN IF NOT EXISTS scope_rule VARCHAR(30) DEFAULT 'all';
+
+COMMENT ON COLUMN checklist.checklist_master.scope_rule IS
+    '모델 분기 매크로. all=모든 모델 / tank_in_mech=DRAGON·GALLANT·SWS / DRAGON=DRAGON 단독';
+
+-- (2) trigger_task_id — 1차 입력 토스트 발화 시점
+ALTER TABLE checklist.checklist_master
+    ADD COLUMN IF NOT EXISTS trigger_task_id VARCHAR(50);
+
+COMMENT ON COLUMN checklist.checklist_master.trigger_task_id IS
+    'MECH 체크리스트 1차 입력 토스트 발화 시점. UTIL_LINE_1/UTIL_LINE_2/WASTE_GAS_LINE_2/NULL';
+
+-- (3) item_type 'INPUT' enum 확장 (기존 CHECK/SELECT)
+ALTER TABLE checklist.checklist_master
+    DROP CONSTRAINT IF EXISTS checklist_master_item_type_check;
+ALTER TABLE checklist.checklist_master
+    ADD CONSTRAINT checklist_master_item_type_check
+    CHECK (item_type IN ('CHECK', 'SELECT', 'INPUT'));
+
+-- (4) alert_type_enum 'CHECKLIST_MECH_READY' 추가
+ALTER TYPE alert_type_enum ADD VALUE IF NOT EXISTS 'CHECKLIST_MECH_READY';
+```
+
+⚠️ Down migration (rollback 시 — 별도 작성 필요):
+```sql
+ALTER TABLE checklist.checklist_master DROP COLUMN IF EXISTS scope_rule;
+ALTER TABLE checklist.checklist_master DROP COLUMN IF EXISTS trigger_task_id;
+-- item_type CHECK 제약 복원 + alert_type_enum 'CHECKLIST_MECH_READY' 제거
+-- PostgreSQL enum drop value 비표준 — 우회: enum 잔존, 사용 안 하면 무해 (Codex 라운드 1 Q5 정정)
+```
+
+⚠️ **Codex 라운드 1 Q5 정정**: enum 잔존 위험 표기
+- 이전 표기 "실질 위험 0" → **"rollback 시 enum 잔존 (사용 안 하면 무해)"**
+- PostgreSQL `ALTER TYPE ... DROP VALUE` 비표준이라 rollback 후 `CHECKLIST_MECH_READY` enum 라벨이 DB 에 남음
+- 코드에서 사용 안 하면 무해하지만, 향후 동일 라벨 재사용 또는 enum cleanup 시 별도 처리 필요
+
+#### 2) `migrations/051a_mech_checklist_seed.sql` 신규 (73 INSERT, v2 INLET 8개 분리)
+
+```sql
+-- Sprint 63-BE: MECH 체크리스트 항목 seed (73 항목 / 20 그룹, v2 INLET S/N L/R 8개 분리)
+-- 양식: Excel '현황판_260108_MFC Maker추가 260223.xlsm' 의 '공정진행현황-2행' 시트
+-- 추출 CSV: AXIS-OPS/docs/mech_checklist_seed_extracted.csv
+
+INSERT INTO checklist.checklist_master
+  (product_code, category, item_group, item_name, item_order, description,
+   item_type, checker_role, scope_rule, trigger_task_id, phase1_applicable,
+   qi_check_required, select_options, is_active)
+VALUES
+  -- 그룹 1: 3Way V/V (2 항목, 모두 CHECK / scope=all / 자주검사)
+  ('COMMON', 'MECH', '3Way V/V', '3Way V/V Spec 확인', 1, '조립 도면과 현물 1:1 확인 / 육안 검사',
+   'CHECK', 'WORKER', 'all', NULL, FALSE, FALSE, NULL, TRUE),
+  ('COMMON', 'MECH', '3Way V/V', '볼트 체결', 2, '조립 유동 여부 / 촉수 검사',
+   'CHECK', 'WORKER', 'all', NULL, FALSE, FALSE, NULL, TRUE),
+  -- ... (총 73 INSERT, v2 INLET S/N L/R 8개 포함, 별도 파일)
+;
+```
+
+⚠️ **Critical 함정 (Sprint 59-BE 교훈)**: SINGLE/DUAL 모델의 `qr_doc_id` 일관성 — `DOC_{S/N}` (SINGLE) / `DOC_{S/N}-L` + `DOC_{S/N}-R` (DUAL). MECH 체크리스트 record 생성 시 처음부터 정합 보장 (TM 은 Sprint 59-BE 에서 별도 fix 필요했음).
+
+### 📋 모든 항목 매핑 (73, v2 INLET 8개 분리 후)
+
+| 그룹 | 항목 수 | input_type 분포 | scope_rule | trigger_task_id (1차) | phase1_applicable |
+|------|---------|----------------|-----------|----------------------|-------------------|
+| 3Way V/V | 2 | CHECK 2 | all | NULL | FALSE |
+| WASTE GAS | 2 | CHECK 2 | all | NULL | FALSE |
+| INLET | 9 | CHECK 1 (도면) + INPUT 8 (S/N L/R 8개 분리 — Left #1, Right #1, ..., Left #4, Right #4) | DRAGON (S/N 8) / all (도면 1) | WASTE_GAS_LINE_2 (S/N 8) / NULL (도면 1) | TRUE (S/N 8) / FALSE (도면 1) |
+| BURNER | 3 | CHECK 3 | all | NULL | FALSE |
+| REACTOR | 4 | CHECK 4 | all | NULL | FALSE |
+| GN₂ | 6 | CHECK 4 + INPUT 1 + SELECT 1 | all | UTIL_LINE_1 (Speed 2) / UTIL_LINE_2 (MFC) / NULL | TRUE (3) / FALSE (3) |
+| LNG | 4 | CHECK 3 + SELECT 1 (MFC) | all | UTIL_LINE_2 (MFC) / NULL | TRUE (1) / FALSE (3) |
+| O₂ | 4 | CHECK 3 + SELECT 1 (MFC) | all | UTIL_LINE_2 (MFC) / NULL | TRUE (1) / FALSE (3) |
+| CDA | 6 | CHECK 4 + INPUT 1 + SELECT 1 | all | UTIL_LINE_1 (Speed 2) / UTIL_LINE_2 (MFC) / NULL | TRUE (3) / FALSE (3) |
+| BCW | 5 | CHECK 4 + SELECT 1 (FS) | all | UTIL_LINE_2 (FS) / NULL | TRUE (1) / FALSE (4) |
+| PCW-S | 5 | CHECK 4 + SELECT 1 (FS) | all | UTIL_LINE_2 (FS) / NULL | TRUE (1) / FALSE (4) |
+| PCW-R | 5 | CHECK 4 + SELECT 1 (FS) | all | UTIL_LINE_2 (FS) / NULL | TRUE (1) / FALSE (4) |
+| **Exhaust** | 4 | CHECK 4 | **tank_in_mech** ⭐ | NULL | FALSE |
+| **TANK** | 3 | CHECK 3 | **tank_in_mech** ⭐ | NULL | FALSE |
+| PU | 1 | CHECK 1 | all | NULL | FALSE |
+| 설비 상부 | 3 | CHECK 3 | all | NULL | FALSE |
+| 설비 전면부 | 1 | CHECK 1 | all | NULL | FALSE |
+| H/J | 3 | CHECK 3 | all | NULL | FALSE |
+| **Quenching** | 2 | CHECK 2 | **tank_in_mech** ⭐ | NULL | FALSE |
+| 눈관리 | 1 | CHECK 1 | all | NULL | FALSE |
+| **합계** | **73** | CHECK 56 / INPUT 10 / SELECT 7 (v2 2026-05-01 INLET S/N 8개 분리 — 사용자 결정 옵션 A 변형) | all 56 / tank_in_mech 9 / DRAGON 8 | NULL 54 / UTIL_LINE_1 4 / UTIL_LINE_2 7 / WASTE_GAS_LINE_2 8 | TRUE 19 / FALSE 54 |
+
+⭐ 13(Exhaust)/14(TANK)/19(Quenching) = `tank_in_mech` 매크로 → DRAGON·GALLANT·SWS 만 활성, 나머지 모델은 disabled NA 자동 표시.
+
+### 📐 BE 구현 (5 파일)
+
+#### 1) `migrations/051_mech_checklist_extension.sql` (위 schema 참조)
+
+#### 2) `migrations/051a_mech_checklist_seed.sql` (73 INSERT, CSV 변환 + v2 INLET 8개 분리)
+
+#### 3) `services/checklist_service.py` — `check_mech_completion()` + scope helper 신설
+
+> **결정 (Codex 라운드 1 추가 advisory 2 반영)**: PostgreSQL stored function `_is_in_scope` 보류 → **Python helper 채택**. 샘플 쿼리도 Python helper 일관성으로 통일 (이전 SQL `_is_in_scope(...)` 호출 잔존 제거).
+
+```python
+# 신규 추가 ~70 LOC (Python helper 일관)
+
+def check_mech_completion(serial_number: str, judgment_phase: int = 1) -> bool:
+    """
+    MECH 체크리스트 완료 여부.
+    Sprint 63-BE — TM/ELEC 패턴 동일.
+
+    judgment_phase=1: phase1_applicable=TRUE 항목 (19개, v2 INLET 8개 분리 후) 의 scope 적용분 모두 입력 완료
+    judgment_phase=2: 관리자 phase=2 record 충족만 판정 (사용자 결정 (c)안 2026-05-01)
+                     - 1차 미입력 항목도 관리자가 검수 자리에서 직접 phase=2 record 입력 가능
+                     - 1차 record 강제 안 함 (작업자 미체크 시 관리자가 cover)
+                     - 동작: scope 매칭 항목들의 phase=2 record 채워진 비율 계산
+
+    구현 전략 (Python helper, stored function 미사용):
+      1) _resolve_active_master_ids() 로 scope_rule + phase1_applicable 필터 적용한 id list 반환
+      2) 해당 id 들에 대해 record 의 check_result 채워진 비율 계산
+    """
+    active_ids = _resolve_active_master_ids(serial_number, judgment_phase)
+    if not active_ids:
+        return False
+
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                COUNT(*) AS total,
+                COUNT(check_result) AS checked
+            FROM checklist.checklist_record
+            WHERE master_id = ANY(%(ids)s)
+              AND serial_number = %(serial_number)s
+              AND judgment_phase = %(judgment_phase)s
+        """, {
+            'ids': active_ids,
+            'serial_number': serial_number,
+            'judgment_phase': judgment_phase,
+        })
+        row = cur.fetchone()
+        total = len(active_ids)
+        checked = row['checked'] if isinstance(row, dict) else row[1]
+        return total > 0 and checked >= total
+    finally:
+        put_conn(conn)
+
+
+def _resolve_active_master_ids(serial_number: str, judgment_phase: int) -> list[int]:
+    """
+    scope_rule + phase1_applicable 필터 적용 후 활성 master id 반환.
+    stored function 미사용 — model lookup 1회 + tank_in_mech lookup 1회 + Python loop.
+
+    HOTFIX-08 표준: SELECT 후 conn.rollback() 으로 INTRANS 정리.
+    """
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        # (1) model + tank_in_mech 한 번에 조회 (JOIN 1번)
+        cur.execute("""
+            SELECT pi.model, COALESCE(mc.tank_in_mech, FALSE) AS tank_in_mech
+            FROM plan.product_info pi
+            LEFT JOIN model_config mc ON pi.model LIKE mc.model_prefix || '%%'
+            WHERE pi.serial_number = %s
+            ORDER BY length(mc.model_prefix) DESC NULLS LAST
+            LIMIT 1
+        """, (serial_number,))
+        row = cur.fetchone()
+        conn.rollback()  # HOTFIX-08
+        if not row:
+            return []
+        model = (row['model'] or '').upper()
+        tank_in_mech = bool(row['tank_in_mech'])
+
+        # (2) MECH 활성 항목 list
+        cur.execute("""
+            SELECT cm.id, cm.scope_rule, cm.phase1_applicable
+            FROM checklist.checklist_master cm
+            WHERE cm.category = 'MECH'
+              AND cm.product_code = 'COMMON'
+              AND cm.is_active = TRUE
+        """)
+        rows = cur.fetchall()
+        conn.rollback()  # HOTFIX-08
+    finally:
+        put_conn(conn)
+
+    # (3) Python 측 필터링
+    out = []
+    for r in rows:
+        if judgment_phase == 1 and not r['phase1_applicable']:
+            continue
+        scope = (r['scope_rule'] or 'all').lower()
+        if scope == 'all':
+            out.append(r['id'])
+        elif scope == 'tank_in_mech':
+            if tank_in_mech:
+                out.append(r['id'])
+        else:
+            # 직접 모델 매칭 (예: scope_rule='DRAGON')
+            if model.startswith(scope.upper()):
+                out.append(r['id'])
+    return out
+```
+
+⚠️ **결정 trail**:
+- Codex 라운드 1 추가 advisory 2 정정: 이전 sample SQL 의 `_is_in_scope(...)` 호출 → DB function 미등록 시 즉시 오류
+- 정정 결과: Python helper 단일 일관성. SQL 안에 user-defined function 호출 없음.
+- 비용: 쿼리 2번 (model lookup + master list) → 캐시 도입 가능 (Sprint 63-BE 후속, 별건)
+
+#### 4) `services/checklist_service.py` — public 인터페이스 일괄 정리 (memory.md L364)
+
+```python
+# Before (Sprint 52 ~ 60 운영)
+def _check_tm_completion(...)   # private (언더스코어)
+def check_elec_completion(...)  # public
+
+# After (Sprint 63-BE 도입 시 일괄 정리)
+def check_tm_completion(...)    # rename (private → public, 언더스코어 제거)
+def check_elec_completion(...)  # 그대로
+def check_mech_completion(...)  # 신규
+```
+
+⚠️ **함정 2 (Codex 라운드 1 Q3 → 라운드 3 A4 concrete 확정)**: `_check_tm_completion` 호출자 **9 hits 일괄 rename + pytest 회귀 검증 명시**. 누락 시 ImportError 즉시.
+
+| # | 파일 | 라인 | 호출 종류 |
+|---|------|------|----------|
+| 1 | `backend/app/services/checklist_service.py` | L463 | docstring 참조 |
+| 2 | 〃 | L523 | 함수 호출 (UPSERT 후) |
+| 3 | 〃 | L541 | 함수 정의 (`def _check_tm_completion`) |
+| 4 | 〃 | L659 | logger.error 메시지 |
+| 5 | 〃 | L664 | logger.error 메시지 |
+| 6 | `backend/app/routes/production.py` | L271 | `from app.services.checklist_service import _check_tm_completion` |
+| 7 | 〃 | L272 | 함수 호출 |
+| 8 | `tests/backend/test_alert_all20_verify.py` (Codex 라운드 3 M2 경로 정정) | L519 | import 호출자 |
+| 9 | 〃 | L521 | skip 메시지 참조 |
+
+→ **합계 9 hits 확정** (checklist_service 5 + production 2 + test_alert_all20 2). BE 구현 commit 직전 `rg "_check_tm_completion" backend/ tests/` 으로 최종 재검증 (추가 발견 시 표 갱신).
+
+**일괄 rename 절차**:
+```bash
+# 1. grep 으로 모든 호출자 확인 (frontend / scripts 포함)
+grep -rn "_check_tm_completion" backend/ tests/ 2>/dev/null
+
+# 2. sed 일괄 (ripgrep + sd 또는 vim multi-file)
+# _check_tm_completion → check_tm_completion (단순 prefix _ 제거)
+
+# 3. AGENT_TEAM_LAUNCH.md L26179 (`_check_sn_checklist_complete()` 분기) 도 동시 갱신
+#    elif process_type == 'TMS':
+#        from app.services.checklist_service import check_tm_completion  # ⭐ 정정
+#        return check_tm_completion(serial_number)
+
+# 4. pytest 회귀 검증
+pytest backend/tests/ -k "tm or checklist" --tb=short
+```
+
+**Pre-deploy Gate 추가**:
+- `grep -rn "_check_tm_completion" backend/ tests/` → **0건** (rename 누락 0)
+- `pytest backend/tests/test_checklist_service.py` GREEN
+- `pytest tests/backend/test_alert_all20_verify.py` GREEN ⭐ (Codex 라운드 3 M2 경로 정정 후 — 호출자 보호)
+
+#### 4-A) `services/checklist_service.py` — `_normalize_qr_doc_id()` 공유 helper 신설 (Codex 라운드 1 Q4 반영)
+
+> **트리거**: Sprint 59-BE 사례 — TM 의 `_check_tm_completion()` SINGLE 분기가 `qr_doc_id=''` 하드코딩 → 실데이터 `DOC_{S/N}` 와 불일치 → LEFT JOIN 매칭 실패. MECH 도입 시 동일 함정 미리 방지 필요.
+> **결정**: 공유 normalizer 1곳 도입 + TM/ELEC route 도 마이그레이션 (도입 시점 = MECH 도입 = Sprint 63-BE).
+
+```python
+# services/checklist_service.py 상단 helper 영역 신설 (~40 LOC)
+
+def _normalize_qr_doc_id(serial_number: str, hint: str | None = None) -> str:
+    """
+    qr_doc_id 정규화 — SINGLE/DUAL 모델 일관 처리.
+
+    Sprint 63-BE: TM/ELEC/MECH 공유 normalizer (Sprint 59-BE 재발 방지).
+
+    Rules:
+      - SINGLE: 'DOC_{serial_number}'   (예: DOC_GBWS-6905)
+      - DUAL Left: 'DOC_{serial_number}-L'  (예: DOC_GBWS-7043-L)
+      - DUAL Right: 'DOC_{serial_number}-R' (예: DOC_GBWS-7043-R)
+
+    Args:
+      serial_number: S/N (예: 'GBWS-6905')
+      hint: 클라이언트 전송 hint ('L' / 'R' / None / 'DOC_GBWS-7043-L' 같은 full id)
+
+    Returns:
+      정규화된 qr_doc_id (string).
+
+    Examples:
+      _normalize_qr_doc_id('GBWS-6905')                      → 'DOC_GBWS-6905'
+      _normalize_qr_doc_id('GBWS-7043', 'L')                 → 'DOC_GBWS-7043-L'
+      _normalize_qr_doc_id('GBWS-7043', 'DOC_GBWS-7043-R')   → 'DOC_GBWS-7043-R'  (hint 우선, idempotent)
+    """
+    if not serial_number:
+        return ''
+
+    sn = serial_number.strip()
+
+    # hint 가 이미 정규화 형태면 그대로 (idempotent 보장)
+    if hint and hint.startswith(f'DOC_{sn}'):
+        return hint.strip()
+
+    # hint 가 'L' / 'R' suffix 만 주어진 경우
+    if hint and hint.upper() in ('L', 'R'):
+        return f'DOC_{sn}-{hint.upper()}'
+
+    # 기본 SINGLE
+    return f'DOC_{sn}'
+
+
+# 호출 시점 (Sprint 63-BE 도입 시 일괄 적용):
+#   1. routes/checklist.py 의 모든 POST/upsert handler — payload.get('qr_doc_id') → _normalize_qr_doc_id(serial_number, hint=payload.get('qr_doc_id') or payload.get('lr'))
+#   2. check_tm_completion / check_elec_completion / check_mech_completion 의 LEFT JOIN 쿼리 직전 — _normalize_qr_doc_id(serial_number) 로 보장
+#   3. 클라이언트 (Flutter mech_checklist_screen.dart) 도 동일 normalizer 호환 — Dart 측 유사 함수 작성 권장 (Sprint 후속)
+
+# 마이그레이션 trail (TM/ELEC route 일괄 적용):
+#   - TM route: Sprint 57-D 이후 클라이언트 가 `DOC_{S/N}` 직접 전송 → normalizer 통과 시 idempotent 그대로 OK
+#   - ELEC route: 현재 `qr_doc_id=''` (31건 운영 데이터) → normalizer 도입 시 빈 문자열 input → 'DOC_{S/N}' 출력
+#     → ELEC LEFT JOIN 쿼리 매칭 OK (현재 record.qr_doc_id='' 와 normalizer 출력 'DOC_{S/N}' 불일치 발생 가능)
+#   ⚠️ ELEC route 마이그레이션은 Sprint 63-BE 범위 외 — 별 Sprint (FIX-ELEC-QR-DOC-NORMALIZE)
+#     본 Sprint 는 MECH 도입 + TM compatibility 만 보장
+```
+
+⚠️ **함정 3 (Codex Q4 정정)**:
+- TM/ELEC/MECH 가 같은 normalizer 사용해야 Sprint 59-BE 재발 차단
+- 단 ELEC 는 운영 record 가 `qr_doc_id=''` 로 누적된 상태 → normalizer 도입 시 매칭 깨짐 위험
+- 본 Sprint 63-BE 는 MECH 도입 + TM 호환만 보장 (idempotent 검증), ELEC 마이그레이션은 **별건 Sprint** 분리
+
+#### 5) `routes/checklist.py` MECH 분기 추가 (~40 LOC)
+
+ELEC 패턴 복제 — GET `/api/checklist/mech/{serial_number}` + POST `/api/checklist/mech/upsert`. 응답 schema 는 ELEC 와 동일 (`scope_rule` + `trigger_task_id` + `select_options` 필드 추가).
+
+#### 6) `_check_sn_checklist_complete()` MECH 분기 활성화 (L26184 주석 → 코드)
+
+```python
+elif process_type == 'MECH':
+    from app.services.checklist_service import check_mech_completion
+    return check_mech_completion(serial_number)
+```
+
+#### 7) `task_service.py` — task 시작 시 MECH alert 발화
+
+```python
+# UTIL_LINE_1, UTIL_LINE_2, WASTE_GAS_LINE_2 task 시작 시점 hook
+def _trigger_mech_checklist_alert(serial_number: str, task_id: str):
+    """MECH 체크리스트 1차 입력 토스트 발화."""
+    cur.execute("""
+        SELECT cm.id, cm.item_name FROM checklist.checklist_master cm
+        WHERE cm.category='MECH' AND cm.trigger_task_id = %s AND cm.is_active=TRUE
+    """, (task_id,))
+    items = cur.fetchall()
+    if items:
+        # 작업자 worker_id 에게 alert INSERT (alert_type='CHECKLIST_MECH_READY')
+        # WebSocket emit_new_alert(worker_id, alert_data)
+        ...
+```
+
+### 📋 AXIS-OPS FE 구현 — **별 Sprint 63-FE 분리** (Critical C1 정정 2026-05-01)
+
+본 Sprint 63-BE 는 **BE 인프라만** 포함. AXIS-OPS Flutter UI 작업은 **별 Sprint 63-FE** 로 분리:
+
+➡️ **상세 설계서**: 본 파일 아래 별 섹션 `## 🚀 Sprint 63-FE — MECH 체크리스트 Flutter UI` (BE 배포 완료 후 착수)
+
+➡️ **BACKLOG entry**: `SPRINT-63-FE-MECH-CHECKLIST-20260501` (별도 등록 완료)
+
+FE 작업 요약 (cross-reference):
+- `mech_checklist_screen.dart` 신규 (~1,000~1,200 LOC, ELEC 패턴 차용 + INPUT/SELECT/CHECK 3종 분기)
+- 73 항목 표시 (v2) + scope_rule 회색 disabled NA + judgment_phase 토글
+- WebSocket `CHECKLIST_MECH_READY` 토스트 핸들러 + 화면 진입 유도
+- INLET 8개 L/R 명확 구분 입력 필드
+
+### 📋 AXIS-VIEW FE 구현 — **별 repo 별 Sprint 분리**
+
+VIEW FE 작업은 별 repo (`/Users/twinfafa/Desktop/GST/AXIS-VIEW`) 라 별도 Sprint 문서에 분리 작성:
+
+➡️ **상세 설계서**: `AXIS-VIEW/DESIGN_FIX_SPRINT.md` 의 **Sprint 39 — MECH 체크리스트 VIEW 연동**
+
+VIEW 측 변경 요약 (cross-reference):
+- `ChecklistManagePage.tsx` L17 `BLUR_CATEGORIES` 에서 `'MECH'` 제거 (블러 해제)
+- `ChecklistAddModal.tsx` L29-33 `TYPE_OPTIONS.MECH` = `['CHECK', 'INPUT', 'SELECT']` (SELECT 추가)
+- `ChecklistAddModal.tsx` L88-90 `phase1_applicable` 토글 ELEC + MECH 양쪽 활성화
+
+배포 의존성: 본 Sprint 63-BE (BE) 배포 완료 → VIEW Sprint 39 착수 (응답 schema 의 신규 컬럼 `scope_rule` / `trigger_task_id` / `select_options` 활용 시점부터).
+
+### 📊 권한 + 매니저 lookup (mech_partner)
+
+```python
+# 4-22 HOTFIX-ALERT-SCHEDULER-DELIVERY 표준 패턴 (v2.10.11 정리 후)
+# process_validator.py L30 _CATEGORY_PARTNER_FIELD['MECH'] = 'mech_partner'
+# 그대로 활용 — GST QI 무관
+
+from app.services.process_validator import resolve_managers_for_category
+
+# MECH 2차 검수자 lookup
+managers = resolve_managers_for_category(serial_number, 'MECH')
+# → workers WHERE company = product_info.mech_partner AND is_manager = TRUE
+```
+
+### ✅ Pre-deploy Gate
+
+```
+1. pytest tests/backend/test_checklist_master.py + test_checklist_record.py + 신규 test_mech_checklist.py
+   → MECH 도입 후 회귀 0건 (TM/ELEC 기존 동작 유지)
+   → 신규 TC **21개** (기본 10 + Q6 3 + Q3 1 + I3 2 phase2 + 라운드 3 5 edge/emit — C2 통일 + A5 보강)
+     기본 10개:
+       - test_scope_rule_all_matches_any_model
+       - test_scope_rule_tank_in_mech_matches_dragon
+       - test_scope_rule_tank_in_mech_matches_gallant
+       - test_scope_rule_tank_in_mech_matches_sws
+       - test_scope_rule_tank_in_mech_excludes_gaia
+       - test_scope_rule_dragon_only_matches_dragon
+       - test_trigger_task_id_util_line_1_for_speed
+       - test_trigger_task_id_util_line_2_for_mfc_fs
+       - test_trigger_task_id_waste_gas_line_2_for_inlet_sn
+       - test_phase1_applicable_19_items_only (v2: INLET 8개 분리 후 phase1=TRUE 15→19)
+     보강 3개 (Codex Q6):
+       - test_qr_doc_id_normalization_single (helper idempotent + DOC_{S/N})
+       - test_qr_doc_id_normalization_dual (Left / Right suffix 정확)
+       - test_seed_count_by_scope_rule (51a 실파일 분포 자동 검증: all=56 / tank_in_mech=9 / DRAGON=8 — v2 INLET 8개 분리 후)
+     보강 1개 (Codex Q3):
+       - test_tm_completion_rename_no_legacy_caller (grep `_check_tm_completion` 결과 0건 보장 — 회귀 자동 차단)
+     v2 보강 2개 (judgment_phase=2 (c)안 검증, Important I3):
+       - test_phase2_completion_when_phase1_missing (1차 미입력 + 2차 record 만 채워도 완료 판정 — (c)안 핵심)
+       - test_phase2_completion_when_both_filled (1차+2차 둘 다 입력 시 정상 완료)
+     라운드 3 보강 5개 (Codex A5-A1 + A5-A2 — edge case + WebSocket emit):
+       - test_normalize_qr_doc_id_hint_none (hint=None 케이스 → 'DOC_{S/N}' 기본 SINGLE)
+       - test_normalize_qr_doc_id_blank_hint (hint='' 또는 공백 → 'DOC_{S/N}' fallback)
+       - test_normalize_qr_doc_id_mixed_case_full_id (hint='doc_GBWS-XXX' → idempotent 보장 또는 normalize)
+       - test_normalize_qr_doc_id_empty_serial (serial='' → '' 반환, 호출자 측 책임 분리)
+       - test_trigger_mech_checklist_alert_websocket_emit (3 trigger 통합: UTIL_LINE_1/UTIL_LINE_2/WASTE_GAS_LINE_2 task 시작 → emit_new_alert 호출 검증)
+   → 실제 TC **21개** (기본 10 + Q6 3 + Q3 1 + I3 2 + 라운드 3 5). pytest 실행 시 정확 카운트 보고.
+
+2. migration 051 + 051a 적용 후 DB 검증:
+   SELECT COUNT(*) FROM checklist.checklist_master WHERE category='MECH';  -- 73 (v2)
+   SELECT scope_rule, COUNT(*) FROM checklist.checklist_master
+     WHERE category='MECH' GROUP BY scope_rule;
+   -- expected (v2): all=56 / tank_in_mech=9 / DRAGON=8 (= 73)
+
+3. 4-22 표준 패턴 정합성 검증:
+   resolve_managers_for_category('GBWS-XXXX', 'MECH') 호출 → mech_partner 매니저 list 반환 (≥1명)
+
+4. 토스트 알람 발화 검증:
+   UTIL_LINE_1 task 시작 → 작업자 단말 토스트 + alert_type='CHECKLIST_MECH_READY' INSERT 확인
+
+5. ⭐ rename gate 자동화 (Codex 라운드 2 Q6-2 보강):
+   $ rg "_check_tm_completion" backend/ tests/
+   → 결과 0건 (rename 누락 시 즉시 ImportError 차단)
+
+   CI 또는 pre-commit hook 활용 권장:
+     - pre-commit: rg "_check_tm_completion" → exit 1 if found
+     - CI: GitHub Actions 또는 Railway pre-deploy hook 동일 검증
+   별 BACKLOG: INFRA-LINT-PRECOMMIT-HOOK-20260501 (lint pre-commit hook 도입 시 통합)
+
+6. ⭐ AXIS-VIEW cross-repo 대조 (Codex 라운드 2 Q6-A6 보강):
+   AXIS-VIEW Sprint 39 의 BLUR_CATEGORIES + TYPE_OPTIONS.MECH 변경분과
+   본 Sprint 의 schema (scope_rule / trigger_task_id / item_type 'INPUT') 응답 정합성 1회 대조:
+
+     # AXIS-OPS BE 응답 schema:
+     - scope_rule: 'all' | 'tank_in_mech' | 'DRAGON'
+     - trigger_task_id: 'UTIL_LINE_1' | 'UTIL_LINE_2' | 'WASTE_GAS_LINE_2' | NULL
+     - item_type: 'CHECK' | 'SELECT' | 'INPUT'
+
+     # AXIS-VIEW Sprint 39 의 TYPE_OPTIONS.MECH:
+     ['CHECK', 'INPUT', 'SELECT']  # 정합 확인
+
+     # AXIS-VIEW Sprint 39 의 BLUR_CATEGORIES:
+     new Set([])  # MECH 활성화 정합 확인
+
+   → BE merge 전 1회 검증 (수동 또는 cross-repo lint script)
+
+   ※ AXIS-VIEW BLUR 해제 검증 자체는 Sprint 39 Pre-deploy Gate 에서 처리 (별 repo)
+
+7. ⭐ ALTER TYPE ADD VALUE non-transactional 환경 검증 (Codex 라운드 3 M1+M3 보강):
+
+   PostgreSQL 12+ 의 `ALTER TYPE ... ADD VALUE` 는 transaction 안 실행 시 같은 transaction 내 새 값 사용 불가.
+   migration 051 의 `ALTER TYPE alert_type_enum ADD VALUE IF NOT EXISTS 'CHECKLIST_MECH_READY'` 도 동일 제약.
+
+   **현재 보증 상태 (확인 완료 2026-05-01)**:
+   - `backend/app/migration_runner.py` L57-58 docstring 명시: "ENUM ADD VALUE는 트랜잭션 내 실행 불가 → autocommit 모드 사용"
+   - `migration_runner.py` L102-104 코드 명시: `m_conn.autocommit = True` 각 migration 별 적용
+   - → migration 051 적용 시 ALTER TYPE 안전 보장
+
+   **Pre-deploy 시 필수 검증**:
+   - [ ] migration_runner.py L104 `m_conn.autocommit = True` 잔존 확인 (regression 방지)
+   - [ ] migration 051 의 ALTER TYPE 구문이 단일 statement 분리 실행 보장 (`_split_statements()` 정상 작동)
+   - [ ] Railway 배포 후 logs: `[migration] ✅ 051_mech_checklist_extension.sql 실행 완료` 확인
+
+   **만약 autocommit 미보장 시 우회 (back-up plan)**:
+   - 옵션 A: `ALTER TYPE` 구문만 별 migration `051b` 분리 (autocommit 강제)
+   - 옵션 B: migration_runner 의 `_split_statements()` 가 ALTER TYPE 자동 감지 후 별 connection 처리
+```
+
+### 🚀 배포 순서 (BE → FE 순, AXIS-OPS 범위)
+
+```
+0. ⭐ git add backend/migrations/051_mech_checklist_extension.sql
+        backend/migrations/051a_mech_checklist_seed.sql
+   (Codex 라운드 2 advisory: 4-30 15:37/15:38 작성 후 untracked 상태 — BE commit 시점에 동시 처리)
+1. migration 051 + 051a Railway 적용 → schema 갱신
+2. BE commit + Railway 자동 배포 → checklist API + scheduler hook 작동
+   (commit 에 BE 구현 + migration 051/051a + 정정 7건 후 Sprint 설계서 + CLAUDE.md drift fix 모두 포함)
+3. AXIS-OPS FE (Flutter) 빌드 + Netlify 배포 → mech_checklist_screen 진입 가능
+4. 1주 운영 관찰 → 1차 입력률 + 2차 검수 완료율 + Sentry 새 ERROR 0건 확인
+
+별 repo: AXIS-VIEW Sprint 39 는 BE 배포 (1+2 단계) 완료 후 별도 진행
+        — BLUR 해제 + AddModal 토글 활성화 (DESIGN_FIX_SPRINT.md 참조)
+```
+
+### 📊 Post-deploy 관찰 (1d / 1주 / 1개월)
+
+#### T+1d
+```
+- Railway logs: MECH alert INSERT 정상 ✓
+- Sentry: 새 ERROR 0건 ✓
+- prod DB: SELECT COUNT(*) FROM checklist.checklist_record WHERE master_id IN (MECH ids) → 점진적 증가
+```
+
+#### T+1주
+```
+- 1차 입력률: phase1_applicable=TRUE 19 항목 / S/N 당 평균 입력 수 (v2 INLET 8개 분리 후)
+- 2차 검수 완료율: SELF_INSPECTION 도달 S/N 중 PASS/NA 일괄 완료 비율
+- 토스트 발화 빈도: alert_type='CHECKLIST_MECH_READY' INSERT 카운트 / day
+- DRAGON/GALLANT/SWS 모델의 13/14/19 그룹 활성 정상 표시 검증
+```
+
+#### T+1개월 종합 판정
+```
+- 1차 입력률 ≥80% → 토스트 정착 ✓
+- 2차 검수 완료율 ≥90% → 관리자 워크플로 정착 ✓
+- MFC/Flow Sensor select_options 운영자 추가 진행률 → VIEW 토글 활용 검증
+- COMPLETED 판정 → BACKLOG SPRINT-63-BE-MECH-CHECKLIST 종료
+```
+
+### 📦 Rollback
+
+```
+git revert <commit-sha>  # BE / FE 양쪽 commit 분리
+
+migration 051 down (별도 작성):
+  ALTER TABLE checklist.checklist_master DROP COLUMN scope_rule;
+  ALTER TABLE checklist.checklist_master DROP COLUMN trigger_task_id;
+  -- item_type 'INPUT' / alert_type_enum 'CHECKLIST_MECH_READY' 제거 우회 (PostgreSQL enum drop value 비표준)
+  DELETE FROM checklist.checklist_master WHERE category='MECH';
+
+위험:
+  - MECH category 데이터 손실 (재배포 시 seed 재실행 필요)
+  - check_mech_completion() 호출자 (process_validator 등) ImportError 가능 → 부분 revert 금지
+```
+
+### 📋 BACKLOG 동기화
+
+```
+SPRINT-63-BE-MECH-CHECKLIST-20260429          🟡 P2  (BE 인프라 단독)
+  → ✅ COMPLETED (v2.10.X 예정, 2026-04-XX)
+  ├─ migration 051 + 051a 적용 (73 INSERT, v2 INLET S/N L/R 8개 분리)
+  ├─ check_mech_completion() 신설 + public 인터페이스 일괄 정리
+  ├─ _normalize_qr_doc_id() 공유 helper 신설
+  ├─ _resolve_active_master_ids() Python helper 신설
+  ├─ routes/checklist.py MECH 분기 (~40 LOC)
+  ├─ task_service.py CHECKLIST_MECH_READY 토스트 트리거
+  ├─ _check_tm_completion → check_tm_completion rename (9곳, rg=0 gate)
+  └─ pytest 신규 TC **21개** (10 기본 + Q6 보강 3 + Q3 보강 1 + I3 보강 2 phase2 + 라운드 3 보강 5 edge/emit) + 기존 TM/ELEC 회귀 0건
+
+SPRINT-63-FE-MECH-CHECKLIST-20260501          🟡 P2  (별 Sprint, BE 배포 후 착수)
+  → 🔴 OPEN (Sprint 63-BE 후속)
+  ├─ mech_checklist_screen.dart 신규 (~1,000~1,200 LOC, ELEC 패턴 + 입력 UI 3종)
+  ├─ 73 항목 표시 + scope_rule 회색 disabled NA UI
+  ├─ judgment_phase 토글 (1차 작업자 / 2차 관리자, (c)안 동작)
+  ├─ INLET 8개 L/R 명확 구분 입력 필드
+  └─ WebSocket CHECKLIST_MECH_READY 토스트 + 화면 진입 유도
+
+AXIS-VIEW Sprint 39                            🟡 P2  (별 repo)
+  → 🔴 OPEN (Sprint 63-BE 후속, /Users/twinfafa/Desktop/GST/AXIS-VIEW/DESIGN_FIX_SPRINT.md)
+  ├─ ChecklistManagePage.tsx BLUR_CATEGORIES 'MECH' 제거
+  ├─ ChecklistAddModal.tsx TYPE_OPTIONS.MECH = ['CHECK','INPUT','SELECT']
+  ├─ AddModal phase1_applicable 토글 ELEC + MECH 양쪽 활성화
+  └─ ⚠️ DESIGN_FIX_SPRINT.md 의 "69 INSERT" 잔존 표기 → "73 INSERT (v2 INLET 8개 분리 후)" cross-repo 정정 (Codex 라운드 3 AV1)
+```
+
+### 🤝 후속 Sprint 연계
+
+```
+INLET-SN-OCR-20260XXX             🟢 P3 (별건)
+  └─ INLET S/N 4 항목 input_type='INPUT' → 'SN_OCR' 전환
+  └─ Flutter google_mlkit_text_recognition 도입 + 카메라 화면 + OCR 결과 사용자 확인
+  └─ schema 변경 0 (input_type enum 1 줄 추가만)
+  └─ 추정 30분~1h
+
+MFC-FLOW-SENSOR-OPTIONS-CURATION  🟢 P3 (운영 작업)
+  └─ Twin파파 측 MFC / Flow Sensor 사양 list 정리되면 VIEW UPDATE
+  └─ checklist_master.select_options UPDATE 7 row (4 MFC + 3 FS)
+
+REFACTOR-CHECKLIST-FILE-SPLIT     🟡 P2 (BACKLOG REF-BE-12)
+  └─ checklist.py 1,192 LOC + checklist_service.py 1,085 LOC 카테고리별 분리
+  └─ Sprint 63-BE 후 더 커진 상태에서 진행 권장 (TM/ELEC/MECH 3개 분리)
+```
+
+### 📝 사후 기록 양식 (배포 후)
+
+```
+✅ 배포 완료 (2026-04-XX HH:MM KST, v2.10.X)
+  ├─ commit: <sha>
+  ├─ migration 051 + 051a Railway 적용 ✓
+  ├─ Railway logs: MECH 관련 ERROR 0 ✓
+  ├─ pytest test_mech_checklist + test_checklist_master 회귀: __ passed / __ skipped ✓
+  └─ AXIS-VIEW + Flutter 빌드 정상 배포 ✓
+
+1d / 1주 / 1개월 관찰:
+  ├─ T+1d:    MECH alert 발화 ___건 / 작업자 1차 입력 ___건
+  ├─ T+1주:   1차 입력률 ___% / 2차 검수 완료율 ___%
+  └─ T+1개월: select_options 운영자 추가 진행률 ___% → COMPLETED 판정
+
+후속 Sprint 트리거:
+  ├─ INLET-SN-OCR-20260XXX 우선순위 결정 (1차 텍스트 입력 vs OCR 정확도)
+  └─ REF-BE-12 (checklist.py 분할) 재평가
+
+OPEN → COMPLETED 전환
+```
+
+---
+
 ## 🔧 FIX-FACTORY-KPI-SHIPPED-V2.4-AMENDMENT-20260428 프롬프트 — Sprint 62-BE v2.4 (`_count_shipped` plan AND→OR + `ops` 폐기 + `best` 신설) (🟡 P2)
 
 > **등록일**: 2026-04-28 KST (4-23~24 논의 → 4-28 Sprint 화)
@@ -33929,3 +34693,305 @@ OPEN → COMPLETED 전환
 ```
 
 ---
+
+---
+
+## Sprint 64-BE — Work Start/Complete Batch 엔드포인트 (TM Tank Module 일괄 처리, 2026-04-28 등록)
+
+> 등록일: 2026-04-28 | 상태: 설계 확정 (FE Sprint 40 동반) → Codex 교차검증 대기 → 구현 착수
+> 트랙: OPS BE (VIEW FE Sprint 40 동반 설계)
+> 선행: 기존 `/work/start` `/work/complete` (Flutter 모바일 앱용) 구조 위에 batch 엔드포인트 신설
+> 설계서: 본 엔트리 + `AXIS-VIEW/DESIGN_FIX_SPRINT.md` Sprint 40
+> 교차검증: Claude Cowork → Claude Code Opus Lead → Codex (2026-04-28 착수 예정)
+> ⚠️ **번호 정정**: 본래 "Sprint 63-BE" 으로 고려했으나 AXIS-VIEW Sprint 39 (MECH 체크리스트 VIEW 연동) 의 BE 의존이 이미 Sprint 63-BE 로 예약 → **Sprint 64-BE 로 재번호**
+
+## 배경
+
+VIEW Sprint 40 의 TM Tank Module 시작/종료 일괄 토스트 흐름을 안전하게 지원하려면 BE 트랜잭션 보장이 필요. 기존 `/work/start` `/work/complete` 는 단일 task_detail_id 만 처리 — N번 순차 호출 시 부분 실패·시간 편차 발생 위험.
+
+**FE 요구사항** (Sprint 40 결정 #7):
+1. 단일 요청 1번으로 N개 task_detail_id 일괄 처리
+2. DB 트랜잭션 내 일괄 처리 → 부분 적용 방지 (전체 성공 또는 전체 실패)
+3. skipped (이미 시작/종료/없음) 항목은 응답으로 안내 (FE 가 사용자에게 표시)
+
+## 결정 사항 (2026-04-28)
+
+| # | 항목 | 확정 | 이유 |
+|---|---|---|---|
+| 1 | 엔드포인트 | `POST /api/app/work/start-batch` + `POST /api/app/work/complete-batch` | 기존 단일 endpoint 와 동일 prefix, 명명 일관성 |
+| 2 | 인증 | `@jwt_required` + `worker_id = get_current_worker_id()` | 기존 단일 endpoint 와 동일. proxy 모드 없음 — 호출자 본인 worker_id 자동 사용 |
+| 3 | 권한 게이트 | `is_admin OR is_manager` 검증. manager 면 task_detail.workers[].company 가 `currentUser.company` 인 task 만 처리 가능 (다른 회사 task 는 skipped) | Sprint 33 force-close 권한 정책 동일 적용 — manager 회사 경계 분기 |
+| 4 | 화이트리스트 (P2 확장) | **`task_category IN ('TMS','MECH') AND task_id='TANK_MODULE'`** 인 task 만 허용 (Codex M7 P2 채택). 다른 task 가 섞이면 400. 카테고리별 회사 매핑 분기 (TMS→module_outsourcing, MECH→mech_partner) | Sprint 40 결정 #10 P2 일치. 신규 모델 추가 (is_tms 또는 tank_in_mech) 시 코드 변경 0건 자동 대응. 무차별 batch 차단 |
+| 5 | 트랜잭션 | psycopg2 connection 의 단일 트랜잭션 내 모든 처리 → 1건이라도 SQL 에러 시 전체 ROLLBACK. skipped (이미 시작/종료) 는 트랜잭션 성공 유지 | DB 정합성 보장 + 비즈니스 skip 은 일관성 영향 없음 |
+| 6 | 응답 schema | `{ succeeded: [...], skipped: [...], total: int }` skipped reason: `ALREADY_STARTED \| ALREADY_COMPLETED \| NOT_STARTED \| NOT_FOUND \| NOT_TANK_MODULE \| FORBIDDEN_COMPANY` | FE 가 결과 그대로 한국어 toast (Sprint 40 Codex I6 매핑 표) |
+| 7 | 시간 동기화 | 일괄 시작 시 `started_at = NOW()` 모든 row 동일값. 종료 시 `completed_at = NOW()`, `duration_minutes` 자동 계산 | "병렬 진행" 의미 정확 반영 — N대 모두 같은 시작/종료 시간 기록 |
+| 8 | **신규 endpoint** (Codex M3 B안 + M3.1) | `GET /api/app/tasks/by-order/<sales_order>?task_categories=TMS,MECH&task_id=TANK_MODULE` — 같은 O/N 의 TANK_MODULE task 일괄 조회 (FE prefetch 용). P2 카테고리 다중 인자 지원 | FE 가 다른 S/N tasks 한 번에 조회 → N+1 prefetch 제거. 화이트리스트 검증과 동일 카테고리 인자 |
+| 9 | 회사 매핑 (Codex M6) | 시작된 task: `worker.company`. 미시작 + TMS: `product.module_outsourcing`. 미시작 + MECH: `product.mech_partner`. NULL 매핑 task 는 manager 호출 시 `FORBIDDEN_COMPANY` skip (FE 에서 사전에 카운트 제외하고 toast 안내) | manager 회사 경계 정합성. 미시작 task 의 company 검증을 product partner 필드로 추정 (BE 확장 0건, Sprint 34 데이터 활용) |
+
+## 엔드포인트 시그니처
+
+### `POST /api/app/work/start-batch`
+
+```python
+@work_bp.route("/work/start-batch", methods=["POST"])
+@jwt_required
+def start_work_batch() -> Tuple[Dict[str, Any], int]:
+    """
+    TM Tank Module 일괄 시작 (Sprint 40 / 64-BE)
+
+    Request Body:
+        {
+            "task_detail_ids": [int, int, ...]  // 최소 1개, 최대 50개
+        }
+
+    Headers:
+        Authorization: Bearer {token}
+
+    Permission:
+        - is_admin: 모든 task_detail 처리 가능
+        - is_manager: task_detail.workers 중 자기 회사 worker 가 있는 task 만 처리
+        - 그 외: 403 Forbidden
+
+    Response 200:
+        {
+            "succeeded": [
+                { "task_detail_id": int, "updated": {...TaskDetail dict} }
+            ],
+            "skipped": [
+                { "task_detail_id": int, "reason": "ALREADY_STARTED|NOT_FOUND|NOT_TANK_MODULE|FORBIDDEN_COMPANY" }
+            ],
+            "total": int  // 입력 task_detail_ids 길이
+        }
+
+    Response 400 (BAD_REQUEST):
+        - INVALID_REQUEST: task_detail_ids 배열 빈 값 / 50개 초과 / 비-정수
+        - NOT_TANK_MODULE_ANY: 모든 입력이 화이트리스트 위반 (task_category != 'TMS' OR task_id != 'TANK_MODULE')
+
+    Response 403 (FORBIDDEN):
+        - NOT_AUTHORIZED: is_admin / is_manager 둘 다 아님
+
+    Response 500 (TRANSACTION_FAILED):
+        - DB 에러로 전체 ROLLBACK
+    """
+    data = request.get_json()
+    task_detail_ids = data.get('task_detail_ids') if data else None
+
+    # 입력 검증
+    if not task_detail_ids or not isinstance(task_detail_ids, list):
+        return jsonify({'error': 'INVALID_REQUEST', 'message': 'task_detail_ids 배열이 필요합니다.'}), 400
+    if len(task_detail_ids) > 50:
+        return jsonify({'error': 'INVALID_REQUEST', 'message': '최대 50개까지 일괄 처리 가능합니다.'}), 400
+    if not all(isinstance(i, int) for i in task_detail_ids):
+        return jsonify({'error': 'INVALID_REQUEST', 'message': 'task_detail_ids 는 정수 배열이어야 합니다.'}), 400
+
+    # 권한 게이트
+    current_worker = get_current_worker()
+    if not (current_worker.is_admin or current_worker.is_manager):
+        return jsonify({'error': 'NOT_AUTHORIZED', 'message': 'is_admin 또는 is_manager 권한이 필요합니다.'}), 403
+
+    worker_id = current_worker.id
+
+    # 일괄 처리 (트랜잭션)
+    response, status_code = task_service.start_work_batch(
+        worker_id=worker_id,
+        task_detail_ids=task_detail_ids,
+        is_admin=current_worker.is_admin,
+        manager_company=current_worker.company if current_worker.is_manager and not current_worker.is_admin else None,
+    )
+    return jsonify(response), status_code
+```
+
+### `POST /api/app/work/complete-batch`
+
+동일 구조, `task_service.complete_work_batch()` 호출. skipped reason: `ALREADY_COMPLETED | NOT_STARTED | NOT_FOUND | NOT_TANK_MODULE | FORBIDDEN_COMPANY`.
+
+## 서비스 레이어 — `task_service.start_work_batch()`
+
+```python
+def start_work_batch(
+    worker_id: int,
+    task_detail_ids: List[int],
+    is_admin: bool,
+    manager_company: Optional[str],
+) -> Tuple[Dict[str, Any], int]:
+    """
+    TM Tank Module 일괄 시작 (트랜잭션 보장)
+
+    Returns:
+        ({succeeded, skipped, total}, status_code)
+    """
+    conn = get_db_connection()
+    try:
+        with conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                succeeded = []
+                skipped = []
+
+                # 1단계: 모든 task_detail 조회 (단일 쿼리)
+                cur.execute("""
+                    SELECT id, task_category, task_id, started_at, completed_at,
+                           force_closed, qr_doc_id
+                    FROM app_task_details
+                    WHERE id = ANY(%s)
+                """, (task_detail_ids,))
+                tasks = {row['id']: row for row in cur.fetchall()}
+
+                # 2단계: 각 task 검증 + skip 분류
+                shared_started_at = datetime.now(KST)  # 모든 row 동일 시각
+
+                for tid in task_detail_ids:
+                    task = tasks.get(tid)
+                    if not task:
+                        skipped.append({'task_detail_id': tid, 'reason': 'NOT_FOUND'})
+                        continue
+                    # Sprint 40 화이트리스트 검증
+                    if task['task_id'] != 'TANK_MODULE' or task['task_category'] not in ('TMS', 'MECH'):  # Codex P2 다중 카테고리
+                        skipped.append({'task_detail_id': tid, 'reason': 'NOT_TANK_MODULE'})
+                        continue
+                    if task['started_at'] is not None:
+                        skipped.append({'task_detail_id': tid, 'reason': 'ALREADY_STARTED'})
+                        continue
+                    # manager 회사 경계 검증
+                    if not is_admin and manager_company:
+                        # 해당 task 의 worker(s) company 확인 → 일치 여부
+                        cur.execute("""
+                            SELECT EXISTS(
+                                SELECT 1 FROM app_task_workers atw
+                                JOIN workers w ON atw.worker_id = w.id
+                                WHERE atw.task_detail_id = %s AND w.company = %s
+                            ) AS allowed
+                        """, (tid, manager_company))
+                        if not cur.fetchone()['allowed']:
+                            skipped.append({'task_detail_id': tid, 'reason': 'FORBIDDEN_COMPANY'})
+                            continue
+
+                    # 통과 → INSERT app_task_workers + UPDATE app_task_details
+                    cur.execute("""
+                        INSERT INTO app_task_workers (task_detail_id, worker_id, started_at)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (task_detail_id, worker_id) DO UPDATE
+                          SET started_at = EXCLUDED.started_at
+                    """, (tid, worker_id, shared_started_at))
+                    cur.execute("""
+                        UPDATE app_task_details
+                        SET started_at = COALESCE(started_at, %s)
+                        WHERE id = %s
+                    """, (shared_started_at, tid))
+                    succeeded.append({
+                        'task_detail_id': tid,
+                        'updated': _task_row_to_dict(task, started_at=shared_started_at),
+                    })
+
+                # 모두 화이트리스트 위반이면 명시적 400
+                if len(skipped) == len(task_detail_ids) and \
+                   all(s['reason'] == 'NOT_TANK_MODULE' for s in skipped):
+                    return ({
+                        'error': 'NOT_TANK_MODULE_ANY',
+                        'message': '모든 task 가 TM Tank Module 이 아닙니다.',
+                    }, 400)
+
+                return ({
+                    'succeeded': succeeded,
+                    'skipped': skipped,
+                    'total': len(task_detail_ids),
+                }, 200)
+    except psycopg2.Error as e:
+        logger.error(f"start_work_batch DB error: {e}")
+        return ({'error': 'TRANSACTION_FAILED', 'message': str(e)}, 500)
+    finally:
+        put_conn(conn)
+```
+
+`complete_work_batch()` 도 동일 구조 — `started_at IS NULL` 체크는 `NOT_STARTED`, `completed_at IS NOT NULL` 은 `ALREADY_COMPLETED` 로 skip.
+
+## 구현 범위
+
+### 수정 파일 2개
+
+| # | 파일 | 변경 | 라인수 |
+|---|---|---|---|
+| 1 | `backend/app/routes/work.py` | (a) `POST /work/start-batch` 라우트 신규 (위 시그니처) (b) `POST /work/complete-batch` 라우트 신규 (동일 구조) (c) 입력 검증 + 권한 게이트 + 서비스 위임 | +90 |
+| 2 | `backend/app/services/task_service.py` | (a) `start_work_batch()` 함수 신규 (위 구현) (b) `complete_work_batch()` 함수 신규 (대칭 구현) (c) `_task_row_to_dict()` 헬퍼 (단일/일괄 응답 통일) | +130 |
+
+**순 증분: ~220 LOC** (각 함수 100줄 미만, route 90줄 — CLAUDE.md BE 코드 크기 1단계 준수).
+
+## 화이트리스트 / 권한 검증 흐름
+
+```
+[POST /work/start-batch { task_detail_ids: [...] }]
+    ↓
+[입력 검증] 빈 배열·>50건·비-int → 400 INVALID_REQUEST
+    ↓
+[권한 게이트] is_admin || is_manager → 통과 / 그 외 → 403 NOT_AUTHORIZED
+    ↓
+[트랜잭션 시작]
+    ↓
+[1단계 단일 쿼리로 모든 task_detail 조회] (id ANY(%s))
+    ↓
+[각 task 검증]
+   ├─ NOT_FOUND
+   ├─ NOT_TANK_MODULE (category != 'TMS' OR task_id != 'TANK_MODULE')
+   ├─ ALREADY_STARTED
+   ├─ FORBIDDEN_COMPANY (manager + 다른 회사 worker)
+   └─ 통과 → INSERT/UPDATE
+    ↓
+[모두 NOT_TANK_MODULE 이면] → 400 NOT_TANK_MODULE_ANY (트랜잭션은 ROLLBACK)
+    ↓
+[정상 응답] 200 { succeeded, skipped, total }
+    ↓
+[트랜잭션 COMMIT (with conn 자동)]
+```
+
+## 안전 degrade / 호환성
+
+- 기존 `/work/start` `/work/complete` 영향 0건 (Flutter 모바일 앱 흐름 보존)
+- FE Sprint 40 미배포 시 본 endpoint 호출자 0 → 무영향
+- DB schema 변경 없음 (기존 `app_task_details` / `app_task_workers` 테이블 사용)
+- migration 불필요
+
+## 교차검증 필수 항목 (Codex 이관 체크리스트)
+
+- ✅ API 응답 계약 변경 (신규 endpoint 2개)
+- ✅ 권한 모델 변경 (is_admin / is_manager 가 정상 시작/종료까지 행사)
+- ✅ 트랜잭션 정책 (psycopg2 with conn 단일 트랜잭션, 전체 성공/실패)
+- ✅ 화이트리스트 정책 (TM Tank Module 만 허용, 무차별 batch 차단)
+
+→ **Codex 교차검증 필수** (CLAUDE.md AI 워크플로우 v2).
+
+## 검증 기준
+
+### 설계 단계 (Codex)
+
+- [ ] manager 회사 경계 검증의 EXISTS 서브쿼리 — N+1 문제 가능성? (각 task 마다 1쿼리) → 1단계 조회 시 worker company 까지 LEFT JOIN 으로 가져오면 1쿼리 감축 가능 검토
+- [ ] `started_at = COALESCE(started_at, %s)` — 동시 호출 race 시 첫 호출 시간 우선 보존 의도. 정상 동작 확인
+- [ ] 트랜잭션 내 INSERT ON CONFLICT — `app_task_workers` PK 가 (task_detail_id, worker_id) 인지 확인 (스키마 검증)
+- [ ] 50건 상한 — 실제 운영 O/N 의 S/N 최대 개수 (보통 5~10대 추정) 대비 충분, 향후 확장 시 상향 가능
+- [ ] `NOT_TANK_MODULE_ANY` 응답 시 ROLLBACK 동작 — 어차피 이 시점 INSERT 0건이라 무관, 그러나 명시적 ROLLBACK 분기 검토
+- [ ] complete-batch 시 `duration_minutes` 계산 — `started_at` 이 batch 별로 동일값이라 단순 (NOW() - started_at), 모바일 앱의 worker별 누적 종료 흐름과 호환?
+
+### 구현 단계
+
+- [ ] pytest 테스트: 정상 시작 (admin) / 정상 시작 (manager 자기 회사) / FORBIDDEN_COMPANY (manager 다른 회사) / ALREADY_STARTED / NOT_TANK_MODULE / NOT_FOUND
+- [ ] 50건 초과 → 400
+- [ ] 빈 배열 → 400
+- [ ] 모두 NOT_TANK_MODULE → 400 NOT_TANK_MODULE_ANY
+- [ ] 트랜잭션 롤백 시뮬레이션 (DB 에러 주입 → 1번째까지 INSERT 됐어도 모두 ROLLBACK 확인)
+- [ ] 동시 호출 race — 같은 task_detail_id 두 manager 가 동시 시작 → 한쪽만 성공, 다른쪽은 ALREADY_STARTED skip
+
+### 배포 후
+
+- [ ] FE Sprint 40 토스트에서 batch 호출 시 응답 시간 < 500ms (50건 기준)
+- [ ] 부분 성공 케이스 — succeeded 비고 skipped 모두 FE 토스트로 안내 잘 노출
+- [ ] manager 가 다른 회사 task 시작 시도 → 403 안 나오고 skipped 로 자연스럽게 처리
+
+## 연계
+
+- FE: `AXIS-VIEW/DESIGN_FIX_SPRINT.md` Sprint 40 (TM Tank Module 시작/종료 admin 액션)
+- 원칙: `CLAUDE.md` BE 코드 크기 1단계 (각 신규 함수 100줄 이내), AI 워크플로우 v2 (Codex 교차검증 필수)
+- 기존 endpoint 영향 0 (Flutter 호환성 유지)
+
+### 다음 응용 포인트
+
+- 다른 task 화이트리스트 확장 (가압검사 등) — Sprint 40 화이트리스트 일반화 시 동시 변경
+- pause-batch / resume-batch — Tank Module 작업 중단 일괄 처리 필요 시 (현재 미요청)
+- worker_ids 명시 batch (admin proxy mode) — 다른 worker 명의 일괄 처리 필요 시 신규 endpoint 분리

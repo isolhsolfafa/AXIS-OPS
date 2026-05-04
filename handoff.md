@@ -1,7 +1,133 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-04-30 10:00 KST (FIX-DB-POOL-WARMUP-WATCHDOG v2.10.16 배포 — silent failure 재발 방지)
+> 마지막 업데이트: 2026-05-04 KST (Sprint 63-BE Step 1~5 진행 — branch `sprint-63-be-mech-checklist`, micro-commit 4건 완료)
+
+## 🚧 Sprint 63-BE 진행 상태 (세션 1 Step 1~9 완료, 2026-05-04)
+
+### ✅ 완료 (Step 1~9, branch `sprint-63-be-mech-checklist`, commit 9건, +1,415 LoC)
+
+```
+9466f66 Step 9: test_mech_checklist.py 21 TC 신규 (+554 LoC, Group A+E 7/7 PASS)
+5bbb83c (docs) Step 1~8 handoff trail 갱신
+ad67e4b Step 7+8: task_service hook + production MECH 분기 (+69)
+7cd10fc Step 6: routes MECH 분기 + service 2개 (+257)
+c8b6607 (docs) Step 1~5 handoff trail
+cfc3d38 Step 5: _check_tm_completion rename 9 hits
+bce0c98 Step 3+4: _resolve_active_master_ids + check_mech_completion (+152)
+bfe86d5 Step 2: _normalize_qr_doc_id (+42)
+2075ef9 Step 1: migration 051/051a + CSV (+253)
+```
+
+### Step 9 pytest 21 TC 검증 결과
+
+**Group A + E 본 세션 실행 (DB 불필요)**: **7/7 PASS** ✅
+```
+TestNormalizeQrDocId: 6 PASS (pure function unit)
+TestRenameGate:       1 PASS (grep --include=*.py self-match 제외)
+```
+
+**Group B + C + D + F + G (14 TC, DB 필요)**: 사용자 측 실행 대기
+```bash
+TEST_DATABASE_URL=postgresql://... \
+  backend/.venv/bin/pytest tests/backend/test_mech_checklist.py -v
+```
+
+기대 결과: 21/21 PASS (test DB 에 migration 051/051a 자동 적용됨).
+
+### 🟡 잔존 (다음 단계)
+
+```
+1. 사용자 측 14 TC 실행 + 결과 확인 (TEST_DATABASE_URL 환경변수 필요)
+2. 21/21 PASS 시 squash merge to main
+3. backend/version.py + frontend/lib/utils/app_version.dart v2.11.0 갱신
+4. CHANGELOG.md v2.11.0 entry 추가
+5. Railway 자동 배포 + migration 051/051a 자동 적용 확인
+6. T+1d Sentry 새 ERROR 0건 확인
+```
+
+### ✅ 완료 (Step 1~8, branch `sprint-63-be-mech-checklist`, commit 6건) [DEPRECATED 갱신]
+
+```
+2075ef9 Step 1: migration 051/051a + seed CSV git add (3 files, +253 LoC)
+bfe86d5 Step 2: _normalize_qr_doc_id() 공유 helper 신설 (+42 LoC, smoke 9/9 PASS)
+bce0c98 Step 3+4: _resolve_active_master_ids() + check_mech_completion() 신설 (+152 LoC)
+cfc3d38 Step 5: _check_tm_completion → check_tm_completion rename 9 hits (3 files)
+c8b6607 (docs) Step 1~5 handoff trail
+7cd10fc Step 6: routes/checklist.py MECH 분기 + service get_mech_checklist/upsert_mech_check (+257 LoC)
+ad67e4b Step 7+8: task_service _trigger_mech_checklist_alert hook + production.py MECH 분기 (+69 LoC)
+```
+
+**검증 통과**:
+- `rg "_check_tm_completion" backend/ tests/` → 0건 ✅ (rename gate)
+- `rg "check_tm_completion" backend/ tests/` → 9 hits ✅
+- `ast.parse` checklist.py / checklist_service.py / task_service.py / production.py 양 4파일 OK
+- 회귀 영향: 0건 (TM/ELEC 응답에 새 필드 추가만, 기존 키 무변경)
+
+**구현 인프라 합계**: +773 LoC (BE only, FE 미포함)
+- migration: 051/051a +253 LoC + CSV
+- service: 신규 함수 5개 (`_normalize_qr_doc_id` / `_resolve_active_master_ids` / `check_mech_completion` / `get_mech_checklist` / `upsert_mech_check`)
+- routes: MECH 분기 3개 (GET / PUT / GET status)
+- task_service: `_trigger_mech_checklist_alert()` hook + start_work 호출 1줄
+- production: `_check_sn_checklist_complete()` MECH 분기 5줄
+
+### 🔴 미완료 (Step 9, 별 세션 권장, 3~4h)
+
+```
+Step 9: tests/backend/test_mech_checklist.py 21 TC (~600 LoC)
+  ├─ 기본 10: scope_rule × 6 + trigger_task_id × 3 + phase1_applicable_19_items
+  ├─ Q6 보강 3: qr_doc_id_normalization (single/dual) + seed_count_by_scope_rule
+  ├─ Q3 보강 1: tm_completion_rename_no_legacy_caller
+  ├─ I3 보강 2: phase2_completion_when_phase1_missing/when_both_filled
+  └─ 라운드 3 보강 5: normalize edge cases × 4 + websocket emit
+  → atomic squash merge to main + Railway 배포 (Step 9 완료 후)
+```
+
+**별 세션 권장 사유**:
+- 21 TC fixture 설계 + DB seeding + assertion = 600+ LoC
+- 본 세션 컨텍스트 누적 ↑ → 별 세션 fresh context 에서 집중 작업이 더 안전
+- BE 인프라 (Step 1~8) 는 단독 commit 가능 상태 (Step 9 후 squash merge)
+
+### 📋 다음 세션 시작 가이드
+
+```bash
+git checkout sprint-63-be-mech-checklist
+git log --oneline ^main  # 7 commits (Step 1~8 + handoff)
+
+# Step 9 작성 시 참고
+ls tests/backend/test_checklist*.py
+grep -l "check_elec_completion\|check_tm_completion" tests/backend/
+
+# 최종 squash merge 절차 (Step 9 완료 후)
+git checkout main
+git merge --squash sprint-63-be-mech-checklist
+git commit -m "feat: v2.11.0 — Sprint 63-BE MECH 체크리스트 인프라"
+git tag v2.11.0
+```
+
+### 🎯 정정 trail 11건 적용 검증 완료 (라운드 1+2+3 + 사용자 결정 4건)
+
+- 라운드 1 정정 7건 (양식 표 / scope_rule / input_type / Python helper / enum / pytest TC / BE/FE 분리)
+- 라운드 2 정정 6건 (atomic / silent failure / ELEC qr_doc_id / models drift / lint hook / cross-repo)
+- 라운드 3 정정 3건 M (ALTER TYPE non-transactional / test 파일 경로 / Pre-deploy Gate)
+- 사용자 결정 v2 INLET 8개 분리 + (c)안 + BE/FE 분리 + Minor 3건
+
+---
+>
+> ✅ **5-04 #29 FIX-PIN-FLAG-MIGRATION-SHAREDPREFS D+7 정성 close 완료** (4-27 v2.10.5 배포 D+7):
+>   ├─ access_log 측정 (Twin파파 SQL 실행, `app_access_log` 14일 cohort): pin_status_calls 4-26 1~12 (1~7%) → **4-27 76 (44.7%)** 점프 → 4-28 81.3% / 4-29 81.9% / 4-30 76.6% / 5-02 76.9% / 5-03 72.7% / **5-04 79.4%** — v2.10.6 FEAT-PIN-STATUS-BACKEND-FALLBACK 배포일 점프 일치 + 7일 안정 추세 입증
+>   ├─ 코호트 (workers + worker_auth_settings): 7일 활성 61명 / PIN 등록 19명 (31.1%) — 위험 노출 코호트 backend fallback 80% 도달
+>   ├─ 사용자 신고 0건 (4-27 ~ 5-04, 7일 정성 관찰)
+>   ├─ regression error 신호 0 (Sentry 새 issue 0)
+>   └─ 정량 baseline 측정 인프라는 별건 (`FEAT-PIN-LOGIN-ANALYTICS`, 필요 시 등록) — 구조적 한계: `/auth/login` + `/auth/pin-login` 200 응답이 `app_access_log` 미기록 (`@app.after_request` 의 `g.worker_id is None` 분기로 skip, `__init__.py:236-240`). 직접 cohort 측정으로 우회.
+>
+> 📊 **5-04 운영 안정성 측정 종합** (Railway 차트 + `app_access_log` 7일 분석, Sprint 63-BE 진행과 별건):
+>   ├─ Railway 차트 p99 3초 spike 정체 확정: **4-30 15:00 KST `work.complete_work` POST max 2,668ms / avg 2,181ms (n=4)** — 평일 오후 출하 마감 burst (5-01 새벽 가설 폐기). Top 6 hourly p99 spike 중 5건이 work.complete_work, **단독 hot endpoint** 확정. 4-30 09:00 max 2,253ms n=11 = 4-30 09:30 Railway Restart 직후 cold start 윈도우 (4-29 23:31 silent failure 복구 직후). 5-04 10:00 max 1,722ms = admin1234 batch fetch 시점 일치
+>   ├─ Railway Error Rate 1.3% spike + p99 3초 spike 동일 시점 = 동일 burst 의 두 측면 (5xx 아닌 slow 200 응답)
+>   ├─ **5xx 0건 7일 입증** ✅ (4-27~5-04), 4xx 50건 모두 정상 동작 (403 권한 차단 38 + 400 validation 거부 10 + 404 잘못된 S/N 1)
+>   ├─ 5-04 admin1234 18분 idle 후 401 폭주 = 자연스러운 token 만료 패턴 (BUG-22 가드 정상 작동, refresh storm 0건, `_isForceLogout` 1회만 발동 후 재호출 차단)
+>   ├─ CPU 거의 0 vCPU idle / Memory 100~150MB 안정 (누수 없음, 점선 = 재배포 cycle 정상)
+>   └─ 종합: **운영 무탈** / Sprint 63-BE/FE 진행에 인프라 측 blocker 0건 / 신규 BACKLOG 2건 등록 (`UX-ATTENDANCE-CHECK-401-TOAST-20260504` 6연타 401 + `UX-ADMIN-MENU-403-FEEDBACK-20260504` 권한 없는 admin 메뉴 across days 반복 시도) + `OBSERV-SLOW-QUERY-ENDPOINT-PROFILING` 보강 (heavy endpoint = work.complete_work 단독 확정, 코드 audit 단계만 잔여)
 >
 > ✅ **4-30 INFRA-COLLATION-REFRESH 완료** — `ALTER DATABASE railway REFRESH COLLATION VERSION;` 218ms, 2.36 → 2.41, WARNING 0건. BACKLOG L337 COMPLETED.
 >
@@ -36,7 +162,7 @@
 >
 > 🟢 **자연 종결 plan (옵션 A)**:
 >   ├─ #26 FIX-DB-POOL-MAX Phase B → 내일 4-30 D+3 Twin파파 측 5분 측정 후 자동 COMPLETED (변경 없음 → MAX=30 충분 확정)
->   └─ #29 FIX-PIN-FLAG baseline → BE endpoint 통합 (`/auth/login` 단일) 본질적 한계 → 5-04 (D+7) 까지 사용자 PIN 화면 손실 신고 0건이면 정성 close. 정량 baseline 측정 인프라는 별건 (FEAT-PIN-LOGIN-ANALYTICS, 필요 시 등록)
+>   └─ ✅ #29 FIX-PIN-FLAG baseline → **5-04 D+7 정성 close 완료** (위 ✅ 5-04 블록 참조 — pin_status fallback 79.4% 안정 + 신고 0건). 정량 baseline 측정 인프라는 별건 (`FEAT-PIN-LOGIN-ANALYTICS`, 필요 시 등록)
 
 ---
 

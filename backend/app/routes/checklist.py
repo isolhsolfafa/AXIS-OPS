@@ -1190,3 +1190,99 @@ def _get_elec_phase_counts(serial_number: str, phase: int) -> tuple:
         return row['total'], row['checked']
     finally:
         put_conn(conn)
+
+
+# ═══ Sprint 63-BE: MECH 체크리스트 (양식 73항목 / 20그룹) ═══
+
+@checklist_bp.route('/api/app/checklist/mech/<serial_number>', methods=['GET'])
+@jwt_required
+def get_mech_checklist_api(serial_number):
+    """MECH 체크리스트 조회 (Sprint 63-BE) — ELEC 패턴 + scope_rule + trigger_task_id 응답."""
+    judgment_phase = request.args.get('phase', 1, type=int)
+    qr_doc_id = request.args.get('qr_doc_id', '')
+    from app.services.checklist_service import get_mech_checklist
+    try:
+        result = get_mech_checklist(serial_number, judgment_phase, qr_doc_id=qr_doc_id)
+        return jsonify(result), 200
+    except Exception as e:
+        return jsonify({'error': 'CHECKLIST_ERROR', 'message': str(e)}), 500
+
+
+@checklist_bp.route('/api/app/checklist/mech/check', methods=['PUT'])
+@jwt_required
+def upsert_mech_check_api():
+    """MECH 체크리스트 항목 체크 (Sprint 63-BE) — manager 제한 없음. INPUT type 지원."""
+    data = request.get_json()
+    if not data or 'serial_number' not in data or 'master_id' not in data or 'check_result' not in data:
+        return jsonify({'error': 'INVALID_REQUEST', 'message': 'serial_number, master_id, check_result 필수'}), 400
+
+    worker_id = g.worker_id
+    from app.services.checklist_service import upsert_mech_check
+    try:
+        result = upsert_mech_check(
+            serial_number=data['serial_number'],
+            master_id=data['master_id'],
+            check_result=data['check_result'],
+            note=data.get('note'),
+            worker_id=worker_id,
+            judgment_phase=data.get('judgment_phase', 1),
+            selected_value=data.get('selected_value'),
+            input_value=data.get('input_value'),
+            qr_doc_id=data.get('qr_doc_id', ''),
+        )
+        return jsonify(result), 200
+    except ValueError as ve:
+        return jsonify({'error': 'VALIDATION_ERROR', 'message': str(ve)}), 400
+    except Exception as e:
+        return jsonify({'error': 'CHECKLIST_ERROR', 'message': str(e)}), 500
+
+
+@checklist_bp.route('/api/app/checklist/mech/<serial_number>/status', methods=['GET'])
+@jwt_required
+def get_mech_checklist_status(serial_number):
+    """MECH 체크리스트 상태 조회 — Phase별 동적 COUNT (Sprint 63-BE).
+
+    judgment_phase=1: phase1_applicable=TRUE 19 항목 / scope 적용분
+    judgment_phase=2: 전체 항목 / (c)안 — phase=2 record 만 카운트
+    """
+    from app.services.checklist_service import _resolve_active_master_ids, check_mech_completion
+    from app.models.worker import get_db_connection
+    from app.db_pool import put_conn
+
+    phase = request.args.get('phase', 1, type=int)
+    active_ids = _resolve_active_master_ids(serial_number, phase)
+    total = len(active_ids)
+
+    if total == 0:
+        return jsonify({
+            'serial_number': serial_number,
+            'total_count': 0,
+            'checked_count': 0,
+            'is_complete': False,
+        }), 200
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT COUNT(DISTINCT master_id) AS checked
+            FROM checklist.checklist_record
+            WHERE master_id = ANY(%s)
+              AND serial_number = %s
+              AND judgment_phase = %s
+              AND check_result IS NOT NULL
+            """,
+            (active_ids, serial_number, phase)
+        )
+        row = cur.fetchone()
+        checked = row['checked'] if row else 0
+    finally:
+        put_conn(conn)
+
+    return jsonify({
+        'serial_number': serial_number,
+        'total_count': total,
+        'checked_count': checked,
+        'is_complete': check_mech_completion(serial_number, phase),
+    }), 200
