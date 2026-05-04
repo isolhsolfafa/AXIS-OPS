@@ -330,9 +330,9 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: GxColors.background,
+      backgroundColor: GxColors.cloud,
       appBar: AppBar(
-        backgroundColor: GxColors.surface,
+        backgroundColor: GxColors.white,
         elevation: 0,
         title: Text(
           '기구 체크리스트 — ${widget.serialNumber}',
@@ -387,7 +387,7 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
-          color: isSelected ? GxColors.accent : GxColors.surface,
+          color: isSelected ? GxColors.accent : GxColors.white,
           borderRadius: BorderRadius.circular(GxRadius.sm),
           border: Border.all(
             color: isSelected ? GxColors.accent : GxColors.mist,
@@ -447,7 +447,7 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: GxColors.surface,
+        color: GxColors.white,
         borderRadius: BorderRadius.circular(GxRadius.md),
       ),
       child: Row(
@@ -490,7 +490,7 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       decoration: BoxDecoration(
-        color: GxColors.surface,
+        color: GxColors.white,
         borderRadius: BorderRadius.circular(GxRadius.md),
       ),
       child: Column(
@@ -521,7 +521,7 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       decoration: BoxDecoration(
-        color: GxColors.surface,
+        color: GxColors.white,
         borderRadius: BorderRadius.circular(GxRadius.md),
       ),
       child: Column(
@@ -606,7 +606,7 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
   /// M2 + Q2-B: scope_rule 비매칭 모델 — disabled 'N/A' 일관 표시
   Widget _buildScopeDisabledNA(Map<String, dynamic> item) {
     return Container(
-      color: GxColors.mistLight,
+      color: GxColors.cloud,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       child: Row(
         children: [
@@ -689,7 +689,7 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
         decoration: BoxDecoration(
           color: isSelected
               ? (value == 'PASS' ? GxColors.success : GxColors.warning)
-              : GxColors.surface,
+              : GxColors.white,
           borderRadius: BorderRadius.circular(GxRadius.sm),
           border: Border.all(
             color: isSelected
