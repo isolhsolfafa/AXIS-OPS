@@ -46,6 +46,12 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 ### 회귀 영향
 - 0건 (응답 키 추가 + 신규 FE 파일 + 기존 alert_log/alert_list 분기 추가만)
 
+### Push 전 검증 (commit 21c581e GxColors 정정 포함)
+- pytest test_mech_checklist 24/24 PASS (229.55s) — 위험 1 통과
+- flutter analyze: 7 error → 0 error (info 2건만, 빌드 차단 X) — 위험 2-1
+  * `GxColors.background` → `cloud` / `surface` → `white` / `mistLight` → `cloud` (7곳, ELEC 패턴 차용)
+- flutter build web --release: ✓ Built build/web (12.3s) — 위험 2-2
+
 ### 후속 (별 sprint)
 - AXIS-VIEW Sprint 39: BLUR 해제 + AddModal 토글 (~0.5d, 별 repo)
 - BUG-TM-CHECKLIST-AUTO-FINALIZE-STALE-TC-20260504 (P3, 1h, Sprint 63-BE 무관)

@@ -15,7 +15,14 @@ tag    v2.11.1
 - FE 신규: mech_checklist_screen.dart 844 LoC + alert_log/alert_list 분기 + 라우팅
 - N1: WebSocket CHECKLIST_MECH_READY 핸들러 (alert_provider 자동 + 탭 시 MECH 진입)
 - N2: pytest TestR21TankInMechResponse 3 TC PASS (총 21→24 TC)
+- **GxColors 정정** (commit 21c581e): background/surface/mistLight → cloud/white/cloud (7곳)
 - 회귀 영향: 0건
+
+### Push 전 검증 결과 ✅
+- pytest test_mech_checklist **24/24 PASS** (229.55s)
+- flutter analyze **0 error** (info 2건만, 빌드 차단 X)
+- flutter build web --release **✓ Built build/web** (12.3s)
+- → push 가능 상태 (Netlify 배포 시 rebuild 불필요)
 
 ### 다음 단계 (퇴근 후 직접 실행)
 
