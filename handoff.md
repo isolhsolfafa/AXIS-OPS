@@ -3,6 +3,41 @@
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
 > 마지막 업데이트: 2026-05-04 KST (✅ **v2.11.0 — Sprint 63-BE squash merge 완료**, pytest 21/21 PASS, +1,415 LoC, 다음 단계: Sprint 63-FE Codex 라운드 1)
 
+## ✅ Sprint 63 BE+FE+Hotfix — 정식 종료 (v2.11.2 release, 2026-05-04)
+
+```
+commit 958fb09 (main) — fix: v2.11.2 Sprint 63 후속 BUGFIX 체크리스트 진입점
+tag    v2.11.2
+```
+
+### v2.11.2 hotfix 변경
+- BE work.py L177~ MECH 분기 (~12 LoC) — 4 task 시작 시 checklist_ready+category='MECH'
+- FE task_detail_screen.dart 5 위치 (~25 LoC) — _hasChecklistAccess + onTap 2곳 (in_progress + completed) + _navigateToChecklist + import
+- pytest TestWorkStartMechChecklistEntry 6 TC 신규 (24→30 TC)
+- 결과: pytest 30/30 PASS (248.87s) / flutter analyze 0 error / flutter build web 성공
+- 회귀 영향: 0건 (additive, migration 없음)
+
+### Codex 라운드 1 + 추가 검토 trail
+- M=1 (risk indicator) / A=3 (인용/pytest/atomic) / N=1 / AV=2 (인용 동일 / 선택 3 별 sprint)
+- 추가 검토 catch: 5번째 위치 (`_buildCompletedBadge` onTap) 누락 → 4→5 위치 갱신
+
+### 다음 단계 (퇴근 후 직접 실행)
+
+```bash
+git push origin main
+git push origin v2.11.2
+cd frontend
+npx netlify-cli deploy --prod --dir=build/web --site=ab8041c3-dc51-40c6-96e4-9966222aeda3
+```
+
+build 이미 완료 → Netlify deploy 만, Railway 자동 배포.
+
+### 후속 별 sprint
+- FEAT-MECH-WORK-COMPLETE-CHECKLIST-NUDGE-20260504 (P3, 30분, 안정 운영 1주 후)
+- AXIS-VIEW Sprint 39 (별 repo)
+
+---
+
 ## ✅ Sprint 63 BE+FE — 정식 종료 (v2.11.1 release, 2026-05-04)
 
 ```

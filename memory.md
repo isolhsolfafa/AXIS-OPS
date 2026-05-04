@@ -2,11 +2,51 @@
 
 > 세션 간 누적되는 의사결정, 아키텍처 판단, 감사 결과를 기록합니다.
 > CLAUDE.md = 프로젝트 고정 정보 / memory.md = 누적 학습 / handoff.md = 세션 인계
-> 마지막 업데이트: 2026-05-04 (ADR-021 Sprint 63-FE Flutter UI + R2-1 patch + WebSocket alert 통합 — Sprint 63 전체 종료 v2.11.1)
+> 마지막 업데이트: 2026-05-04 (ADR-022 Sprint 63 후속 hotfix — 신규 카테고리 도입 시 진입점 검증 표준 v2.11.2)
 
 ---
 
 ## 1. 아키텍처 의사결정 기록 (ADR)
+
+### ADR-022: 신규 체크리스트 카테고리 도입 시 진입점 검증 표준 (2026-05-04, v2.11.2 hotfix)
+
+**맥락**:
+- Sprint 63 (v2.11.0+v2.11.1) prod 배포 직후 사용자 검증에서 발견 — "체크리스트 자동 전환 안 됨" + "task 상세 메뉴 버튼 없음"
+- Sprint 63-BE 설계 시 ELEC 패턴 차용 영역에서 **toast 알림 (CHECKLIST_*_READY) 만 매핑**, work/start 응답 분기 + FE task 상세 메뉴 버튼 = 진입점 (entry point) 영역 누락
+- Sprint 63-FE `_navigateToChecklist` 함수는 task_management_screen 에만 MECH 분기 추가, task_detail_screen 의 동일 이름 함수는 누락 (dead code 상태)
+- 추가 검토에서 5번째 위치 (`_buildCompletedBadge` onTap) 신규 catch — 4 → 5 위치 갱신
+
+**결정 — 신규 카테고리 도입 시 진입점 검증 표준**:
+
+### BE 측 (4 영역)
+1. **`work.py` work/start 응답 분기** — `checklist_ready=True + checklist_category='{CATEGORY}'`
+2. **`task_service.py` work/complete 응답 분기** (선택) — 완료 후 진입 유도 (ELEC IF_2 패턴)
+3. **`trigger_task_id` 토스트 알림** (`CHECKLIST_*_READY` enum) — 51a seed 의 master 권위
+4. **WebSocket emit 핸들러** (`alert_service`)
+
+### FE 측 (5 영역)
+1. **import** — 신규 ChecklistScreen 추가
+2. **`_hasChecklistAccess`** — taskCategory + taskId 양쪽 매칭 필수 (단축 금지)
+3. **`_buildChecklistButton` onTap** (in_progress 시) — 진입 분기
+4. **`_navigateToChecklist`** — Screen 분기 (⚠️ task_management vs task_detail **두 파일 별도 정의**, 둘 다 정합 필수)
+5. **`_buildCompletedBadge` onTap** (completed 시) — 진입 분기 (라운드 1 누락 영역, 추가 검토 catch)
+6. **`alert_log` priority + iconName + alert_list_screen `_handleAlertTap`** — WebSocket alert 분기
+
+### 검증 절차
+- ELEC 패턴 동등 영역 grep 으로 모든 진입점 위치 확인
+- prerequisite 명시 (Sprint 설계서 본문)
+- prod 배포 직후 수동 시나리오 검증 (자동 전환 + 메뉴 버튼 클릭, in_progress + completed 양 시점)
+- pytest TC: work/start 응답 키 검증 + 회귀 (기존 카테고리 무영향) + negative (의도적 제외)
+
+**결과 (v2.11.2)**:
+- pytest 30/30 PASS (24 기존 + 6 신규)
+- 회귀 영향 0건
+- 본 hotfix 변경 = BE 1 + FE 1 = 2 파일 ~25 LoC
+
+**적용 가능 영역**:
+- 향후 PI/QI/SI Flutter UI 도입 시 동일 진입점 표준 (BE 4 + FE 5 + alert 1 = 10 영역) 검증
+
+---
 
 ### ADR-021: Sprint 63-FE Flutter UI + R2-1 BE patch + WebSocket 통합 (2026-05-04, v2.11.1)
 

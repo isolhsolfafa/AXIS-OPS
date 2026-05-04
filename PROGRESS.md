@@ -3,9 +3,35 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: **v2.11.1 (Sprint 63-FE Flutter UI + R2-1 patch, 2026-05-04)** — Sprint 63 전체 (BE 인프라 v2.11.0 + FE UI v2.11.1) 종료 / pytest 24/24 PASS / +2,453 LoC 누적
+> **현재 버전**: **v2.11.2 (Sprint 63 후속 hotfix — 진입점 누락, 2026-05-04)** — Sprint 63 BE+FE+Hotfix 정식 종료 / pytest 30/30 PASS / +2,478 LoC 누적
 > **최근 인프라**: FIX-DB-POOL-MAX-SIZE-20260427 — Railway env DB_POOL_MAX 20→30 (2026-04-27, 코드 변경 0)
 > **D+1 운영 검증 (2026-04-28)**: 출근 peak 측정 PASS — Pool exhausted 0 / direct conn fallback 0 / OPS conn 6~7 안정 / Sentry 새 issue 0 → 옵션 X1 유지, OBSERV-WARMUP COMPLETED 확정, v2.10.11 HOTFIX-06b 불필요
+
+---
+
+## v2.11.2 (Sprint 63 후속 hotfix — 체크리스트 진입점 누락 fix, 2026-05-04)
+
+**Sprint**: `FIX-SPRINT-63-MECH-CHECKLIST-ENTRY-POINT-20260504` (P0, 5-04 등록 + 당일 release)
+
+**배경**: v2.11.1 prod 배포 직후 사용자 검증 — "체크리스트 자동 전환 안 됨" + "task 상세 메뉴 버튼 없음" 발견. Sprint 63-BE 설계 시 진입점 검증 누락.
+
+**변경 (BE 1 + FE 1, +25 LoC)**:
+- BE work.py L177~ MECH 분기 (4 task_id: UTIL_LINE_1/2 + WASTE_GAS_LINE_2 + SELF_INSPECTION)
+- FE task_detail_screen.dart 5 위치 정정 (import + _hasChecklistAccess + onTap × 2 + _navigateToChecklist)
+
+**Codex 라운드 1 + 추가 검토 (M=1 / A=3 / N=1 + AV=2 + 추가 catch 1)**:
+- 추가 검토 catch: 5번째 위치 (`_buildCompletedBadge` onTap) 누락 → 4→5 위치 갱신
+- AV2: 선택 3 (work/complete MECH) 별 sprint 분리 (`FEAT-MECH-WORK-COMPLETE-CHECKLIST-NUDGE-20260504`, P3)
+
+**Test (24 → 30 TC)**:
+- TestWorkStartMechChecklistEntry 6 TC 신규 (4 task PASS + WASTE_GAS_LINE_1 negative + ELEC INSPECTION 회귀)
+- 결과: pytest 30/30 PASS (248.87s)
+
+**검증**:
+- pytest 30/30 PASS ✅ / flutter analyze 0 error ✅ / flutter build web 성공 ✅
+- 회귀 영향: 0건 (additive, migration 없음)
+
+**ADR-022 신설**: 신규 카테고리 도입 시 진입점 검증 표준 (BE 4 + FE 5 + alert 1 = 10 영역)
 
 ---
 
