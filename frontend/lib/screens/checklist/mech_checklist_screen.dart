@@ -284,20 +284,28 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
   }) async {
     final masterId = item['master_id'] as int?;
     if (masterId == null) return;
-    if (_updatingIds.contains(masterId)) return;
 
+    // ⭐ v2.11.3 Fix R1 (Root cause 1, ELEC _toggleResult 패턴 정합):
+    //   BE upsert_mech_check 는 check_result 'PASS'/'NA' 만 허용 (None 거부, 400).
+    //   PASS/NA 미선택 시 PUT skip — 사용자가 라디오 클릭 시점에 input/select+check_result 번들 PUT.
+    final cr = checkResult ?? _getCurrentCheckResult(masterId);
+    if (cr.isEmpty) {
+      // INPUT/SELECT 만 입력 + PASS/NA 미선택 = state 갱신만 (PUT skip, 라디오 클릭 시점에 번들 PUT)
+      return;
+    }
+
+    if (_updatingIds.contains(masterId)) return;
     setState(() => _updatingIds.add(masterId));
 
     try {
       final apiService = ref.read(apiServiceProvider);
       // M5 + Q3-B: input_value/selected_value + check_result 번들 PUT (BE upsert_mech_check 정합)
-      final cr = checkResult ?? _getCurrentCheckResult(masterId);
       final qrDocId = _qrDocIdForItem(item);
 
       final putData = <String, dynamic>{
         'serial_number': widget.serialNumber,
         'master_id': masterId,
-        'check_result': cr.isEmpty ? null : cr,
+        'check_result': cr,  // ⭐ v2.11.3: null 제거, 항상 'PASS' 또는 'NA' (위 cr.isEmpty 가드)
         'judgment_phase': _currentPhase,
         'qr_doc_id': qrDocId,
       };
@@ -740,6 +748,7 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
 
     final currentValue = _selectValueMap[masterId];
     final currentResult = _checkResultMap[masterId];
+    final isPhase2 = _currentPhase == 2;  // ⭐ v2.11.3 R2
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -754,11 +763,13 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
           DropdownButtonFormField<String>(
             value: options.contains(currentValue) ? currentValue : null,
             isExpanded: true,
-            decoration: const InputDecoration(
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(
+              border: const OutlineInputBorder(),
               contentPadding:
-                  EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               isDense: true,
+              fillColor: isPhase2 ? GxColors.cloud : null,  // ⭐ v2.11.3 R2: 회색 배경
+              filled: isPhase2,
             ),
             items: options
                 .map((opt) => DropdownMenuItem(
@@ -766,10 +777,10 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
                       child: Text(opt, overflow: TextOverflow.ellipsis),
                     ))
                 .toList(),
-            onChanged: (value) {
+            onChanged: isPhase2 ? null : (value) {  // ⭐ v2.11.3 R2: 2차 disabled
               if (value == null) return;
               setState(() => _selectValueMap[masterId] = value);
-              // M4 + Q6-C: debounce + 번들 PUT
+              // M4 + Q6-C: debounce + 번들 PUT (1차만)
               _debouncedUpsert(
                 item: item,
                 selectedValue: value,
@@ -792,6 +803,7 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
 
   /// INPUT type — TextField (INLET S/N + Speed Controller 수량)
   /// M5: 입력값 + check_result 번들 PUT
+  /// v2.11.3 Fix R2: phase=2 시 readOnly + 회색 배경 (1차 입력값 read-only 표시)
   Widget _buildInputField(Map<String, dynamic> item) {
     final masterId = item['master_id'] as int?;
     if (masterId == null) return const SizedBox.shrink();
@@ -800,6 +812,7 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
       () => TextEditingController(text: item['input_value'] as String? ?? ''),
     );
     final currentResult = _checkResultMap[masterId];
+    final isPhase2 = _currentPhase == 2;  // ⭐ v2.11.3 R2
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -813,15 +826,18 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
           const SizedBox(height: 6),
           TextField(
             controller: controller,
-            decoration: const InputDecoration(
+            readOnly: isPhase2,  // ⭐ v2.11.3 R2: 2차 검사인원 = 1차 입력값 read-only
+            decoration: InputDecoration(
               hintText: 'S/N 또는 수량 입력',
-              border: OutlineInputBorder(),
+              border: const OutlineInputBorder(),
               contentPadding:
-                  EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               isDense: true,
+              fillColor: isPhase2 ? GxColors.cloud : null,  // ⭐ v2.11.3 R2: 회색 배경
+              filled: isPhase2,
             ),
-            onChanged: (value) {
-              // M4 + M5 + Q6-C: debounce 500ms + check_result 번들 PUT
+            onChanged: isPhase2 ? null : (value) {
+              // M4 + M5 + Q6-C: debounce 500ms + check_result 번들 PUT (1차만)
               _debouncedUpsert(
                 item: item,
                 inputValue: value,

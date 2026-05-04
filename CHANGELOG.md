@@ -6,6 +6,37 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.11.3] - 2026-05-04 — Sprint 63 후속 hotfix: check_result null 차단 + phase=2 read-only UI (FE only, P0 hotfix)
+
+> v2.11.2 prod 배포 후 사용자 운영 검증 (TEST-333/TEST-1111) — `PUT /api/app/checklist/mech/check → 400 INVALID_CHECK_RESULT: 'None'` + 2차 검사인원 읽기 전용 UI 부재. Codex 라운드 1 A3-F2 advisory 미구현 영역.
+
+### 진단 SQL 결과 (DB 직접 쿼리)
+- TEST-1111: CHECK 2 + SELECT 7 + INPUT 1 모두 정상 저장 ✅
+- TEST-333 (DRAGON): CHECK 2 + SELECT 7 + INPUT 10 (INLET L/R 8 + Speed × 2) 모두 정상 저장 ✅
+- → BE upsert 정상 작동 확정. **FE only 정정 충분** (BE 무관)
+
+### Root cause 2건
+- **R1**: `_upsertNow` 의 `cr.isEmpty ? null : cr` → null 전송 시 BE 400 거부
+- **R2**: phase=2 시 TextField/DropdownButton 둘 다 enabled → 관리자가 1차 데이터 임의 변경 가능 (권한 위반)
+
+### 변경 (FE only, 1 파일 ~13 LoC)
+
+`frontend/lib/screens/checklist/mech_checklist_screen.dart` 3 위치:
+1. **`_upsertNow`** L278~ — `cr.isEmpty` 시 PUT skip (R1, ELEC `_toggleResult` 패턴 정합)
+2. **`_buildInputField`** L803~ — phase=2 시 `readOnly: true` + `fillColor: GxColors.cloud` + `onChanged: null` (R2)
+3. **`_buildSelectDropdown`** L723~ — phase=2 시 `onChanged: null` + `fillColor: GxColors.cloud` (R2)
+
+### 검증
+- 진단 SQL: TEST-1111/TEST-333 phase=1 모든 항목 정상 저장 확인 ✅
+- flutter analyze: 0 error (info 2건만, 빌드 차단 X) ✅
+- flutter build web --release: ✓ Built ✅
+
+### 회귀 영향
+- 0건 (FE UI 변경만, BE/타 화면 무관)
+- migration/DB 변경 없음 → git revert 1건으로 v2.11.2 복귀 가능
+
+---
+
 ## [2.11.2] - 2026-05-04 — Sprint 63 후속 BUGFIX: 체크리스트 진입점 누락 fix (BE+FE, P0 hotfix)
 
 > v2.11.1 prod 배포 직후 사용자 검증 — "체크리스트 자동 전환 안 됨" + "task 상세 메뉴 버튼 없음" 발견. Sprint 63-BE 설계 시 ELEC 패턴 차용 영역에서 토스트만 매핑하고 진입점(entry point) 영역 누락. P0 hotfix.
