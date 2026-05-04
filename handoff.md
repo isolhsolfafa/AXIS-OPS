@@ -18,11 +18,30 @@ branch sprint-63-be-mech-checklist (squash merged, 11 commits)
 - Pre-deploy Gate 7건 모두 통과
 
 ### Pre-deploy 이후 (Twin파파 측 진행 예정)
-1. ⏳ git push (⑦.5 배포 승인 후)
-2. ⏳ Railway 자동 배포 + migration 051/051a 자동 적용
-3. ⏳ DB 검증: SELECT COUNT(*) FROM checklist.checklist_master WHERE category='MECH' → 73
-4. ⏳ T+1d Sentry 새 ERROR 0건 확인
-5. ⏳ 1주 운영 관찰 (1차 입력률 + 2차 검수 완료율)
+
+**🕐 push 대기 중** — 서버 운영 시간 회피 (퇴근 후 진행 결정 2026-05-04 KST)
+
+```bash
+# 퇴근 후 (예: 18:00 이후) 직접 실행:
+git push origin main      # 5 commits push (f59e1be ~ 8e6d1c7)
+git push origin v2.11.0   # tag push
+```
+
+배포 단계 (push 후 자동 + 사용자 검증):
+1. 🕐 git push (퇴근 후)
+2. ⏳ Railway 자동 배포 + migration 051/051a 자동 적용 (~2분)
+3. ⏳ DB 검증: `SELECT COUNT(*) FROM checklist.checklist_master WHERE category='MECH'` → 73
+4. ⏳ Railway logs: `[migration] ✅ 051_mech_checklist_extension.sql 실행 완료` 확인
+5. ⏳ T+1d Sentry 새 ERROR 0건 확인
+6. ⏳ 1주 운영 관찰 (1차 입력률 + 2차 검수 완료율)
+
+### Sprint 63-FE 진행 상태
+
+- ✅ 설계서 작성 (commit cd164ea)
+- ✅ Codex 라운드 1 완료 (M=5 / A=5 / N=2 + Q1~Q7 결정 7건, commit 8e6d1c7)
+- 🔴 Cowork 측 추가 검토 진행 중 (Twin파파 결정)
+- 🔴 라운드 2 (옵션, tank_in_mech BE 응답 노출 + Dart normalizer)
+- 🔴 구현 (~2~3d, BE 배포 후 착수)
 
 ### 후속 별 sprint (BE 배포 완료 후 착수)
 - **Sprint 63-FE** — `mech_checklist_screen.dart` 신규 (~1,000~1,200 LoC, 2~3d) — **Codex 라운드 1 진입 예정**
