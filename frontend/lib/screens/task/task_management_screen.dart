@@ -7,6 +7,7 @@ import '../../utils/design_system.dart';
 import 'task_detail_screen.dart';
 import '../checklist/tm_checklist_screen.dart';
 import '../checklist/elec_checklist_screen.dart';
+import '../checklist/mech_checklist_screen.dart';  // Sprint 63-FE
 
 /// Task 관리 화면
 ///
@@ -689,11 +690,14 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
     }
   }
 
-  /// Sprint 57-FE/E: 카테고리별 체크리스트 화면 분기
+  /// Sprint 57-FE/E + Sprint 63-FE: 카테고리별 체크리스트 화면 분기
   void _navigateToChecklist(String category, String serialNumber, {int? initialPhase, String? qrDocId}) {
     Widget screen;
     if (category == 'ELEC') {
       screen = ElecChecklistScreen(serialNumber: serialNumber, initialPhase: initialPhase);
+    } else if (category == 'MECH') {
+      // Sprint 63-FE: MECH 체크리스트 신규 (73 항목 / 20 그룹 / scope_rule + INPUT/SELECT)
+      screen = MechChecklistScreen(serialNumber: serialNumber, initialPhase: initialPhase);
     } else {
       screen = TmChecklistScreen(serialNumber: serialNumber, qrDocId: qrDocId);
     }

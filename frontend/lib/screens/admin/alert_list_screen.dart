@@ -5,6 +5,7 @@ import '../../providers/alert_provider.dart';
 import '../../models/alert_log.dart';
 import '../../utils/design_system.dart';
 import '../checklist/tm_checklist_screen.dart';
+import '../checklist/mech_checklist_screen.dart';  // Sprint 63-FE
 
 /// 알림 목록 화면
 ///
@@ -101,6 +102,20 @@ class _AlertListScreenState extends ConsumerState<AlertListScreen>
           context,
           MaterialPageRoute(
             builder: (_) => TmChecklistScreen(serialNumber: sn),
+          ),
+        );
+        return;
+      }
+    }
+
+    // CHECKLIST_MECH_READY 알림 → MECH 체크리스트 화면 (Sprint 63-FE, A6-F1 정정)
+    if (alert.alertType == 'CHECKLIST_MECH_READY') {
+      final sn = alert.serialNumber;
+      if (sn != null && sn.isNotEmpty) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => MechChecklistScreen(serialNumber: sn),
           ),
         );
         return;
@@ -364,6 +379,7 @@ class _AlertListScreenState extends ConsumerState<AlertListScreen>
       case 'WORKER_REJECTED':
         return GxColors.danger;
       case 'CHECKLIST_TM_READY':
+      case 'CHECKLIST_MECH_READY':  // Sprint 63-FE
         return GxColors.accent;
       default:
         return GxColors.info;
@@ -516,6 +532,8 @@ class _AlertDetailDialog extends StatelessWidget {
         return '작업자 거부';
       case 'CHECKLIST_TM_READY':
         return 'TM 체크리스트 검수 요청';
+      case 'CHECKLIST_MECH_READY':  // Sprint 63-FE
+        return 'MECH 체크리스트 1차 입력 가능';
       default:
         return '알림';
     }
@@ -534,6 +552,7 @@ class _AlertDetailDialog extends StatelessWidget {
       case 'WORKER_REJECTED':
         return GxColors.danger;
       case 'CHECKLIST_TM_READY':
+      case 'CHECKLIST_MECH_READY':  // Sprint 63-FE
         return GxColors.accent;
       default:
         return GxColors.info;

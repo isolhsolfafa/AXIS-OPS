@@ -379,6 +379,53 @@ class TestSeedCount:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# [D2] R2-1 patch — get_mech_checklist 응답 tank_in_mech 키 회귀 검증 (3 TC)
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestR21TankInMechResponse:
+    """R2-1 patch (Codex 라운드 2): get_mech_checklist() 응답에 tank_in_mech bool 추가.
+    M-R2-D 정정 — FE _isScopeMatched 활용 정합성 검증."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, db_conn, seed_test_data):
+        self.db_conn = db_conn
+        self.created_sns = []
+        yield
+        for sn in self.created_sns:
+            _cleanup(db_conn, sn)
+
+    def _create_and_get(self, sn_suffix, model):
+        from app.services.checklist_service import get_mech_checklist
+        sn = f'{_PREFIX}R21-{sn_suffix}'
+        _insert_product(self.db_conn, sn, model=model)
+        self.created_sns.append(sn)
+        return get_mech_checklist(sn, judgment_phase=1)
+
+    def test_get_mech_checklist_response_has_tank_in_mech_key(self):
+        """TC-D2-01: 모든 모델 응답에 tank_in_mech 키 존재 (additive contract)."""
+        for model in ['GAIA-I', 'DRAGON-V', 'GALLANT-50', 'SWS-100', 'MITHAS-X']:
+            response = self._create_and_get(f'KEY-{model}', model)
+            assert 'tank_in_mech' in response, \
+                f"model={model} 응답에 'tank_in_mech' 키 부재 (R2-1 patch 미적용)"
+            assert isinstance(response['tank_in_mech'], bool), \
+                f"model={model} tank_in_mech 타입 != bool ({type(response['tank_in_mech'])})"
+
+    def test_get_mech_checklist_tank_in_mech_true_for_dragon_gallant_sws(self):
+        """TC-D2-02: tank_in_mech=TRUE 모델 — DRAGON / GALLANT / SWS."""
+        for model in ['DRAGON-V', 'GALLANT-50', 'SWS-100']:
+            response = self._create_and_get(f'TIM-T-{model}', model)
+            assert response['tank_in_mech'] is True, \
+                f"model={model} tank_in_mech={response['tank_in_mech']} (TRUE expected — model_config flip)"
+
+    def test_get_mech_checklist_tank_in_mech_false_for_gaia_mithas_sds(self):
+        """TC-D2-03: tank_in_mech=FALSE 모델 — GAIA / MITHAS / SDS."""
+        for model in ['GAIA-I', 'MITHAS-X', 'SDS-Y']:
+            response = self._create_and_get(f'TIM-F-{model}', model)
+            assert response['tank_in_mech'] is False, \
+                f"model={model} tank_in_mech={response['tank_in_mech']} (FALSE expected)"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # [E] rename gate _check_tm_completion = 0 (1 TC)
 # ═════════════════════════════════════════════════════════════════════════════
 

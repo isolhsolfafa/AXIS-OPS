@@ -132,6 +132,7 @@ class AlertLog {
       case 'PROCESS_READY':
       case 'UNFINISHED_AT_CLOSING':
       case 'CHECKLIST_TM_READY':
+      case 'CHECKLIST_MECH_READY':  // Sprint 63-FE: MECH 체크리스트 1차 입력 토스트
         return 2; // 중간
       default:
         return 1; // 낮음
@@ -157,6 +158,7 @@ class AlertLog {
       case 'WORKER_REJECTED':
         return 'cancel';
       case 'CHECKLIST_TM_READY':
+      case 'CHECKLIST_MECH_READY':  // Sprint 63-FE
         return 'checklist';
       default:
         return 'info';

@@ -1284,26 +1284,37 @@ def check_mech_completion(serial_number: str, judgment_phase: int = 1) -> bool:
 
 
 def get_mech_checklist(serial_number: str, judgment_phase: int = 1, qr_doc_id: str = '') -> Dict[str, Any]:
-    """MECH 체크리스트 조회 (Sprint 63-BE) — ELEC 패턴 + scope_rule + trigger_task_id 응답.
+    """MECH 체크리스트 조회 (Sprint 63-BE + R2-1 patch v2.11.1) — ELEC 패턴 + scope_rule + tank_in_mech 응답.
 
     73 항목 모두 반환 (FE 가 scope_rule 보고 disabled NA 처리).
     judgment_phase=1 시 phase1_applicable=False 항목은 자동 NA 처리 (기존 ELEC 동작 동일).
     qr_doc_id 빈 문자열 시 _normalize_qr_doc_id() 로 'DOC_{S/N}' SINGLE 자동 채움.
+    R2-1 patch (Codex 라운드 2, 2026-05-04): 응답에 tank_in_mech bool 추가 — FE 별도 model_config 호출 회피.
     """
     conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor()
 
+        # R2-1 patch: model + tank_in_mech 한 번에 lookup (FE _isScopeMatched 활용)
         cur.execute(
-            "SELECT pi.product_code, pi.sales_order, pi.model "
-            "FROM plan.product_info pi WHERE pi.serial_number = %s",
+            """
+            SELECT pi.product_code, pi.sales_order, pi.model,
+                   COALESCE(mc.tank_in_mech, FALSE) AS tank_in_mech
+            FROM plan.product_info pi
+            LEFT JOIN model_config mc ON pi.model LIKE mc.model_prefix || '%%'
+            WHERE pi.serial_number = %s
+            ORDER BY length(mc.model_prefix) DESC NULLS LAST
+            LIMIT 1
+            """,
             (serial_number,)
         )
         product_row = cur.fetchone()
+        conn.rollback()  # HOTFIX-08
         product_code = product_row['product_code'] if product_row else None
         sales_order = product_row['sales_order'] if product_row else None
         model = product_row['model'] if product_row else None
+        tank_in_mech = bool(product_row['tank_in_mech']) if product_row else False  # R2-1
 
         # qr_doc_id 정규화 (Sprint 59-BE 재발 방지)
         normalized_qr = _normalize_qr_doc_id(serial_number, qr_doc_id) if qr_doc_id else _normalize_qr_doc_id(serial_number)
@@ -1344,6 +1355,7 @@ def get_mech_checklist(serial_number: str, judgment_phase: int = 1, qr_doc_id: s
             'serial_number': serial_number,
             'sales_order': sales_order,
             'model': model,
+            'tank_in_mech': tank_in_mech,  # R2-1 patch (Codex 라운드 2): FE _isScopeMatched 활용
             'judgment_phase': judgment_phase,
             'qr_doc_id': normalized_qr,
             'groups': groups,

@@ -6,6 +6,52 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.11.1] - 2026-05-04 — Sprint 63-FE Flutter UI + R2-1 BE patch + N1/N2 정정 (BE+FE)
+
+> Sprint 63 전체 종료 piece. v2.11.0 (BE 인프라) + R2-1 BE patch + Flutter UI 통합 release.
+
+### 추가 (BE patch — R2-1, Codex 라운드 2)
+- `services/checklist_service.py` `get_mech_checklist()` 응답에 `tank_in_mech: bool` 추가
+- model_config LEFT JOIN longest-prefix 매칭 (FE `_isScopeMatched` 활용)
+- HOTFIX-08 표준 `conn.rollback()` 적용
+
+### 추가 (FE 신규)
+- `frontend/lib/screens/checklist/mech_checklist_screen.dart` 신규 (~844 LoC)
+  - 입력 UI 3종 분기 (CHECK 라디오 / SELECT 드롭다운 / INPUT 텍스트)
+  - scope_rule disabled NA UI ('N/A' 일관)
+  - judgment_phase 토글 + role gate (`is_manager` / `is_admin`)
+  - INLET 8개 Left/Right subgroup 시각 분리 (Q1-B)
+  - debounce 500ms (Q6-C) + 번들 PUT (M5)
+  - dispose() controller + timer 정리 (A4-F2)
+- `frontend/lib/models/alert_log.dart` `CHECKLIST_MECH_READY` priority + iconName 추가
+- `frontend/lib/screens/admin/alert_list_screen.dart`:
+  - `_handleAlertTap` MECH 분기 → `MechChecklistScreen` 진입
+  - title 매핑 + color 매핑 추가
+- `frontend/lib/screens/task/task_management_screen.dart` `MechChecklistScreen` 라우팅 추가
+
+### 정정 (Codex 라운드 2 Must 4건)
+- M-R2-A/B: DUAL split-token 매칭 — `model.split(RegExp(r'[\s\-]')).contains('DUAL')` ('DUAL-300' / 'GAIA-DUAL-X' false-positive 차단)
+- M-R2-C: DUAL 도면 qr_doc_id 정책 — `_qrDocIdForItem` DRAGON+INPUT+DUAL 만 hint 강제, 도면 SINGLE fallback
+- M-R2-D: pytest 3 TC 신규 (`TestR21TankInMechResponse`)
+
+### 정정 (N1+N2 본 세션 추가)
+- N1: WebSocket `CHECKLIST_MECH_READY` alert provider 분기 추가 (alert_list_screen + alert_log)
+- N2: pytest 3 TC 신규 — `tank_in_mech` 응답 키 회귀 + 모델별 boolean 검증
+
+### Test
+- `tests/backend/test_mech_checklist.py` 21 → 24 TC
+- `TestR21TankInMechResponse` 3 TC: 모든 모델 응답 키 / DRAGON/GALLANT/SWS=TRUE / GAIA/MITHAS/SDS=FALSE
+- 결과: **3/3 PASS** (85.54s)
+
+### 회귀 영향
+- 0건 (응답 키 추가 + 신규 FE 파일 + 기존 alert_log/alert_list 분기 추가만)
+
+### 후속 (별 sprint)
+- AXIS-VIEW Sprint 39: BLUR 해제 + AddModal 토글 (~0.5d, 별 repo)
+- BUG-TM-CHECKLIST-AUTO-FINALIZE-STALE-TC-20260504 (P3, 1h, Sprint 63-BE 무관)
+
+---
+
 ## [2.11.0] - 2026-05-04 — Sprint 63-BE MECH 체크리스트 BE 인프라 (BE only, +1,415 LoC)
 
 > 양식 73 항목 / 20 그룹 도입 — TM(Sprint 52)/ELEC(Sprint 57) 후 MECH 자주검사 체크리스트 디지털화. BE 단독 배포, FE/VIEW 별 sprint.
