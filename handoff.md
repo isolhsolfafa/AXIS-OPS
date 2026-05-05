@@ -3,6 +3,41 @@
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
 > 마지막 업데이트: 2026-05-04 KST (✅ **v2.11.0 — Sprint 63-BE squash merge 완료**, pytest 21/21 PASS, +1,415 LoC, 다음 단계: Sprint 63-FE Codex 라운드 1)
 
+## ✅ Sprint 63 BE+FE+Hotfix×3 — 정식 종료 (v2.11.4 release, 2026-05-06)
+
+### 잔존 hotfix 추가 release
+
+```
+v2.11.3 (2026-05-04) — check_result null 차단 + phase=2 read-only UI (FE only, FIX-MECH-CHECKLIST-PHASE2-READONLY-AND-VALIDATION 1차)
+v2.11.4 (2026-05-06) — 옵션 C UI 가이드 + description 렌더 (FE only, 동 sprint 추가 정정 1+3+4)
+```
+
+### v2.11.4 변경
+- description 렌더 (item_name 아래 작은 글씨, ELEC L898-909 패턴 정합)
+- 옵션 C: PASS/NA 미선택 경고 ⚠️ "PASS 또는 NA 선택 후 저장됩니다"
+- INPUT setState({}) 추가 (controller.text reactive 보강)
+- Codex 라운드 1: M=0 / A=2 / N=3 — 즉시 구현 합의
+
+### 다음 단계 (퇴근 후 직접 실행)
+
+```bash
+git push origin main
+git push origin v2.11.4
+cd frontend
+npx netlify-cli deploy --prod --dir=build/web --site=ab8041c3-dc51-40c6-96e4-9966222aeda3
+```
+
+build 이미 완료 → Netlify deploy 만, Railway 자동 배포.
+
+### 잔존 BACKLOG (clean work 후 진행)
+- 🔴 Sprint 64-BE 보류 (Codex 라운드 1 M=6 → 재설계 필요)
+- 🟡 widget test 별 BACKLOG (Codex AV1 — provider/api mock harness 설계 필요)
+- 🟢 FEAT-MECH-WORK-COMPLETE-CHECKLIST-NUDGE (P3, 30분, 안정 운영 1주 후)
+- 🟢 BUG-TM-CHECKLIST-AUTO-FINALIZE-STALE-TC (P3, 1h)
+- 🟢 AXIS-VIEW Sprint 39 (별 repo)
+
+---
+
 ## ✅ Sprint 63 BE+FE+Hotfix — 정식 종료 (v2.11.2 release, 2026-05-04)
 
 ```

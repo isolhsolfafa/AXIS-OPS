@@ -750,6 +750,13 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
     final currentResult = _checkResultMap[masterId];
     final isPhase2 = _currentPhase == 2;  // ⭐ v2.11.3 R2
 
+    // ⭐ v2.11.4 옵션 C: 입력 후 PASS/NA 미선택 경고 (R1 PUT skip 부작용 가시화)
+    final hasInput = currentValue != null && currentValue.isNotEmpty;
+    final hasResult = currentResult != null && currentResult.isNotEmpty;
+    final showPendingWarning = hasInput && !hasResult && !isPhase2;
+
+    final description = item['description'] as String?;
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       child: Column(
@@ -759,6 +766,16 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
             item['item_name'] as String? ?? '',
             style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
           ),
+          // ⭐ v2.11.4 추가 정정 1: description 렌더 (ELEC L898-909 패턴)
+          if (description != null && description.isNotEmpty) ...[
+            const SizedBox(height: 2),
+            Text(
+              description,
+              style: const TextStyle(fontSize: 10, color: GxColors.silver),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
           const SizedBox(height: 6),
           DropdownButtonFormField<String>(
             value: options.contains(currentValue) ? currentValue : null,
@@ -788,6 +805,20 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
               );
             },
           ),
+          // ⭐ v2.11.4 추가 정정 3: PASS/NA 미선택 경고 (옵션 C)
+          if (showPendingWarning) ...[
+            const SizedBox(height: 4),
+            Row(
+              children: const [
+                Icon(Icons.warning_amber_rounded, size: 12, color: GxColors.warning),
+                SizedBox(width: 4),
+                Text(
+                  'PASS 또는 NA 선택 후 저장됩니다',
+                  style: TextStyle(fontSize: 10, color: GxColors.warning),
+                ),
+              ],
+            ),
+          ],
           const SizedBox(height: 6),
           Row(
             children: [
@@ -814,6 +845,13 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
     final currentResult = _checkResultMap[masterId];
     final isPhase2 = _currentPhase == 2;  // ⭐ v2.11.3 R2
 
+    // ⭐ v2.11.4 옵션 C: 입력 후 PASS/NA 미선택 경고 (R1 PUT skip 부작용 가시화)
+    final hasInput = controller.text.isNotEmpty;
+    final hasResult = currentResult != null && currentResult.isNotEmpty;
+    final showPendingWarning = hasInput && !hasResult && !isPhase2;
+
+    final description = item['description'] as String?;
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       child: Column(
@@ -823,6 +861,16 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
             item['item_name'] as String? ?? '',
             style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
           ),
+          // ⭐ v2.11.4 추가 정정 1: description 렌더 (ELEC L898-909 패턴)
+          if (description != null && description.isNotEmpty) ...[
+            const SizedBox(height: 2),
+            Text(
+              description,
+              style: const TextStyle(fontSize: 10, color: GxColors.silver),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
           const SizedBox(height: 6),
           TextField(
             controller: controller,
@@ -837,6 +885,8 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
               filled: isPhase2,
             ),
             onChanged: isPhase2 ? null : (value) {
+              // ⭐ v2.11.4 옵션 C: controller.text 변경 후 경고 메시지 갱신 (TextField 자체 state)
+              setState(() {});
               // M4 + M5 + Q6-C: debounce 500ms + check_result 번들 PUT (1차만)
               _debouncedUpsert(
                 item: item,
@@ -845,6 +895,20 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
               );
             },
           ),
+          // ⭐ v2.11.4 추가 정정 3: PASS/NA 미선택 경고 (옵션 C)
+          if (showPendingWarning) ...[
+            const SizedBox(height: 4),
+            Row(
+              children: const [
+                Icon(Icons.warning_amber_rounded, size: 12, color: GxColors.warning),
+                SizedBox(width: 4),
+                Text(
+                  'PASS 또는 NA 선택 후 저장됩니다',
+                  style: TextStyle(fontSize: 10, color: GxColors.warning),
+                ),
+              ],
+            ),
+          ],
           const SizedBox(height: 6),
           Row(
             children: [

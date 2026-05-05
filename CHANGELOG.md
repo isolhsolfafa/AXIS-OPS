@@ -6,6 +6,45 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.11.4] - 2026-05-06 — Sprint 63 후속 hotfix: 옵션 C UI 가이드 + description 렌더 (FE only, P0 hotfix)
+
+> v2.11.3 prod 운영 후 사용자 발견 — "2차 드롭다운 react 안 됨". v2.11.3 R1 fix (`cr.isEmpty 시 PUT skip`) 의 부작용 가시화 (사용자가 SELECT 선택 후 PASS/NA 미선택 시 저장 안 되는 흐름 인지 못함). **옵션 C 채택** (UI 가이드 + R1 fix 유지 + Q3-B Codex 결정 정합).
+
+### 변경 (FE only, 1 파일 ~30 LoC)
+
+`frontend/lib/screens/checklist/mech_checklist_screen.dart` 2 위젯 동일 패턴:
+
+#### 추가 정정 1: description 렌더 (ELEC L898-909 패턴)
+- `_buildSelectDropdown` + `_buildInputField` 둘 다 item_name 아래 description 표시
+- fontSize 10 / GxColors.silver / maxLines 1 / ellipsis
+
+#### 추가 정정 3: 옵션 C — PASS/NA 미선택 경고
+- 변수 3개: `hasInput` / `hasResult` / `showPendingWarning = hasInput && !hasResult && !isPhase2`
+- 위젯: ⚠️ "PASS 또는 NA 선택 후 저장됩니다" (warning_amber_rounded + GxColors.warning)
+- INPUT 위젯 onChanged 안 `setState(() {})` 추가 — controller.text 변경 후 경고 메시지 갱신용
+
+### Codex 라운드 1 결과 (M=0 / A=2 / N=3)
+- **N1** Area 1 옵션 C + R1 정합: ELEC `_toggleResult` 패턴 정합, debounce 타이머 재사용으로 500ms 내 이중 PUT 상쇄
+- **N3** Area 3 description 렌더: BE `_get_checklist_by_category()` `cm.description` 모든 item 응답 정합
+- **N5** Area 5 read-only + 경고 호환: phase2 dropdown:null + readOnly + cloud + `!isPhase2` 가드 — R2 충돌 0
+- **A2** INPUT setState({}) 성능: 매 키 입력마다 rebuild — 50건 환경 minor 성능 risk (minor hotfix 범위 허용)
+- **A4** 회귀 0 보장 어려움: 저장 semantics 유지 but rebuild 비용 ↑ (minor 허용)
+- **추가 advisory**: widget test 별 BACKLOG (provider/api mock harness 설계 필요)
+
+### 검증
+- flutter analyze: 0 error (info 4건만, 빌드 차단 X) ✅
+- flutter build web --release: ✓ Built ✅
+
+### 부수 발견 (Codex 합의)
+- "phase2 에서 input 만 있고 result 없음" 케이스 사실상 생성 불가 (BE upsert 제약상) — `!isPhase2` 가드 안전성 입증
+- 경고 재출현 우려 0 — 라디오 "해제" 안 되는 구조라 실질 발생 X
+
+### 회귀 영향
+- 0건 (FE UI 추가만, BE/타 화면 무관)
+- migration/DB 변경 없음 → git revert 1건으로 v2.11.3 복귀 가능
+
+---
+
 ## [2.11.3] - 2026-05-04 — Sprint 63 후속 hotfix: check_result null 차단 + phase=2 read-only UI (FE only, P0 hotfix)
 
 > v2.11.2 prod 배포 후 사용자 운영 검증 (TEST-333/TEST-1111) — `PUT /api/app/checklist/mech/check → 400 INVALID_CHECK_RESULT: 'None'` + 2차 검사인원 읽기 전용 UI 부재. Codex 라운드 1 A3-F2 advisory 미구현 영역.

@@ -2,11 +2,49 @@
 
 > 세션 간 누적되는 의사결정, 아키텍처 판단, 감사 결과를 기록합니다.
 > CLAUDE.md = 프로젝트 고정 정보 / memory.md = 누적 학습 / handoff.md = 세션 인계
-> 마지막 업데이트: 2026-05-04 (ADR-022 Sprint 63 후속 hotfix — 신규 카테고리 도입 시 진입점 검증 표준 v2.11.2)
+> 마지막 업데이트: 2026-05-06 (ADR-023 신규 Flutter 코드 작성 시 ELEC 패턴 정확 검증 표준 v2.11.4)
 
 ---
 
 ## 1. 아키텍처 의사결정 기록 (ADR)
+
+### ADR-023: 신규 Flutter 코드 작성 시 ELEC 패턴 정확 검증 표준 (2026-05-06, v2.11.4 hotfix)
+
+**맥락**:
+- Sprint 63-FE prod 운영 후 cowork 추측 작성 실수 누적 발견:
+  1. `GxColors.background/surface/mistLight` 미존재 → flutter analyze 7 error (commit 21c581e fix)
+  2. `check_result: null` BE validator 거부 → 사용자 운영 검증 시 PUT 400 (v2.11.3 R1 fix)
+  3. `description` 렌더 누락 (ELEC L898-909 패턴 미차용) → v2.11.4 추가 정정 1
+  4. R1 부작용 가시화 누락 (사용자가 PASS/NA 미선택 인지 못함) → v2.11.4 옵션 C
+- Codex 라운드 1+2 검증으로 일부 catch 했지만 **ELEC 패턴 단순 차용** 시 실제 멤버/payload/흐름 미검증 영역 존재
+
+**결정 — 신규 Flutter 코드 작성 시 ELEC 패턴 정확 검증 표준**:
+
+### ✅ 권장
+1. **GxColors / GxRadius / GxGradients 멤버 grep** — `frontend/lib/utils/design_system.dart` 직접 확인 후 사용. 추측 X
+2. **apiService 호출 패턴 1:1 차용** — ELEC 의 `_toggleResult` / `_showCommentDialog` / debounce 타이밍 그대로
+3. **BE schema 정확 확인** — `check_result` enum / `input_value` nullable / `selected_value` nullable / `description` 응답 포함 여부 grep
+4. **위젯 구조 시각 차용** — `description` 렌더 (item_name 아래 작은 글씨, fontSize 10 / silver / ellipsis 1줄) ELEC 와 시각 일관성
+5. **flutter analyze + flutter build web --release 강제** — 작성 후 즉시 검증, info 만 허용 (error 0)
+
+### ❌ 금지
+- 추측해서 작성 — 검증 안 된 멤버 / payload / 흐름 사용 금지
+- BE validator 모르고 nullable 가정 — `check_result: null` 같은 사례 재발 차단
+- ELEC 패턴 일부만 차용 — entry point / disabled UI / 경고 메시지 / state reactive 모두 검증
+
+### 📋 Pre-deploy Gate 강화
+- pytest BE 테스트 + flutter analyze + flutter build web 모두 PASS
+- 사용자 측 운영 검증 시나리오 4 상태 (초기 / 입력만 / 라디오 클릭 / 2차 진입) 명시
+
+**결과 (v2.11.4)**:
+- Codex 라운드 1: M=0 / A=2 / N=3 (ELEC 패턴 정합 입증)
+- ~30 LoC FE only, 회귀 영향 0건
+- description + 옵션 C 경고 동시 추가, R1/R2 충돌 0
+
+**적용 가능 영역**:
+- 향후 PI/QI/SI Flutter UI 도입 시 동일 검증 표준 (멤버 grep + 패턴 1:1 + BE schema + 위젯 시각 + analyze/build)
+
+---
 
 ### ADR-022: 신규 체크리스트 카테고리 도입 시 진입점 검증 표준 (2026-05-04, v2.11.2 hotfix)
 

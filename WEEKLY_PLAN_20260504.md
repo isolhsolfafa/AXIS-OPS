@@ -11,9 +11,9 @@
 ## 🧭 한눈에 (현재 상태, 2026-05-04 월요일 마감)
 
 ```
-현재 버전 : v2.11.2 (2026-05-04, main commit — Sprint 63 후속 hotfix 체크리스트 진입점 누락 fix)
-최근 작업 : ✅ v2.11.2 — Sprint 63 후속 BUGFIX (P0). v2.11.1 배포 후 사용자 검증에서 "자동 전환 안 됨" 발견 → BE work.py + FE task_detail 5 위치 정정 + pytest 6 TC (30/30 PASS) + ADR-022 신설. Sprint 63 BE+FE+Hotfix 정식 종료
-이전 트랙 : v2.11.1 Sprint 63-FE / v2.11.0 Sprint 63-BE / v2.10.17 HOTFIX-09 / v2.10.16 watchdog / v2.10.15 access_log 90d / v2.10.14 KPI v2.4
+현재 버전 : v2.11.4 (2026-05-06, main commit — Sprint 63 후속 hotfix 옵션 C UI 가이드 + description 렌더)
+최근 작업 : ✅ v2.11.4 — Sprint 63 후속 hotfix (P0, FE only ~30 LoC). v2.11.3 R1 부작용 가시화 — 옵션 C 채택 (UI 가이드 + description 렌더, ELEC L898-909 패턴 정합). Codex 라운드 1 M=0 합의. ADR-023 신설 (ELEC 패턴 정확 검증 표준)
+이전 트랙 : v2.11.3 R1 check_result null 차단 + R2 phase=2 read-only / v2.11.2 진입점 누락 hotfix / v2.11.1 Sprint 63-FE / v2.11.0 Sprint 63-BE / v2.10.17 HOTFIX-09
 이전 트랙 : v2.11.0 Sprint 63-BE / v2.10.17 HOTFIX-09 / v2.10.16 watchdog / v2.10.15 access_log 90d / v2.10.14 KPI v2.4 / v2.10.13 묶음 / v2.10.12 DURATION_WARNINGS
 진행 중   : (없음 — Sprint 63 종료)
 대기 중   : push (퇴근 후 main + v2.11.0 + v2.11.1 + Netlify deploy) / AXIS-VIEW Sprint 39 (~0.5d, 별 repo) / BUG-TM-...-STALE-TC (P3, 1h)

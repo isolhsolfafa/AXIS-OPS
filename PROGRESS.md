@@ -3,9 +3,41 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: **v2.11.2 (Sprint 63 후속 hotfix — 진입점 누락, 2026-05-04)** — Sprint 63 BE+FE+Hotfix 정식 종료 / pytest 30/30 PASS / +2,478 LoC 누적
+> **현재 버전**: **v2.11.4 (Sprint 63 후속 hotfix — 옵션 C UI 가이드 + description, 2026-05-06)** — Sprint 63 BE+FE+Hotfix×3 정식 종료 / pytest 30/30 PASS / +2,521 LoC 누적
 > **최근 인프라**: FIX-DB-POOL-MAX-SIZE-20260427 — Railway env DB_POOL_MAX 20→30 (2026-04-27, 코드 변경 0)
 > **D+1 운영 검증 (2026-04-28)**: 출근 peak 측정 PASS — Pool exhausted 0 / direct conn fallback 0 / OPS conn 6~7 안정 / Sentry 새 issue 0 → 옵션 X1 유지, OBSERV-WARMUP COMPLETED 확정, v2.10.11 HOTFIX-06b 불필요
+
+---
+
+## v2.11.4 (Sprint 63 후속 hotfix — 옵션 C UI 가이드 + description 렌더, 2026-05-06)
+
+**Sprint**: `FIX-MECH-CHECKLIST-PHASE2-READONLY-AND-VALIDATION-20260504` 추가 정정 1+3+4 (P0)
+
+**배경**: v2.11.3 prod 운영 후 사용자 발견 — "2차 드롭다운 react 안 됨". v2.11.3 R1 fix (`cr.isEmpty 시 PUT skip`) 부작용 가시화 누락. 옵션 C 채택 (UI 가이드 + R1 유지).
+
+**변경 (FE only, 1 파일 ~30 LoC)**:
+- 추가 정정 1: description 렌더 (item_name 아래 작은 글씨, ELEC L898-909 패턴)
+- 추가 정정 3: 옵션 C — PASS/NA 미선택 경고 ⚠️ (`hasInput && !hasResult && !isPhase2`)
+- INPUT setState({}) 추가 (controller.text reactive 보강)
+
+**Codex 라운드 1**: M=0 / A=2 / N=3 (ELEC 패턴 정합 입증)
+- N1/N3/N5: 옵션 C+R1 / description / read-only+경고 호환 모두 정합
+- A2/A4: setState 성능 minor risk (허용 범위)
+- 추가 advisory: widget test 별 BACKLOG 분리
+
+**검증**: flutter analyze 0 error / flutter build web ✓
+
+**ADR-023 신설**: 신규 Flutter 코드 작성 시 ELEC 패턴 정확 검증 표준 (멤버 grep + 패턴 1:1 + BE schema + 위젯 시각 + analyze/build)
+
+---
+
+## v2.11.3 (Sprint 63 후속 hotfix — check_result null 차단 + phase=2 read-only, 2026-05-04)
+
+**Sprint**: `FIX-MECH-CHECKLIST-PHASE2-READONLY-AND-VALIDATION-20260504` 1차 (P0)
+
+**변경**: mech_checklist_screen.dart 3 위치 (~13 LoC) — `_upsertNow` cr.isEmpty 시 PUT skip / `_buildInputField` phase=2 readOnly + cloud / `_buildSelectDropdown` phase=2 onChanged null + cloud
+
+**진단 SQL**: TEST-1111/TEST-333 input_value/selected_value 모두 정상 저장 확인 → BE 무관 확정
 
 ---
 
