@@ -6,6 +6,45 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.11.6] - 2026-05-06 — DB Pool 자가 회복 메커니즘 (5일 주기 사고 차단, BE only, P1)
+
+> 4-29 23:31 + 5-04 11:38 KST 5일 주기 사고 패턴 차단. 5-04 사고 분석 결과 `_used` dict dead conn 정리 부재 + Railway proxy idle TCP disconnect → 40분 0/0 conn 지속 (Restart 외 회복 불가). `keepalive` 활성화 + 자가 회복 메커니즘으로 5-09 ± 1d 재발 시점 자동 차단.
+
+### Root cause (2단계)
+
+- **1단계 트리거**: Railway network proxy idle TCP disconnect — `pg_settings` 의 idle 정책 모두 0 (Postgres 안 끊음) + `tcp_keepalives_idle=7200초` 너무 길음 + Sprint 30-B 정책으로 client psycopg2 keepalive OFF → Railway proxy 가 5~10분 idle 끊으면 client silent
+- **2단계 확산**: `ThreadedConnectionPool` 의 `_used` dict 에 dead conn 5개 누적 정리 메커니즘 부재 → `getconn()` PoolError exhausted → warmup loop break → 0/0 8 cycles (40분) → 새 conn 생성 자체 fail → Restart 만 회복 가능
+- **WATCHDOG 영역 외**: 기존 watchdog (db_pool.py:267-277) 은 `_pool=None` 만 감지 → 본 사고는 `_pool` object 살아있음 + internal state 깨짐 → Sentry 0 event
+
+### 변경
+
+- **BE**: `backend/app/db_pool.py` 단일 파일 (~30 LOC + getter)
+  - `_CONN_KWARGS` keepalive 활성화 — `keepalives=1, idle=60, interval=10, count=3` (90초 안 끊김 발견)
+  - `_consecutive_zero_warmup` 모듈 카운터 + getter `get_consecutive_zero_warmup()`
+  - `warmup_pool()` 0/0 conn 연속 3 cycles 도달 시 `close_pool()` + `init_pool()` 자가 회복
+  - `logger.error` 격상 → LoggingIntegration 자동 Sentry capture (WATCHDOG 확장)
+- **TEST**: `tests/backend/test_db_pool.py` 신규 TC 4 추가 (8/8 PASS)
+  - `test_keepalive_args_passed_to_psycopg2` — 4 args 정확 전달 검증
+  - `test_consecutive_zero_warmup_triggers_init_pool` — 3 cycles 자가 회복 trigger
+  - `test_zero_warmup_logger_error_captured` — Sentry capture 보장 (logger.error)
+  - `test_normal_warmup_resets_consecutive_counter` — 정상 cycle 카운터 리셋
+
+### 영향
+
+- 사용자 영향 0 (정상 운영 시 keepalive 부작용 없음, 사고 시 15분 max 자동 회복)
+- 회귀 위험 0 (additive 변경, 기존 정상 path 무영향)
+- migration/DB 변경 없음 → git revert 1건 복귀 가능
+- staging 1h 관찰 권장 (Sprint 30-B Railway proxy TCP_OVERWINDOW 충돌 패턴 재발 검증)
+
+### 참조
+
+- BACKLOG: `FIX-DB-POOL-SELF-RECOVERY-20260504` 🔴 P1 → ✅ COMPLETED
+- 사고 timeline: KST 11:38~12:32 (1h, Restart 수동 회복) — 5-04 13:00 KST trail 작성
+- 선행 sprint: `OBSERV-DB-POOL-IDLE-DISCONNECT-WARMUP-20260427` ✅ + `FIX-DB-POOL-DIRECT-FALLBACK-LOG-LEVEL-20260428` ✅ + 본 sprint = 자가 회복 추가
+- 관찰 기간: T+1h / T+24h / T+1주 (5-09 ± 1d) — 자가 회복 작동 또는 keepalive 자체 차단 효과 정량 검증
+
+---
+
 ## [2.11.5] - 2026-05-06 — Sprint 63 후속 hotfix: phase=2 1차 데이터 inherit + CHECK description (BE+FE, P0 hotfix)
 
 > v2.11.4 prod 운영 후 사용자 발견 — "2차 검사 화면에서 1차 SELECT 값 안 보임". BE SQL phase 단일 LEFT JOIN 한계 + FE description 일부 위젯 누락 (cowork 추측 작성 실수 #4).

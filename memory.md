@@ -2,11 +2,69 @@
 
 > 세션 간 누적되는 의사결정, 아키텍처 판단, 감사 결과를 기록합니다.
 > CLAUDE.md = 프로젝트 고정 정보 / memory.md = 누적 학습 / handoff.md = 세션 인계
-> 마지막 업데이트: 2026-05-06 (ADR-024 신규 — phase=2 GET 시 phase=1 데이터 inherit BE SQL 표준 v2.11.5)
+> 마지막 업데이트: 2026-05-06 (ADR-025 신규 — DB Pool 자가 회복 메커니즘 v2.11.6)
 
 ---
 
 ## 1. 아키텍처 의사결정 기록 (ADR)
+
+### ADR-025: DB Pool 자가 회복 메커니즘 — keepalive + warmup self-recovery (2026-05-06, v2.11.6)
+
+**맥락**: 4-29 23:31 + 5-04 11:38 KST 사고 — 5일 주기 silent failure 패턴 확립. 2단계 root cause:
+1. Railway network proxy idle TCP disconnect (`pg_settings` idle 정책 0 + `tcp_keepalives_idle=7200초` + Sprint 30-B 정책으로 client psycopg2 keepalive OFF)
+2. `ThreadedConnectionPool` `_used` dict dead conn 정리 부재 → `getconn()` PoolError exhausted → warmup loop break → 0/0 8 cycles (40분) → Restart 외 회복 불가
+
+**WATCHDOG 영역 외**: 기존 watchdog (`db_pool.py:267-277`) 은 `_pool=None` 만 감지 → 본 사고는 `_pool` object 살아있음 + internal `_used` state 깨짐 → Sentry 0 event (사용자 실측).
+
+**결정 — keepalive 활성화 + 자가 회복 + WATCHDOG 확장**:
+
+```python
+# 1. _CONN_KWARGS 에 keepalive 4 args (Sprint 30-B 정책 update — 4-30+ Railway tier 변동으로 충돌 해결됐을 가능성)
+_CONN_KWARGS = {
+    'connect_timeout': 5,
+    'keepalives': 1,                # OS 레벨 TCP keepalive 활성화
+    'keepalives_idle': 60,          # 60초 idle 후 probe 시작 (vs 기존 OS 7200초)
+    'keepalives_interval': 10,      # 10초 간격 probe
+    'keepalives_count': 3,          # 3회 fail 시 dead 판정 (90초 안 끊김 발견)
+}
+
+# 2. warmup_pool 0/0 연속 3 cycles 시 close_pool + init_pool 자가 회복
+_consecutive_zero_warmup: int = 0
+if warmed == 0 and len(conns) == 0:
+    _consecutive_zero_warmup += 1
+    if _consecutive_zero_warmup >= 3:  # 15분 = 5분 cron × 3
+        logger.error("[db_pool] 0/0 warmed for %d consecutive cycles — re-initializing pool")
+        close_pool(); init_pool()
+        _consecutive_zero_warmup = 0
+
+# 3. logger.error → LoggingIntegration(event_level=ERROR) 자동 Sentry capture (WATCHDOG 확장)
+```
+
+**근거**:
+- keepalive 60s idle + 30s probe = 90초 안 disconnect 발견 → fresh conn 생성 가능 (1단계 root cause 해소)
+- 자가 회복 = 1단계 누설 시에도 15분 max 안 회복 (2단계 root cause 해소)
+- per-worker 카운터 (의도된 설계 — Worker A 자가 회복해도 B 별개)
+- additive 변경 — 정상 path 무영향 → 회귀 위험 0
+
+**위험**: Sprint 30-B Railway proxy TCP_OVERWINDOW 충돌 재발 가능성 — staging 1h 검증 필수. 만약 재발 시 keepalive 만 부분 rollback 가능 (자가 회복 (변경 2/3) 만 유지).
+
+**검증** — staging 1h + T+1h / T+24h / T+1주:
+- staging: TCP_OVERWINDOW WARN 0건 + Railway logs 정상 boot
+- T+1h: Sentry 신규 issue 0
+- T+24h: warmup cron 정상 5/5 패턴 유지 (288 cycles) + `_consecutive_zero_warmup` 누적 0
+- T+1주 (5-09 ± 1d): 재발 0 (keepalive 차단) 또는 자가 회복 작동 (init_pool 호출 logs + Sentry event) → 정량 입증
+
+**선행/후속**:
+- 선행: `OBSERV-DB-POOL-IDLE-DISCONNECT-WARMUP-20260427` ✅ (warmup cron) + `FIX-DB-POOL-DIRECT-FALLBACK-LOG-LEVEL-20260428` ✅ + `FIX-DB-POOL-WARMUP-WATCHDOG-20260430` ✅
+- 후속 (선택): `INFRA-RAILWAY-PROXY-IDLE-INVESTIGATION-20260504` (P3) / `OBSERV-WARMUP-LOGGER-CLARIFY-20260504` (P3)
+
+**pytest** — `tests/backend/test_db_pool.py` 신규 4 TC (8/8 PASS):
+- `test_keepalive_args_passed_to_psycopg2`
+- `test_consecutive_zero_warmup_triggers_init_pool`
+- `test_zero_warmup_logger_error_captured`
+- `test_normal_warmup_resets_consecutive_counter`
+
+---
 
 ### ADR-024: phase=2 GET 시 phase=1 데이터 inherit BE SQL 표준 (2026-05-06, v2.11.5 hotfix)
 

@@ -6,6 +6,10 @@ Sprint 30-B: Railway TCP 대응
   - 커넥션 수명 관리 (max_age 기반 자동 재생성)
   - 커넥션 health check (죽은 커넥션 자동 교체)
   - connect_timeout 설정 (무한 대기 방지)
+FIX-DB-POOL-SELF-RECOVERY-20260504:
+  - psycopg2 client 측 keepalive 활성화 (Railway proxy idle TCP disconnect 회피)
+  - warmup_pool 0/0 conn 연속 3 cycles 시 close_pool + init_pool 자가 회복
+  - 4-29 23:31 + 5-04 11:38 KST 5일 주기 재발 차단
 """
 
 import logging
@@ -25,10 +29,16 @@ _MAX_CONN = int(os.environ.get('DB_POOL_MAX', 10))
 # 커넥션 최대 수명 (초) — Railway proxy idle disconnect 전에 자발적 교체
 _MAX_CONN_AGE = int(os.environ.get('DB_CONN_MAX_AGE', 300))  # 5분
 
-# Railway public proxy용: keepalive OFF (프록시와 충돌 방지)
-# connect_timeout만 설정
+# FIX-DB-POOL-SELF-RECOVERY-20260504:
+# Railway network proxy idle TCP disconnect 회피 — psycopg2 client 측 keepalive 활성화.
+# 4-30+ Railway tier 변동으로 Sprint 30-B 의 TCP_OVERWINDOW 충돌 해결됐을 가능성.
+# 60초 idle 후 30초 안 dead 감지 (10s × 3 retry = 30s) → 90초 안 끊김 발견.
 _CONN_KWARGS = {
     'connect_timeout': 5,
+    'keepalives': 1,                # OS 레벨 TCP keepalive 활성화
+    'keepalives_idle': 60,          # 60초 idle 후 probe 시작 (vs 기존 OS 7200초)
+    'keepalives_interval': 10,      # 10초 간격 probe
+    'keepalives_count': 3,          # 3회 fail 시 dead 판정
 }
 
 _pool = None
@@ -40,10 +50,20 @@ _conn_created_at: dict = {}
 # direct conn fallback 누적 카운트 (관찰성용, /admin/db-pool-status 등 후속 활용 가능).
 _direct_fallback_count: int = 0
 
+# FIX-DB-POOL-SELF-RECOVERY-20260504:
+# warmup_pool 의 0/0 conn warmed 연속 카운터. 3 cycles (15분) 도달 시 close_pool+init_pool 자가 회복.
+# per-worker 구조라 각 worker 독립 카운터 (의도된 설계 — Worker A 자가 회복해도 B 는 별개).
+_consecutive_zero_warmup: int = 0
+
 
 def get_direct_fallback_count() -> int:
     """direct conn fallback 누적 카운트 (관찰성용)."""
     return _direct_fallback_count
+
+
+def get_consecutive_zero_warmup() -> int:
+    """0/0 conn warmed 연속 카운터 (관찰성용 + 테스트용)."""
+    return _consecutive_zero_warmup
 
 
 def _create_pool():
@@ -263,6 +283,8 @@ def warmup_pool() -> tuple:
     Returns:
         tuple (warmed: int, requested: int) — 성공한 conn 수 / 요청한 conn 수.
     """
+    global _consecutive_zero_warmup
+
     if _pool is None:
         # WATCHDOG (FIX-DB-POOL-WARMUP-WATCHDOG-20260430):
         # warmup cron 이 돌고 있다는 건 scheduler 가 살아있다는 의미. 그런데도 _pool=None 이면
@@ -300,6 +322,27 @@ def warmup_pool() -> tuple:
                 warmed += 1
             except Exception as e:
                 logger.warning(f"[db_pool] warmup SELECT 1 failed: {e}")
+
+        # FIX-DB-POOL-SELF-RECOVERY-20260504:
+        # 0/0 conn warmed 연속 3 cycles (15분 = 5분 cron × 3) 도달 시 자가 회복.
+        # 5-04 11:38~12:32 사고 패턴 (40분 0/0 지속) 차단 — _used dict dead conn 정리 부재 해소.
+        # logger.error → LoggingIntegration(event_level=ERROR) → 자동 Sentry capture (WATCHDOG 확장).
+        if warmed == 0 and len(conns) == 0:
+            _consecutive_zero_warmup += 1
+            if _consecutive_zero_warmup >= 3:
+                logger.error(
+                    "[db_pool] 0/0 warmed for %d consecutive cycles — re-initializing pool (pid=%d)",
+                    _consecutive_zero_warmup, os.getpid(),
+                )
+                try:
+                    close_pool()
+                    init_pool()
+                    _consecutive_zero_warmup = 0
+                    logger.info("[db_pool] pool re-initialized successfully (self-recovery)")
+                except Exception as e:
+                    logger.error("[db_pool] pool re-init failed: %s", e)
+        else:
+            _consecutive_zero_warmup = 0  # 정상 cycle 시 리셋
 
         return (warmed, len(conns))
     finally:

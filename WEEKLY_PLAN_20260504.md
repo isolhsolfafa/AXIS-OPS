@@ -11,12 +11,12 @@
 ## 🧭 한눈에 (현재 상태, 2026-05-04 월요일 마감)
 
 ```
-현재 버전 : v2.11.5 (2026-05-06, main commit — Sprint 63 후속 hotfix phase=2 1차 데이터 inherit + CHECK description)
-최근 작업 : ✅ v2.11.5 — Sprint 63 후속 hotfix (P0, BE 1 + FE 1 ~25 LoC). v2.11.4 운영 후 "2차 1차 SELECT 값 안 보임" catch — BE SQL cr_p1 LEFT JOIN + COALESCE inherit + FE _buildCheckRadio description 추가. Codex 라운드 1 M=1 (DUAL 보호) / pytest 2 TC 신규 (32 TC 누적)
-이전 트랙 : v2.11.4 옵션 C UI 가이드 + desc / v2.11.3 R1 null + R2 read-only / v2.11.2 진입점 / v2.11.1 Sprint 63-FE / v2.11.0 Sprint 63-BE / v2.10.17 HOTFIX-09
-이전 트랙 : v2.11.0 Sprint 63-BE / v2.10.17 HOTFIX-09 / v2.10.16 watchdog / v2.10.15 access_log 90d / v2.10.14 KPI v2.4 / v2.10.13 묶음 / v2.10.12 DURATION_WARNINGS
-진행 중   : (없음 — Sprint 63 종료)
-대기 중   : push (퇴근 후 main + v2.11.0 + v2.11.1 + Netlify deploy) / AXIS-VIEW Sprint 39 (~0.5d, 별 repo) / BUG-TM-...-STALE-TC (P3, 1h)
+현재 버전 : v2.11.6 (2026-05-06, main commit — DB Pool 자가 회복 keepalive + warmup self-recovery)
+최근 작업 : ✅ v2.11.6 — FIX-DB-POOL-SELF-RECOVERY (P1, BE only ~30 LOC + pytest 4 TC). 4-29 23:31 + 5-04 11:38 KST 5일 주기 사고 차단 — 2단계 root cause (Railway proxy idle TCP disconnect + ThreadedConnectionPool _used dict dead conn 정리 부재) 해소. keepalive 4 args (idle=60/interval=10/count=3) + warmup 0/0 연속 3 cycles 시 close+init 자가 회복 + logger.error → Sentry capture. ADR-025 신설.
+이전 트랙 : v2.11.5 phase=2 inherit + CHECK desc / v2.11.4 옵션 C UI / v2.11.3 R1 null + R2 read-only / v2.11.2 진입점 / v2.11.1 Sprint 63-FE / v2.11.0 Sprint 63-BE / v2.10.17 HOTFIX-09
+이전 트랙 : v2.10.16 watchdog / v2.10.15 access_log 90d / v2.10.14 KPI v2.4 / v2.10.13 묶음 / v2.10.12 DURATION_WARNINGS
+진행 중   : staging 1h 관찰 + T+24h + T+1주 (5-09 ± 1d) 효과 정량 검증
+대기 중   : push (퇴근 후 main + Railway 자동 재배포) / AXIS-VIEW Sprint 39 (~0.5d, 별 repo) / BUG-TM-...-STALE-TC (P3, 1h)
 ```
 
 → 5-04 (월) **Sprint 63 전체 정식 종료** — 양식 73 항목 디지털화 + Flutter UI + qr_doc_id 공유 normalizer 표준 (ADR-020) + DUAL split-token 패턴 (ADR-021). 하루 안에 BE 인프라 + FE UI + Codex 라운드 1+2 + N1/N2 모두 완료.

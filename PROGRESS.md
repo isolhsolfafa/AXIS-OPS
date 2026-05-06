@@ -3,9 +3,72 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: **v2.11.5 (Sprint 63 후속 hotfix — phase=2 1차 inherit + CHECK description, 2026-05-06)** — Sprint 63 BE+FE+Hotfix×4 정식 종료 / pytest 32/32 PASS / +2,546 LoC 누적
+> **현재 버전**: **v2.11.6 (DB Pool 자가 회복 — keepalive + warmup self-recovery, 2026-05-06)** — BE only ~30 LOC + pytest 4 TC / 8/8 PASS / 5-09 ± 1d 재발 차단
+> **선행 release**: v2.11.5 (Sprint 63 후속 hotfix — phase=2 1차 inherit + CHECK description) — Sprint 63 BE+FE+Hotfix×4 정식 종료 / pytest 32/32 PASS / +2,546 LoC 누적
 > **최근 인프라**: FIX-DB-POOL-MAX-SIZE-20260427 — Railway env DB_POOL_MAX 20→30 (2026-04-27, 코드 변경 0)
 > **D+1 운영 검증 (2026-04-28)**: 출근 peak 측정 PASS — Pool exhausted 0 / direct conn fallback 0 / OPS conn 6~7 안정 / Sentry 새 issue 0 → 옵션 X1 유지, OBSERV-WARMUP COMPLETED 확정, v2.10.11 HOTFIX-06b 불필요
+
+---
+
+## v2.11.6 (DB Pool 자가 회복 메커니즘 — keepalive + warmup self-recovery, 2026-05-06)
+
+**Sprint**: `FIX-DB-POOL-SELF-RECOVERY-20260504` (P1)
+
+### 배경 — 5일 주기 사고 패턴 확립
+
+| 사고 일시 | warmup 결과 | 회복 |
+|----------|-------------|------|
+| 4-29 23:31 KST | 0/0 silent failure (1.5h+) | Restart 수동 |
+| 5-04 11:38 KST | 5/5 → 2/2 → 0/0 (40분) | Restart 수동 |
+
+**Root cause** — 2단계:
+1. **트리거** — Railway network proxy idle TCP disconnect (`pg_settings` idle 정책 0 + `tcp_keepalives_idle=7200초` + Sprint 30-B 정책으로 client keepalive OFF)
+2. **확산** — `ThreadedConnectionPool` `_used` dict dead conn 정리 부재 → `getconn()` PoolError exhausted → warmup 0/0 8 cycles → Restart 외 회복 불가
+
+WATCHDOG 영역 외: 기존 watchdog 은 `_pool=None` 만 감지 → 본 사고는 `_pool` object 살아있음 → Sentry 0 event.
+
+### 변경 (BE only)
+
+#### `backend/app/db_pool.py`
+- `_CONN_KWARGS` keepalive 4 args 활성화: `keepalives=1, idle=60, interval=10, count=3` (90초 안 끊김 발견)
+- `_consecutive_zero_warmup` 모듈 카운터 + `get_consecutive_zero_warmup()` getter
+- `warmup_pool()` 0/0 conn 연속 3 cycles (15분) 시 `close_pool()` + `init_pool()` 자가 회복 + 카운터 리셋
+- `logger.error` 격상 → LoggingIntegration(event_level=ERROR) 자동 Sentry capture (WATCHDOG 확장)
+
+#### `tests/backend/test_db_pool.py` — 신규 4 TC
+- `test_keepalive_args_passed_to_psycopg2` — psycopg2 connect kwargs 4 args 정확 전달
+- `test_consecutive_zero_warmup_triggers_init_pool` — 3 cycles 자가 회복 trigger 검증
+- `test_zero_warmup_logger_error_captured` — Sentry capture 보장 (logger.error)
+- `test_normal_warmup_resets_consecutive_counter` — 정상 cycle 카운터 리셋
+
+**테스트 결과**: 8/8 PASS (기존 4 + 신규 4) ✓
+
+### 영향
+
+- 사용자 영향 0 (정상 운영 시 keepalive 부작용 없음, 사고 시 15분 max 자동 회복)
+- 회귀 위험 0 (additive 변경, 기존 정상 path 무영향)
+- migration/DB 변경 없음 → git revert 1건 복귀 가능
+- staging 1h 관찰 권장 (Sprint 30-B Railway proxy TCP_OVERWINDOW 충돌 패턴 재발 검증 — 4-30+ tier 변동으로 해결됐을 가능성)
+
+### Pre-deploy Gate (3건)
+1. Staging 1h 운영 후 `TCP_OVERWINDOW` WARN 0건 확인
+2. 자가 회복 trigger 강제 시뮬레이션 — `pg_terminate_backend` 5 conn 후 15분 안에 init_pool 호출 logs 확인
+3. Sentry 새 issue (`[db_pool] 0/0 warmed for N consecutive cycles`) capture 검증
+
+### 선행/후속 sprint
+- 선행: `OBSERV-DB-POOL-IDLE-DISCONNECT-WARMUP-20260427` ✅ (warmup cron) + `FIX-DB-POOL-DIRECT-FALLBACK-LOG-LEVEL-20260428` ✅ (logger.warning 강등) + `FIX-DB-POOL-WARMUP-WATCHDOG-20260430` ✅ (WATCHDOG 도입)
+- 후속 (선택): `INFRA-RAILWAY-PROXY-IDLE-INVESTIGATION-20260504` (P3) / `OBSERV-WARMUP-LOGGER-CLARIFY-20260504` (P3)
+
+### 효과 검증 (T+1주 / 5-09 ± 1d 도달)
+- 재발 0 (keepalive 자체 차단) → keepalive 효과 입증
+- 또는 자가 회복 작동 (close+init 호출 logs + Sentry event 발화) → 자가 회복 효과 입증
+- Restart 수동 처리 빈도 0 도달 → 본 sprint 정량 입증
+
+### 변경 파일 (2)
+- `backend/app/db_pool.py` (변경)
+- `tests/backend/test_db_pool.py` (변경)
+- `backend/version.py` 2.11.5 → 2.11.6
+- `frontend/lib/utils/app_version.dart` 2.11.5 → 2.11.6 (FE 변경 없으나 단일 소스 일치 정책)
 
 ---
 
