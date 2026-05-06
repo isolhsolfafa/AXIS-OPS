@@ -441,3 +441,387 @@ OPEN → COMPLETED 전환
 - BACKLOG: `AXIS-OPS/BACKLOG.md` § FIX-DB-POOL-MAX-SIZE-20260427
 - baseline 데이터: 어제 공유한 q-a.csv / q-b.csv / q-c.csv (2026-04-27 분석)
 - 검증 라운드 trail (9건 약점 + 3건 I 정정): Sprint 문서 안 "Claude 원안 약점 trail" 섹션
+
+---
+
+# 📦 v2.11.6 추가 — FIX-DB-POOL-SELF-RECOVERY-20260504 (2026-05-06 release)
+
+> Sprint: `FIX-DB-POOL-SELF-RECOVERY-20260504`
+> 적용 시각: 2026-05-06 KST (commit `9997bca`, push 완료)
+> 적용 변경:
+>   - `_CONN_KWARGS` keepalive 4 args 활성화 (`keepalives=1, idle=60, interval=10, count=3`)
+>   - `warmup_pool` 0/0 conn 연속 3 cycles 시 `close_pool()` + `init_pool()` 자가 회복
+>   - `logger.error` 격상 → LoggingIntegration 자동 Sentry capture (WATCHDOG 확장)
+>
+> **사고 timeline**: 4-29 23:31 + 5-04 11:38 KST (5일 주기) → 5-09 ± 1d 재발 차단 목표
+>
+> 본 섹션은 v2.11.6 배포 직후 (T+1h) / T+24h / T+1주 (5-09 ± 1d) 관찰 단계별 query/command 정리.
+
+---
+
+## 🟢 T+1h — 배포 직후 (boot 정상 + Railway logs)
+
+### V1.1 — Railway logs boot 정상 확인
+
+```bash
+railway logs --tail 100 2>&1 | grep -E "Connection pool initialized|warmup|Sentry|Pool init"
+```
+
+**기대 출력**:
+```
+[db_pool] Connection pool initialized: min=5, max=30, max_age=300s, connect_timeout=5s
+(Sentry initialized 메시지 — 4-27 v2.10.8 부터)
+```
+
+**결과 기록**:
+```
+실행 시각: ___ KST
+boot 메시지 정합: ___ (Y/N)
+이상 로그: ___
+```
+
+---
+
+### V1.2 — TCP_OVERWINDOW / keepalive 충돌 검증 (Sprint 30-B 회귀 방지)
+
+```bash
+# 1h 운영 후 grep — 모두 0건이어야 정합
+railway logs --since 1h 2>&1 | grep -iE "TCP_OVERWINDOW|keepalive|connection reset|ECONNRESET"
+```
+
+**기대**: 출력 0줄 (Sprint 30-B 충돌 패턴 재발 없음)
+
+**결과 기록**:
+```
+실행 시각: ___ KST
+충돌 출력 라인 수: ___
+TCP_OVERWINDOW: ___ (0건 / 발견)
+ECONNRESET: ___ (0건 / 발견)
+```
+
+---
+
+### V1.3 — Sentry 신규 issue 0 검증
+
+```
+https://sentry.io 접속 →
+  Project: AXIS-OPS →
+  Issues 탭 → Last 1 hour 필터 →
+  Level: error 만 →
+  검색: "[db_pool]" 또는 비워둠
+```
+
+**기대**: 신규 issue 0건
+
+**결과 기록**:
+```
+조회 시각: ___ KST
+신규 issue 수: ___
+issue 제목 (있으면): ___
+```
+
+---
+
+## 🟡 T+24h — warmup cron 정상 cycle 검증
+
+### V2.1 — Railway logs warmup 정상 5/5 패턴 (288 cycles 예상)
+
+```bash
+# 24h 동안 warmup 결과 추출
+railway logs --since 24h 2>&1 | grep "pool_warmup\|warmup cycle" | tail -20
+
+# 0/0 cycles 카운트 (있으면 안 됨)
+railway logs --since 24h 2>&1 | grep "0/0 warmed" | wc -l
+```
+
+**기대**:
+- 5/5 패턴 일관 유지
+- 0/0 카운트 = 0
+
+**결과 기록**:
+```
+조회 시각: ___ KST
+24h 동안 5/5 cycles 수: ___ (예상 ≈ 288)
+0/0 cycles 발생: ___ (Y/N)
+0/0 발생 시점 (있으면): ___
+```
+
+---
+
+### V2.2 — Postgres pg_stat_activity idle conn 분포
+
+```sql
+-- gunicorn worker 별 idle conn 분포 (정상이면 worker 당 5개 안정 유지)
+SELECT
+  application_name,
+  state,
+  COUNT(*) AS conn_count,
+  MAX(EXTRACT(EPOCH FROM (NOW() - state_change))) AS max_idle_sec
+FROM pg_stat_activity
+WHERE datname = current_database()
+  AND (application_name LIKE '%axis%' OR application_name LIKE '%psycopg2%')
+GROUP BY application_name, state
+ORDER BY application_name, state;
+```
+
+**기대 (정상 운영)**:
+```
+ application_name | state  | conn_count | max_idle_sec
+ axis-ops         | idle   | 5~10       | < 60   (warmup 5분 cron 갱신)
+ axis-ops         | active | 0~3        | -
+```
+
+**결과 기록**:
+```
+실행 시각: ___ KST
+worker별 idle conn 수: ___
+max_idle_sec: ___
+이상 패턴: ___
+```
+
+---
+
+### V2.3 — keepalive TCP 활성 검증 (선택)
+
+```sql
+-- conn 별 client_addr / backend_start (Railway 의 경우 client_addr = proxy IP)
+SELECT pid, application_name, client_addr, backend_start, state_change
+FROM pg_stat_activity
+WHERE datname = current_database()
+  AND state IN ('idle', 'idle in transaction')
+ORDER BY backend_start DESC LIMIT 20;
+```
+
+**결과 기록**:
+```
+실행 시각: ___ KST
+backend_start 분포: ___
+state_change 분포: ___
+```
+
+---
+
+## 🔴 자가 회복 trigger 강제 시뮬레이션 (선택, staging 권장)
+
+> ⚠️ **prod 직접 실행 금지** — staging 환경에서만. prod 실행 시 5분 안에 자동 회복되지만 운영 영향 발생.
+
+### V3.1 — 강제 conn termination
+
+```sql
+-- Step 1: 현재 axis-ops 의 idle conn pid 확인
+SELECT pid, application_name, state, backend_start
+FROM pg_stat_activity
+WHERE datname = current_database()
+  AND state = 'idle'
+  AND application_name LIKE '%axis%'
+LIMIT 5;
+
+-- Step 2: 5개 pid 강제 종료
+SELECT pg_terminate_backend(pid)
+FROM pg_stat_activity
+WHERE datname = current_database()
+  AND state = 'idle'
+  AND application_name LIKE '%axis%'
+LIMIT 5;
+```
+
+---
+
+### V3.2 — 시뮬레이션 후 자가 회복 logs 검증 (15분 안)
+
+```bash
+# 시뮬레이션 직후 logs 모니터링 (5분 cron × 3 = 15분 안 회복)
+railway logs --since 15m 2>&1 | grep -E "0/0 warmed|re-initializing|self-recovery"
+```
+
+**기대 출력 흐름** (15분 안):
+```
+[db_pool] 0/0 warmed for 1 consecutive cycles  (5분차)
+[db_pool] 0/0 warmed for 2 consecutive cycles  (10분차)
+[db_pool] 0/0 warmed for 3 consecutive cycles — re-initializing pool (pid=X)  (15분차)
+[db_pool] pool re-initialized successfully (self-recovery)
+[db_pool] Connection pool initialized: min=5, max=30, ...
+```
+
+**결과 기록**:
+```
+시뮬레이션 시각: ___ KST
+1차 0/0 cycle 시각: ___
+3차 cycle + re-initializing 시각: ___
+회복 완료 시각: ___
+총 회복 소요 시간: ___ 분
+```
+
+---
+
+### V3.3 — Sentry alert 발화 확인
+
+```
+https://sentry.io →
+  Issues → 검색: "0/0 warmed" 또는 "re-initializing" →
+  Last 1 hour →
+```
+
+**기대**: 신규 issue 1건 (자가 회복 trigger 시점) → alert rule (level=error) 정확 작동
+
+**결과 기록**:
+```
+조회 시각: ___ KST
+신규 issue 발생: ___ (Y/N)
+issue 제목: ___
+alert 도달 시간: ___ (1분 안)
+```
+
+---
+
+## 🔵 T+1주 (5-09 ± 1d) — 효과 정량 검증
+
+### V4.1 — Railway logs 5-09 시점 사고 재발 또는 자가 회복 확인
+
+```bash
+# 5-09 KST 23:00 ~ 5-10 KST 12:00 사이 logs 추출 (이전 사고 패턴 시각)
+railway logs --since 36h 2>&1 | grep -E "0/0 warmed|re-initializing|Connection pool initialized" | head -30
+```
+
+**3가지 시나리오**:
+- 🟢 **시나리오 A (이상적)**: 0/0 출력 0건 → keepalive 자체 차단 효과
+- 🟡 **시나리오 B (정상 fallback)**: 0/0 출력 + 15분 안 re-initializing → 자가 회복 메커니즘 효과
+- 🔴 **시나리오 C (실패)**: 0/0 출력 + 15분+ 지속 → 자가 회복 결함, 재진단 필요
+
+**결과 기록**:
+```
+조회 시각: ___ KST
+시나리오: ___ (A / B / C)
+0/0 발생 횟수: ___
+re-initializing 호출 횟수: ___
+사용자 영향 시간: ___ (분, 0~15)
+```
+
+---
+
+### V4.2 — Sentry 1주 누적 issue / event 카운트
+
+```
+https://sentry.io →
+  Issues → 검색: "[db_pool]" →
+  Last 7 days →
+```
+
+**기대**:
+- 시나리오 A: 0 issue
+- 시나리오 B: 1~2 issue (재발 시점, alert 정상 작동)
+
+**결과 기록**:
+```
+조회 시각: ___ KST
+1주 누적 issue 수: ___
+주요 issue 제목: ___
+```
+
+---
+
+### V4.3 — Postgres 1주 누적 conn 안정성
+
+```sql
+-- 1주 동안 backend_start 분포 (자가 회복 시 backend_start 재설정됨)
+SELECT
+  DATE_TRUNC('hour', backend_start) AS hour_bucket,
+  COUNT(*) AS new_conn_count
+FROM pg_stat_activity
+WHERE datname = current_database()
+  AND application_name LIKE '%axis%'
+  AND backend_start > NOW() - INTERVAL '7 days'
+GROUP BY hour_bucket
+ORDER BY hour_bucket DESC LIMIT 30;
+```
+
+**기대**:
+- 시나리오 A: max_age=300s 정상 cycle (시간당 ~12 새 conn)
+- 시나리오 B: 5-09 시점 spike (자가 회복 작동 시점에 5개 동시 신규)
+
+**결과 기록**:
+```
+실행 시각: ___ KST
+1주 평균 시간당 new_conn_count: ___
+spike 시점 (있으면): ___
+```
+
+---
+
+## 🧪 로컬 pytest 재검증 (회귀 0 보장)
+
+### V5.1 — test_db_pool 8/8 PASS 재확인
+
+```bash
+cd /Users/twinfafa/Desktop/GST/AXIS-OPS/backend
+PYTHONPATH=. .venv/bin/pytest ../tests/backend/test_db_pool.py -v
+```
+
+**기대**: 8 passed (기존 4 + 신규 4)
+- `test_fallback_increments_counter`
+- `test_normal_path_no_counter_increment`
+- `test_warmup_logs_error_when_pool_none`
+- `test_pool_exhausted_does_not_increment_fallback_counter`
+- `test_keepalive_args_passed_to_psycopg2` ⭐ v2.11.6
+- `test_consecutive_zero_warmup_triggers_init_pool` ⭐ v2.11.6
+- `test_zero_warmup_logger_error_captured` ⭐ v2.11.6
+- `test_normal_warmup_resets_consecutive_counter` ⭐ v2.11.6
+
+**결과 기록**:
+```
+실행 시각: ___ KST
+PASS 수: ___ / 8
+FAIL 항목 (있으면): ___
+```
+
+---
+
+## 📋 v2.11.6 종합 검증 결과 (1주 후 작성)
+
+```
+관찰 기간: 2026-05-06 ~ 2026-05-13 (T+1주, 7일)
+
+T+1h (2026-05-06 HH:MM):
+  ├─ Railway boot: ___ (정상 / 이상)
+  ├─ TCP_OVERWINDOW: ___ (0건 / 발견)
+  ├─ Sentry 신규 issue: ___ 건
+  └─ 평가: ___
+
+T+24h (2026-05-07 HH:MM):
+  ├─ warmup 5/5 cycles: ___ 회 (예상 288)
+  ├─ 0/0 cycles: ___ 회 (예상 0)
+  ├─ pg_stat_activity 정합: ___ (Y/N)
+  └─ 평가: ___
+
+T+1주 (2026-05-13 또는 5-09 ± 1d 측정):
+  ├─ 시나리오: ___ (A / B / C)
+  ├─ 0/0 발생: ___ 회
+  ├─ 자가 회복 작동: ___ 회
+  ├─ Sentry 1주 누적 issue: ___ 건
+  └─ 사용자 영향 시간: ___ 분 (max)
+
+종합 판정:
+  ├─ COMPLETED: ___ (Y/N)
+  ├─ 추가 조치 필요: ___ (있으면 후속 sprint)
+  └─ ADR-025 보강: ___ (실측 데이터 추가)
+
+후속 Sprint 트리거:
+  ├─ INFRA-RAILWAY-PROXY-IDLE-INVESTIGATION-20260504: ___ (필요 / 불필요)
+  ├─ OBSERV-WARMUP-LOGGER-CLARIFY-20260504: ___ (필요 / 불필요)
+  └─ FEAT-DB-POOL-STATUS-ENDPOINT (신규): ___ (필요 / 불필요)
+```
+
+---
+
+## 🔗 v2.11.6 관련 문서
+
+- Sprint 설계서: `AXIS-OPS/AGENT_TEAM_LAUNCH.md` § FIX-DB-POOL-SELF-RECOVERY-20260504 (L35799)
+- BACKLOG: `AXIS-OPS/BACKLOG.md` § FIX-DB-POOL-SELF-RECOVERY-20260504 (L370)
+- ADR: `AXIS-OPS/memory.md` § ADR-025 (DB Pool 자가 회복 메커니즘)
+- CHANGELOG: `AXIS-OPS/CHANGELOG.md` § [2.11.6] - 2026-05-06
+- 사고 trail: 4-29 23:31 KST + 5-04 11:38~12:32 KST (1.5h+ + 40분 silent failure)
+- 선행 sprint:
+  - `OBSERV-DB-POOL-IDLE-DISCONNECT-WARMUP-20260427` ✅ (warmup cron)
+  - `FIX-DB-POOL-DIRECT-FALLBACK-LOG-LEVEL-20260428` ✅ (logger.warning 강등)
+  - `FIX-DB-POOL-WARMUP-WATCHDOG-20260430` ✅ (WATCHDOG 도입)
+- pytest: `tests/backend/test_db_pool.py` 8/8 PASS (commit `9997bca`)
