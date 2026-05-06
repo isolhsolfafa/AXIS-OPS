@@ -37626,3 +37626,264 @@ FIX-MECH-CHECKLIST-PHASE2-DATA-AND-DESCRIPTION-20260504  🔴 P0
 memory.md ADR-023 (재발 방지): ___ (Y/N)
 ```
 
+
+---
+
+## Sprint 65-BE — MECH 체크리스트 성적서 분기 hotfix (Sprint 39 후속, 2026-05-05 등록)
+
+> 등록일: 2026-05-05 | 상태: 🔴 **HOTFIX** — 즉시 구현/배포 권장
+> 트랙: OPS BE (단일 파일 / ~25 LOC)
+> 선행: Sprint 63-BE ✅ (MECH master 73 항목), VIEW Sprint 39 ✅ (구현 + 1 hotfix 완료)
+> 트리거: Twin파파 운영 검증 (2026-05-05) — `/partner/report` 성적서에서 MECH 입력값(input_value)이 '—' 로만 렌더링
+> 영향: BE 1파일 (`checklist_service.py`), FE/모바일 앱 변경 0건
+
+## 배경
+
+### 증상 (Twin파파 제보, 2026-05-05)
+
+VIEW `/partner/report` 페이지의 "기구" 섹션에서:
+- 모바일 Flutter 앱(`mech_checklist_screen.dart`)으로 worker 가 input_value 정상 입력
+- DB `checklist.checklist_record` 에 정상 저장 (검증 SQL 결과 record 정상 존재)
+- **그러나 VIEW 성적서 화면에서는 input_value 가 '—' 로만 표시**
+- 작업자 / 확인 일시 모두 비어있음
+
+### 운영 DB 검증 결과 (2026-05-05)
+
+```sql
+SELECT cr.master_id, cr.judgment_phase, cr.qr_doc_id, cr.input_value, cr.check_result
+FROM checklist.checklist_record cr
+JOIN checklist.checklist_master cm ON cm.id = cr.master_id
+WHERE cm.category = 'MECH' AND cr.master_id IN (149, 158, 163, 176);
+```
+
+결과:
+| master_id | phase | qr_doc_id | input_value | check_result |
+|---|---|---|---|---|
+| 149 | 1 | DOC_TEST-1111 | 1 | PASS |
+| 158 | 1 | DOC_TEST-1111 | NULL | PASS |
+| 163 | 1 | DOC_TEST-1111 | 11 | PASS |
+| 176 | 1 | DOC_TEST-1111 | NULL | PASS |
+| ... | ... | DOC_TEST-2222 | ... | ... |
+
+→ **모든 MECH record 가 `qr_doc_id = 'DOC_<sn>'` 단일 형식** (`-L`/`-R` 분리 없음). 모바일 앱 `_normalizeQrDocId(sn)` 결과와 일치.
+
+## 원인 분석
+
+### `checklist_service.py L490 get_checklist_report` 의 `else` 분기
+
+```python
+if cat == 'ELEC':
+    # Phase 1/2 분리 + qr_doc_id 미지정 (default '') — ELEC 모바일도 빈 문자열 송신이라 매칭 OK
+    for phase_num, phase_label in [(1, '1차 배선'), (2, '2차 배선')]:
+        p_data = _get_checklist_by_category(... phase_num)
+        ...
+
+elif cat == 'TM':
+    # DUAL/SINGLE qr_doc_id 명시 처리
+    qr_doc_ids = [(f'DOC_{sn}-L', 'L'), ...] if dual else [(f'DOC_{sn}', None)]
+    ...
+
+else:
+    # ── MECH 등: qr_doc_id='' (default) ──   ← 🔴 문제 지점
+    cat_data = _get_checklist_by_category(
+        cur, serial_number, cat, product_code, scope, judgment_phase
+    )
+```
+
+### `_get_checklist_by_category` 의 SQL LEFT JOIN
+
+```sql
+LEFT JOIN checklist.checklist_record cr
+    ON cr.master_id      = cm.id
+   AND cr.serial_number  = %s
+   AND cr.judgment_phase = %s
+   AND cr.qr_doc_id     = %s    ← qr_doc_id 매칭 필수
+```
+
+### 흐름
+
+1. 모바일 앱 INSERT: `qr_doc_id = 'DOC_TEST-1111'` (정상)
+2. VIEW 성적서 GET → BE `else` 분기 → `qr_doc_id = ''` (default) 로 SELECT
+3. SQL: `cr.qr_doc_id = ''` ↔ DB row `qr_doc_id = 'DOC_TEST-1111'` → **매칭 0건**
+4. LEFT JOIN 결과 cr 컬럼 모두 NULL → input_value NULL
+5. VIEW: `item.input_value ?? '—'` → 화면에 '—' 표시
+
+→ **BE `else` 분기에서 `qr_doc_id` 미명시 = 모바일 앱과 mismatch** 가 root cause.
+
+## 결정 사항 (2026-05-05 Twin파파 + Codex 합의)
+
+| # | 항목 | 확정 | 이유 |
+|---|---|---|---|
+| 1 | 분기 패턴 | **ELEC 패턴 동일 적용** — Phase 1/2 분리 (`'1차 입력'` / `'2차 검수'`) | UX 일관성, 코드 재사용 (DRY). MECH worker 입력 흐름이 ELEC 와 동일 (1차 입력 → 2차 검수) |
+| 2 | qr_doc_id 처리 | **`_normalize_qr_doc_id(serial_number)` 명시 전달** = `'DOC_<sn>'` | 모바일 앱 `_normalizeQrDocId` 와 정확히 일치. `else` 분기 default 빈 문자열 사용 시 mismatch |
+| 3 | DUAL/INLET L/R 분리 | **무시 (단순화)** — 현재 운영 데이터 0건 (모든 record SINGLE-style `'DOC_<sn>'`) | INLET 8개 master 분리됐지만 worker 가 L/R hint 없이 입력 — 분리 필요해지는 시점에 별 hotfix |
+| 4 | `phase1_applicable=False` 자동 NA | **유지** — ELEC 패턴 동일 (`if phase_num == 1: filter items`) | Sprint 60-BE 도입한 phase1 필터 정합 |
+| 5 | 영향 범위 | **BE 1파일만** (`checklist_service.py`) | 모바일 앱·VIEW FE 변경 0건. 기존 SQL `_get_checklist_by_category` 변경 없음 |
+
+## 영향 파일
+
+### 수정 파일 1개
+
+| # | 파일 | 변경 | LOC |
+|---|---|---|---|
+| 1 | `backend/app/services/checklist_service.py` | L490 `else` 분기를 `elif cat == 'MECH':` 로 명시 + ELEC 패턴 (Phase 1/2 분리) + `_normalize_qr_doc_id(serial_number)` 명시 호출. 기존 `else` 는 잠재 신규 카테고리(PI/QI/SI 등)용 fallback 으로 유지 | +25, -3 |
+
+**순 증분 ~25 LOC**. CLAUDE.md 코드 크기 1단계 범위 내.
+
+## 코드 변경 상세
+
+### `checklist_service.py L490` — `else` → `elif cat == 'MECH':` + ELEC 패턴
+
+```diff
+        elif cat == 'TM':
+            # ── Sprint 59-BE: TM DUAL/SINGLE 통합 ──
+            ...
+            for tank_qr, tank_label in qr_doc_ids:
+                t_data = _get_checklist_by_category(
+                    cur, serial_number, cat, product_code, scope,
+                    judgment_phase, qr_doc_id=tank_qr
+                )
+                ...
+
+-       else:
+-           # ── MECH 등: 기존 그대로 qr_doc_id='' 사용 ──
+-           cat_data = _get_checklist_by_category(
+-               cur, serial_number, cat, product_code, scope, judgment_phase
+-           )
+-           if cat_data['summary']['total'] > 0:
+-               categories.append(cat_data)
++       elif cat == 'MECH':
++           # ── Sprint 65-BE hotfix (2026-05-05): ELEC 패턴 + qr_doc_id 명시 ──
++           # 모바일 앱 _normalizeQrDocId(sn) = 'DOC_<sn>' 와 정확히 일치 매칭
++           # DUAL/INLET L/R 분리는 운영 데이터 0건이라 미적용 (현 시점 단순화)
++           qr_doc_id_for_mech = _normalize_qr_doc_id(serial_number)
++
++           for phase_num, phase_label in [(1, '1차 입력'), (2, '2차 검수')]:
++               p_data = _get_checklist_by_category(
++                   cur, serial_number, cat, product_code, scope, phase_num,
++                   qr_doc_id=qr_doc_id_for_mech,
++               )
++               # Phase 1: phase1_applicable=False 항목 제외 (Sprint 60-BE 컬럼 기반)
++               if phase_num == 1:
++                   p_data['items'] = [
++                       i for i in p_data['items']
++                       if i.get('phase1_applicable', True)
++                   ]
++               items = p_data['items']
++               total = len(items)
++               checked = sum(1 for i in items if i.get('check_result') in ('PASS', 'NA'))
++               p_data['summary'] = {
++                   'total': total,
++                   'checked': checked,
++                   'percent': round(checked / total * 100, 1) if total > 0 else 0.0,
++               }
++               p_data['phase'] = phase_num
++               p_data['phase_label'] = phase_label
++               if total > 0:
++                   categories.append(p_data)
++
++       else:
++           # 잠재 신규 카테고리(PI/QI/SI 등) — 기본 fallback (qr_doc_id='')
++           cat_data = _get_checklist_by_category(
++               cur, serial_number, cat, product_code, scope, judgment_phase
++           )
++           if cat_data['summary']['total'] > 0:
++               categories.append(cat_data)
+```
+
+## 검증 흐름
+
+```
+[모바일 앱 INSERT]
+  qr_doc_id = 'DOC_<sn>'  (변경 없음)
+       ↓
+[DB checklist_record]
+  qr_doc_id = 'DOC_<sn>'  (변경 없음)
+       ↓
+[VIEW 성적서 GET → BE get_checklist_report]
+  cat == 'MECH' 분기 진입 (NEW)
+       ↓
+  qr_doc_id_for_mech = _normalize_qr_doc_id(serial_number)
+                     = 'DOC_<sn>'   ← 모바일과 정확히 일치
+       ↓
+  Phase 1 호출: _get_checklist_by_category(... qr_doc_id='DOC_<sn>')
+       ↓
+  SQL: AND cr.qr_doc_id = 'DOC_<sn>'   ← 매칭 성공
+       ↓
+  LEFT JOIN cr 결과: input_value, check_result, checked_at 등 정상 응답
+       ↓
+[VIEW 화면]
+  item.input_value: '1', '11' 등 실제 값 표시  ✅
+  worker_name: 정상 표시  ✅
+  checked_at: 정상 표시  ✅
+
+  Phase 1 / Phase 2 두 섹션 분리 표시 (ELEC 패턴)  ✅
+```
+
+## 검증 체크리스트
+
+### 설계 단계 (Codex)
+
+- [ ] `_normalize_qr_doc_id(serial_number)` 호출 결과가 `'DOC_<sn>'` 반환 (운영 DB record 와 일치) 검증
+- [ ] DUAL 모델 (DRAGON 등) 의 `_is_report_dual_model(model)` 분기가 본 hotfix 에서 무시됨 — 향후 DUAL INLET L/R 분리 record 발생 시 별 hotfix 필요 명시
+- [ ] `else` fallback 이 PI/QI/SI 등 신규 카테고리 도입 시 안전하게 동작 (qr_doc_id='' 가 record 에 매칭되는 카테고리만)
+- [ ] Phase 2 record 0건 케이스 — `total > 0` 조건으로 빈 섹션 자동 제외 확인
+
+### 구현 단계 (BE 작업)
+
+- [ ] `python -m pytest tests/services/test_checklist_service.py -v` GREEN
+- [ ] 운영 DB 의 TEST-1111 SN 으로 GET `/api/admin/checklist/report/TEST-1111` 호출 → MECH 카테고리에 input_value 정상 반환 확인
+- [ ] Phase 1 응답에 `phase_label='1차 입력'` 포함, items 에 phase1_applicable=False 항목 제외 확인
+- [ ] Phase 2 응답이 운영 데이터 0건 → 자동 NA 처리 + summary 정상
+
+### 배포 후 (Twin파파 현업 검증)
+
+- [ ] VIEW `/partner/report` 페이지에서 TEST-1111 SN 검색 → 기구 섹션 input_value 정상 표시 (1, 11 등)
+- [ ] 작업자 이름 정상 표시 (마스킹 후), 확인 일시 정상 표시
+- [ ] Phase 1 / Phase 2 두 섹션 분리 노출 (ELEC 와 동일 패턴)
+- [ ] ELEC / TM 카테고리 영향 없음 (회귀 테스트)
+- [ ] 다른 SN (TEST-2222 등) 도 동일 정상 동작
+
+## Codex 이관 트리거
+
+- ❌ API 응답 계약 변경 — 응답 schema 동일 (categories 배열 안에 1 → 2 phase 분리만)
+- ❌ 타입 변경
+- ❌ 권한 모델 변경
+- ❌ 클린 코어 데이터 원칙 영향
+- ✅ 단일 파일 hotfix (~25 LOC)
+
+→ **Codex 교차검증 임의** (단순 분기 패턴 적용, ELEC 검증된 코드 재사용). 다만 운영 DB 직접 영향이라 deploy 후 검증 필수.
+
+## 안전 degrade
+
+- BE 미배포 시: 현재 동작 그대로 (input_value '—' 표시) — degrade 영향 0
+- 모바일 앱 변경 0건: worker 입력 흐름 그대로 유지
+- VIEW FE 변경 0건: 응답 schema 동일 (Phase 1/2 categories 배열 안에 두 entry 추가만)
+
+## 연계
+
+- Sprint 39 (FE) ✅ 구현 + 1 hotfix 완료 — MECH 체크리스트 마스터 입력 가능
+- Sprint 63-BE ✅ 적용 — MECH master 73 항목 + phase1_applicable / qi_check_required 컬럼
+- Sprint 60-BE ✅ — phase1_applicable 컬럼 + 자동 NA 처리 패턴 (재사용)
+- Sprint 64-BE ⏳ — 별건 (TM Tank Module batch endpoint, 본 hotfix 와 무관)
+
+### 다음 응용 포인트
+
+- **DUAL INLET L/R 분리 처리** — 운영에서 INLET S/N L/R record 발생 시 hotfix 추가 (qr_doc_ids 배열로 확장 — TM 패턴 차용)
+- **PI/QI/SI 신규 카테고리** — 도입 시 본 hotfix 의 `else` fallback 그대로 활용 가능 (qr_doc_id='' 매칭이 정합인지 케이스 확인 후)
+
+## 배포 절차
+
+1. **PR 생성** — 단일 파일 25 LOC, 리뷰 부담 낮음
+2. **로컬 테스트** — pytest + 로컬 Flask 기동 후 `/api/admin/checklist/report/<sn>` 응답 확인
+3. **Railway 배포** — `git push origin main` → 자동 배포
+4. **Twin파파 검증** — VIEW `/partner/report` 페이지 재로드 후 input_value 표시 확인
+5. **운영 안정화** — 24h 모니터링 (다른 카테고리 회귀 없는지)
+
+## 판정 기준 (Sprint 65-BE 종료)
+
+- VIEW `/partner/report` 페이지의 MECH 섹션 input_value 정상 표시
+- Phase 1 / Phase 2 두 섹션 분리 노출
+- ELEC / TM 회귀 0건
+- pytest GREEN
+- v2.10.x → v2.10.(N+1) 패치 릴리스 (CHANGELOG + version.py + git tag)
