@@ -36518,3 +36518,1111 @@ FIX-SPRINT-63-MECH-CHECKLIST-ENTRY-POINT-20260504  🔴 P0
 memory.md ADR-022 추가: ___ (Y/N) — 재발 방지 표준 등록
 ```
 
+
+---
+
+## 🐛 FIX-MECH-CHECKLIST-PHASE2-READONLY-AND-VALIDATION-20260504 프롬프트 — 2차 read-only UI + check_result null fix (🔴 P0)
+
+> **등록일**: 2026-05-04 KST (v2.11.1 prod 배포 후 사용자 운영 검증, TEST-333)
+> **Sprint ID**: `FIX-MECH-CHECKLIST-PHASE2-READONLY-AND-VALIDATION-20260504`
+> **BACKLOG 연계**: `FIX-MECH-CHECKLIST-PHASE2-READONLY-AND-VALIDATION-20260504` (5-04 신규)
+> **선행 Sprint**: Sprint 63-BE v2.11.0 ✅ + Sprint 63-FE v2.11.1 ✅
+> **연관 Sprint** (묶음 진행 권장): `FIX-SPRINT-63-MECH-CHECKLIST-ENTRY-POINT-20260504` (P0, 30분)
+> **우선순위**: 🔴 P0 — 사용자 입력 저장 차단 + 2차 검수 흐름 미구현
+> **상태**: 🔴 OPEN — 사용자 운영 검증 logs 분석 완료, 변경 명확
+> **예상 소요**: 30분 (FE 3 위치 ~13 LoC + flutter analyze + 운영 검증 + 묶음 commit + push)
+> **선행 의존성**: 0 (Sprint 63-FE prod 배포 완료 전제)
+> **충돌 위험**: 0 (FE UI 변경만, BE 무관)
+> **트리거 근거**: 2026-05-04 13:55~13:57 KST TEST-333 운영 검증 logs + Network 탭 400 응답 + 사용자 요구사항 ("1차 저장값 read-only + PASS/NA 만 선택")
+
+### 🔬 Root cause 분석
+
+#### Root cause 1 — `check_result: null` BE validator 거부
+
+```
+Network 탭: PUT /api/app/checklist/mech/check → 400
+Response:    { "error": "VALIDATION_ERROR", "message": "INVALID_CHECK_RESULT: 'None'" }
+
+cowork 가 작성한 mech_checklist_screen.dart _upsertNow:
+  'check_result': cr.isEmpty ? null : cr,   ← null 전송 → BE 거부
+
+BE upsert_mech_check 의 validator:
+  check_result 가 'PASS' / 'NA' 만 허용. None 거부.
+
+ELEC 패턴 (정합):
+  elec_checklist_screen.dart _toggleResult — PASS/NA 라디오 클릭 시점에만 호출 → check_result 항상 명시.
+  cowork 가 INPUT/SELECT 자동 저장 패턴 추측 + ELEC 패턴 검증 안 한 영역.
+```
+
+#### Root cause 2 — 2차 검사인원 read-only UI 부재 (Codex A3-F2 advisory 미구현)
+
+```
+사용자 요구사항:
+  - 1차 작업자: INPUT/SELECT/CHECK 모두 입력 가능 (현재 OK)
+  - 2차 검사인원 (관리자): 1차 입력값 read-only 표시 + PASS/NA 만 선택
+
+현재 mech_checklist_screen.dart:
+  - judgment_phase 토글로 1/2 전환은 작동
+  - 다만 phase=2 시점에도 TextField/DropdownButton 둘 다 enabled 상태
+  - 관리자가 1차 데이터 임의 변경 가능 = 권한 위반
+
+Codex 라운드 1 A3-F2 advisory:
+  "2차 read-only vs 편집 UI 명확 구분" 권고 — 당시 사후 진행 표시, 실 구현 누락.
+```
+
+#### logs 분석 — 부분 저장 OK 확인
+
+```
+13:55:05  master_id=130, NA, phase=1, qr=DOC_TEST-333-L  ✅
+13:55:06  master_id=132, NA, phase=1, qr=DOC_TEST-333-L  ✅
+13:55:07  master_id=132, PASS, phase=1, qr=DOC_TEST-333-L  ← 토글 테스트
+13:55:08  master_id=134, NA, phase=1, qr=DOC_TEST-333-L  ✅
+13:55:13  master_id=131, NA, phase=1, qr=DOC_TEST-333-R  ✅ (Right 시작)
+...
+
+INLET S/N 8 master (130~137) 저장 OK
+qr_doc_id L/R suffix 정확 (R2-2 _normalizeQrDocId 정합)
+
+⚠️ logs 에 input_value / selected_value 출력 없음:
+  - BE INFO log 가 출력 안 한 것일 수도 (저장됐을 가능성)
+  - 또는 FE 가 input_value 전송 안 했을 가능성
+  → DB SELECT 진단 SQL 필요
+```
+
+### 📐 변경 범위 (FE only, 1 파일 ~13 LoC)
+
+#### 1) `_upsertNow` — check_result 빈 시 PUT skip (Root cause 1 fix)
+
+```dart
+// frontend/lib/screens/checklist/mech_checklist_screen.dart 의 _upsertNow 함수 정정
+
+Future<void> _upsertNow({
+  required Map<String, dynamic> item,
+  String? checkResult,
+  String? selectedValue,
+  String? inputValue,
+  String? note,
+}) async {
+  final masterId = item['master_id'] as int?;
+  if (masterId == null) return;
+
+  // ⭐ Fix 1 (Root cause 1, ELEC 패턴 정합):
+  // BE upsert_mech_check 는 check_result 'PASS'/'NA' 강제 (INVALID_CHECK_RESULT: 'None' 거부).
+  // PASS/NA 미선택 시 PUT skip — 사용자가 라디오 클릭 시점에 input/select+check_result 번들 PUT.
+  final cr = checkResult ?? _getCurrentCheckResult(masterId);
+  if (cr.isEmpty) {
+    // INPUT/SELECT 만 입력 + PASS/NA 미선택 = state 갱신만 (PUT skip)
+    return;
+  }
+
+  if (_updatingIds.contains(masterId)) return;
+  setState(() => _updatingIds.add(masterId));
+
+  try {
+    final apiService = ref.read(apiServiceProvider);
+    final qrDocId = _qrDocIdForItem(item);
+
+    final putData = <String, dynamic>{
+      'serial_number': widget.serialNumber,
+      'master_id': masterId,
+      'check_result': cr,        // ⭐ null 제거, 항상 'PASS' 또는 'NA'
+      'judgment_phase': _currentPhase,
+      'qr_doc_id': qrDocId,
+    };
+    if (selectedValue != null) putData['selected_value'] = selectedValue;
+    if (inputValue != null) putData['input_value'] = inputValue;
+    if (note != null) putData['note'] = note;
+
+    await apiService.put('/app/checklist/mech/check', data: putData);
+  } catch (e) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('저장 실패: $e'), backgroundColor: GxColors.danger),
+      );
+    }
+  } finally {
+    if (mounted) {
+      setState(() => _updatingIds.remove(masterId));
+    }
+  }
+}
+```
+
+#### 2) `_buildInputField` — phase=2 시점 TextField readOnly + onChanged null
+
+```dart
+// frontend/lib/screens/checklist/mech_checklist_screen.dart _buildInputField
+
+Widget _buildInputField(Map<String, dynamic> item) {
+  final masterId = item['master_id'] as int?;
+  if (masterId == null) return const SizedBox.shrink();
+  final controller = _inputControllers.putIfAbsent(...);
+  final currentResult = _checkResultMap[masterId];
+  final isPhase2 = _currentPhase == 2;  // ⭐ 신규
+
+  return Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(item['item_name'] as String? ?? '', ...),
+        const SizedBox(height: 6),
+        TextField(
+          controller: controller,
+          readOnly: isPhase2,                            // ⭐ Fix 2
+          decoration: InputDecoration(
+            hintText: 'S/N 또는 수량 입력',
+            border: const OutlineInputBorder(),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            isDense: true,
+            fillColor: isPhase2 ? GxColors.cloud : null,  // ⭐ 회색 배경
+            filled: isPhase2,                              // ⭐
+          ),
+          onChanged: isPhase2 ? null : (value) {           // ⭐ phase=2 disabled
+            _debouncedUpsert(
+              item: item,
+              inputValue: value,
+              checkResult: _getCurrentCheckResult(masterId),
+            );
+          },
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            _resultRadio(item, 'PASS', currentResult),
+            const SizedBox(width: 6),
+            _resultRadio(item, 'NA', currentResult),
+          ],
+        ),
+      ],
+    ),
+  );
+}
+```
+
+#### 3) `_buildSelectDropdown` — phase=2 시점 DropdownButton onChanged null
+
+```dart
+// frontend/lib/screens/checklist/mech_checklist_screen.dart _buildSelectDropdown
+
+Widget _buildSelectDropdown(Map<String, dynamic> item) {
+  final masterId = item['master_id'] as int?;
+  if (masterId == null) return const SizedBox.shrink();
+  final options = ((item['select_options'] as List?) ?? []).cast<String>();
+  if (options.isEmpty) {
+    // 기존 Q7-B 운영자 미설정 안내 (변경 없음)
+    return Padding(...);
+  }
+  final currentValue = _selectValueMap[masterId];
+  final currentResult = _checkResultMap[masterId];
+  final isPhase2 = _currentPhase == 2;  // ⭐ 신규
+
+  return Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(item['item_name'] as String? ?? '', ...),
+        const SizedBox(height: 6),
+        DropdownButtonFormField<String>(
+          value: options.contains(currentValue) ? currentValue : null,
+          isExpanded: true,
+          decoration: InputDecoration(
+            border: const OutlineInputBorder(),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            isDense: true,
+            fillColor: isPhase2 ? GxColors.cloud : null,  // ⭐ 회색 배경
+            filled: isPhase2,
+          ),
+          items: options.map((opt) => DropdownMenuItem(
+            value: opt,
+            child: Text(opt, overflow: TextOverflow.ellipsis),
+          )).toList(),
+          onChanged: isPhase2 ? null : (value) {            // ⭐ Fix 3
+            if (value == null) return;
+            setState(() => _selectValueMap[masterId] = value);
+            _debouncedUpsert(
+              item: item,
+              selectedValue: value,
+              checkResult: _getCurrentCheckResult(masterId),
+            );
+          },
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            _resultRadio(item, 'PASS', currentResult),
+            const SizedBox(width: 6),
+            _resultRadio(item, 'NA', currentResult),
+          ],
+        ),
+      ],
+    ),
+  );
+}
+```
+
+### 🔍 진단 SQL — input_value / selected_value 저장 여부 (Pre-deploy 권장)
+
+```sql
+-- TEST-333 의 1차 record 전체 조회 — input_value/selected_value 실 저장 확인
+SELECT
+  master_id,
+  check_result,
+  input_value,
+  selected_value,
+  judgment_phase,
+  qr_doc_id,
+  worker_id,
+  checked_at
+FROM checklist.checklist_record
+WHERE serial_number = 'TEST-333'
+ORDER BY master_id, judgment_phase;
+```
+
+**기대**:
+- INLET S/N 8 record: master_id 130~137, check_result='PASS'/'NA', input_value=실제 S/N 텍스트, judgment_phase=1
+- 만약 input_value 컬럼 NULL → BE upsert 가 input_value 무시 → 별 BE fix 추가 필요
+
+**판정 분기**:
+- input_value 정상 저장 → 본 Sprint (FE 만) 충분
+- input_value NULL → 별 BACKLOG `FIX-MECH-CHECKLIST-INPUT-VALUE-PERSISTENCE-20260504` 등록 후 BE fix
+
+### ✅ Pre-deploy Gate
+
+```
+1. 진단 SQL 실행 (선행) → input_value/selected_value 저장 여부 확정
+
+2. flutter analyze 0 error
+   - mech_checklist_screen.dart 의 _upsertNow / _buildInputField / _buildSelectDropdown 정정 후
+   - GxColors.cloud 사용 정합 (commit 21c581e 패턴)
+
+3. 운영 검증 시나리오 (DRAGON S/N 또는 TEST-333):
+   ✅ 1차: INPUT 입력 + PASS/NA 라디오 클릭 → 저장 OK (BE 200 응답)
+   ✅ 1차: SELECT 선택 + PASS/NA → 저장 OK
+   ✅ 1차: PASS/NA 만 클릭 → 저장 OK
+   ✅ 1차: INPUT 입력만 (PASS/NA 미선택) → 저장 안 됨 (의도된 동작)
+
+   ✅ 2차 진입 (관리자):
+     - TextField 회색 + readOnly (1차 값 표시만)
+     - DropdownButton disabled (1차 선택값 표시만)
+     - PASS/NA 라디오 정상 클릭 가능
+     - 2차 PASS 클릭 → 저장 OK (BE 200 응답)
+```
+
+### 🚀 배포 순서 — **묶음 commit 권장**
+
+```
+권장: FIX-SPRINT-63-MECH-CHECKLIST-ENTRY-POINT-20260504 (P0, 30분) 과 묶음 진행
+
+1. 단일 atomic commit:
+   git add backend/app/routes/work.py
+   git add frontend/lib/screens/task/task_detail_screen.dart
+   git add frontend/lib/screens/checklist/mech_checklist_screen.dart
+   git commit -m "fix(sprint-63): 진입점 + 2차 read-only + check_result validation (P0 hotfix)
+
+    Sprint 63 prod 활성화 piece — v2.11.1 운영 검증 후 catch:
+      - 진입점: work/start 응답 MECH 분기 + task_detail 5 위치 (FIX-SPRINT-63-MECH-CHECKLIST-ENTRY-POINT)
+      - check_result null fix: cr.isEmpty 시 PUT skip (ELEC _toggleResult 정합)
+      - 2차 read-only: phase=2 시 TextField readOnly + DropdownButton onChanged null
+
+    회귀 위험: 0 (BE response key + FE UI 변경, 기존 무영향)
+    Refs: FIX-SPRINT-63-MECH-CHECKLIST-ENTRY-POINT-20260504
+          FIX-MECH-CHECKLIST-PHASE2-READONLY-AND-VALIDATION-20260504"
+
+2. git push origin main → Railway + Netlify 동시 배포
+3. 1~2분 후 prod 검증 (위 Pre-deploy Gate #3 시나리오)
+```
+
+### 📦 Rollback
+
+```
+git revert <commit-sha>
+→ 3 파일 원복 (work.py + task_detail_screen.dart + mech_checklist_screen.dart)
+→ Railway + Netlify 자동 재배포
+→ 이전 상태 (v2.11.1 prod) 복귀
+
+위험: 0 (rollback 후 사용자 영향 = 이전과 동일)
+```
+
+### 📋 BACKLOG 동기화
+
+```
+FIX-MECH-CHECKLIST-PHASE2-READONLY-AND-VALIDATION-20260504  🔴 P0
+  → ✅ COMPLETED (v2.11.2 예정, 2026-05-XX, 묶음 commit)
+  ├─ _upsertNow check_result 빈 시 PUT skip (Root cause 1)
+  ├─ _buildInputField TextField readOnly + onChanged null (phase=2)
+  ├─ _buildSelectDropdown DropdownButton onChanged null (phase=2)
+  └─ Sprint 63 가시 기능 + 2차 검수 흐름 정식 활성화
+```
+
+### 🤝 Cowork 추측 작성 실수 trail (재발 방지)
+
+본 세션 cowork 추측 작성 실수 누적:
+
+| # | 영역 | 발견 시점 | Fix 방법 |
+|---|------|----------|----------|
+| 1 | GxColors.background/surface/mistLight 존재 안 함 | flutter analyze 7 error | 사용자 측 fix (commit 21c581e) — cloud/white/cloud |
+| 2 | check_result null 처리 BE validator 거부 | 사용자 운영 검증 (TEST-333, BE 400) | 본 Sprint — cr.isEmpty 시 PUT skip |
+| 3 ⭐ | description 표시 누락 (ELEC L898-909 패턴 미차용) | 사용자 운영 검증 화면 (TEST-1111) | 본 Sprint 추가 정정 — _buildCheckRadio/_buildSelectDropdown/_buildInputField 에 description Text 추가 |
+
+### 📐 추가 정정 4건 (사용자 운영 검증 5-04 추가 catch)
+
+#### 추가 정정 1 — description 표시 (3 위젯 모두)
+
+> ELEC L898-909 패턴 차용. cowork 추측 작성 실수 #3 — 모든 _build* 위젯에서 description 부재.
+
+```dart
+// 모든 _buildCheckRadio / _buildSelectDropdown / _buildInputField 의 항목명 Text 다음에 추가:
+
+Text(
+  item['item_name'] as String? ?? '',
+  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+),
+// ⭐ 추가 정정 1: ELEC L898-909 패턴 — description 작은 글씨
+if ((item['description'] as String?)?.isNotEmpty ?? false) ...[
+  const SizedBox(height: 2),
+  Text(
+    item['description'] as String,
+    style: const TextStyle(fontSize: 10, color: GxColors.silver),
+    maxLines: 1,
+    overflow: TextOverflow.ellipsis,
+  ),
+],
+const SizedBox(height: 6),
+// ... 기존 라디오/드롭다운/텍스트필드 ...
+```
+
+**적용 위치 3곳**:
+- `_buildCheckRadio` — Text(item_name) 다음 + Row 라디오 직전
+- `_buildSelectDropdown` — Text(item_name) 다음 + DropdownButtonFormField 직전
+- `_buildInputField` — Text(item_name) 다음 + TextField 직전
+
+#### 추가 정정 2 — view 수정 불가 (별 영역)
+
+> AXIS-VIEW Sprint 39 (별 repo) 진행 시 자동 해소. 본 Sprint 영역 외.
+> 사용자 측 임시 처리 (긴급 시): DB 직접 UPDATE
+> ```sql
+> UPDATE checklist.checklist_master
+> SET select_options = '["MKS GE50A | 5 SLM | 0.5 MPa", "..."]'::jsonb
+> WHERE category = 'MECH' AND item_name LIKE '%MFC%';
+> ```
+
+#### 추가 정정 3 — 2차 드롭다운 react 안 됨 → **옵션 C 채택** (사용자 결정 2026-05-04)
+
+> R1 fix (check_result 빈 시 PUT skip) 가 SELECT/INPUT 데이터 저장도 차단하는 부작용 차단.
+> **옵션 C** = UI 가이드 (⚠️ 경고 메시지) + R1 fix 유지 + check_result 강제 보장 (Q3-B Codex 결정 정합).
+
+##### 옵션 결정 trail
+```
+옵션 A 폐기 — 자동 PASS default 가 잘못된 판정 가능
+옵션 B 폐기 — BE validator 변경 필요 + 부분 record 의미 모호
+옵션 C 채택 ⭐ — UI 가이드만, BE 변경 0 + ELEC 패턴 정합
+```
+
+##### 옵션 C UI 시나리오 (4 상태)
+
+```
+상태 1 (초기): 드롭다운 미선택 + PASS/NA 미선택
+  ┌─────────────────────────────────────┐
+  │ MFC Spec, Flow 방향                  │
+  │ 조립 도면과 현물 1:1 확인 / 육안 검사  │ ← description (작은 글씨)
+  │ ┌─────────────────────────────┐    │
+  │ │ ▼ 선택하세요                │    │
+  │ └─────────────────────────────┘    │
+  │ [ PASS ]  [ NA ]                    │
+  └─────────────────────────────────────┘
+
+상태 2 (드롭다운 선택 후 PASS/NA 미선택): ⚠️ 경고 표시
+  ┌─────────────────────────────────────┐
+  │ MFC Spec, Flow 방향                  │
+  │ 조립 도면과 현물 1:1 확인 / 육안 검사  │
+  │ ┌─────────────────────────────┐    │
+  │ │ MKS GE50A | 5 SLM | 0.5MPa▼│    │
+  │ └─────────────────────────────┘    │
+  │ ⚠️ PASS 또는 NA 선택 후 저장됩니다  │ ← 신규 (주황색)
+  │ [ PASS ]  [ NA ]                    │
+  │ → BE 호출 X (R1 fix 정합)           │
+  └─────────────────────────────────────┘
+
+상태 3 (PASS 선택): 저장 OK ⭐
+  ┌─────────────────────────────────────┐
+  │ ┌─────────────────────────────┐    │
+  │ │ MKS GE50A | 5 SLM | 0.5MPa▼│    │
+  │ └─────────────────────────────┘    │
+  │ [✓ PASS]  [ NA ]                    │ ← 초록색 selected
+  │ → BE PUT (selected_value+check_result │
+  │    'PASS' 번들) ✅                   │
+  └─────────────────────────────────────┘
+
+상태 4 (2차 관리자): read-only + PASS/NA 만 선택 가능
+  ┌─────────────────────────────────────┐
+  │ ┌─────────────────────────────┐ 🔒 │ ← 회색 + readOnly
+  │ │ MKS GE50A | 5 SLM | 0.5MPa▼│    │
+  │ └─────────────────────────────┘    │
+  │ [ PASS ]  [ NA ]                    │ ← 정상 선택 가능
+  └─────────────────────────────────────┘
+```
+
+##### 코드 샘플 — `_buildSelectDropdown` (~10 LoC 추가)
+
+```dart
+Widget _buildSelectDropdown(Map<String, dynamic> item) {
+  final masterId = item['master_id'] as int?;
+  if (masterId == null) return const SizedBox.shrink();
+  final options = ((item['select_options'] as List?) ?? []).cast<String>();
+  if (options.isEmpty) {
+    return Padding(...);  // Q7-B 운영자 미설정 안내 (변경 없음)
+  }
+  final currentValue = _selectValueMap[masterId];
+  final currentResult = _checkResultMap[masterId];
+  final isPhase2 = _currentPhase == 2;
+
+  // ⭐ 옵션 C: 시각적 indicator 조건
+  final hasInput = currentValue != null && currentValue.isNotEmpty;
+  final hasResult = currentResult != null && currentResult.isNotEmpty;
+  final showPendingWarning = hasInput && !hasResult && !isPhase2;
+
+  return Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(item['item_name'] as String? ?? '',
+             style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+        // 추가 정정 1 — description (ELEC L898-909 패턴)
+        if ((item['description'] as String?)?.isNotEmpty ?? false) ...[
+          const SizedBox(height: 2),
+          Text(item['description'] as String,
+               style: const TextStyle(fontSize: 10, color: GxColors.silver),
+               maxLines: 1, overflow: TextOverflow.ellipsis),
+        ],
+        const SizedBox(height: 6),
+        DropdownButtonFormField<String>(
+          value: options.contains(currentValue) ? currentValue : null,
+          isExpanded: true,
+          decoration: InputDecoration(
+            border: const OutlineInputBorder(),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            isDense: true,
+            fillColor: isPhase2 ? GxColors.cloud : null,  // 2차 read-only
+            filled: isPhase2,
+          ),
+          items: options.map((opt) => DropdownMenuItem(
+            value: opt, child: Text(opt, overflow: TextOverflow.ellipsis),
+          )).toList(),
+          onChanged: isPhase2 ? null : (value) {
+            if (value == null) return;
+            setState(() => _selectValueMap[masterId] = value);
+            _debouncedUpsert(
+              item: item,
+              selectedValue: value,
+              checkResult: _getCurrentCheckResult(masterId),
+            );
+          },
+        ),
+        // ⭐ 옵션 C: PASS/NA 미선택 경고
+        if (showPendingWarning) ...[
+          const SizedBox(height: 4),
+          Row(
+            children: const [
+              Icon(Icons.warning_amber_rounded, size: 12, color: GxColors.warning),
+              SizedBox(width: 4),
+              Text('PASS 또는 NA 선택 후 저장됩니다',
+                   style: TextStyle(fontSize: 10, color: GxColors.warning)),
+            ],
+          ),
+        ],
+        const SizedBox(height: 6),
+        Row(children: [
+          _resultRadio(item, 'PASS', currentResult),
+          const SizedBox(width: 6),
+          _resultRadio(item, 'NA', currentResult),
+        ]),
+      ],
+    ),
+  );
+}
+```
+
+##### 코드 샘플 — `_buildInputField` (동일 패턴, ~10 LoC 추가)
+
+```dart
+Widget _buildInputField(Map<String, dynamic> item) {
+  final masterId = item['master_id'] as int?;
+  if (masterId == null) return const SizedBox.shrink();
+  final controller = _inputControllers.putIfAbsent(...);
+  final currentResult = _checkResultMap[masterId];
+  final isPhase2 = _currentPhase == 2;
+
+  // ⭐ 옵션 C: 시각적 indicator 조건 (TextField 의 text 활용)
+  final hasInput = controller.text.isNotEmpty;
+  final hasResult = currentResult != null && currentResult.isNotEmpty;
+  final showPendingWarning = hasInput && !hasResult && !isPhase2;
+
+  return Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(item['item_name'] as String? ?? '',
+             style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+        // 추가 정정 1 — description
+        if ((item['description'] as String?)?.isNotEmpty ?? false) ...[
+          const SizedBox(height: 2),
+          Text(item['description'] as String,
+               style: const TextStyle(fontSize: 10, color: GxColors.silver),
+               maxLines: 1, overflow: TextOverflow.ellipsis),
+        ],
+        const SizedBox(height: 6),
+        TextField(
+          controller: controller,
+          readOnly: isPhase2,
+          decoration: InputDecoration(
+            hintText: 'S/N 또는 수량 입력',
+            border: const OutlineInputBorder(),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            isDense: true,
+            fillColor: isPhase2 ? GxColors.cloud : null,
+            filled: isPhase2,
+          ),
+          onChanged: isPhase2 ? null : (value) {
+            // ⭐ 옵션 C: setState 빈 호출 — controller.text 변경 후 경고 메시지 재렌더
+            setState(() {});
+            _debouncedUpsert(
+              item: item,
+              inputValue: value,
+              checkResult: _getCurrentCheckResult(masterId),
+            );
+          },
+        ),
+        // ⭐ 옵션 C: PASS/NA 미선택 경고
+        if (showPendingWarning) ...[
+          const SizedBox(height: 4),
+          Row(
+            children: const [
+              Icon(Icons.warning_amber_rounded, size: 12, color: GxColors.warning),
+              SizedBox(width: 4),
+              Text('PASS 또는 NA 선택 후 저장됩니다',
+                   style: TextStyle(fontSize: 10, color: GxColors.warning)),
+            ],
+          ),
+        ],
+        const SizedBox(height: 6),
+        Row(children: [
+          _resultRadio(item, 'PASS', currentResult),
+          const SizedBox(width: 6),
+          _resultRadio(item, 'NA', currentResult),
+        ]),
+      ],
+    ),
+  );
+}
+```
+
+##### 핵심 로직 요약
+
+```
+변수 3개 추가 (각 위젯):
+  hasInput = currentValue 또는 controller.text 가 비어있지 않음
+  hasResult = currentResult ('PASS'/'NA') 선택됨
+  showPendingWarning = hasInput && !hasResult && !isPhase2
+
+UI 분기:
+  showPendingWarning == true → ⚠️ "PASS 또는 NA 선택 후 저장됩니다" 표시
+  PASS/NA 클릭 → setState + _debouncedUpsert → 경고 자동 사라짐 + 저장
+
+INPUT 추가 처리:
+  onChanged 안에 setState({}) — controller.text 변경 후 경고 메시지 갱신용
+  (TextField 는 controller 가 직접 state 관리하므로 따로 setState 필요)
+
+회귀 위험: 0 (기존 입력 흐름 무영향, 경고 메시지 추가만)
+변경 영향: ~20 LoC (SELECT 10 + INPUT 10)
+```
+
+##### Pre-deploy Gate 추가 시나리오
+
+```
+운영 검증:
+  ✅ SELECT 드롭다운 선택 (PASS 미클릭) → ⚠️ 경고 표시
+  ✅ PASS 클릭 → 경고 사라짐 + BE 200 응답 + 저장 OK
+  ✅ INPUT 입력 (PASS 미클릭) → ⚠️ 경고 표시
+  ✅ NA 클릭 → 경고 사라짐 + 저장 OK
+  ✅ 2차 phase 진입 → 경고 비표시 (isPhase2 분기)
+  ✅ 2차 phase 진입 → 1차 입력값 read-only 표시 (회색 배경)
+  ✅ 2차 PASS/NA 클릭 → 저장 OK
+```
+
+#### 추가 정정 4 — pytest TC 1건 추가 (ELEC L898-909 description 정합)
+
+> A2 advisory 의 test_work_start_mech_checklist_ready 외에 description 렌더 검증 TC 추가:
+
+```dart
+// 또는 widget test
+testWidgets('mech_checklist description displays under item_name', (tester) async {
+  // ... 기존 setup ...
+  await tester.pumpWidget(...);
+  expect(find.text('Part 및 Duct Label 도면상의 사양 일치'), findsWidgets);
+});
+```
+
+**재발 방지 표준** (memory.md ADR-023 권장):
+```
+신규 Flutter 코드 작성 시:
+  ✅ ELEC 패턴 정확 검증 (단순 차용 X)
+    - GxColors / GxRadius / GxGradients 의 실제 멤버 grep 후 사용
+    - apiService 호출 패턴 (_toggleResult / _showCommentDialog) 그대로
+    - check_result / input_value 등 BE schema 정확 확인
+  ❌ 추측해서 작성 X — 검증 안 된 멤버 / payload / 흐름 사용 금지
+  📋 작성 후 flutter analyze + flutter build web 강제
+```
+
+### 📝 사후 기록 양식 (배포 후)
+
+```
+✅ 배포 완료 (2026-05-XX HH:MM KST, v2.11.2)
+  ├─ commit: <sha> (묶음 atomic)
+  ├─ Railway logs: BE 정상 ✓
+  ├─ Netlify FE 빌드 성공 ✓
+  └─ Sentry 새 ERROR 0건 ✓
+
+운영 검증 시나리오 (15분):
+  ├─ 1차 INPUT + PASS/NA → 저장 OK: ___ (Y/N)
+  ├─ 1차 SELECT + PASS/NA → 저장 OK: ___ (Y/N)
+  ├─ 1차 INPUT 만 → PUT skip 의도된 동작: ___ (Y/N)
+  ├─ 2차 진입 → TextField readOnly: ___ (Y/N)
+  ├─ 2차 진입 → DropdownButton disabled: ___ (Y/N)
+  └─ 2차 PASS/NA 클릭 → 저장 OK: ___ (Y/N)
+
+진단 SQL 결과 (input_value 저장 여부):
+  ├─ master_id 130~137 의 input_value: ___ (실 S/N 또는 NULL)
+  ├─ MFC 4 master 의 selected_value: ___
+  └─ Flow Sensor 3 master 의 selected_value: ___
+
+→ 모두 Y + 진단 SQL input_value 정상 → COMPLETED 전환 + Sprint 63 정식 활성화
+
+memory.md ADR-023 (재발 방지 표준): ___ (Y/N)
+```
+
+
+---
+
+## 🐛 FIX-MECH-CHECKLIST-PHASE2-DATA-AND-DESCRIPTION-20260504 프롬프트 — 2차 1차 데이터 inherit + description 모든 위젯 (🔴 P0)
+
+> **등록일**: 2026-05-04 KST (v2.11.X prod 배포 후 사용자 운영 검증)
+> **Sprint ID**: `FIX-MECH-CHECKLIST-PHASE2-DATA-AND-DESCRIPTION-20260504`
+> **BACKLOG 연계**: 동명 entry (5-04 신규)
+> **선행 Sprint**: Sprint 63-BE v2.11.0 ✅ + Sprint 63-FE v2.11.1 ✅ + 옵션 C hotfix
+> **연관 Sprint** (묶음 진행 권장): `FIX-SPRINT-63-MECH-CHECKLIST-ENTRY-POINT-20260504` (P0) + `FIX-MECH-CHECKLIST-PHASE2-READONLY-AND-VALIDATION-20260504` (P0)
+> **우선순위**: 🔴 P0 — 2차 관리자 검수 흐름 차단 + description 일부 위젯 누락
+> **상태**: 🔴 OPEN — Root cause 2건 확정, 변경 명확
+> **예상 소요**: 1h (BE 5분 + FE 5분 + pytest + flutter analyze + 묶음 commit + push + 운영 검증)
+> **선행 의존성**: 0 (Sprint 63 prod 배포 완료 전제)
+> **충돌 위험**: 0 (BE additive JOIN + FE Text 추가)
+> **트리거 근거**: 2026-05-04 사용자 스크린샷 비교 (1차 입력 OK / 2차 빈 화면)
+
+### 🔬 Root cause 분석 — 2건
+
+#### Root cause 1 — BE SQL LEFT JOIN 단일 phase 조건
+
+```python
+# backend/app/services/checklist_service.py L92-96 (현재)
+LEFT JOIN checklist.checklist_record cr
+    ON cr.master_id      = cm.id
+   AND cr.serial_number  = %s
+   AND cr.judgment_phase = %s   # 🔴 phase=2 호출 시 phase=2 record 만 join
+   AND cr.qr_doc_id     = %s
+
+# 응답 (L150-151):
+'selected_value': row.get('selected_value'),  # phase=2 record 의 값 (NULL)
+'input_value':    row.get('input_value'),     # phase=2 record 의 값 (NULL)
+```
+
+**시나리오**:
+```
+phase=1 GET (1차 작업자):
+  cr.judgment_phase = 1 → phase=1 record 매칭 → input_value/selected_value 정상 ✓
+
+phase=2 GET (2차 관리자):
+  cr.judgment_phase = 2 → phase=2 record 미존재 (또는 비어있음) → NULL 반환 🔴
+  ⚠️ phase=1 record 의 input_value/selected_value 는 LEFT JOIN 에서 매칭 안 됨
+```
+
+#### Root cause 2 — FE description 표시 일부 누락
+
+```dart
+// 사용자 운영 검증:
+INPUT (Speed Controller 수량) → description "조립 도면과 현물 1:1 확인 / 육안 검사" 표시 ✓
+CHECK (Sol V/V Spec / SUS Fitting / Tube 조립 / Speed Controller 방향) → description 미표시 🔴
+SELECT (MFC Spec / Flow Sensor) → description 미표시 🔴
+
+→ cowork 가 작성한 mech_checklist_screen.dart 의 _buildInputField 만 description Text 적용
+   _buildCheckRadio / _buildSelectDropdown 누락 (cowork 추측 작성 실수 #4)
+```
+
+#### ELEC/TM 에서 왜 발견 안 됐나
+
+```
+ELEC: SELECT 일부 사용 (TUBE 색상) — phase 단일 결정이라 영향 적음
+TM:   SELECT 미사용 + INPUT 미사용
+MECH: INPUT 6개 + SELECT 7개 = 본 영역 처음 노출 ⭐
+
+→ Sprint 63-BE 가 첫 SELECT/INPUT 다용 카테고리 = Root cause 1+2 첫 발견.
+```
+
+### 📐 변경 범위 (BE 1 + FE 1, ~20 LoC)
+
+#### 1) BE: `_get_checklist_by_category` SQL 의 LEFT JOIN cr_phase1 추가 (~10 LoC)
+
+> 옵션 A 채택 — phase=1 record 의 input_value/selected_value 보존. ELEC/TM 도 자동 적용 (회귀 위험 0).
+
+```python
+# backend/app/services/checklist_service.py L69~107 의 query 수정
+
+query = f"""
+    SELECT
+        cm.id          AS master_id,
+        cm.item_group,
+        cm.item_name,
+        cm.item_type,
+        cm.item_order,
+        cm.description,
+        COALESCE(cm.checker_role, 'WORKER') AS checker_role,
+        COALESCE(cm.phase1_na, FALSE) AS phase1_na,
+        COALESCE(cm.phase1_applicable, TRUE) AS phase1_applicable,
+        COALESCE(cm.qi_check_required, FALSE) AS qi_check_required,
+        cm.select_options,
+        cm.scope_rule,
+        cm.trigger_task_id,
+        cr.check_result,
+        cr.checked_by,
+        w.name         AS checked_by_name,
+        cr.checked_at,
+        cr.note,
+        -- ⭐ R1 정정 (옵션 A): phase=1 record 의 input/select 우선 (1차 데이터 inherit)
+        COALESCE(cr.input_value,    cr_p1.input_value)    AS input_value,
+        COALESCE(cr.selected_value, cr_p1.selected_value) AS selected_value
+    FROM checklist.checklist_master cm
+    LEFT JOIN checklist.checklist_record cr
+        ON cr.master_id      = cm.id
+       AND cr.serial_number  = %s
+       AND cr.judgment_phase = %s
+       AND cr.qr_doc_id     = %s
+    -- ⭐ R1 정정 (옵션 A): phase=1 record 별도 LEFT JOIN
+    LEFT JOIN checklist.checklist_record cr_p1
+        ON cr_p1.master_id      = cm.id
+       AND cr_p1.serial_number  = %s
+       AND cr_p1.judgment_phase = 1
+       AND cr_p1.qr_doc_id     = %s
+    LEFT JOIN workers w ON w.id = cr.checked_by
+    WHERE {master_filter_sql}
+      AND cm.is_active = TRUE
+    ORDER BY ...
+"""
+# params 추가: serial_number, qr_doc_id 가 cr_p1 에도 필요
+params: list = [serial_number, judgment_phase, qr_doc_id,
+                serial_number, qr_doc_id] + master_params  # ⭐ cr_p1 위한 2개 추가
+cur.execute(query, params)
+```
+
+**효과**:
+- phase=1 GET: cr (phase=1) 와 cr_p1 (phase=1) 동일 → COALESCE 첫 번째 값 사용 → 정상 작동 (현재와 동일)
+- phase=2 GET: cr (phase=2 빈) 와 cr_p1 (phase=1 데이터) → COALESCE 두 번째 값 사용 → 1차 데이터 응답 ⭐
+
+⚠️ **함정 1**: `params` 리스트에 cr_p1 의 serial_number + qr_doc_id 두 번 추가 누락 시 SQL 파라미터 mismatch → IndexError 또는 잘못된 row 매칭. **반드시 cr_p1 위치 추가 검증**.
+
+⚠️ **함정 2**: ELEC/TM 도 자동 적용. 회귀 위험 평가:
+- ELEC 의 TUBE 색상 SELECT — phase 단일 결정이라 phase=1 = phase=2 → 회귀 0
+- TM SINGLE/DUAL — INPUT 미사용 → 회귀 0
+
+#### 2) FE: `_buildCheckRadio` + `_buildSelectDropdown` 에 description 추가 (~10 LoC)
+
+> ELEC `_buildCheckItem` L898-909 패턴 차용 — _buildInputField 와 동일.
+
+```dart
+// _buildCheckRadio (현재 — description 없음)
+Widget _buildCheckRadio(Map<String, dynamic> item) {
+  final masterId = item['master_id'] as int?;
+  if (masterId == null) return const SizedBox.shrink();
+  final currentResult = _checkResultMap[masterId];
+
+  return Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+    child: Row(
+      children: [
+        Expanded(
+          child: Column(  // ⭐ Text 단일 → Column 으로 변경 (description 추가)
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                item['item_name'] as String? ?? '',
+                style: const TextStyle(fontSize: 13),
+              ),
+              // ⭐ R2 정정: description 추가 (ELEC L898-909 패턴)
+              if ((item['description'] as String?)?.isNotEmpty ?? false) ...[
+                const SizedBox(height: 2),
+                Text(
+                  item['description'] as String,
+                  style: const TextStyle(fontSize: 10, color: GxColors.silver),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ],
+          ),
+        ),
+        _resultRadio(item, 'PASS', currentResult),
+        const SizedBox(width: 8),
+        _resultRadio(item, 'NA', currentResult),
+        if (_updatingIds.contains(masterId)) ...[
+          const SizedBox(width: 8),
+          const SizedBox(
+            width: 12,
+            height: 12,
+            child: CircularProgressIndicator(strokeWidth: 1.5),
+          ),
+        ],
+      ],
+    ),
+  );
+}
+
+// _buildSelectDropdown (현재 — Text(item_name) 만)
+// 정정: Text(item_name) 다음에 description Text 추가 (이미 옵션 C 본문에 명시했지만 실 코드 적용 누락)
+Widget _buildSelectDropdown(Map<String, dynamic> item) {
+  // ... (생략) ...
+
+  return Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          item['item_name'] as String? ?? '',
+          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+        ),
+        // ⭐ R2 정정: description 추가
+        if ((item['description'] as String?)?.isNotEmpty ?? false) ...[
+          const SizedBox(height: 2),
+          Text(
+            item['description'] as String,
+            style: const TextStyle(fontSize: 10, color: GxColors.silver),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+        const SizedBox(height: 6),
+        DropdownButtonFormField<String>(
+          // ... (생략) ...
+        ),
+        // ... showPendingWarning + 라디오 (생략) ...
+      ],
+    ),
+  );
+}
+```
+
+⚠️ **함정 3**: `_buildCheckRadio` 는 현재 Row 구조 — Text 단독에서 Column 으로 변경 필요 (description 추가용). Row+Column 중첩 구조 + Expanded 정합 검증 필수.
+
+⚠️ **함정 4**: `_buildInputField` 는 이미 description 적용됨 — 별 변경 X (검증만).
+
+### ✅ 진단 SQL — phase=1 데이터 정상 저장 확인 (선행)
+
+```sql
+-- TEST-333 (또는 사용자 검증 S/N) 의 phase=1 + phase=2 record 분리 조회
+SELECT
+  master_id,
+  judgment_phase,
+  check_result,
+  input_value,
+  selected_value,
+  qr_doc_id,
+  checked_at
+FROM checklist.checklist_record
+WHERE serial_number = 'TEST-333'
+ORDER BY master_id, judgment_phase;
+```
+
+**기대**:
+- phase=1 row: input_value="1" / selected_value="MKS GE50A | ..." 정상 저장 ✓
+- phase=2 row: 부재 또는 빈 row
+
+→ phase=1 데이터 정상 저장 확인되면 **BE GET SQL fix 만으로 즉시 해소**. 만약 phase=1 도 NULL 이면 별 BE upsert fix 추가 필요.
+
+### ✅ pytest 신규 TC
+
+```python
+# tests/backend/test_mech_checklist.py 또는 test_checklist_service.py 확장
+
+def test_get_mech_checklist_phase2_inherits_phase1_input_value(client, fixture_with_phase1_input):
+    """phase=2 GET 시 phase=1 의 input_value 가 응답에 포함 (R1 fix 옵션 A)"""
+    serial_number, master_id = fixture_with_phase1_input  # phase=1 INPUT='1' 저장됨
+
+    # phase=2 GET 호출
+    response = client.get(f'/api/app/checklist/mech/{serial_number}?phase=2')
+    assert response.status_code == 200
+    body = response.get_json()
+
+    # 해당 master_id 의 item 찾기
+    target_item = None
+    for group in body['groups']:
+        for item in group['items']:
+            if item['master_id'] == master_id:
+                target_item = item
+                break
+
+    assert target_item is not None
+    # ⭐ R1 fix 검증: phase=1 의 input_value 가 phase=2 응답에 inherit
+    assert target_item['input_value'] == '1'
+
+
+def test_get_mech_checklist_phase2_inherits_phase1_selected_value(client, fixture_with_phase1_select):
+    """phase=2 GET 시 phase=1 의 selected_value 가 응답에 포함 (R1 fix 옵션 A)"""
+    serial_number, master_id = fixture_with_phase1_select  # phase=1 SELECT 'MKS GE50A | ...' 저장됨
+
+    response = client.get(f'/api/app/checklist/mech/{serial_number}?phase=2')
+    body = response.get_json()
+
+    target_item = None
+    for group in body['groups']:
+        for item in group['items']:
+            if item['master_id'] == master_id:
+                target_item = item
+                break
+
+    assert target_item is not None
+    assert target_item['selected_value'] == 'MKS GE50A | 5 SLM | 0.5 MPa | 0.1-0.7 MPa'
+```
+
+### ✅ Pre-deploy Gate
+
+```
+1. 진단 SQL 실행 (phase=1 데이터 정상 저장 확인)
+
+2. BE 변경 검증:
+   - flask_app boot 정상
+   - pytest 신규 TC 2건 PASS
+   - 기존 TM/ELEC checklist API 회귀 0 (additive JOIN)
+
+3. FE 변경 검증:
+   - flutter analyze 0 error
+   - flutter build web 빌드 성공
+
+4. 운영 검증 시나리오:
+   ✅ 1차 phase: SELECT MFC + INPUT 수량 + PASS → 저장 OK
+   ✅ 2차 phase 진입:
+     - SELECT 드롭다운 → 1차 선택값 표시 (회색 readOnly) ⭐
+     - INPUT TextField → 1차 입력값 표시 (회색 readOnly) ⭐
+     - PASS/NA 라디오 → 정상 클릭 가능
+   ✅ 모든 항목 (CHECK/SELECT/INPUT) 의 description 작은 글씨 표시 ⭐
+```
+
+### 🚀 배포 순서 — **묶음 atomic commit 권장**
+
+```
+권장: 본 sprint + FIX-SPRINT-63-MECH-CHECKLIST-ENTRY-POINT (P0) + FIX-MECH-CHECKLIST-PHASE2-READONLY-AND-VALIDATION (P0) 묶음
+
+1. 단일 atomic commit:
+   git add backend/app/services/checklist_service.py
+   git add backend/app/routes/work.py                           # entry point hotfix
+   git add frontend/lib/screens/checklist/mech_checklist_screen.dart
+   git add frontend/lib/screens/task/task_detail_screen.dart    # entry point hotfix
+   git add tests/backend/test_mech_checklist.py                  # 신규 TC
+   git commit -m "fix(sprint-63): 2차 inherit + description + 진입점 + read-only (P0 묶음)
+
+    Sprint 63 prod 활성화 piece — v2.11.X 운영 검증 후 catch:
+      - BE: _get_checklist_by_category SQL 에 cr_phase1 LEFT JOIN + COALESCE
+            → phase=2 GET 시 phase=1 input_value/selected_value inherit
+      - FE: _buildCheckRadio + _buildSelectDropdown 에 description Text 추가
+            → 모든 위젯 (CHECK/SELECT/INPUT) description 일관 표시
+      - (묶음) 진입점: work/start MECH 분기 + task_detail 5 위치
+      - (묶음) read-only: phase=2 TextField/Dropdown disabled
+      - (묶음) 옵션 C: PASS/NA 미선택 경고
+
+    회귀 위험: 0 (BE additive JOIN + FE Text 추가, ELEC/TM 무영향)
+    pytest: phase2_inherits_phase1_input_value + selected_value 신규
+    Refs: FIX-MECH-CHECKLIST-PHASE2-DATA-AND-DESCRIPTION-20260504"
+
+2. git push origin main → Railway + Netlify 동시 배포
+3. 1~2분 후 prod 검증 (위 Pre-deploy Gate #4 시나리오)
+```
+
+### 📦 Rollback
+
+```
+git revert <commit-sha>
+→ BE checklist_service.py + FE mech_checklist_screen.dart 등 원복
+→ Railway + Netlify 자동 재배포
+→ 이전 상태 (v2.11.1 prod) 복귀
+
+위험: 0 (rollback 후 사용자 영향 = 이전과 동일)
+부분 rollback: 안전 (BE 만 revert / FE 만 revert 둘 다 가능)
+```
+
+### 📋 BACKLOG 동기화
+
+```
+FIX-MECH-CHECKLIST-PHASE2-DATA-AND-DESCRIPTION-20260504  🔴 P0
+  → ✅ COMPLETED (v2.11.X 예정, 2026-05-XX, 묶음 commit)
+  ├─ BE _get_checklist_by_category SQL 의 cr_phase1 LEFT JOIN + COALESCE
+  ├─ FE _buildCheckRadio + _buildSelectDropdown 에 description 추가
+  ├─ pytest TC 2건 신규 (input_value / selected_value inherit)
+  └─ Sprint 63 2차 검수 흐름 정식 활성화
+```
+
+### 🤝 Cowork 추측 작성 실수 trail #5 (재발 방지 ADR-023, 2026-05-06 보강)
+
+```
+누적 5건:
+  1. GxColors.background/surface/mistLight (commit 21c581e 사용자 fix)
+  2. check_result null 처리 (BE 400, 사용자 운영 catch)
+  3. ELEC `_get_checklist_by_category` SQL 차용 시 phase 단일 join 한계 미파악
+  4. description 표시 영역 _buildInputField 만 적용 + _buildCheckRadio/_buildSelectDropdown 누락
+  5. ELEC-only 초기화 SQL 컬럼명 — completion_status.ee_completed (실제 elec_completed)
+     + task_category='EE' (실제 'ELEC'). 003 마이그레이션만 보고 006 RENAME 누락 ⭐ NEW
+
+재발 방지 표준 (memory.md ADR-023, 2026-05-06 보강):
+  Flutter 영역
+  ✅ ELEC 패턴 1:1 검증 (단순 차용 X)
+  ✅ 모든 동등 위젯 (3 종) 동일 적용 검증 — _build* 함수 일관성
+  ✅ BE SQL 차용 시 신규 카테고리 영향 (SELECT/INPUT 다용) 검토
+  ✅ 신규 작성 후 화면 진입 + 모든 입력 타입 운영 검증
+  ❌ 추측해서 작성 X
+
+  DB / SQL 영역 (보강 신규)
+  ✅ 마이그레이션 시간순 전체 grep — CREATE + 후속 ALTER/RENAME 모두 확인
+  ✅ 코드 cross-check — services / routes / migrations 의 실제 값 grep
+  ✅ information_schema 검증 SQL 동봉 — 사용자에게 사전 확인 권고
+  ✅ 트랜잭션 BEGIN/COMMIT + 검증 쿼리 동봉
+  ✅ 단일 row 다중 컬럼 테이블 (completion_status 등) row DELETE 금지, UPDATE 만
+  ❌ 마이그레이션 코멘트 표기 그대로 신뢰 X (`-- MM, EE, ...` → 실제는 'MECH', 'ELEC')
+  ❌ 초기 CREATE 마이그레이션만 보고 후속 RENAME 무시 X
+```
+
+### 📝 사후 기록 양식 (배포 후)
+
+```
+✅ 배포 완료 (2026-05-XX HH:MM KST, v2.11.X)
+  ├─ commit: <sha> (묶음 atomic)
+  ├─ Railway + Netlify 정상 ✓
+  ├─ pytest test_mech_checklist 신규 TC 2/2 PASS ✓
+  └─ Sentry 새 ERROR 0건 ✓
+
+운영 검증 시나리오 (15분):
+  ├─ 1차 SELECT + INPUT + PASS 입력 → 저장 OK: ___ (Y/N)
+  ├─ 2차 진입 → SELECT 1차값 표시 (회색): ___ (Y/N)
+  ├─ 2차 진입 → INPUT 1차값 표시 (회색): ___ (Y/N)
+  ├─ 2차 PASS/NA 클릭 → 저장 OK: ___ (Y/N)
+  ├─ CHECK 위젯 description 표시: ___ (Y/N)
+  ├─ SELECT 위젯 description 표시: ___ (Y/N)
+  └─ INPUT 위젯 description 표시 (이미 적용): ___ (Y/N)
+
+진단 SQL 결과:
+  ├─ phase=1 input_value 정상 저장: ___ (Y/N)
+  ├─ phase=1 selected_value 정상 저장: ___ (Y/N)
+  └─ phase=2 GET 응답에 phase=1 데이터 inherit: ___ (Y/N)
+
+→ 모두 Y → COMPLETED + Sprint 63 정식 활성화
+memory.md ADR-023 (재발 방지): ___ (Y/N)
+```
+
