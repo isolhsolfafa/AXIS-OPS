@@ -11,11 +11,12 @@
 ## 🧭 한눈에 (현재 상태, 2026-05-04 월요일 마감)
 
 ```
-현재 버전 : v2.11.6 (2026-05-06, main commit — DB Pool 자가 회복 keepalive + warmup self-recovery)
-최근 작업 : ✅ v2.11.6 — FIX-DB-POOL-SELF-RECOVERY (P1, BE only ~30 LOC + pytest 4 TC). 4-29 23:31 + 5-04 11:38 KST 5일 주기 사고 차단 — 2단계 root cause (Railway proxy idle TCP disconnect + ThreadedConnectionPool _used dict dead conn 정리 부재) 해소. keepalive 4 args (idle=60/interval=10/count=3) + warmup 0/0 연속 3 cycles 시 close+init 자가 회복 + logger.error → Sentry capture. ADR-025 신설.
+현재 버전 : v2.11.7 (2026-05-06, main commit — Sprint 65-BE MECH 성적서 분기 hotfix)
+최근 작업 : ✅ v2.11.7 — Sprint 65-BE MECH 체크리스트 성적서 분기 hotfix (P1, BE only ~25 LoC + pytest 3 TC / 22/22 PASS). VIEW `/partner/report` MECH input_value '—' 표시 fix — `else` → `elif cat == 'MECH':` 명시 분기 + ELEC 패턴 (Phase 1/2 분리) + `_normalize_qr_doc_id(sn)` 명시 호출 (모바일 앱 정합). Codex 1차 P1~P5 전건 반영 (VIEW FE prerequisite 통과 + pytest 3 + REFACTOR BACKLOG + 문서 자취 + DUAL TODO). ADR-026 신설.
+선행 작업 : v2.11.6 — FIX-DB-POOL-SELF-RECOVERY (BE only ~30 LOC + pytest 4 TC). 4-29 23:31 + 5-04 11:38 KST 5일 주기 사고 차단 — keepalive + warmup 자가 회복. ADR-025 신설.
 이전 트랙 : v2.11.5 phase=2 inherit + CHECK desc / v2.11.4 옵션 C UI / v2.11.3 R1 null + R2 read-only / v2.11.2 진입점 / v2.11.1 Sprint 63-FE / v2.11.0 Sprint 63-BE / v2.10.17 HOTFIX-09
 이전 트랙 : v2.10.16 watchdog / v2.10.15 access_log 90d / v2.10.14 KPI v2.4 / v2.10.13 묶음 / v2.10.12 DURATION_WARNINGS
-진행 중   : staging 1h 관찰 + T+24h + T+1주 (5-09 ± 1d) 효과 정량 검증
+진행 중   : ✅ T+1h CLEAN PASS (5-06: V1.1 5/5×3 + V1.2 TCP_OVERWINDOW 제어 패킷 only + V1.3 Sentry 0) → ⏳ T+24h (5-07) → ⏳ T+1주 (5-09 ± 1d) 효과 정량 검증
 대기 중   : push (퇴근 후 main + Railway 자동 재배포) / AXIS-VIEW Sprint 39 (~0.5d, 별 repo) / BUG-TM-...-STALE-TC (P3, 1h)
 ```
 

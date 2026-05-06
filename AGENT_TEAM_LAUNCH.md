@@ -37629,9 +37629,9 @@ memory.md ADR-023 (재발 방지): ___ (Y/N)
 
 ---
 
-## Sprint 65-BE — MECH 체크리스트 성적서 분기 hotfix (Sprint 39 후속, 2026-05-05 등록)
+## Sprint 65-BE — MECH 체크리스트 성적서 분기 hotfix (Sprint 39 후속, 2026-05-05 등록, 🟢 Codex 1차 검증 5건 전건 반영)
 
-> 등록일: 2026-05-05 | 상태: 🔴 **HOTFIX** — 즉시 구현/배포 권장
+> 등록일: 2026-05-05 | 상태: 🟢 **HOTFIX 구현 진입 가능** (Codex 1차 P1~P5 전건 반영, P1 prerequisite 검증 통과)
 > 트랙: OPS BE (단일 파일 / ~25 LOC)
 > 선행: Sprint 63-BE ✅ (MECH master 73 항목), VIEW Sprint 39 ✅ (구현 + 1 hotfix 완료)
 > 트리거: Twin파파 운영 검증 (2026-05-05) — `/partner/report` 성적서에서 MECH 입력값(input_value)이 '—' 로만 렌더링
@@ -37885,5 +37885,107 @@ LEFT JOIN checklist.checklist_record cr
 - VIEW `/partner/report` 페이지의 MECH 섹션 input_value 정상 표시
 - Phase 1 / Phase 2 두 섹션 분리 노출
 - ELEC / TM 회귀 0건
-- pytest GREEN
-- v2.10.x → v2.10.(N+1) 패치 릴리스 (CHANGELOG + version.py + git tag)
+- pytest GREEN (신규 TC 2건 포함)
+- v2.11.6 → v2.11.7 패치 릴리스 (CHANGELOG + version.py + app_version.dart + git tag)
+
+## Codex 1차 검증 결과 반영 (2026-05-05, 5건 전건)
+
+> **Codex 평가 — B+ → A** (P1 prerequisite 검증 통과 + P2~P5 반영 후)
+
+### 🔴 P1 — VIEW FE schema 정합 prerequisite (검증 통과 ✅)
+
+| 검증 항목 | 결과 |
+|---|---|
+| `ChecklistReportView L177-178` categories.map 처리 | ✅ entry 개수 무관 정상 처리 (배열 길이만큼 CategoryTable 렌더) |
+| `ChecklistReportView L202-203` phase_label 표시 로직 | ✅ `cat.phase_label && — ${cat.phase_label}` 이미 구현됨 |
+| `types/checklist.ts L109-113` phase/phase_label optional | ✅ 타입 이미 `phase?: number / phase_label?: string` (주석은 "ELEC 전용" 이지만 실제 optional 이라 MECH 도 호환) |
+| ELEC 의 동일 패턴 운영 검증 | ✅ ELEC 가 이미 phase 1/2 분리 응답 + VIEW 측 정상 렌더 중 — MECH 도 동일 패턴으로 자동 정상 동작 |
+
+→ **VIEW FE 변경 0건 주장 유효**. Atomic deploy 불필요. BE 단독 hotfix 안전.
+
+### 🟠 P2 — 신규 pytest TC 2건 추가 (구현 단계 검증 강화)
+
+```python
+# tests/services/test_checklist_service.py 신규 추가
+
+def test_get_checklist_report_mech_qr_doc_id_match():
+    """MECH record 가 'DOC_<sn>' 로 저장됐을 때 input_value 정상 반환 (P2-1)"""
+    # Given: MECH record (master_id=149, qr_doc_id='DOC_TEST-1111', input_value='1')
+    # When: get_checklist_report('TEST-1111')
+    # Then: response.categories[?cat=='MECH', phase==1].items[?master_id==149].input_value == '1'
+
+def test_get_checklist_report_mech_phase_split():
+    """응답에 cat=MECH 의 phase=1, phase=2 두 entry 분리 확인 (P2-2)"""
+    # Given: MECH record (phase=1 only)
+    # When: get_checklist_report('TEST-1111')
+    # Then: phase=1 entry 존재 (items > 0), phase=2 entry 없음 (total=0 으로 자동 제외)
+    # Then: phase_label 이 '1차 입력' 으로 표시됨
+```
+
+### 🟠 P3 — REFACTOR-CHECKLIST-PHASE-SPLIT BACKLOG 등록 (후속)
+
+ELEC L443-461 + Sprint 65-BE MECH 분기가 phase_label 텍스트 + qr_doc_id 명시 여부만 차이. 향후 PI/QI/SI 신규 카테고리 도입 시 또 중복 추가 위험.
+
+→ **`OPS-CHECKLIST-PHASE-SPLIT-REFACTOR-01` BACKLOG 별도 등록** (~1h):
+
+```python
+def _get_phase_split_categories(
+    cur, serial_number, category, product_code, scope,
+    phase_labels: List[Tuple[int, str]],
+    qr_doc_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """ELEC/MECH/PI/QI/SI 공용 헬퍼 — Phase 1/2 분리 처리"""
+    results = []
+    for phase_num, phase_label in phase_labels:
+        p_data = _get_checklist_by_category(
+            cur, serial_number, category, product_code, scope, phase_num,
+            qr_doc_id=qr_doc_id or '',
+        )
+        if phase_num == 1:
+            p_data['items'] = [i for i in p_data['items'] if i.get('phase1_applicable', True)]
+        ...
+        if total > 0:
+            results.append(p_data)
+    return results
+```
+
+호출부:
+```python
+elif cat == 'ELEC':
+    categories.extend(_get_phase_split_categories(..., [(1, '1차 배선'), (2, '2차 배선')]))
+elif cat == 'MECH':
+    categories.extend(_get_phase_split_categories(..., [(1, '1차 입력'), (2, '2차 검수')], qr_doc_id=_normalize_qr_doc_id(serial_number)))
+```
+
+### 🟡 P4 — handoff / CHANGELOG / BACKLOG 자취 추가
+
+본 hotfix 등록 후 OPS handoff/CHANGELOG/BACKLOG 에 자취 추가:
+- `handoff.md`: "🔥 HOTFIX-MECH-REPORT (Sprint 65-BE) — 운영 검증 trigger"
+- `CHANGELOG.md`: "v2.10.(N+1) — MECH 성적서 input_value '—' 표시 hotfix"
+- `BACKLOG.md`: REFACTOR-CHECKLIST-PHASE-SPLIT 신규 (P3 후속)
+
+### 🟡 P5 — DUAL INLET L/R 분리 TODO 코드 주석 추가
+
+코드 변경 본문에 명시:
+
+```python
+elif cat == 'MECH':
+    # Sprint 65-BE hotfix (2026-05-05): ELEC 패턴 + qr_doc_id 명시
+    # 모바일 앱 _normalizeQrDocId(sn) = 'DOC_<sn>' 와 정확히 일치 매칭
+    #
+    # TODO (다음 응용): DUAL INLET S/N L/R 분리 처리
+    #   - 현재 운영 데이터 0건 (모든 record SINGLE-style 'DOC_<sn>')
+    #   - 향후 worker 가 INLET L/R 별도 입력 시 또는 DRAGON DUAL INLET 분리 시:
+    #     qr_doc_ids = [(_normalize_qr_doc_id(sn, 'L'), 'L'), (_normalize_qr_doc_id(sn, 'R'), 'R'), ...]
+    #     → TM 패턴 (L468-485) 차용
+    #   - BACKLOG: FIX-MECH-DUAL-INLET-L-R-SEPARATION (별 hotfix, 운영 데이터 발생 시)
+    qr_doc_id_for_mech = _normalize_qr_doc_id(serial_number)
+    ...
+```
+
+## 후속 BACKLOG 등록 권장
+
+| ID | 우선순위 | 설명 | 트리거 |
+|---|---|---|---|
+| `OPS-CHECKLIST-PHASE-SPLIT-REFACTOR-01` | 🟡 LOW | ELEC + MECH (+ 향후 PI/QI/SI) 의 phase 분리 로직 헬퍼 함수 추출 (P3) | 신규 카테고리 도입 시점 또는 코드 정리 슬롯 확보 시 |
+| `FIX-MECH-DUAL-INLET-L-R-SEPARATION` | 🟡 LOW | DUAL DRAGON 모델의 INLET S/N L/R 분리 record 발생 시 hotfix (P5 TODO) | 운영 데이터로 INLET L/R record 발생 시점 |

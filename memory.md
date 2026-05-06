@@ -2,11 +2,63 @@
 
 > 세션 간 누적되는 의사결정, 아키텍처 판단, 감사 결과를 기록합니다.
 > CLAUDE.md = 프로젝트 고정 정보 / memory.md = 누적 학습 / handoff.md = 세션 인계
-> 마지막 업데이트: 2026-05-06 (ADR-025 신규 — DB Pool 자가 회복 메커니즘 v2.11.6)
+> 마지막 업데이트: 2026-05-06 (ADR-026 신규 — 신규 체크리스트 카테고리 phase split 표준 v2.11.7)
 
 ---
 
 ## 1. 아키텍처 의사결정 기록 (ADR)
+
+### ADR-026: 신규 체크리스트 카테고리 phase split 표준 (2026-05-06, v2.11.7 Sprint 65-BE)
+
+**맥락**: Sprint 65-BE — VIEW `/partner/report` 성적서 MECH 섹션 input_value 가 `—` 로 렌더링. Root cause: `get_checklist_report` 의 `else` 분기에서 `qr_doc_id=''` (default) 로 SELECT → DB record (`DOC_<sn>`) 와 매칭 0건. 근본 원인 = 카테고리별 phase split 패턴 비일관 (ELEC 만 분리, MECH/TM 미분리).
+
+**결정 — 카테고리별 phase split 적용 기준 표준화**:
+
+| 카테고리 | phase split | qr_doc_id 처리 | 이유 |
+|:---:|:---:|:---|:---|
+| **ELEC** | ✅ Phase 1/2 | default `''` (모바일도 `''` 송신) | 1차 배선 → 2차 배선 흐름, 양쪽 빈 문자열 매칭 OK |
+| **MECH** | ✅ Phase 1/2 | `_normalize_qr_doc_id(sn)` 명시 = `'DOC_<sn>'` | 1차 입력 → 2차 검수 흐름, 모바일 앱 `_normalizeQrDocId` 와 정확 일치 (Sprint 65-BE) |
+| **TM** | ❌ SINGLE 흐름 | DUAL/SINGLE 분기 (`'DOC_<sn>-L/R'` 또는 `'DOC_<sn>'`) | Tank Module 검사는 1회 완료, phase 분리 무의미 |
+| **PI/QI/SI** (미래) | 도입 시 결정 | 케이스별 검토 | 성적서 응답 schema 정합 검증 후 분기 |
+
+**Phase split 적용 시 필수 영역**:
+1. BE `checklist_service.py get_checklist_report` 분기 추가
+2. `phase_label` 한국어 라벨 명시 (`'1차 입력'` vs `'2차 검수'` 등 카테고리별 적합)
+3. `phase1_applicable=False` 항목 자동 제외 (Sprint 60-BE 컬럼 기반)
+4. `total > 0` 조건으로 빈 phase 자동 제외
+5. VIEW FE `ChecklistReportView` 측 `cat.phase_label` 표시 로직 (이미 ELEC 패턴 일반화됨)
+
+**Phase split 미적용 (TM 패턴) 시 필수 영역**:
+1. `qr_doc_ids` 배열 (DUAL 시 L/R 분리)
+2. `qr_doc_id` 명시 호출 (`_normalize_qr_doc_id(sn, 'L')` 등)
+
+**적용 흐름** (신규 카테고리 도입 시):
+```
+1. 카테고리 워커 입력 흐름 분석:
+   - 1차 → 2차 분리 흐름 → Phase split 적용 (ELEC/MECH 패턴)
+   - 1회 완료 흐름 → SINGLE 분기 (TM 패턴)
+2. qr_doc_id 모바일 앱 송신 패턴 확인:
+   - 빈 문자열 송신 → BE default `''` 매칭 OK
+   - `'DOC_<sn>'` 송신 → BE `_normalize_qr_doc_id` 명시 호출 필수
+3. BE/VIEW FE 회귀 검증:
+   - pytest TC 신규 (qr_doc_id 매칭 + phase 분리)
+   - VIEW `ChecklistReportView` 의 categories.map / phase_label 처리 검증
+```
+
+**위험 + 대응**:
+- 신규 카테고리 도입 시 `else` fallback 사용하면 record 매칭 실패 가능 (Sprint 65-BE 사고 패턴 재발) → 명시 분기 강제
+- 코드 중복 (ELEC + MECH 거의 1:1) → `OPS-CHECKLIST-PHASE-SPLIT-REFACTOR-01` BACKLOG 등록
+
+**검증 trail**:
+- pytest 3 TC 신규 (qr_doc_id 매칭 + phase 분리 + ELEC/TM 회귀 0)
+- 운영 검증: TEST-1111 / TEST-2222 SN 의 MECH 섹션 input_value 정상 표시
+- VIEW FE 변경 0건 입증 (4 angle prerequisite 검증 통과)
+
+**선행/후속**:
+- 선행: Sprint 39 (FE) ✅, Sprint 63-BE ✅ (master 73), Sprint 60-BE ✅ (phase1_applicable 컬럼)
+- 후속: REFACTOR-CHECKLIST-PHASE-SPLIT (헬퍼 함수 추출, P3 LOW), FIX-MECH-DUAL-INLET-L-R-SEPARATION (운영 데이터 발생 시)
+
+---
 
 ### ADR-025: DB Pool 자가 회복 메커니즘 — keepalive + warmup self-recovery (2026-05-06, v2.11.6)
 

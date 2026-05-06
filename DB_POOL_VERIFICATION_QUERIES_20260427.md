@@ -473,12 +473,22 @@ railway logs --tail 100 2>&1 | grep -E "Connection pool initialized|warmup|Sentr
 (Sentry initialized 메시지 — 4-27 v2.10.8 부터)
 ```
 
-**결과 기록**:
+**결과 기록** (2026-05-06 측정):
 ```
-실행 시각: ___ KST
-boot 메시지 정합: ___ (Y/N)
-이상 로그: ___
+실행 시각: 2026-05-06 ~17:00 KST (배포 후 ~T+10h, 첫 검증 cycle)
+boot 메시지 정합: Y
+  ├─ 07:02:56 [db_pool] Connection pool initialized: min=5, max=30, max_age=300s, connect_timeout=5s (worker 1)
+  └─ 07:02:56 [db_pool] Connection pool initialized: min=5, max=30, max_age=300s, connect_timeout=5s (worker 2)
+warmup 5/5 cycle 정상 (3회 연속 sample):
+  ├─ 08:03:06 [pool_warmup] 5/5 conn warmed
+  ├─ 08:08:06 [pool_warmup] 5/5 conn warmed
+  └─ 08:13:06 [pool_warmup] 5/5 conn warmed
+APScheduler interval[0:05:00] 정확 (간격 5분)
+0/0 cycles: 0건 (자가 회복 trigger 미작동 = 정상)
+이상 로그: 없음
 ```
+
+→ ✅ **CLEAN PASS** — 2 worker boot + warmup 정상 작동 입증.
 
 ---
 
@@ -491,13 +501,31 @@ railway logs --since 1h 2>&1 | grep -iE "TCP_OVERWINDOW|keepalive|connection res
 
 **기대**: 출력 0줄 (Sprint 30-B 충돌 패턴 재발 없음)
 
-**결과 기록**:
+**결과 기록** (2026-05-06 측정):
 ```
-실행 시각: ___ KST
-충돌 출력 라인 수: ___
-TCP_OVERWINDOW: ___ (0건 / 발견)
-ECONNRESET: ___ (0건 / 발견)
+실행 시각: 2026-05-06 ~17:00 KST (네트워크 monitor capture)
+충돌 출력 라인 수: 다수 (제어 평면만)
+TCP_OVERWINDOW: 발견 (단 제어 패킷 66 B 만)
+ECONNRESET: 0건
+keepalive: Y (활성, 정상)
 ```
+
+**패턴 분석** (Wireshark/tcpdump style 출력):
+```
+방향                                                상태
+66.33.22.251:38813 → 10.190.83.40:varies  TCP_OVERWINDOW   (66 B)
+10.190.83.40:varies → 66.33.22.251:38813  OK               (66 B)
+```
+
+- `66.33.22.251:38813`: Railway Postgres proxy (server side)
+- `10.190.83.40:varies`: gunicorn worker conn (ephemeral ports)
+- **packet size 66 B** = TCP 제어 패킷 (페이로드 없음, keepalive ACK 추정)
+- 모든 OVERWINDOW 직후 즉시 OK 응답 → TCP 스택 자동 복구
+- 응용 레이어 (psycopg2 / Flask) 영향 0 — V1.1 의 5/5 cycle 정상 작동이 입증
+
+**Sprint 30-B 회귀 판정**: ❌ **회귀 NO** — 진짜 회귀이면 5/5 → 0/5 또는 boot 실패가 보였어야 함. 제어 평면 noise 만.
+
+→ ⚠️ **MONITOR (non-critical)** — 5-09 시점에 빈도 급증 또는 66 B 초과 패킷 출현 시 별 sprint `OBSERV-TCP-OVERWINDOW-RAILWAY-PROXY` 등록 필요.
 
 ---
 
@@ -513,12 +541,29 @@ https://sentry.io 접속 →
 
 **기대**: 신규 issue 0건
 
-**결과 기록**:
+**결과 기록** (2026-05-06 측정):
 ```
-조회 시각: ___ KST
-신규 issue 수: ___
-issue 제목 (있으면): ___
+조회 시각: 2026-05-06 ~17:00 KST
+신규 issue 수: 0 (Last 1 hour, Level: error)
+new events: 0 (Sentry 검색 결과 NaN/없음)
+issue 제목: 없음
 ```
+
+→ ✅ **CLEAN PASS** — 앱 레이어 ERROR 0건. v2.10.8 Sentry 도입 (4건 silent failure 자동 감지 가치 입증) 후 첫 1시간 운영 quiet.
+
+**의미**: TCP_OVERWINDOW (V1.2) 가 발생해도 SQL/Flask 레벨 ERROR 로 escalate 안 됨 = TCP 스택 자동 복구가 정상 작동 중.
+
+---
+
+## 📋 T+1h 종합 판정 (2026-05-06)
+
+| Query | 결과 | 판정 |
+|:---|:---:|:---:|
+| V1.1 boot + warmup 5/5 × 3 | 5/5 × 3 cycle 정상 | ✅ PASS |
+| V1.2 TCP_OVERWINDOW | 제어 패킷 66 B 만, 즉시 OK | ⚠️ MONITOR (non-critical) |
+| V1.3 Sentry new events | 0건 확정 | ✅ PASS |
+
+**T+1h 종합**: ✅ **CLEAN** — keepalive + 자가 회복 메커니즘 적용 후 첫 1시간 운영 안정. 다음 체크포인트 5-07 (T+24h, V2.1~V2.3).
 
 ---
 

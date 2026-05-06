@@ -481,8 +481,47 @@ def get_checklist_report(serial_number: str, judgment_phase: int = 1) -> Dict[st
                     if t_data['summary']['total'] > 0:
                         categories.append(t_data)
 
+            elif cat == 'MECH':
+                # ── Sprint 65-BE hotfix (2026-05-06, v2.11.7): ELEC 패턴 + qr_doc_id 명시 ──
+                # 모바일 앱 _normalizeQrDocId(sn) = 'DOC_<sn>' 와 정확히 일치 매칭.
+                # 이전 else 분기는 qr_doc_id='' 로 SELECT → DB record (DOC_<sn>) 매칭 0건 →
+                #   VIEW 성적서 input_value '—' 표시 (5-05 운영 catch).
+                #
+                # TODO (다음 응용): DUAL INLET S/N L/R 분리 처리
+                #   - 현재 운영 데이터 0건 (모든 record SINGLE-style 'DOC_<sn>')
+                #   - 향후 worker 가 INLET L/R 별도 입력 시 또는 DRAGON DUAL INLET 분리 시:
+                #     qr_doc_ids = [(_normalize_qr_doc_id(sn, 'L'), 'L'), (_normalize_qr_doc_id(sn, 'R'), 'R'), ...]
+                #     → TM 패턴 (L463-482) 차용
+                #   - BACKLOG: FIX-MECH-DUAL-INLET-L-R-SEPARATION (운영 데이터 발생 시)
+                qr_doc_id_for_mech = _normalize_qr_doc_id(serial_number)
+
+                for phase_num, phase_label in [(1, '1차 입력'), (2, '2차 검수')]:
+                    p_data = _get_checklist_by_category(
+                        cur, serial_number, cat, product_code, scope, phase_num,
+                        qr_doc_id=qr_doc_id_for_mech,
+                    )
+                    # Phase 1: phase1_applicable=False 항목 제외 (Sprint 60-BE 컬럼 기반)
+                    if phase_num == 1:
+                        p_data['items'] = [
+                            i for i in p_data['items']
+                            if i.get('phase1_applicable', True)
+                        ]
+                    items = p_data['items']
+                    total = len(items)
+                    checked = sum(1 for i in items if i.get('check_result') in ('PASS', 'NA'))
+                    p_data['summary'] = {
+                        'total': total,
+                        'checked': checked,
+                        'percent': round(checked / total * 100, 1) if total > 0 else 0.0,
+                    }
+                    p_data['phase'] = phase_num
+                    p_data['phase_label'] = phase_label
+                    if total > 0:
+                        categories.append(p_data)
+
             else:
-                # ── MECH 등: 기존 그대로 qr_doc_id='' 사용 ──
+                # 잠재 신규 카테고리(PI/QI/SI 등) — 기본 fallback (qr_doc_id='')
+                # ⚠️ 신규 카테고리 도입 시 ADR-026 표준 검토 후 명시 분기 추가 권장
                 cat_data = _get_checklist_by_category(
                     cur, serial_number, cat, product_code, scope, judgment_phase
                 )

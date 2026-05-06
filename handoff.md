@@ -1,7 +1,45 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-06 KST (✅ **v2.11.6 — DB Pool 자가 회복 메커니즘 완료**, BE only ~30 LOC + pytest 4 TC / 8/8 PASS, 5-09 ± 1d 재발 차단)
+> 마지막 업데이트: 2026-05-06 KST (✅ **v2.11.7 — Sprint 65-BE MECH 성적서 분기 hotfix 완료**, BE only ~25 LOC + pytest 3 TC / 22/22 PASS, ADR-026 신설)
+
+## ✅ Sprint 65-BE — 정식 종료 (v2.11.7 release, 2026-05-06)
+
+### v2.11.7 변경 (5-05 Twin파파 운영 검증 trigger)
+
+- **BE**: `backend/app/services/checklist_service.py` 단일 파일 (~25 LOC)
+  - `else` → `elif cat == 'MECH':` 명시 분기 + ELEC 패턴 (Phase 1/2 분리: '1차 입력' / '2차 검수')
+  - `_normalize_qr_doc_id(serial_number)` 명시 호출 = `'DOC_<sn>'` (모바일 앱 정합)
+  - `phase1_applicable=False` 항목 자동 제외 + DUAL INLET TODO 주석 명시
+  - 기존 `else` 보존 → PI/QI/SI 잠재 신규 카테고리 fallback (ADR-026 표준)
+- **TEST**: `tests/backend/test_sprint54_checklist_report.py` 신규 TC 3 (`TestSprint65MechReportBranch`)
+  - TC-65-01 qr_doc_id 매칭 + input_value 반환 / TC-65-02 phase split + phase_label / TC-65-03 TM 회귀 0
+  - 결과: 22/22 PASS (전 sprint54 GREEN)
+- **memory.md ADR-026** 신설 — 신규 체크리스트 카테고리 phase split 표준
+- **버전**: `version.py` + `app_version.dart` v2.11.6→v2.11.7
+
+Frontend 변경 없음 → Netlify deploy 불필요. version.py + app_version.dart 양쪽 v2.11.7 동기화.
+
+### Codex 1차 검증 P1~P5 전건 반영
+
+- 🔴 P1 VIEW FE schema 정합 — 4 angle prerequisite 통과 (entry 개수 무관 + phase_label 이미 구현 + optional 타입 + ELEC baseline 운영 검증)
+- 🟠 P2 신규 pytest TC 2건 + 회귀 1건 (총 3 TC)
+- 🟠 P3 REFACTOR-CHECKLIST-PHASE-SPLIT BACKLOG 등록 (헬퍼 함수 추출, P3 LOW)
+- 🟡 P4 handoff/CHANGELOG/BACKLOG/memory ADR-026 자취 추가
+- 🟡 P5 DUAL INLET L/R 분리 TODO 주석 + BACKLOG ID 명시
+
+### 사용자 검증 plan (배포 후)
+
+- VIEW `/partner/report` 페이지 TEST-1111 검색 → 기구 섹션 input_value 정상 표시 (1, 11 등)
+- 작업자 이름 / 확인 일시 정상 표시
+- Phase 1 / Phase 2 두 섹션 분리 노출 (ELEC 와 동일 패턴)
+- ELEC / TM 카테고리 영향 없음
+
+### Rollback
+
+git revert <commit-sha> → v2.11.6 복귀. 위험: 0 (사용자 영향 = 이전과 동일, '—' 표시로 회귀).
+
+---
 
 ## ✅ FIX-DB-POOL-SELF-RECOVERY-20260504 — 정식 종료 (v2.11.6 release, 2026-05-06)
 
@@ -23,9 +61,13 @@ git push origin main
 Frontend 변경 없음 → Netlify deploy 불필요. version.py + app_version.dart 양쪽 v2.11.6 동기화.
 
 ### 관찰 plan
-- **T+1h**: Railway logs `[db_pool] Connection pool initialized` 정상 + Sentry 신규 issue 0
-- **T+24h**: warmup cron 정상 5/5 패턴 유지 (288 cycles) + `_consecutive_zero_warmup` 누적 0
-- **T+1주 (5-09 ± 1d)**: 재발 0 (keepalive 차단) 또는 자가 회복 작동 → COMPLETED 판정
+- **T+1h** (2026-05-06): ✅ **CLEAN PASS**
+  - V1.1 boot + warmup 5/5 × 3 cycle 정상 (`pool_warmup` 5분 cron 간격 정확)
+  - V1.2 TCP_OVERWINDOW: 제어 패킷 66 B 만, 즉시 OK 응답 → ⚠️ MONITOR (non-critical, Sprint 30-B 회귀 NO)
+  - V1.3 Sentry new events: 0건 확정
+  - 0/0 cycles: 0건 (자가 회복 trigger 미작동 = 정상)
+- **T+24h** (2026-05-07): warmup cron 정상 5/5 패턴 유지 (288 cycles) + `_consecutive_zero_warmup` 누적 0
+- **T+1주 (5-09 ± 1d)**: 재발 0 (keepalive 차단, 시나리오 A) 또는 자가 회복 작동 (시나리오 B) → COMPLETED 판정
 
 ### Rollback
 git revert <commit-sha> → 이전 동작 (keepalive OFF + 자가 회복 X) 복귀. 위험: 5-09 ± 1d 재발 시 Restart 수동 필요. Sprint 30-B Railway proxy 충돌 재발 시 keepalive 만 제거 (부분 rollback OK).

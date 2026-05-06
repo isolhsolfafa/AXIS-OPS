@@ -6,6 +6,61 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.11.7] - 2026-05-06 — Sprint 65-BE MECH 성적서 분기 hotfix (qr_doc_id 명시, BE only, P1)
+
+> VIEW `/partner/report` 성적서 MECH 섹션의 input_value 가 '—' 로 렌더링되는 문제 hotfix. Root cause: `get_checklist_report` 의 `else` 분기에서 `qr_doc_id=''` (default) 로 SELECT → DB record (`DOC_<sn>`) 와 매칭 0건 → LEFT JOIN cr 컬럼 NULL → VIEW '—' 표시. ELEC 패턴 차용 (Phase 1/2 분리) + `_normalize_qr_doc_id()` 명시 호출로 모바일 앱 record 정확 매칭. ADR-026 신설.
+
+### Root cause
+
+- 모바일 앱 INSERT: `qr_doc_id = 'DOC_TEST-1111'` (`_normalizeQrDocId(sn)` 결과, 정상)
+- VIEW 성적서 GET → BE `else` 분기 → `qr_doc_id = ''` (default) 로 SELECT
+- SQL `cr.qr_doc_id = ''` ↔ DB row `qr_doc_id = 'DOC_TEST-1111'` → 매칭 0건
+- LEFT JOIN cr 컬럼 NULL → `item.input_value ?? '—'` → 화면 '—' 표시
+- 운영 검증 (5-05): `master_id IN (149, 158, 163, 176)` record 정상 (`input_value='1', '11'` 등) — fix 후 정상 표시 기대
+
+### 변경
+
+- **BE**: `backend/app/services/checklist_service.py` 단일 파일 (~25 LOC)
+  - `else` 분기를 `elif cat == 'MECH':` 로 명시 + ELEC 패턴 (Phase 1/2 분리: '1차 입력' / '2차 검수')
+  - `_normalize_qr_doc_id(serial_number)` 명시 호출 = `'DOC_<sn>'` (모바일 앱 정합)
+  - `phase1_applicable=False` 항목 자동 제외 (Sprint 60-BE 컬럼 기반)
+  - DUAL INLET L/R 분리 TODO 주석 명시 (운영 데이터 0건 — 향후 hotfix 예약)
+  - 기존 `else` 보존 — 잠재 신규 카테고리(PI/QI/SI) fallback 로 변신 (ADR-026 표준 검토 후 명시 분기 권장)
+- **TEST**: `tests/backend/test_sprint54_checklist_report.py` 신규 TC 3 추가 (`TestSprint65MechReportBranch`)
+  - `test_tc65_01_mech_qr_doc_id_match_returns_input_value` — qr_doc_id 매칭 + input_value 정상 반환
+  - `test_tc65_02_mech_phase_split_labels_correct` — phase=1/phase=2 entry 분리 + phase_label 정확
+  - `test_tc65_03_elec_tm_unaffected_by_mech_branch` — TM 회귀 0 검증
+  - 결과: 22/22 PASS (전 sprint54)
+- **memory.md ADR-026** 신설 — 신규 체크리스트 카테고리 phase split 표준 (ELEC/MECH/TM/PI/QI/SI 결정 매트릭스)
+- **버전**: `version.py` 2.11.6→2.11.7 + `app_version.dart` 동기화
+
+### VIEW FE 정합 (P1 prerequisite 통과)
+
+- `ChecklistReportView L177-178` categories.map → entry 개수 무관 처리 ✅
+- `L202-203` `cat.phase_label` 표시 로직 이미 구현 ✅
+- `types/checklist.ts L109-113` phase/phase_label optional 타입 ✅
+- ELEC baseline 동일 패턴 운영 검증 — MECH 도 동일 자동 정상 동작 ✅
+- → **VIEW FE 변경 0건, BE 단독 hotfix 안전 + atomic deploy 불필요**
+
+### 영향
+
+- 회귀 위험: 0 (BE additive 분기, ELEC/TM 무영향, pytest 22/22 GREEN)
+- 사용자 영향: VIEW 성적서 MECH 섹션 input_value 정상 표시 + Phase 1/2 분리 노출 (UX 개선)
+- migration/DB 변경 없음 → git revert 1건으로 v2.11.6 복귀 가능
+
+### 후속 BACKLOG (등록)
+
+- `OPS-CHECKLIST-PHASE-SPLIT-REFACTOR-01` (P3 LOW) — ELEC/MECH 헬퍼 함수 추출 (~1h)
+- `FIX-MECH-DUAL-INLET-L-R-SEPARATION` (LOW, 트리거 시) — INLET L/R record 발생 시 hotfix
+
+### 참조
+
+- 설계: `AGENT_TEAM_LAUNCH.md` Sprint 65-BE 섹션 (Codex 1차 P1~P5 전건 반영)
+- ADR: `memory.md` ADR-026 (신규 체크리스트 카테고리 phase split 표준)
+- 트리거: 5-05 Twin파파 운영 검증 (`/partner/report` MECH input_value '—')
+
+---
+
 ## [2.11.6] - 2026-05-06 — DB Pool 자가 회복 메커니즘 (5일 주기 사고 차단, BE only, P1)
 
 > 4-29 23:31 + 5-04 11:38 KST 5일 주기 사고 패턴 차단. 5-04 사고 분석 결과 `_used` dict dead conn 정리 부재 + Railway proxy idle TCP disconnect → 40분 0/0 conn 지속 (Restart 외 회복 불가). `keepalive` 활성화 + 자가 회복 메커니즘으로 5-09 ± 1d 재발 시점 자동 차단.

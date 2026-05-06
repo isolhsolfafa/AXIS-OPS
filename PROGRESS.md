@@ -3,10 +3,68 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: **v2.11.6 (DB Pool 자가 회복 — keepalive + warmup self-recovery, 2026-05-06)** — BE only ~30 LOC + pytest 4 TC / 8/8 PASS / 5-09 ± 1d 재발 차단
-> **선행 release**: v2.11.5 (Sprint 63 후속 hotfix — phase=2 1차 inherit + CHECK description) — Sprint 63 BE+FE+Hotfix×4 정식 종료 / pytest 32/32 PASS / +2,546 LoC 누적
-> **최근 인프라**: FIX-DB-POOL-MAX-SIZE-20260427 — Railway env DB_POOL_MAX 20→30 (2026-04-27, 코드 변경 0)
+> **현재 버전**: **v2.11.7 (Sprint 65-BE MECH 성적서 분기 hotfix — qr_doc_id 명시 + Phase 1/2 분리, 2026-05-06)** — BE only ~25 LOC + pytest 3 TC / 22/22 PASS / VIEW '—' 표시 fix
+> **선행 release**: v2.11.6 (DB Pool 자가 회복 — keepalive + warmup self-recovery) — BE only ~30 LOC + pytest 4 TC / 8/8 PASS / 5-09 ± 1d 재발 차단
+> **선행 인프라**: FIX-DB-POOL-MAX-SIZE-20260427 — Railway env DB_POOL_MAX 20→30 (2026-04-27, 코드 변경 0)
 > **D+1 운영 검증 (2026-04-28)**: 출근 peak 측정 PASS — Pool exhausted 0 / direct conn fallback 0 / OPS conn 6~7 안정 / Sentry 새 issue 0 → 옵션 X1 유지, OBSERV-WARMUP COMPLETED 확정, v2.10.11 HOTFIX-06b 불필요
+
+---
+
+## v2.11.7 (Sprint 65-BE MECH 성적서 분기 hotfix — qr_doc_id 명시 + Phase 1/2 분리, 2026-05-06)
+
+**Sprint**: `Sprint 65-BE — MECH 체크리스트 성적서 분기 hotfix` (P1, Codex 1차 P1~P5 전건 반영)
+
+**배경**: 5-05 Twin파파 운영 검증 — VIEW `/partner/report` 페이지 "기구" 섹션에서 input_value 가 `—` 로만 렌더링. 모바일 앱 입력 정상 + DB record 정상 (master_id 149/158/163/176, input_value='1', '11' 등) but VIEW 화면 미표시. Root cause: BE `else` 분기에서 `qr_doc_id=''` (default) 로 SELECT → DB row (`DOC_TEST-1111`) 매칭 0건 → LEFT JOIN cr 컬럼 NULL → VIEW '—' 표시.
+
+### Codex 1차 검증 P1~P5 전건 반영
+
+- 🔴 P1 VIEW FE schema 정합 — 4 angle prerequisite 통과 (entry 개수 무관 + phase_label 이미 구현 + optional 타입 + ELEC baseline 운영 검증)
+- 🟠 P2 신규 pytest TC 3건 (qr_doc_id 매칭 + phase split + ELEC/TM 회귀)
+- 🟠 P3 REFACTOR-CHECKLIST-PHASE-SPLIT BACKLOG 등록 (헬퍼 함수 추출, P3 LOW)
+- 🟡 P4 handoff/CHANGELOG/BACKLOG/memory ADR-026 자취 추가
+- 🟡 P5 DUAL INLET L/R 분리 TODO 주석 + BACKLOG ID 명시
+
+### BE 변경 (~25 LOC, 단일 파일)
+
+**`backend/app/services/checklist_service.py L484~`**:
+
+- `else` → `elif cat == 'MECH':` 명시 분기 + ELEC 패턴 (Phase 1/2 분리: `'1차 입력'` / `'2차 검수'`)
+- `_normalize_qr_doc_id(serial_number)` 명시 호출 = `'DOC_<sn>'` (모바일 앱 `_normalizeQrDocId` 정합)
+- `phase1_applicable=False` 항목 자동 제외 (Sprint 60-BE 컬럼 기반)
+- DUAL INLET L/R 분리 TODO 주석 명시 (운영 데이터 0건, 향후 hotfix 예약)
+- 기존 `else` 보존 → PI/QI/SI 잠재 신규 카테고리 fallback (ADR-026 표준 검토 후 명시 분기 권장)
+
+### TEST 변경 (~120 LOC, +3 TC)
+
+**`tests/backend/test_sprint54_checklist_report.py` 신규 `TestSprint65MechReportBranch`**:
+
+- `test_tc65_01_mech_qr_doc_id_match_returns_input_value` — qr_doc_id 매칭 + input_value 정상 반환 검증
+- `test_tc65_02_mech_phase_split_labels_correct` — phase=1/phase=2 entry 분리 + phase_label 정확 + master inherit 검증
+- `test_tc65_03_elec_tm_unaffected_by_mech_branch` — TM 카테고리 회귀 0 + phase 키 미노출 검증
+- 결과: **22/22 PASS** (전 sprint54 GREEN, 회귀 0)
+
+### memory.md ADR-026 신설
+
+신규 체크리스트 카테고리 phase split 표준 — ELEC/MECH/TM/PI/QI/SI 결정 매트릭스. 워커 입력 흐름 (1→2 분리 vs 1회 완료) + qr_doc_id 모바일 앱 송신 패턴 + VIEW FE 정합 검증 절차 표준화.
+
+### 영향
+
+- BE 단일 파일 분기 추가 — ELEC/TM 무영향 (additive)
+- 모바일 앱 변경 0건, VIEW FE 변경 0건 (P1 prerequisite 통과 입증)
+- migration/DB 변경 없음 → git revert 1건으로 v2.11.6 복귀 가능
+- 사용자 영향: VIEW 성적서 MECH 섹션 input_value 정상 표시 + Phase 1/2 분리 노출 (UX 개선)
+
+### 후속 BACKLOG
+
+- `OPS-CHECKLIST-PHASE-SPLIT-REFACTOR-01` (P3 LOW) — ELEC/MECH 헬퍼 함수 추출 (~1h)
+- `FIX-MECH-DUAL-INLET-L-R-SEPARATION` (LOW, 트리거 시) — INLET L/R record 발생 시 hotfix
+
+### 사용자 검증 plan (배포 후)
+
+- VIEW `/partner/report` TEST-1111 검색 → 기구 섹션 input_value 정상 표시 (1, 11)
+- 작업자 이름 (마스킹) / 확인 일시 정상 표시
+- Phase 1 / Phase 2 두 섹션 분리 노출 (ELEC 와 동일 패턴)
+- ELEC / TM 카테고리 영향 없음 + 다른 SN (TEST-2222 등) 정상 동작
 
 ---
 

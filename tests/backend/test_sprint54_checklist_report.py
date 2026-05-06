@@ -548,3 +548,193 @@ class TestExistingApiCompat:
         assert data['checked_count'] >= 1
         assert data['total_count'] >= 3
         assert data['is_complete'] is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [Sprint 65-BE] MECH 성적서 분기 hotfix (qr_doc_id 명시 + Phase 1/2 분리)
+# 트리거: 5-05 운영 검증 — VIEW 성적서 MECH input_value '—' 표시 (qr_doc_id mismatch)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _insert_mech_master_items_sp65(db_conn, product_code='COMMON', count=2):
+    """Sprint 65-BE 용 MECH master 테스트 데이터 INSERT — INPUT 타입 (input_value 검증)"""
+    cursor = db_conn.cursor()
+    master_ids = []
+    for i in range(count):
+        cursor.execute("""
+            INSERT INTO checklist.checklist_master
+                (product_code, category, item_group, item_name, item_type,
+                 item_order, is_active, phase1_applicable, updated_at)
+            VALUES (%s, 'MECH', 'PANEL 검사', %s, 'INPUT', %s, TRUE, TRUE, NOW())
+            ON CONFLICT (product_code, category, item_group, item_name) DO UPDATE
+                SET item_order = EXCLUDED.item_order,
+                    item_type = EXCLUDED.item_type,
+                    phase1_applicable = EXCLUDED.phase1_applicable
+            RETURNING id
+        """, (product_code, f'SP65 MECH 항목 {i+1}', i + 1))
+        row = cursor.fetchone()
+        master_ids.append(row[0])
+    db_conn.commit()
+    cursor.close()
+    return master_ids
+
+
+def _upsert_mech_record_with_input(db_conn, serial_number, master_id, check_result,
+                                     input_value, worker_id, judgment_phase=1):
+    """Sprint 65-BE 용 — MECH record INSERT (qr_doc_id='DOC_<sn>' 명시 = 모바일 앱 정합)"""
+    qr_doc_id = f'DOC_{serial_number}'
+    cursor = db_conn.cursor()
+    cursor.execute("""
+        INSERT INTO checklist.checklist_record
+            (serial_number, master_id, judgment_phase, check_result, input_value,
+             checked_by, checked_at, qr_doc_id, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, NOW(), %s, NOW())
+        ON CONFLICT (serial_number, master_id, judgment_phase, qr_doc_id) DO UPDATE
+            SET check_result = EXCLUDED.check_result,
+                input_value  = EXCLUDED.input_value,
+                checked_by   = EXCLUDED.checked_by,
+                checked_at   = NOW(),
+                updated_at   = NOW()
+    """, (serial_number, master_id, judgment_phase, check_result, input_value,
+          worker_id, qr_doc_id))
+    db_conn.commit()
+    cursor.close()
+
+
+def _cleanup_mech_master_sp65(db_conn):
+    """SP65 MECH master + record 정리"""
+    cursor = db_conn.cursor()
+    try:
+        cursor.execute("""
+            DELETE FROM checklist.checklist_record
+            WHERE master_id IN (
+                SELECT id FROM checklist.checklist_master
+                WHERE category='MECH' AND item_name LIKE 'SP65 MECH 항목%'
+            )
+        """)
+        cursor.execute("""
+            DELETE FROM checklist.checklist_master
+            WHERE category='MECH' AND item_name LIKE 'SP65 MECH 항목%'
+        """)
+        db_conn.commit()
+    except Exception:
+        db_conn.rollback()
+    finally:
+        cursor.close()
+
+
+class TestSprint65MechReportBranch:
+    """Sprint 65-BE — MECH 성적서 분기 hotfix (qr_doc_id 명시 + Phase 1/2 분리)"""
+
+    @pytest.fixture(autouse=True)
+    def cleanup_sp65(self, db_conn):
+        yield
+        _cleanup_mech_master_sp65(db_conn)
+
+    def test_tc65_01_mech_qr_doc_id_match_returns_input_value(
+        self, client, db_conn, view_token, worker_id
+    ):
+        """TC-65-01 (P2-1): MECH record 가 'DOC_<sn>' 로 저장됐을 때 input_value 정상 반환
+
+        Root cause 검증: 본 fix 전에는 BE else 분기가 qr_doc_id='' 로 SELECT → input_value=NULL.
+        본 fix 후 _normalize_qr_doc_id(sn) = 'DOC_<sn>' 로 명시 매칭 → input_value 정상.
+        """
+        sn = f'{_PREFIX}MECH65A'
+        _insert_product(db_conn, sn)
+        master_ids = _insert_mech_master_items_sp65(db_conn, count=2)
+
+        # 모바일 앱 입력 시뮬레이션 — qr_doc_id='DOC_<sn>' (운영 동일)
+        _upsert_mech_record_with_input(db_conn, sn, master_ids[0], 'PASS', '1', worker_id)
+        _upsert_mech_record_with_input(db_conn, sn, master_ids[1], 'PASS', '11', worker_id)
+
+        resp = client.get(
+            f'/api/admin/checklist/report/{sn}',
+            headers={'Authorization': f'Bearer {view_token}'}
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        # MECH 카테고리 entry 추출 (Phase 1 entry)
+        mech_phase1 = next(
+            (c for c in data['categories']
+             if c['category'] == 'MECH' and c.get('phase') == 1),
+            None
+        )
+        assert mech_phase1 is not None, \
+            f"MECH phase=1 entry 없음. categories={[c.get('category') for c in data['categories']]}"
+        # input_value 정상 반환 검증
+        items_by_id = {i.get('master_id'): i for i in mech_phase1['items']}
+        assert items_by_id[master_ids[0]].get('input_value') == '1'
+        assert items_by_id[master_ids[1]].get('input_value') == '11'
+        # check_result 도 정상 반환
+        assert items_by_id[master_ids[0]].get('check_result') == 'PASS'
+
+    def test_tc65_02_mech_phase_split_labels_correct(
+        self, client, db_conn, view_token, worker_id
+    ):
+        """TC-65-02 (P2-2): MECH 응답에 phase=1/phase=2 entry 분리 + phase_label 정확
+
+        Sprint 65-BE 핵심: MECH 가 ELEC 패턴 (Phase 분리) 으로 변환됐는지 검증.
+        - phase=1 entry: phase_label='1차 입력', SP65 master 의 phase=1 record 정상 inherit
+        - phase=2 entry: phase_label='2차 검수', SP65 master 가 items 에 포함 (LEFT JOIN, check_result=None)
+        - 양쪽 모두 phase 키 존재
+        - 운영 MECH master seed 존재해도 entry 분리 작동 입증
+
+        주의: 운영 master 가 product_code='COMMON' 으로 seed 되어 있어 빈 entry 자동 제외는
+        TC-65-04 (별 product_code) 영역. 본 TC 는 phase split logic 자체 검증만.
+        """
+        sn = f'{_PREFIX}MECH65B'
+        _insert_product(db_conn, sn)
+        master_ids = _insert_mech_master_items_sp65(db_conn, count=1)
+        _upsert_mech_record_with_input(db_conn, sn, master_ids[0], 'PASS', '5', worker_id)
+
+        resp = client.get(
+            f'/api/admin/checklist/report/{sn}',
+            headers={'Authorization': f'Bearer {view_token}'}
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        mech_entries = [c for c in data['categories'] if c['category'] == 'MECH']
+        # Phase 1, Phase 2 entry 모두 존재 (ELEC 패턴 정합)
+        assert len(mech_entries) == 2, \
+            f"MECH phase split 실패 — entry 개수 {len(mech_entries)} (2 기대)"
+        phase1 = next((c for c in mech_entries if c.get('phase') == 1), None)
+        phase2 = next((c for c in mech_entries if c.get('phase') == 2), None)
+        assert phase1 is not None and phase1.get('phase_label') == '1차 입력', \
+            f"phase=1 entry phase_label 불일치: {phase1.get('phase_label') if phase1 else 'None'}"
+        assert phase2 is not None and phase2.get('phase_label') == '2차 검수', \
+            f"phase=2 entry phase_label 불일치: {phase2.get('phase_label') if phase2 else 'None'}"
+        # SP65 master 가 phase=1 entry 에 input_value='5' 로 정상 inherit
+        sp65_in_p1 = next(
+            (i for i in phase1['items'] if i.get('master_id') == master_ids[0]), None
+        )
+        assert sp65_in_p1 is not None, "SP65 master phase=1 entry 누락"
+        assert sp65_in_p1.get('input_value') == '5'
+        assert sp65_in_p1.get('check_result') == 'PASS'
+
+    def test_tc65_03_elec_tm_unaffected_by_mech_branch(
+        self, client, db_conn, view_token, worker_id
+    ):
+        """TC-65-03 (P2-3 회귀): Sprint 65-BE MECH 분기 추가 후 ELEC/TM 응답 동일
+
+        '회귀 위험 0' 주장 검증. TM 카테고리 응답 schema 무변경.
+        TM 은 phase split 미적용 (Sprint 65-BE 영역 외) — 단일 entry per qr_doc_id.
+        """
+        sn = f'{_PREFIX}MECH65C'
+        _insert_product(db_conn, sn)
+        tm_master_ids = _insert_tm_master_items(db_conn, count=2)
+        _upsert_checklist_record(db_conn, sn, tm_master_ids[0], 'PASS', worker_id)
+
+        resp = client.get(
+            f'/api/admin/checklist/report/{sn}',
+            headers={'Authorization': f'Bearer {view_token}'}
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        tm_entries = [c for c in data['categories'] if c['category'] == 'TM']
+        # TM 은 SINGLE 모델 기준 1 entry (DUAL 시 2 — model='GAIA-I' SINGLE 이라 1 entry 기대)
+        assert len(tm_entries) == 1, f"TM entry 개수 {len(tm_entries)} (1 기대 — SINGLE 모델)"
+        tm_cat = tm_entries[0]
+        assert tm_cat['summary']['total'] >= 2
+        # TM 은 phase 키 없음 (phase split 미적용)
+        assert 'phase' not in tm_cat or tm_cat.get('phase') is None, \
+            f"TM 에 phase 키 노출 — 회귀 (phase split 잘못 적용): {tm_cat.get('phase')}"
