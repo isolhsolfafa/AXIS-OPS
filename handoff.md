@@ -3,6 +3,27 @@
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
 > 마지막 업데이트: 2026-05-04 KST (✅ **v2.11.0 — Sprint 63-BE squash merge 완료**, pytest 21/21 PASS, +1,415 LoC, 다음 단계: Sprint 63-FE Codex 라운드 1)
 
+## ✅ Sprint 63 BE+FE+Hotfix×4 — 정식 종료 (v2.11.5 release, 2026-05-06)
+
+### v2.11.5 추가 변경 (FIX-MECH-CHECKLIST-PHASE2-DATA-AND-DESCRIPTION)
+- BE: `_get_checklist_by_category` SQL 에 cr_p1 LEFT JOIN + COALESCE — phase=2 GET 시 phase=1 input/select inherit
+- FE: `_buildCheckRadio` description 추가 (Row → Column wrap, ELEC L898-909 패턴 정합)
+- pytest TestPhase2InheritsPhase1Data 2 TC 신규 (32 TC 누적)
+- Codex 라운드 1: M=1 (DUAL qr_doc_id 보호 — 설계 자체 정합) / A=4 / N=2
+
+### 다음 단계 (퇴근 후 직접 실행)
+
+```bash
+git push origin main
+git push origin v2.11.5
+cd frontend
+npx netlify-cli deploy --prod --dir=build/web --site=ab8041c3-dc51-40c6-96e4-9966222aeda3
+```
+
+build 이미 완료 → Netlify deploy 만, Railway 자동 배포.
+
+---
+
 ## ✅ Sprint 63 BE+FE+Hotfix×3 — 정식 종료 (v2.11.4 release, 2026-05-06)
 
 ### 잔존 hotfix 추가 release

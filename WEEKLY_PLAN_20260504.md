@@ -11,9 +11,9 @@
 ## 🧭 한눈에 (현재 상태, 2026-05-04 월요일 마감)
 
 ```
-현재 버전 : v2.11.4 (2026-05-06, main commit — Sprint 63 후속 hotfix 옵션 C UI 가이드 + description 렌더)
-최근 작업 : ✅ v2.11.4 — Sprint 63 후속 hotfix (P0, FE only ~30 LoC). v2.11.3 R1 부작용 가시화 — 옵션 C 채택 (UI 가이드 + description 렌더, ELEC L898-909 패턴 정합). Codex 라운드 1 M=0 합의. ADR-023 신설 (ELEC 패턴 정확 검증 표준)
-이전 트랙 : v2.11.3 R1 check_result null 차단 + R2 phase=2 read-only / v2.11.2 진입점 누락 hotfix / v2.11.1 Sprint 63-FE / v2.11.0 Sprint 63-BE / v2.10.17 HOTFIX-09
+현재 버전 : v2.11.5 (2026-05-06, main commit — Sprint 63 후속 hotfix phase=2 1차 데이터 inherit + CHECK description)
+최근 작업 : ✅ v2.11.5 — Sprint 63 후속 hotfix (P0, BE 1 + FE 1 ~25 LoC). v2.11.4 운영 후 "2차 1차 SELECT 값 안 보임" catch — BE SQL cr_p1 LEFT JOIN + COALESCE inherit + FE _buildCheckRadio description 추가. Codex 라운드 1 M=1 (DUAL 보호) / pytest 2 TC 신규 (32 TC 누적)
+이전 트랙 : v2.11.4 옵션 C UI 가이드 + desc / v2.11.3 R1 null + R2 read-only / v2.11.2 진입점 / v2.11.1 Sprint 63-FE / v2.11.0 Sprint 63-BE / v2.10.17 HOTFIX-09
 이전 트랙 : v2.11.0 Sprint 63-BE / v2.10.17 HOTFIX-09 / v2.10.16 watchdog / v2.10.15 access_log 90d / v2.10.14 KPI v2.4 / v2.10.13 묶음 / v2.10.12 DURATION_WARNINGS
 진행 중   : (없음 — Sprint 63 종료)
 대기 중   : push (퇴근 후 main + v2.11.0 + v2.11.1 + Netlify deploy) / AXIS-VIEW Sprint 39 (~0.5d, 별 repo) / BUG-TM-...-STALE-TC (P3, 1h)

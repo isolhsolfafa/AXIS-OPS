@@ -3,9 +3,29 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: **v2.11.4 (Sprint 63 후속 hotfix — 옵션 C UI 가이드 + description, 2026-05-06)** — Sprint 63 BE+FE+Hotfix×3 정식 종료 / pytest 30/30 PASS / +2,521 LoC 누적
+> **현재 버전**: **v2.11.5 (Sprint 63 후속 hotfix — phase=2 1차 inherit + CHECK description, 2026-05-06)** — Sprint 63 BE+FE+Hotfix×4 정식 종료 / pytest 32/32 PASS / +2,546 LoC 누적
 > **최근 인프라**: FIX-DB-POOL-MAX-SIZE-20260427 — Railway env DB_POOL_MAX 20→30 (2026-04-27, 코드 변경 0)
 > **D+1 운영 검증 (2026-04-28)**: 출근 peak 측정 PASS — Pool exhausted 0 / direct conn fallback 0 / OPS conn 6~7 안정 / Sentry 새 issue 0 → 옵션 X1 유지, OBSERV-WARMUP COMPLETED 확정, v2.10.11 HOTFIX-06b 불필요
+
+---
+
+## v2.11.5 (Sprint 63 후속 hotfix — phase=2 1차 데이터 inherit + CHECK description, 2026-05-06)
+
+**Sprint**: `FIX-MECH-CHECKLIST-PHASE2-DATA-AND-DESCRIPTION-20260504` (P0)
+
+**배경**: v2.11.4 prod 운영 후 사용자 발견 — "2차 검사 화면에서 1차 SELECT 값 안 보임". BE SQL phase 단일 LEFT JOIN 한계 + FE description 일부 위젯 누락.
+
+**변경 (BE 1 + FE 1, ~25 LoC)**:
+- R1 BE: cr_p1 LEFT JOIN 추가 (4개 조건) + COALESCE 우선 — phase=2 GET 시 phase=1 input/select inherit
+- R2 FE: `_buildCheckRadio` Row → Column wrap + description 추가 (ELEC 패턴 정합)
+
+**Codex 라운드 1**: M=1 (DUAL 보호 — 설계 정합) / A=4 / N=2
+
+**Test**: TestPhase2InheritsPhase1Data 2 TC 신규 (input/select inherit) — 2/2 PASS (58.02s) / 누적 30 → 32 TC
+
+**검증**: pytest 2/2 PASS / flutter analyze 0 error / flutter build web ✓
+
+**회귀 영향**: 0건 (BE additive LEFT JOIN + FE Text 추가만)
 
 ---
 

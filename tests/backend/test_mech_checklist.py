@@ -715,3 +715,123 @@ class TestWorkStartMechChecklistEntry:
         assert data.get('checklist_ready') is True
         assert data.get('checklist_category') == 'ELEC', \
             f"ELEC INSPECTION 회귀 발생 — category={data.get('checklist_category')} (ELEC 기대)"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# [I] v2.11.5 hotfix — phase=2 GET 시 phase=1 input/select inherit (2 TC)
+#     Codex 라운드 1 합의 — cr_p1 LEFT JOIN + COALESCE
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestPhase2InheritsPhase1Data:
+    """v2.11.5 R1: _get_checklist_by_category SQL 의 cr_p1 LEFT JOIN.
+
+    phase=2 GET 시 phase=1 record 의 input_value/selected_value 가 응답에 포함 (1차 데이터 inherit).
+    DUAL L/R 분리 보장 — qr_doc_id 4개 조건 매칭.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, db_conn, seed_test_data, create_test_worker):
+        self.db_conn = db_conn
+        self.worker_id = create_test_worker(
+            email='sp63_v2115@test.axisos.com', password='Test1234!',
+            name='SP63 v2.11.5', role='MECH', company='FNI'
+        )
+        self.sn = f'{_PREFIX}V2115-INHERIT'
+        # GAIA-I = SINGLE / scope='all' (CHECK / SELECT 활성)
+        _insert_product(db_conn, self.sn, model='GAIA-I')
+        yield
+        _cleanup(db_conn, self.sn)
+
+    def _seed_phase1(self, master_id, item_type, value, qr='SINGLE'):
+        """phase=1 record 직접 INSERT — input_value 또는 selected_value + check_result='PASS'."""
+        qr_doc_id = f'DOC_{self.sn}' if qr == 'SINGLE' else f'DOC_{self.sn}-{qr}'
+        cur = self.db_conn.cursor()
+        if item_type == 'INPUT':
+            cur.execute("""
+                INSERT INTO checklist.checklist_record
+                    (serial_number, master_id, judgment_phase, check_result,
+                     checked_by, checked_at, input_value, qr_doc_id, updated_at)
+                VALUES (%s, %s, 1, 'PASS', %s, NOW(), %s, %s, NOW())
+                ON CONFLICT (serial_number, master_id, judgment_phase, qr_doc_id) DO UPDATE
+                SET input_value = EXCLUDED.input_value, check_result = EXCLUDED.check_result
+            """, (self.sn, master_id, self.worker_id, value, qr_doc_id))
+        else:  # SELECT
+            cur.execute("""
+                INSERT INTO checklist.checklist_record
+                    (serial_number, master_id, judgment_phase, check_result,
+                     checked_by, checked_at, selected_value, qr_doc_id, updated_at)
+                VALUES (%s, %s, 1, 'PASS', %s, NOW(), %s, %s, NOW())
+                ON CONFLICT (serial_number, master_id, judgment_phase, qr_doc_id) DO UPDATE
+                SET selected_value = EXCLUDED.selected_value, check_result = EXCLUDED.check_result
+            """, (self.sn, master_id, self.worker_id, value, qr_doc_id))
+        self.db_conn.commit()
+        cur.close()
+
+    def _find_item(self, response, master_id):
+        """응답 groups 에서 master_id 찾기."""
+        for group in response.get('groups', []):
+            for item in group.get('items', []):
+                if item.get('master_id') == master_id:
+                    return item
+        return None
+
+    def test_phase2_inherits_phase1_input_value(self):
+        """TC-I-01: phase=2 GET 시 phase=1 INPUT 의 input_value inherit.
+
+        시나리오: 1차 작업자가 INPUT='10' + PASS 저장 → 2차 관리자 GET 시 input_value='10' 응답.
+        """
+        from app.services.checklist_service import get_mech_checklist
+
+        # GN2 Speed Controller 수량 (INPUT, scope=all) 의 master_id 조회
+        cur = self.db_conn.cursor()
+        cur.execute("""
+            SELECT id FROM checklist.checklist_master
+            WHERE category='MECH' AND product_code='COMMON' AND is_active=TRUE
+              AND item_type='INPUT' AND scope_rule='all'
+            ORDER BY id LIMIT 1
+        """)
+        row = cur.fetchone()
+        cur.close()
+        assert row is not None, "INPUT scope='all' master 없음"
+        master_id = row[0]
+
+        # phase=1 INPUT='10' + PASS 저장
+        self._seed_phase1(master_id, 'INPUT', '10')
+
+        # phase=2 GET → input_value inherit 확인
+        response = get_mech_checklist(self.sn, judgment_phase=2)
+        item = self._find_item(response, master_id)
+        assert item is not None, f"master_id={master_id} 응답에 없음"
+        assert item['input_value'] == '10', \
+            f"phase=2 GET input_value={item['input_value']} ('10' 기대 — phase=1 inherit)"
+
+    def test_phase2_inherits_phase1_selected_value(self):
+        """TC-I-02: phase=2 GET 시 phase=1 SELECT 의 selected_value inherit.
+
+        시나리오: 1차 작업자가 SELECT='MKS GE50A...' + PASS 저장 → 2차 관리자 GET 시 selected_value 응답.
+        """
+        from app.services.checklist_service import get_mech_checklist
+
+        # GN2 MFC Spec (SELECT, scope=all) master_id 조회
+        cur = self.db_conn.cursor()
+        cur.execute("""
+            SELECT id FROM checklist.checklist_master
+            WHERE category='MECH' AND product_code='COMMON' AND is_active=TRUE
+              AND item_type='SELECT' AND scope_rule='all'
+            ORDER BY id LIMIT 1
+        """)
+        row = cur.fetchone()
+        cur.close()
+        assert row is not None, "SELECT scope='all' master 없음"
+        master_id = row[0]
+
+        # phase=1 SELECT 저장
+        seeded_value = 'MKS GE50A | 5 SLM | 0.5 MPa | 0.1-0.7 MPa'
+        self._seed_phase1(master_id, 'SELECT', seeded_value)
+
+        # phase=2 GET → selected_value inherit 확인
+        response = get_mech_checklist(self.sn, judgment_phase=2)
+        item = self._find_item(response, master_id)
+        assert item is not None
+        assert item['selected_value'] == seeded_value, \
+            f"phase=2 GET selected_value={item['selected_value']} (seeded 기대 — phase=1 inherit)"

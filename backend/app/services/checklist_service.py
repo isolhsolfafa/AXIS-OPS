@@ -66,6 +66,10 @@ def _get_checklist_by_category(
         master_filter_sql = "cm.product_code = %s AND cm.category = %s"
         master_params = [product_code, category]
 
+    # ⭐ v2.11.5 R1: phase=2 GET 시 phase=1 record 의 input_value/selected_value 가
+    #    cr (phase=2) LEFT JOIN 결과에서 NULL 응답되는 문제 수정 (2차 read-only inherit).
+    #    옵션 A 채택 — phase=1 record 별도 LEFT JOIN (cr_p1) + COALESCE 우선.
+    #    Codex 라운드 1 M-A2: cr_p1 조인 4개 조건 (master_id + serial_number + judgment_phase=1 + qr_doc_id) 모두 포함 — DUAL L/R 오상속 차단.
     query = f"""
         SELECT
             cm.id          AS master_id,
@@ -86,14 +90,21 @@ def _get_checklist_by_category(
             w.name         AS checked_by_name,
             cr.checked_at,
             cr.note,
-            cr.selected_value,
-            cr.input_value
+            -- ⭐ v2.11.5 R1: phase=1 record 의 input/select 우선 (1차 데이터 inherit)
+            COALESCE(cr.selected_value, cr_p1.selected_value) AS selected_value,
+            COALESCE(cr.input_value,    cr_p1.input_value)    AS input_value
         FROM checklist.checklist_master cm
         LEFT JOIN checklist.checklist_record cr
             ON cr.master_id      = cm.id
            AND cr.serial_number  = %s
            AND cr.judgment_phase = %s
            AND cr.qr_doc_id     = %s
+        -- ⭐ v2.11.5 R1: phase=1 record 별도 LEFT JOIN (4개 조건 — DUAL L/R 분리 보장)
+        LEFT JOIN checklist.checklist_record cr_p1
+            ON cr_p1.master_id      = cm.id
+           AND cr_p1.serial_number  = %s
+           AND cr_p1.judgment_phase = 1
+           AND cr_p1.qr_doc_id     = %s
         LEFT JOIN workers w ON w.id = cr.checked_by
         WHERE {master_filter_sql}
           AND cm.is_active = TRUE
@@ -105,7 +116,11 @@ def _get_checklist_by_category(
             END ASC,
             cm.item_order ASC, cm.id ASC
     """
-    params: list = [serial_number, judgment_phase, qr_doc_id] + master_params
+    # ⭐ v2.11.5 R1: cr_p1 위해 serial_number + qr_doc_id 2개 추가 (params placeholder 정합)
+    params: list = [
+        serial_number, judgment_phase, qr_doc_id,  # cr (phase=current)
+        serial_number, qr_doc_id,                   # cr_p1 (phase=1 고정)
+    ] + master_params
     cur.execute(query, params)
     rows = cur.fetchall()
 

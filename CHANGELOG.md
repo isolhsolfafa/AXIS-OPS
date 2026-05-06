@@ -6,6 +6,50 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.11.5] - 2026-05-06 — Sprint 63 후속 hotfix: phase=2 1차 데이터 inherit + CHECK description (BE+FE, P0 hotfix)
+
+> v2.11.4 prod 운영 후 사용자 발견 — "2차 검사 화면에서 1차 SELECT 값 안 보임". BE SQL phase 단일 LEFT JOIN 한계 + FE description 일부 위젯 누락 (cowork 추측 작성 실수 #4).
+
+### Root cause 2건
+- **R1 (BE)**: `_get_checklist_by_category` SQL 의 `cr.judgment_phase = %s` 단일 phase 매칭 → phase=2 GET 시 phase=1 record 의 input_value/selected_value NULL 응답
+- **R2 (FE)**: v2.11.4 에서 `_buildSelectDropdown` + `_buildInputField` 만 description 추가 + `_buildCheckRadio` 누락
+
+### 변경 (BE 1 + FE 1, ~25 LoC)
+
+#### R1 — BE: `services/checklist_service.py` `_get_checklist_by_category` (옵션 A)
+- LEFT JOIN cr_p1 (phase=1 고정) 추가 + `COALESCE(cr.X, cr_p1.X)` 우선
+- 4개 조건: `master_id + serial_number + judgment_phase=1 + qr_doc_id` (Codex M-A2 — DUAL L/R 분리 보장)
+- params: `[sn, phase, qr, sn, qr] + master_params`
+- ELEC/TM 자동 적용 — 회귀 0 (ELEC TUBE 색상 phase 단일 / TM INPUT 미사용)
+
+#### R2 — FE: `mech_checklist_screen.dart` `_buildCheckRadio` (~12 LoC)
+- 기존 `Row(Expanded(Text) + radio)` → `Row(Expanded(Column(Text + description)) + radio)`
+- description 렌더 (fontSize 10 / GxColors.silver / maxLines 1 / ellipsis) — ELEC L898-909 패턴 정합
+
+### Codex 라운드 1 (M=1 / A=4 / N=2 + 추가 advisory)
+- **M-A2**: cr_p1 LEFT JOIN 4개 조건 (qr_doc_id 포함) DUAL L/R 분리 — 설계 정합 ✅, 구현 시 params 순서 검증
+- A1/A2/A3/A4: SQL 위치 / DUAL 정합 / FE Row→Column / 회귀 범위 좁음
+- N4/N5: 코드만 운영 회귀 확정 불가 / cr_p1 신규 race 미생성
+- 추가: maxLines:1 + ellipsis 일관성
+
+### Test (30 → 32 TC)
+- TestPhase2InheritsPhase1Data 2 TC 신규:
+  * `test_phase2_inherits_phase1_input_value` — INPUT='10' inherit
+  * `test_phase2_inherits_phase1_selected_value` — SELECT 'MKS GE50A...' inherit
+- 결과: 2/2 PASS (58.02s)
+
+### 검증
+- pytest 2/2 PASS ✅
+- flutter analyze: 0 error (info 4건만, 빌드 차단 X) ✅
+- flutter build web --release: ✓ Built (12.6s) ✅
+
+### 회귀 영향
+- 0건 (BE additive LEFT JOIN + FE Text 추가만)
+- ELEC/TM phase=1 GET 응답 schema 변경: input_value/selected_value 가 NULL 대신 1차 데이터 자동 inherit (additive)
+- migration/DB 변경 없음 → git revert 1건으로 v2.11.4 복귀 가능
+
+---
+
 ## [2.11.4] - 2026-05-06 — Sprint 63 후속 hotfix: 옵션 C UI 가이드 + description 렌더 (FE only, P0 hotfix)
 
 > v2.11.3 prod 운영 후 사용자 발견 — "2차 드롭다운 react 안 됨". v2.11.3 R1 fix (`cr.isEmpty 시 PUT skip`) 의 부작용 가시화 (사용자가 SELECT 선택 후 PASS/NA 미선택 시 저장 안 되는 흐름 인지 못함). **옵션 C 채택** (UI 가이드 + R1 fix 유지 + Q3-B Codex 결정 정합).

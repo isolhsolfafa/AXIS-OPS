@@ -2,13 +2,46 @@
 
 > 세션 간 누적되는 의사결정, 아키텍처 판단, 감사 결과를 기록합니다.
 > CLAUDE.md = 프로젝트 고정 정보 / memory.md = 누적 학습 / handoff.md = 세션 인계
-> 마지막 업데이트: 2026-05-06 (ADR-023 신규 Flutter 코드 작성 시 ELEC 패턴 정확 검증 표준 v2.11.4)
+> 마지막 업데이트: 2026-05-06 (ADR-024 신규 — phase=2 GET 시 phase=1 데이터 inherit BE SQL 표준 v2.11.5)
 
 ---
 
 ## 1. 아키텍처 의사결정 기록 (ADR)
 
-### ADR-023: 신규 Flutter 코드 작성 시 ELEC 패턴 정확 검증 표준 (2026-05-06, v2.11.4 hotfix)
+### ADR-024: phase=2 GET 시 phase=1 데이터 inherit BE SQL 표준 (2026-05-06, v2.11.5 hotfix)
+
+**맥락**: v2.11.4 prod 운영 후 사용자 발견 — "2차 검사 화면에서 1차 SELECT 값 안 보임". BE SQL 단일 phase LEFT JOIN 한계.
+
+**결정 — 옵션 A (phase=1 record 별도 LEFT JOIN + COALESCE 우선)**:
+
+```sql
+-- cr (phase=current) + cr_p1 (phase=1 고정) 동시 LEFT JOIN
+-- cr_p1 4개 조건: master_id + serial_number + judgment_phase=1 + qr_doc_id (Codex M-A2)
+COALESCE(cr.selected_value, cr_p1.selected_value) AS selected_value
+COALESCE(cr.input_value,    cr_p1.input_value)    AS input_value
+```
+
+**핵심 검증 (Codex 라운드 1 M-A2)**:
+- cr_p1 의 `qr_doc_id = %s` 필수 — 누락 시 DUAL L/R 오상속
+- params placeholder: `[sn, phase, qr, sn, qr] + master_params`
+
+**회귀 평가**:
+- ELEC TUBE 색상 SELECT — phase 단일 결정 → 영향 0
+- TM SINGLE/DUAL — INPUT 미사용 → 영향 0
+- additive LEFT JOIN — 기존 응답 schema 무변경 (NULL → 1차 데이터 자동 채움)
+
+**결과 (v2.11.5)**:
+- TestPhase2InheritsPhase1Data 2 TC — 2/2 PASS (58.02s)
+- ~25 LoC (BE 1 + FE 1)
+- 회귀 영향 0건
+
+**적용 가능 영역**:
+- 향후 PI/QI/SI 체크리스트 도입 시 동일 BE SQL 패턴
+- phase 다단 진행 카테고리 모두 적용
+
+---
+
+### ADR-023: 신규 코드 작성 시 ELEC 패턴 + DB 스키마 정확 검증 표준 (2026-05-06, v2.11.4 hotfix + 5-06 보강)
 
 **맥락**:
 - Sprint 63-FE prod 운영 후 cowork 추측 작성 실수 누적 발견:
@@ -16,33 +49,55 @@
   2. `check_result: null` BE validator 거부 → 사용자 운영 검증 시 PUT 400 (v2.11.3 R1 fix)
   3. `description` 렌더 누락 (ELEC L898-909 패턴 미차용) → v2.11.4 추가 정정 1
   4. R1 부작용 가시화 누락 (사용자가 PASS/NA 미선택 인지 못함) → v2.11.4 옵션 C
+  5. **(2026-05-06 보강)** ELEC-only 데이터 초기화 SQL 작성 시 `completion_status.ee_completed` 사용 → 실제 컬럼명은 `elec_completed` (Sprint 6 RENAME 마이그레이션 미확인). `app_task_details.task_category = 'EE'` 도 동일 — 실제는 `'ELEC'`. 003 마이그레이션 (코멘트 "MM, EE, ...") 만 보고 006 의 `MM→MECH`, `EE→ELEC` RENAME 누락
 - Codex 라운드 1+2 검증으로 일부 catch 했지만 **ELEC 패턴 단순 차용** 시 실제 멤버/payload/흐름 미검증 영역 존재
+- **DB 스키마 영역 추가** — 초기 마이그레이션 (예: 003) 만 보고 후속 ALTER/RENAME 마이그레이션 (예: 006) 누락 시 컬럼명/enum 값 불일치로 SQL 에러
 
-**결정 — 신규 Flutter 코드 작성 시 ELEC 패턴 정확 검증 표준**:
+**결정 — Flutter + DB 양쪽 검증 표준**:
 
-### ✅ 권장
+### ✅ 권장 — Flutter 영역
 1. **GxColors / GxRadius / GxGradients 멤버 grep** — `frontend/lib/utils/design_system.dart` 직접 확인 후 사용. 추측 X
 2. **apiService 호출 패턴 1:1 차용** — ELEC 의 `_toggleResult` / `_showCommentDialog` / debounce 타이밍 그대로
 3. **BE schema 정확 확인** — `check_result` enum / `input_value` nullable / `selected_value` nullable / `description` 응답 포함 여부 grep
 4. **위젯 구조 시각 차용** — `description` 렌더 (item_name 아래 작은 글씨, fontSize 10 / silver / ellipsis 1줄) ELEC 와 시각 일관성
 5. **flutter analyze + flutter build web --release 강제** — 작성 후 즉시 검증, info 만 허용 (error 0)
+6. **모든 동등 위젯 일관 적용** — `_buildCheckRadio` / `_buildSelectDropdown` / `_buildInputField` 같은 _build* 함수군 = description / disabled / state reactive 영역 모두 동일 패턴 적용 검증 (한 위젯만 적용 후 누락 X)
+
+### ✅ 권장 — DB 스키마 / SQL 영역 (보강 신규)
+1. **마이그레이션 시간순 전체 grep** — 특정 테이블 / 컬럼 작업 시 초기 CREATE 마이그레이션만 보지 말고 후속 ALTER/RENAME 도 모두 시간순 확인
+   - 예시: `Grep pattern="completion_status" path=migrations` → 003 (CREATE) + 006 (RENAME) + 023 (ALTER) 등 모두 확인
+2. **컬럼명 / enum 값 코드 cross-check** — 실제 운영 코드 (services / routes / migrations) 에서 사용 중인 값 grep
+   - 예시: `Grep pattern="task_category\s*=\s*['\"](MM|EE|MECH|ELEC|TM|PI|QI|SI)['\"]"` → 실제 값 'MECH' / 'ELEC' 확인 후 사용
+3. **information_schema 검증 SQL** — 사용자에게 제공할 SQL 작성 시 사전 검증 쿼리 동봉
+   - `SELECT column_name FROM information_schema.columns WHERE table_name = 'X'`
+   - `SELECT DISTINCT column_value FROM table` (enum 실제 값 확인)
+4. **트랜잭션 안전 패턴 권고** — `BEGIN; ... COMMIT;` 또는 `SAVEPOINT` 명시. 운영 DB 삭제 SQL 은 항상 트랜잭션 + 검증 쿼리 동봉
+5. **단일 row 다중 컬럼 테이블 주의** — `completion_status` 처럼 시리얼 1개당 단일 row 에 여러 카테고리 boolean 보유 시 row DELETE 금지, 카테고리별 컬럼 UPDATE 만
 
 ### ❌ 금지
 - 추측해서 작성 — 검증 안 된 멤버 / payload / 흐름 사용 금지
 - BE validator 모르고 nullable 가정 — `check_result: null` 같은 사례 재발 차단
 - ELEC 패턴 일부만 차용 — entry point / disabled UI / 경고 메시지 / state reactive 모두 검증
+- **(보강)** 초기 마이그레이션 (CREATE) 만 보고 후속 ALTER/RENAME 무시 — 컬럼명/enum 값 변경 추적 누락 X
+- **(보강)** 코멘트 (`-- MM, EE, TM, PI, QI, SI`) 의 표기를 그대로 신뢰 — 실제 운영 데이터 / 후속 마이그레이션 / 코드 사용처 cross-check 필수
 
 ### 📋 Pre-deploy Gate 강화
 - pytest BE 테스트 + flutter analyze + flutter build web 모두 PASS
 - 사용자 측 운영 검증 시나리오 4 상태 (초기 / 입력만 / 라디오 클릭 / 2차 진입) 명시
+- **(보강)** SQL 작성 시 사전 검증 쿼리 (information_schema + 카테고리 분포) 동봉, 트랜잭션 BEGIN/COMMIT 패턴 권고
 
-**결과 (v2.11.4)**:
+**결과 (v2.11.4 + 5-06 보강)**:
 - Codex 라운드 1: M=0 / A=2 / N=3 (ELEC 패턴 정합 입증)
 - ~30 LoC FE only, 회귀 영향 0건
 - description + 옵션 C 경고 동시 추가, R1/R2 충돌 0
+- ELEC-only 데이터 초기화 SQL 사용자 catch 2회 (column "category" + column "ee_completed") 후 정정 → DB 영역 검증 표준 ADR-023 보강
 
 **적용 가능 영역**:
 - 향후 PI/QI/SI Flutter UI 도입 시 동일 검증 표준 (멤버 grep + 패턴 1:1 + BE schema + 위젯 시각 + analyze/build)
+- DB 스키마 작업 (ALTER/RENAME 영향 큰 컬럼) 시 동일 표준 (시간순 마이그레이션 grep + 코드 cross-check + information_schema 검증 + 트랜잭션 패턴)
+- 사용자에게 SQL 제공 시 사전 검증 쿼리 동봉 + ROLLBACK 가이드 첨부
+
+**Cowork 추측 작성 실수 trail 누적 5건** (이번 보강 포함) — 다음 동일 패턴 catch 6번째 발생 시 ADR-024 신규 분리 검토
 
 ---
 

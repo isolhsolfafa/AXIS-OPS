@@ -644,15 +644,32 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
     final masterId = item['master_id'] as int?;
     if (masterId == null) return const SizedBox.shrink();
     final currentResult = _checkResultMap[masterId];
+    final description = item['description'] as String?;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       child: Row(
         children: [
           Expanded(
-            child: Text(
-              item['item_name'] as String? ?? '',
-              style: const TextStyle(fontSize: 13),
+            // ⭐ v2.11.5 R2: Text 단일 → Column (description 추가, ELEC L898-909 패턴 정합)
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  item['item_name'] as String? ?? '',
+                  style: const TextStyle(fontSize: 13),
+                ),
+                if (description != null && description.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    description,
+                    style: const TextStyle(fontSize: 10, color: GxColors.silver),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ],
             ),
           ),
           _resultRadio(item, 'PASS', currentResult),
