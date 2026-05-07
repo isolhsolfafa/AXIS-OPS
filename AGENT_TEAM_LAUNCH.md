@@ -37570,18 +37570,21 @@ FIX-MECH-CHECKLIST-PHASE2-DATA-AND-DESCRIPTION-20260504  🔴 P0
   └─ Sprint 63 2차 검수 흐름 정식 활성화
 ```
 
-### 🤝 Cowork 추측 작성 실수 trail #5 (재발 방지 ADR-023, 2026-05-06 보강)
+### 🤝 Cowork 추측 작성 실수 trail #6 (재발 방지 ADR-023, 2026-05-07 2차 보강)
 
 ```
-누적 5건:
+누적 6건 — ADR-024 분리 검토 영역 도달:
   1. GxColors.background/surface/mistLight (commit 21c581e 사용자 fix)
   2. check_result null 처리 (BE 400, 사용자 운영 catch)
   3. ELEC `_get_checklist_by_category` SQL 차용 시 phase 단일 join 한계 미파악
   4. description 표시 영역 _buildInputField 만 적용 + _buildCheckRadio/_buildSelectDropdown 누락
   5. ELEC-only 초기화 SQL 컬럼명 — completion_status.ee_completed (실제 elec_completed)
-     + task_category='EE' (실제 'ELEC'). 003 마이그레이션만 보고 006 RENAME 누락 ⭐ NEW
+     + task_category='EE' (실제 'ELEC'). 003 마이그레이션만 보고 006 RENAME 누락
+  6. ⭐ NEW (2026-05-07) — 신규 인증 데코레이터 @require_admin_or_gst 작성
+     (실제 @gst_or_admin_required 가 jwt_auth.py L263 에 이미 존재, Sprint 27 v1.7.4 도입)
+     단순 grep cross-check 으로 즉시 발견 가능했던 영역, DRY 위반
 
-재발 방지 표준 (memory.md ADR-023, 2026-05-06 보강):
+재발 방지 표준 (memory.md ADR-023, 2026-05-07 2차 보강):
   Flutter 영역
   ✅ ELEC 패턴 1:1 검증 (단순 차용 X)
   ✅ 모든 동등 위젯 (3 종) 동일 적용 검증 — _build* 함수 일관성
@@ -37589,15 +37592,30 @@ FIX-MECH-CHECKLIST-PHASE2-DATA-AND-DESCRIPTION-20260504  🔴 P0
   ✅ 신규 작성 후 화면 진입 + 모든 입력 타입 운영 검증
   ❌ 추측해서 작성 X
 
-  DB / SQL 영역 (보강 신규)
+  DB / SQL 영역
   ✅ 마이그레이션 시간순 전체 grep — CREATE + 후속 ALTER/RENAME 모두 확인
   ✅ 코드 cross-check — services / routes / migrations 의 실제 값 grep
-  ✅ information_schema 검증 SQL 동봉 — 사용자에게 사전 확인 권고
+  ✅ information_schema 검증 SQL 동봉
   ✅ 트랜잭션 BEGIN/COMMIT + 검증 쿼리 동봉
   ✅ 단일 row 다중 컬럼 테이블 (completion_status 등) row DELETE 금지, UPDATE 만
-  ❌ 마이그레이션 코멘트 표기 그대로 신뢰 X (`-- MM, EE, ...` → 실제는 'MECH', 'ELEC')
+  ❌ 마이그레이션 코멘트 표기 그대로 신뢰 X
   ❌ 초기 CREATE 마이그레이션만 보고 후속 RENAME 무시 X
+
+  데코레이터 / 함수 / 헬퍼 영역 (2차 보강 신규)
+  ✅ 신규 작성 전 `Grep <name>` 또는 `Grep <역할 keyword>` cross-check 필수
+  ✅ 인증/권한 영역 = jwt_auth.py + auth.py 우선 grep
+  ✅ CLAUDE.md L1009-1015 의 표준 데코레이터 5종 명시 활용
+     (@admin_required / @manager_or_admin_required / @gst_or_admin_required /
+      @view_access_required / @jwt_required)
+  ✅ 신규 데코레이터 도입 시 ADR 등록 + 사용자 결정 받음
+  ❌ 기존 표준 cross-check 없이 신규 데코레이터 / 함수 / 헬퍼 작성 X
+  ❌ role / permission 영역 신규 작성 (jwt_auth.py 패턴 복제 X)
 ```
+
+**ADR-024 분리 검토 영역 (2026-05-07)**:
+- 6건 catch 도달 = ADR-023 분량 비대화 + 영역 분리 시점
+- ADR-024 후보 = "신규 코드 작성 시 기존 표준 cross-check 의무 표준"
+- 본 sprint 진행 후 시점에 사용자 결정 권장
 
 ### 📝 사후 기록 양식 (배포 후)
 
@@ -37989,3 +38007,2162 @@ elif cat == 'MECH':
 |---|---|---|---|
 | `OPS-CHECKLIST-PHASE-SPLIT-REFACTOR-01` | 🟡 LOW | ELEC + MECH (+ 향후 PI/QI/SI) 의 phase 분리 로직 헬퍼 함수 추출 (P3) | 신규 카테고리 도입 시점 또는 코드 정리 슬롯 확보 시 |
 | `FIX-MECH-DUAL-INLET-L-R-SEPARATION` | 🟡 LOW | DUAL DRAGON 모델의 INLET S/N L/R 분리 record 발생 시 hotfix (P5 TODO) | 운영 데이터로 INLET L/R record 발생 시점 |
+
+---
+
+# FEAT-MATERIAL-MASTER-AND-BOM-INTEGRATION-20260507
+
+> **Sprint ID**: `FEAT-MATERIAL-MASTER-AND-BOM-INTEGRATION-20260507`
+> **작성일**: 2026-05-07 KST
+> **작성자**: Cowork (Twin파파 측 운영 catch + 설계 합의 5-07)
+> **우선순위**: 🔴 P1 (운영 flow 우선, Sprint 64 후순위 명시)
+> **추정 시간**: ~6.5h+ (R3 4 step 분할 / 단계별 release)
+> **상태**: 🟢 OPEN (점검 1 BACKLOG entry 등록 완료, 점검 2 Step 1 영역 검증 중)
+> **MECH 체크리스트 완성 prerequisite** — Sprint 63-BE/FE + Sprint 65-BE 후속 필수 완성 영역
+
+---
+
+## 🎯 트리거 + 배경
+
+### 운영 catch (5-07)
+
+Twin파파 운영 사용자 검증 결과 — Sprint 63 의 51a seed 의 SELECT 항목 `select_options` JSON 이 placeholder 값:
+
+```json
+[
+  "MKS GE50A | 5 SLM | 0.5 MPa | 0.1-0.7 MPa",
+  "Brooks 5850E | 10 SLM | 0.7 MPa | 0.2-0.9 MPa",
+  "Horiba SEC-Z512 | 20 SLM | 1.0 MPa | 0.3-1.2 MPa"
+]
+```
+
+→ 현장 실 자재 (MRC / HORIBA / MKP × 14 MFC + 173 SI 자재) 와 무관. 작업자가 의미 없는 옵션 선택 + DB 직접 수정 외 변경 불가능 (운영 영구 차단).
+
+### 3 영역 영구 해결 목표
+
+| 영역 | 현재 (5-07) | 본 sprint 후 |
+|---|---|---|
+| MFC dropdown | placeholder 무의미 | 실 자재 데이터 (MRC / HORIBA / MKP) |
+| 자재 수정 | DB 직접 수정 (운영 불가능) | AXIS-VIEW admin UI 등록 |
+| MECH + SI BOM | 분리 인프라 (51a placeholder + 미구현) | 단일 자재 마스터 공유 |
+
+### 인프라 활용 (5-07 사용자 결정)
+
+이미 미사용으로 만들어둔 `public.product_bom` (11컬럼) + `public.bom_checklist_log` (17컬럼) 인프라를 살려서 활용:
+- public → checklist schema 이전
+- product_bom 컬럼 영문 표준 정리
+- 신규 `material_master` 테이블 추가 (정규화)
+- bom_checklist_log 17 컬럼 그대로 (AI 검증 영역 보존)
+
+---
+
+## ✅ 사용자 합의 영역 (5-07 검증 완료)
+
+| # | 결정 | 근거 |
+|---|---|---|
+| schema 1 | material_master 신설 (정규화) | 같은 자재가 여러 product_code 등장 (max 105회), 정규화 정합 |
+| schema 2 | product_bom 영문 컬럼 표준 + 한국어 주석 | "table 한글명 X, 기존 table명 동일" |
+| schema 3 | bom_checklist_log 17 컬럼 그대로 | Phase 3 AI 검증 영역 보존 |
+| FK 정책 | soft FK (REFERENCES X) | csv 246 product_code 중 4100xxxx prefix 다수가 plan.product_info 미등록 (옛 옵션 코드) |
+| schema 4 | checklist_master.select_options 에 material_id 배열 저장 | admin 이 AXIS-VIEW 에서 자재 DB 골라 수동 매핑 |
+| schema 5 | checklist_record: selected_value = 표시용 string + selected_material_id = INTEGER FK (옵션 X 채택, Codex M-R2-01 정정) | 자재 추적 영역 + ELEC/TM 패턴 정합 |
+| seed 방식 | Migration 053a 하드코딩 INSERT (옵션 A) | 자동화 + 재현 가능 |
+| category | csv 자재내역 그대로 사용 (옵션 A) | 92 종 자재내역 = 충분한 분류, 추가 정규화 불필요 |
+| release | R3 단계별 분리 | 사용자 다른 작업 병행, 단계별 검증 후 진행 |
+| 권한 | admin + GST | 자재 등록 페이지 |
+
+### 검증 받은 데이터 (5-07)
+
+- csv 1,640 row (246 product_code × 173 unique 자재) — `/Users/twinfafa/Downloads/출하 어플용의 사본 - DB.csv`
+- xlsx 14 MFC 자재 (4 가스: LNG/CDA/O2/N2) — `/Users/twinfafa/Library/Application Support/Claude/.../uploads/MFC.xlsx`
+- 통합 csv: `/Users/twinfafa/Desktop/GST/material_master_통합.csv` (1,654 row, 186 unique 자재 = csv 173 + MFC 14 - MFC 내부 중복 1)
+- plan.product_info 매칭률: 부분 (4100xxxx prefix 다수 missing)
+- prod DB 상태: `public.product_bom` + `public.bom_checklist_log` 둘 다 존재 + 데이터 0 (이전 가능)
+
+---
+
+## 📊 전체 변경 범위 (R3 4 단계)
+
+```
+Step 1 (~1h, BE) — Migration 053
+  ├─ public.product_bom DROP (데이터 0 영역)
+  ├─ public.bom_checklist_log DROP
+  ├─ checklist.material_master CREATE (신규)
+  ├─ checklist.product_bom CREATE (영문 컬럼)
+  ├─ checklist.bom_checklist_log CREATE (17 컬럼 그대로)
+  └─ pytest TC 1건 (test_migration_053_schema_정합성)
+  Release: v2.12.0 (BE only, schema 만)
+
+Step 2 (~30분, SQL) — Migration 053a
+  ├─ material_master INSERT (186 unique 자재)
+  └─ product_bom INSERT (1,640 BOM 매핑, material_master JOIN)
+  Release: v2.12.1 (SQL only, schema 변경 0)
+
+Step 3 + Step 4 ordered deploy with feature flag (5-07 사용자 결정 — 선택지 1, Codex M-R2-04 / D6-03 정정 — 별 repo 분리 영역이라 "atomic" 부정확)
+  Step 3 (~2h, BE+FE) — checklist_master 동적 조회 통합
+    ├─ BE: GET /checklist/mech 응답 시 select_options 동적 채움
+    │      (material_id 배열 → material_master JOIN → spec 정보)
+    ├─ FE: mech_checklist_screen.dart SELECT widget — material spec 표시
+    ├─ 51a placeholder 옛 옵션 BE override (DB 변경 0, additive)
+    └─ pytest TC 3건
+
+  Step 4 (~3h, AXIS-VIEW + BE) — 자재 등록 / 체크리스트 관리 페이지
+    ├─ AXIS-VIEW: /materials 페이지 (검색 / 직접 입력 / Excel 업로드)
+    ├─ AXIS-VIEW: /checklists 관리 페이지 (select_options 매핑)
+    ├─ BE: /api/admin/materials CRUD
+    ├─ BE: /api/admin/checklists/master/:id/options 매핑 API
+    └─ 권한 가드 (admin + GST)
+
+  Release: v2.12.2 (MECH 체크리스트 완성! + admin UX 완성)
+  ⭐ ordered deploy — Step 3 BE override 먼저 prod 적용 후 Step 4 admin GUI deploy (호환성 영역 안전)
+  ⭐ 자재 spec 변경 시 select_options 자동 반영 (material_id 배열 저장)
+```
+
+---
+
+## 🔵 Step 1 — Migration 053 (schema 이전 + material_master CREATE)
+
+### 변경 범위
+
+| 영역 | 변경 |
+|---|---|
+| public schema | product_bom + bom_checklist_log DROP (데이터 0) |
+| checklist schema | material_master CREATE (신규) |
+| checklist schema | product_bom CREATE (영문 컬럼) |
+| checklist schema | bom_checklist_log CREATE (17 컬럼 그대로) |
+| 인덱스 | material_master(item_code UNIQUE), product_bom(product_code), bom_checklist_log(serial_number, bom_item_id) |
+
+### Migration 053 SQL 초안 (Step 1 검증 영역 ⭐)
+
+```sql
+-- migrations/053_material_master_and_bom_schema_migration.sql
+-- =============================================================
+-- FEAT-MATERIAL-MASTER-AND-BOM-INTEGRATION-20260507 Step 1
+-- public.product_bom + public.bom_checklist_log → checklist.* 이전
+-- + checklist.material_master 신설
+-- =============================================================
+
+BEGIN;
+
+-- 1. 기존 public 테이블 DROP (데이터 0 검증 완료, 5-07 사용자 측)
+--    안전 차원 — 데이터 있으면 에러 발생하도록 RESTRICT (CASCADE X)
+--    P1 #9 옵션 A: bom_csv_import (사용자 임시 임포트 테이블) 도 묶어서 DROP
+DROP TABLE IF EXISTS public.bom_csv_import RESTRICT;        -- 사용자 측 임시 임포트 (5-07 검증 완료)
+DROP TABLE IF EXISTS public.bom_checklist_log RESTRICT;     -- 옛 인프라 (데이터 0)
+DROP TABLE IF EXISTS public.product_bom RESTRICT;           -- 옛 인프라 (데이터 0)
+
+-- 2. checklist.material_master 신설 (자재 마스터)
+-- ⭐ Codex 라운드 1 D1-02 정정: NOT NULL 제약 추가 (boolean/timestamp 영역)
+CREATE TABLE IF NOT EXISTS checklist.material_master (
+    id              SERIAL PRIMARY KEY,
+    item_code       VARCHAR(50) UNIQUE NOT NULL,                -- 자재코드 (1310225400, 1110006700)
+    item_name       VARCHAR(200) NOT NULL,                       -- 자재내역 (CENTER O-RING, MFC LNG)
+    category        VARCHAR(50),                                 -- 자재내역 분류 (csv 자재내역 그대로)
+    spec_1          VARCHAR(200),                                -- 규격1
+    spec_2          VARCHAR(200),                                -- 규격2
+    unit            VARCHAR(20),                                 -- 단위 (EA)
+    is_active       BOOLEAN NOT NULL DEFAULT TRUE,               -- ⭐ NOT NULL (D1-02)
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_material_master_category
+    ON checklist.material_master(category) WHERE is_active = TRUE;
+
+CREATE INDEX IF NOT EXISTS idx_material_master_item_name
+    ON checklist.material_master(item_name);
+
+-- 3. checklist.product_bom 신설 (product_code 별 BOM 매핑)
+-- ⭐ Codex 라운드 1 D1-02 정정: NOT NULL 제약 추가
+CREATE TABLE IF NOT EXISTS checklist.product_bom (
+    id              SERIAL PRIMARY KEY,
+    product_code    VARCHAR(50) NOT NULL,                        -- 품번 (plan.product_info.product_code, soft FK)
+    customer        VARCHAR(100),                                -- 고객사 (csv 영역)
+    model           VARCHAR(100),                                -- 모델 (csv 영역, 일반명: GAIA-I DUAL)
+    material_id     INTEGER NOT NULL REFERENCES checklist.material_master(id) ON DELETE RESTRICT,
+    quantity        INTEGER,                                     -- 수량
+    is_active       BOOLEAN NOT NULL DEFAULT TRUE,               -- ⭐ NOT NULL (D1-02)
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (product_code, material_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_product_bom_product_code
+    ON checklist.product_bom(product_code) WHERE is_active = TRUE;
+
+CREATE INDEX IF NOT EXISTS idx_product_bom_material_id
+    ON checklist.product_bom(material_id);
+
+-- 4. checklist.bom_checklist_log 신설 (SI hook-up 검사 결과, 17 컬럼)
+-- ⭐ Codex 라운드 1 D1-01 정정: google_doc_id → qr_doc_id (CLAUDE.md L72,234 표준 준수)
+-- ⭐ Codex 라운드 1 D1-02 정정: NOT NULL 제약 추가 (boolean / timestamp 영역 검증 가능)
+CREATE TABLE IF NOT EXISTS checklist.bom_checklist_log (
+    id                  SERIAL PRIMARY KEY,
+    serial_number       VARCHAR(128) NOT NULL,
+    qr_doc_id           VARCHAR(100),                              -- ⭐ google_doc_id → qr_doc_id (D1-01)
+    product_code        VARCHAR(50) NOT NULL,
+    bom_item_id         INTEGER NOT NULL REFERENCES checklist.product_bom(id) ON DELETE RESTRICT,
+    is_checked          BOOLEAN NOT NULL DEFAULT FALSE,            -- ⭐ NOT NULL (D1-02)
+    checked_at          TIMESTAMPTZ,
+    checked_by          VARCHAR(50),
+    -- AI 검증 영역 (Phase 3 보존)
+    ai_verified         BOOLEAN,
+    ai_verified_at      TIMESTAMPTZ,
+    ai_confidence       NUMERIC,
+    ai_image_url        TEXT,
+    ai_response         JSONB,
+    -- 불일치 보고
+    mismatch_reported   BOOLEAN NOT NULL DEFAULT FALSE,            -- ⭐ NOT NULL (D1-02)
+    mismatch_notes      TEXT,
+    -- 메타
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,  -- ⭐ NOT NULL (D1-02)
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP   -- ⭐ NOT NULL (D1-02)
+);
+
+CREATE INDEX IF NOT EXISTS idx_bom_checklist_log_serial
+    ON checklist.bom_checklist_log(serial_number);
+
+CREATE INDEX IF NOT EXISTS idx_bom_checklist_log_bom_item
+    ON checklist.bom_checklist_log(bom_item_id);
+
+-- 5. ⭐ Codex 라운드 1 D5-01 정정 (옵션 X 채택)
+--    checklist.checklist_record 에 selected_material_id INTEGER 컬럼 추가
+--    selected_value (display string) + selected_material_id (자재 추적) 양쪽 보유
+--    ELEC/TM 기존 record 는 NULL 유지 (영향 0)
+--    MECH 만 신규 record 부터 채움 — 운영 추적 / 자재 변경 영향 분석 / Phase 3 AI 비전 검증 prerequisite
+ALTER TABLE checklist.checklist_record
+    ADD COLUMN IF NOT EXISTS selected_material_id INTEGER
+    REFERENCES checklist.material_master(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_checklist_record_material_id
+    ON checklist.checklist_record(selected_material_id)
+ WHERE selected_material_id IS NOT NULL;
+
+COMMENT ON COLUMN checklist.checklist_record.selected_material_id IS
+    '5-07 사용자 결정 옵션 X — 자재 추적용 FK (ELEC/TM=NULL, MECH 만 채움)';
+
+-- 6. updated_at 자동 갱신 트리거
+CREATE TRIGGER trg_material_master_updated_at
+    BEFORE UPDATE ON checklist.material_master
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER trg_product_bom_updated_at
+    BEFORE UPDATE ON checklist.product_bom
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER trg_bom_checklist_log_updated_at
+    BEFORE UPDATE ON checklist.bom_checklist_log
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- 7. 코멘트 (운영 영역)
+COMMENT ON TABLE checklist.material_master IS
+    '자재 마스터 — MFC / Flow Sensor / SI hook-up 자재 통합 (5-07 사용자 합의)';
+COMMENT ON TABLE checklist.product_bom IS
+    'product_code 별 BOM 매핑 (csv 출하 어플용 1,640 row + admin UI 추가)';
+COMMENT ON TABLE checklist.bom_checklist_log IS
+    'SI hook-up 검사 결과 (17 컬럼, AI 검증 영역 보존 — Phase 3 영역)';
+
+COMMIT;
+```
+
+### 함정 / 위험 영역 (Step 1)
+
+| # | 영역 | 검증 |
+|---|---|---|
+| 1 | `update_updated_at_column()` 함수 존재 여부 | 다른 마이그레이션에서 이미 정의 됐는지 grep — 없으면 본 마이그레이션에 함수 정의 추가 필요 |
+| 2 | DROP TABLE RESTRICT 안전성 | 데이터 0 영역이지만 다른 코드에서 import 잔존 가능 — grep `bom_checklist` / `product_bom` 으로 의존 0 확인 |
+| 3 | `checklist` schema 존재 여부 | 사용자 스크린샷 검증 (5-07) — `checklist` schema 존재 ✅ |
+| 4 | 인덱스 partial WHERE is_active | is_active 컬럼 사용 영역 정합 검증 |
+| 5 | trigger 함수의 schema 영역 | `update_updated_at_column()` 가 어느 schema 에 있는지 명시 호출 필요할 수 있음 |
+
+### 사전 검증 SQL (Step 1 진행 전)
+
+```sql
+-- 1. update_updated_at_column 함수 존재 확인
+SELECT proname, pronamespace::regnamespace AS schema
+  FROM pg_proc WHERE proname = 'update_updated_at_column';
+
+-- 2. checklist schema 의 기존 테이블 확인
+SELECT table_name FROM information_schema.tables
+ WHERE table_schema = 'checklist' ORDER BY table_name;
+
+-- 3. public.product_bom / bom_checklist_log 데이터 0 재검증
+SELECT 'product_bom' AS t, COUNT(*) FROM public.product_bom
+ UNION ALL
+SELECT 'bom_checklist_log' AS t, COUNT(*) FROM public.bom_checklist_log;
+
+-- 4. 다른 코드에서 import 잔존 영역 grep (Bash, BE 측)
+-- grep -rn "public.product_bom\|public.bom_checklist_log" backend/
+```
+
+### pytest TC (Step 1, 1건)
+
+```python
+# tests/backend/test_migration_053_schema.py
+def test_migration_053_creates_checklist_tables():
+    """Migration 053 후 checklist schema 의 3 테이블 + 인덱스 정합 검증."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+             WHERE table_schema = 'checklist'
+               AND table_name IN ('material_master', 'product_bom', 'bom_checklist_log')
+        """)
+        tables = {r[0] for r in cur.fetchall()}
+        assert tables == {'material_master', 'product_bom', 'bom_checklist_log'}
+
+    # public 테이블 DROP 확인
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT COUNT(*) FROM information_schema.tables
+             WHERE table_schema = 'public'
+               AND table_name IN ('product_bom', 'bom_checklist_log')
+        """)
+        assert cur.fetchone()[0] == 0
+
+    # FK 제약 검증 (product_bom → material_master)
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT conname, conrelid::regclass, confrelid::regclass
+              FROM pg_constraint
+             WHERE conname LIKE '%material_id%'
+        """)
+        # product_bom.material_id → material_master.id FK 존재 확인
+        ...
+```
+
+### 회귀 위험 (Step 1)
+
+```
+회귀 위험 = 0
+  ├─ 신규 테이블 + 신규 schema (기존 코드 영향 0)
+  ├─ public.product_bom / bom_checklist_log = 데이터 0 + import 0 (사용자 검증 5-07)
+  ├─ FK soft (plan.product_info 미참조)
+  └─ 기존 51a seed 의 placeholder 영역 그대로 (Step 3 에서 BE override)
+
+선행 의존성 = 0
+  └─ BE 단독 시작 가능
+```
+
+### Rollback (Step 1)
+
+```sql
+-- migrations/053_rollback.sql
+BEGIN;
+DROP TABLE IF EXISTS checklist.bom_checklist_log CASCADE;
+DROP TABLE IF EXISTS checklist.product_bom CASCADE;
+DROP TABLE IF EXISTS checklist.material_master CASCADE;
+-- public 테이블은 데이터 0 영역이라 복원 불필요 (사용자 합의)
+COMMIT;
+```
+
+→ git revert 1 commit + Migration 053 rollback SQL 실행. 회귀 영향 0.
+
+---
+
+## 🤔 Step 1 점검 영역 — 사용자 검증 받을 영역
+
+1. **schema 정의 정확성** — material_master / product_bom / bom_checklist_log 컬럼 정의가 사용자 의도 정합?
+2. **인덱스 영역** — `category WHERE is_active`, `product_code WHERE is_active`, `material_id` 인덱스 적정?
+3. **soft FK 정책 영역** — material_master / product_bom 사이는 hard FK (REFERENCES + RESTRICT), product_bom 의 product_code 만 soft FK (plan 참조 X) — 의도 정합?
+4. **사전 검증 SQL 4건** — 빠진 영역 있나?
+5. **rollback SQL** — 데이터 0 가정 OK?
+
+→ 답 받으면 Step 2 (Migration 053a seed) 영역 작성 진행.
+
+---
+
+## 🔵 Step 2 — Migration 053a (csv + MFC 통합 seed)
+
+### 변경 범위
+
+| 영역 | 변경 |
+|---|---|
+| material_master | **186 unique 자재** INSERT (csv 173 + MFC 13 = 186, 1110299900 LNG/O2 1 row) |
+| product_bom | 1,640 BOM 매핑 INSERT (csv 그대로, material_id JOIN) |
+| bom_checklist_log | (변경 없음, Step 4 이후 검사 흐름 별 sprint) |
+| 검증 SQL | 자재 카운트 + product_bom 매칭률 + 시리얼별 BOM 추출 sample |
+
+### Migration 053a SQL 양식 (Step 2 검증 영역 ⭐)
+
+```sql
+-- migrations/053a_material_master_and_bom_seed.sql
+-- =============================================================
+-- FEAT-MATERIAL-MASTER-AND-BOM-INTEGRATION-20260507 Step 2
+-- material_master 186 자재 + product_bom 1,640 BOM 매핑 INSERT
+-- 출처: /Users/twinfafa/Desktop/GST/material_master_통합.csv (1,654 row)
+-- =============================================================
+
+BEGIN;
+
+-- ============================================================
+-- 1. material_master INSERT (186 unique 자재)
+-- ============================================================
+-- 패턴: ON CONFLICT (item_code) DO UPDATE SET ... (idempotent + UPDATE 정합)
+-- 5-07 사용자 결정: 중복 자재 = UPDATE (사양 변경 가능성 + updated_at 갱신)
+
+INSERT INTO checklist.material_master
+    (item_code, item_name, category, spec_1, spec_2, unit)
+VALUES
+    -- csv 1,640 row 의 unique 자재코드 추출 (173 자재)
+    -- 각 row 의 첫 등장 (자재내역, 규격1, 규격2, 단위) 사용
+    ('1310225400', 'ANCHOR BRACKET', 'ANCHOR BRACKET', 'O3 DESTRUCTOR', 'STANDARD', 'EA'),
+    ('1310350500', 'ANCHOR BRAKCET', 'ANCHOR BRAKCET', 'ANCHOR BRACKET', '10t', 'EA'),
+    ('1100130400', 'REDUCER', 'REDUCER', 'R16-12', '1",3/4"', 'EA'),
+    ('1100618000', 'CENTER O-RING', 'CENTER O-RING', 'NW100 PVC, EPDM, AN346', 'NW100,PVC', 'EA'),
+    ('1100365600', 'CENTER O-RING', 'CENTER O-RING', 'NW100', 'NW100', 'EA'),
+    -- ... (170 row 생략, cowork 가 자동 생성한 SQL 파일 053a_material_master.sql)
+    
+    -- MFC 13 unique 자재 (5-07 사용자 결정: category 단일 "MFC", 가스 분기는 admin 이 select_options 매핑 시 설정)
+    -- 1110299900 LNG/O2 양쪽 등장 → 1 row 만 INSERT (자재코드 UNIQUE 영역 정합)
+    ('1110006700', 'MFC', 'MFC', 'MRC | 25 SLM', 'P:0.2~1 / W:0.4', 'EA'),
+    ('1120094300', 'MFC', 'MFC', 'HORIBA | 50 SLM', 'P:1~1.5', 'EA'),
+    ('1110298800', 'MFC', 'MFC', 'MKP | 50 SLM', 'P:0.3~2.5 / W:0.3', 'EA'),
+    ('1110020400', 'MFC', 'MFC', 'MRC | 50 SLM', 'P:2~5 / W:0.3', 'EA'),
+    ('1110299800', 'MFC', 'MFC', 'MKP | 75 SLM', 'P:0.3~2.5 / W:0.3', 'EA'),
+    ('1110299900', 'MFC', 'MFC', 'MKP | 150 SLM', 'P:2~4 / W:0.3', 'EA'),  -- LNG 영역 사양 (admin 이 view 에서 가스 분기 매핑)
+    ('1110049600', 'MFC', 'MFC', 'MRC | 50 SLM', 'P:0.3 / W:2~5', 'EA'),
+    ('1100479300', 'MFC', 'MFC', 'MKP | 300 SLM', 'P:0.3 / W:2~5', 'EA'),
+    ('1110006800', 'MFC', 'MFC', 'MRC | 50 SLM', 'P:0.3 / W:2~5', 'EA'),
+    ('1120099400', 'MFC', 'MFC', 'HORIBA | 100 SLM', 'W:2~3', 'EA'),
+    ('1100519700', 'MFC', 'MFC', 'MKP | 100 SLM', 'P:0.3 / W:2~5', 'EA'),
+    ('1110005900', 'MFC', 'MFC', 'MRC | 100 SLM', 'P:0.3 / W:2~5', 'EA'),
+    ('1100887400', 'MFC', 'MFC', 'MKP | 100 SLM', 'P:0.3 / W:2~5', 'EA')
+ON CONFLICT (item_code) DO UPDATE SET
+    item_name  = EXCLUDED.item_name,
+    category   = EXCLUDED.category,
+    spec_1     = EXCLUDED.spec_1,
+    spec_2     = EXCLUDED.spec_2,
+    unit       = EXCLUDED.unit,
+    updated_at = CURRENT_TIMESTAMP;
+    -- created_at / is_active 보존
+
+-- ============================================================
+-- 2. product_bom INSERT (1,640 BOM 매핑)
+-- ============================================================
+-- 패턴: csv 의 자재코드 → material_master.id JOIN 후 INSERT
+-- ON CONFLICT (product_code, material_id) DO UPDATE SET quantity (수량 변경 반영)
+
+INSERT INTO checklist.product_bom
+    (product_code, customer, model, material_id, quantity)
+SELECT
+    src.product_code,
+    src.customer,
+    src.model,
+    mm.id AS material_id,
+    src.quantity
+FROM (
+    VALUES
+        ('41000514', 'SEC', 'DRAGON LE DUAL', '1310225400', 4),
+        ('41000516', 'SEC', 'GAIA-I DUAL',    '1310350500', 4),
+        ('41000516', 'SEC', 'GAIA-I DUAL',    '1100130400', 2),
+        ('41000538', 'PV',  'IVAS 3CH',       '1100618000', 2),
+        ('41000538', 'PV',  'IVAS 3CH',       '1100365600', 2),
+        -- ... (1,635 row 생략, cowork 가 자동 생성한 SQL 파일 053a_product_bom.sql)
+        ('41000556', 'MICRON TW', 'GAIA-I DUAL', '1310798500', 1)
+) AS src(product_code, customer, model, item_code, quantity)
+JOIN checklist.material_master mm ON mm.item_code = src.item_code
+ON CONFLICT (product_code, material_id) DO UPDATE SET
+    customer   = EXCLUDED.customer,
+    model      = EXCLUDED.model,
+    quantity   = EXCLUDED.quantity,
+    updated_at = CURRENT_TIMESTAMP;
+
+COMMIT;
+
+-- ============================================================
+-- 3. 검증 SQL (Migration 053a 후 즉시 실행)
+-- ============================================================
+-- 3-1) material_master row 카운트
+SELECT COUNT(*) AS total_materials FROM checklist.material_master;
+-- 기대: 186
+
+-- 3-2) product_bom row 카운트
+SELECT COUNT(*) AS total_bom_rows FROM checklist.product_bom;
+-- 기대: 1,640
+
+-- 3-3) MFC 자재 카테고리별 분포
+SELECT category, COUNT(*) AS n
+  FROM checklist.material_master
+ WHERE category = 'MFC'
+ GROUP BY category;
+-- 기대: MFC=13 (5-07 사용자 결정 — 단일 카테고리, 1110299900 1 row)
+
+-- 3-4) 시리얼별 BOM 추출 sample (GAIA-I DUAL product_code='41200076')
+SELECT pb.product_code, mm.item_code, mm.item_name, mm.spec_1, pb.quantity
+  FROM checklist.product_bom pb
+  JOIN checklist.material_master mm ON pb.material_id = mm.id
+ WHERE pb.product_code = '41200076'
+ ORDER BY mm.item_name;
+-- 기대: GBWS-6408 / 6409 / 6410 / 6411 시리얼이 공유하는 BOM 자재 N건
+
+-- 3-5) plan.product_info 매칭 product_code 카운트 (soft FK 검증)
+SELECT
+  COUNT(DISTINCT pb.product_code) AS bom_pc,
+  COUNT(DISTINCT pi.product_code) AS plan_pc_matched,
+  COUNT(DISTINCT CASE WHEN pi.product_code IS NULL THEN pb.product_code END) AS bom_pc_no_plan
+FROM checklist.product_bom pb
+LEFT JOIN plan.product_info pi ON pi.product_code = pb.product_code;
+-- 기대: bom_pc=246, plan_pc_matched=일부, bom_pc_no_plan=일부 (4100xxxx prefix)
+```
+
+### 함정 / 위험 영역 (Step 2)
+
+| # | 영역 | 검증 |
+|---|---|---|
+| 1 | **MFC 1110299900 LNG/O2 중복** | LNG 영역만 INSERT, O2 의 동일 자재코드는 ON CONFLICT 로 skip. material_master 1 row 만 등록 (자재 ID 기준 unique). |
+| 2 | csv 의 따옴표 안 콤마 (`"NW100,PVC"`, `"VCR, 태광, 1/2""""`) | INSERT VALUES 의 단일 따옴표 escape (Python `csv.writer` 자동 처리, SQL `''`) |
+| 3 | csv 의 NULL 셀 (수량 / 단위 / 생성일 NULL) | INSERT VALUES 에서 `''` (빈 문자열) 또는 `NULL` 처리. cowork SQL 생성 시 빈 셀 → SQL `NULL` 변환. |
+| 4 | 자재내역 = '' (빈 값) row 처리 | csv 검증 — 자재내역 NULL row 0 (1,640 row 모두 자재내역 보유) |
+| 5 | item_seq 컬럼 영역 | 신규 product_bom 에는 item_seq 없음 (사용자 답변 — Mockup 이라 운영 영역 따라 변경 가능). seed 시 csv 의 row 순서 그대로 INSERT. |
+| 6 | INSERT VALUES 사이즈 영역 | material_master 186 row + product_bom 1,640 row = 단일 SQL 파일 ~150-200 KB. 1 transaction 처리 가능 (Postgres 한계 무관). |
+
+### 사전 검증 SQL (Step 2 진행 전)
+
+```sql
+-- 1. Migration 053 (Step 1) 정상 적용 확인
+SELECT table_name FROM information_schema.tables
+ WHERE table_schema = 'checklist'
+   AND table_name IN ('material_master', 'product_bom');
+-- 기대: 2 row
+
+-- 2. material_master 비어있음 확인
+SELECT COUNT(*) FROM checklist.material_master;
+-- 기대: 0 (Step 2 INSERT 전)
+
+-- 3. product_bom 비어있음 확인
+SELECT COUNT(*) FROM checklist.product_bom;
+-- 기대: 0 (Step 2 INSERT 전)
+```
+
+### pytest TC (Step 2, 2건)
+
+```python
+# tests/backend/test_migration_053a_seed.py
+
+def test_material_master_seeded_186_unique():
+    """Migration 053a 후 material_master 186 unique 자재 INSERT 검증."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM checklist.material_master")
+        assert cur.fetchone()[0] == 186, "material_master 186 자재 정합"
+        
+        # MFC 13 자재 검증 (5-07 사용자 결정: 단일 category)
+        cur.execute("""
+            SELECT COUNT(*) FROM checklist.material_master
+             WHERE category = 'MFC'
+        """)
+        assert cur.fetchone()[0] == 13, "MFC 자재 13 unique (1110299900 LNG/O2 1 row)"
+
+def test_product_bom_seeded_1640_with_material_join():
+    """Migration 053a 후 product_bom 1,640 BOM 매핑 + material_id JOIN 정합 검증."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM checklist.product_bom")
+        assert cur.fetchone()[0] == 1640
+        
+        # 시리얼 GBWS-6408 → product_code='41200076' → BOM N건 추출
+        cur.execute("""
+            SELECT mm.item_code, pb.quantity
+              FROM checklist.product_bom pb
+              JOIN checklist.material_master mm ON pb.material_id = mm.id
+             WHERE pb.product_code = '41200076'
+             ORDER BY mm.item_code
+        """)
+        bom_rows = cur.fetchall()
+        # 기대: 41200076 product_code 의 자재 매핑 N건 (csv 데이터 기준)
+        assert len(bom_rows) > 0, "41200076 BOM 매핑 보유"
+```
+
+### 회귀 위험 (Step 2)
+
+```
+회귀 위험 = 0
+  ├─ 데이터 INSERT 만 (schema 변경 0)
+  ├─ ON CONFLICT (idempotent) — 재실행 안전
+  └─ 기존 코드 영향 0 (Step 3 까지 신규 데이터 사용 안 함)
+
+선행 의존성 = Step 1 Migration 053 적용 완료
+```
+
+### Rollback (Step 2) — Codex 라운드 2 A-R2-02 정정 (DELETE 기반, scope 제한)
+
+```sql
+-- migrations/053a_rollback.sql
+-- ⭐ Codex 라운드 2 A-R2-02 + 라운드 3 잔존 catch 정정 영역
+-- → 정정 후 = DELETE 기반 + scope 제한 (pre-Step-4 전용 rollback)
+-- → 정정 전 영역 (옛 패턴) 폐기 — 본 SQL 영역은 정정 완료 영역
+
+BEGIN;
+
+-- 1) 검증: bom_checklist_log 영역 데이터 0 확인 (Step 4 진행 후 데이터 있으면 rollback X)
+DO $$
+DECLARE
+    log_count INTEGER;
+BEGIN
+    SELECT COUNT(*) INTO log_count FROM checklist.bom_checklist_log;
+    IF log_count > 0 THEN
+        RAISE EXCEPTION
+            'Step 4 진행 후 데이터 % 건 존재 — rollback 시 destructive. 별 절차 필요.', log_count;
+    END IF;
+END $$;
+
+-- 2) Step 2 seed 가 INSERT 한 영역만 DELETE (scope 제한)
+DELETE FROM checklist.product_bom
+ WHERE created_at >= '2026-05-XX' -- Step 2 release 시각 이후
+   AND material_id IN (SELECT id FROM checklist.material_master);
+
+DELETE FROM checklist.material_master
+ WHERE created_at >= '2026-05-XX'; -- Step 2 release 시각 이후
+
+COMMIT;
+```
+
+**Pre-Step-4 전용 rollback 명시**:
+- Step 4 (admin GUI) 배포 후 admin 매핑 / 작업자 검사 진행 시 rollback X (destructive)
+- Step 4 진행 후 rollback 필요 시 별 절차 (snapshot 복원 + admin 매핑 결과 보존 또는 손실 인지)
+
+→ Step 1 schema 그대로 + 데이터만 비움. 검증 + scope 제한 영역으로 안전.
+
+### Cowork 측 자동 생성 영역 (실 INSERT VALUES SQL)
+
+본 설계서는 양식만 표기. 실제 1,640 + 186 INSERT VALUES SQL 은 **cowork 측에서 통합 csv (1,654 row) → SQL 변환 자동 생성**:
+
+```bash
+# cowork 가 진행할 영역 (Step 2 실 작업 시점)
+python3 scripts/generate_migration_053a.py \
+    --csv /Users/twinfafa/Desktop/GST/material_master_통합.csv \
+    --output backend/migrations/053a_material_master_and_bom_seed.sql
+
+# 생성 SQL 검증
+grep "INSERT INTO" 053a_material_master_and_bom_seed.sql | wc -l  # 기대: 2 (material_master 1 + product_bom 1)
+grep "VALUES" 053a_material_master_and_bom_seed.sql              # SQL VALUES 영역 정합 검증
+```
+
+### ⭐ Codex 라운드 1 D2-02 정정 — 생성 스크립트 사전 중복 검증 (fail-fast)
+
+**위험**: PostgreSQL ON CONFLICT 가 단일 statement 내에서 같은 conflict target row 를 두 번 affect 시 raise — `cannot affect row a second time`. 따라서 source csv 의 중복 키 fail-fast 영역 필요.
+
+```python
+# scripts/generate_migration_053a.py — 사전 검증 영역 (fail-fast)
+
+import csv
+from collections import Counter
+
+def validate_source_keys(csv_path):
+    """source csv 의 중복 키 + 필수 컬럼 NULL 검증 — SQL 생성 전 fail-fast.
+    
+    ⭐ Codex D2-02: ON CONFLICT 영역 'cannot affect row a second time' 위험 차단
+    ⭐ Codex Pre-validation gap #4 + #5: 중복 키 + 필수 컬럼 검증
+    """
+    with open(csv_path, encoding='utf-8') as f:
+        rows = list(csv.DictReader(f))
+    
+    # 1) 자재코드 중복 검증 (material_master ON CONFLICT 대비)
+    item_codes = [r['자재코드'] for r in rows if r['자재코드']]
+    item_dup = [k for k, v in Counter(item_codes).items() if v > 1]
+    
+    # 2) (product_code, item_code) 조합 중복 검증 (product_bom ON CONFLICT 대비)
+    bom_keys = [(r['품번'], r['자재코드']) for r in rows if r['품번'] and r['자재코드']]
+    bom_dup = [k for k, v in Counter(bom_keys).items() if v > 1]
+    
+    # 3) 필수 컬럼 NULL 검증 (item_code / item_name / product_code)
+    invalid_rows = []
+    for i, r in enumerate(rows, start=2):  # CSV 행번호 (헤더 제외)
+        if not r['자재코드']:
+            invalid_rows.append((i, 'item_code 누락', r))
+        elif not r['자재내역']:
+            invalid_rows.append((i, 'item_name 누락', r))
+        # 품번 (product_code) 은 MFC 영역에서 NULL 허용 (자재 마스터만 등록 영역)
+    
+    # 4) Validation report 출력
+    if item_dup or bom_dup or invalid_rows:
+        print("=== Source CSV 검증 실패 (SQL 생성 중단) ===")
+        if item_dup:
+            print(f"❌ 자재코드 중복 {len(item_dup)} 건: {item_dup[:5]}...")
+        if bom_dup:
+            print(f"❌ (품번, 자재코드) 중복 {len(bom_dup)} 건: {bom_dup[:5]}...")
+        if invalid_rows:
+            print(f"❌ 필수 컬럼 누락 {len(invalid_rows)} 행:")
+            for line_no, reason, _row in invalid_rows[:10]:
+                print(f"   row {line_no}: {reason}")
+        raise ValueError(
+            "source csv 검증 실패 — 중복 키 또는 필수 컬럼 누락. "
+            "사용자 측 csv 정정 후 재실행 권장."
+        )
+    
+    print(f"✅ source csv 검증 통과: {len(rows)} row, {len(set(item_codes))} 자재")
+    return rows
+```
+
+→ Step 2 실 작업 시점에 cowork 가 위 스크립트로 SQL 생성 + 사용자 측 검토 후 commit. **사전 검증 fail 시 SQL 생성 안 됨**.
+
+---
+
+## 🤔 Step 2 점검 영역 — 사용자 검증 받을 영역
+
+1. **자재내역 그대로 category 사용** — "ANCHOR BRACKET" / "CENTER O-RING" / "MFC LNG" 그대로. OK?
+2. **MFC 자재의 category 표기** — "MFC LNG" / "MFC CDA" / "MFC O2" / "MFC N2" 4종 분리. OK? (또는 단일 "MFC" 로 통합 + spec_1 에 가스 인코딩)
+3. **csv 의 NULL 셀 처리** — 빈 셀은 SQL NULL 로 변환 (수량 / 생성일 영역). OK?
+4. **ON CONFLICT (item_code) DO UPDATE 패턴** — 5-07 합의 (UPDATE) 정합. OK?
+5. **MFC 1110299900 (LNG/O2 중복)** — material_master 1 row 만 (자재 ID 기준 unique), 카테고리 'MFC LNG' 로 INSERT (먼저 등장 영역). 어느 카테고리 우선? 또는 별 분리 row 2개?
+
+→ 답 받으면 Step 3 (BE+FE 동적 조회 통합) 영역 작성 진행.
+
+---
+
+## 🔵 Step 3 — checklist_master 동적 조회 통합 (MECH 체크리스트 완성!)
+
+### 변경 범위
+
+| 영역 | 변경 |
+|---|---|
+| BE | `_get_checklist_by_category()` 의 select_options 응답 영역 enrich (material_master JOIN) |
+| BE | `_enrich_select_options()` 신규 함수 — material_id 배열 → 옵션 Y full spec 문자열 변환 |
+| BE | 51a placeholder 옛 옵션 호환 영역 (legacy compatibility) — DB 변경 0 |
+| FE | mech_checklist_screen.dart SELECT widget 표시 영역 (이미 string 배열 처리, schema 변경 0) |
+| pytest | 신규 TC 3건 (dynamic_select_options / material_join / legacy_placeholder_compat) |
+
+### checklist_master.select_options JSON 양식 호환 영역
+
+```
+옛 양식 (51a placeholder, prod 적용 중):
+  ["MKS GE50A | 5 SLM | 0.5 MPa | 0.1-0.7 MPa",
+   "Brooks 5850E | 10 SLM | 0.7 MPa | 0.2-0.9 MPa",
+   "Horiba SEC-Z512 | 20 SLM | 1.0 MPa | 0.3-1.2 MPa"]
+       ↑ string 배열 (BE override 후 그대로 표시)
+
+신규 양식 (admin 매핑 후, Step 4 영역에서 admin 이 변환):
+  [12, 14, 18, 22, 24, 30]
+       ↑ material_id (정수) 배열 — BE 가 material_master JOIN 후 옵션 Y 형식 string 으로 변환
+```
+
+→ **호환 영역**: 옛 placeholder + 신규 material_id 배열 양쪽 지원. 51a seed 변경 0 (DB 안전), admin UI (Step 4) 에서 사용자가 직접 매핑 변경.
+
+### BE — `_enrich_select_options()` 신규 함수 (Step 3 검증 영역 ⭐)
+
+```python
+# backend/app/services/checklist_service.py
+# Sprint 63-BE 의 _get_checklist_by_category() 응답 직전에 enrich
+
+def _enrich_select_options(select_options: Optional[List], cur) -> Optional[List[str]]:
+    """
+    select_options 의 양식 자동 판단 후 옵션 Y full spec 문자열 배열로 변환.
+    
+    옛 양식 (legacy): string 배열 → 그대로 반환 (호환 영역)
+    신규 양식: int 배열 (material_id) → material_master JOIN → "item_name | spec_1 | spec_2" 변환
+    혼합 영역: 그대로 반환 + WARN 로그 (admin UI 에서 정정 권장)
+    
+    5-07 사용자 결정: 옵션 Y (full spec) — admin 이 매핑한 자재 후보들의 spec 정보 동봉.
+    """
+    if not select_options:
+        return select_options
+    
+    # 모두 string → 옛 placeholder 영역 (51a seed)
+    if all(isinstance(x, str) for x in select_options):
+        return select_options  # 그대로 (legacy compatibility)
+    
+    # 모두 int → 신규 material_id 영역
+    if all(isinstance(x, int) for x in select_options):
+        cur.execute("""
+            SELECT id, item_name, spec_1, spec_2
+              FROM checklist.material_master
+             WHERE id = ANY(%s) AND is_active = TRUE
+             ORDER BY array_position(%s::int[], id)
+        """, (select_options, select_options))
+        rows = cur.fetchall()
+        result = []
+        for _id, item_name, spec_1, spec_2 in rows:
+            # 옵션 Y 형식: "item_name | spec_1 | spec_2"
+            parts = [item_name]
+            if spec_1:
+                parts.append(spec_1)
+            if spec_2:
+                parts.append(spec_2)
+            result.append(" | ".join(parts))
+        return result
+    
+    # 혼합 영역 (일부 string + 일부 int) — admin UI 에서 정정 권장
+    logger.warning(
+        "[checklist] select_options 혼합 양식 감지, admin 매핑 정정 권장: %s",
+        select_options
+    )
+    return [str(x) for x in select_options]  # fallback (string 변환)
+
+
+# _get_checklist_by_category() 함수 변경 — 응답 직전 enrich 호출
+def _get_checklist_by_category(...):
+    # ... 기존 SELECT 로직 그대로 ...
+    
+    items_resp = []
+    for row in cur.fetchall():
+        # row[8] = select_options (JSONB)
+        items_resp.append({
+            'id': row[0],
+            'item_name': row[1],
+            ...
+            'select_options': _enrich_select_options(row[8], cur),  # ⭐ enrich 호출
+            ...
+        })
+    return items_resp
+```
+
+### FE — mech_checklist_screen.dart 변경 영역 (Step 3 검증)
+
+```dart
+// frontend/lib/screens/checklist/mech_checklist_screen.dart
+// SELECT widget — string 배열 그대로 처리 (schema 변경 0, BE 가 변환 완료한 string 받음)
+
+Widget _buildSelectDropdown(Map<String, dynamic> item) {
+  final selectOptions = (item['select_options'] as List?)?.cast<String>() ?? [];
+  // 5-07 결정: BE 가 옵션 Y 형식 ("MRC | 25 SLM | P:0.2~1 / W:0.4") 으로 변환 완료
+  // FE 는 이미 string 배열 처리하므로 schema / 코드 변경 0
+  
+  return DropdownButton<String>(
+    value: _selectedValueMap[item['id']] as String?,
+    isExpanded: true,
+    items: selectOptions.map((opt) => DropdownMenuItem<String>(
+      value: opt,
+      child: Text(
+        opt,
+        style: TextStyle(fontSize: 13),
+        overflow: TextOverflow.ellipsis,
+        maxLines: 2,  // 옵션 Y full spec 표시 영역 (긴 string 대비)
+      ),
+    )).toList(),
+    onChanged: _currentPhase == 2 ? null : (value) {
+      // 5-07 결정: 작업자 = dropdown 값만 선택 (수정 X)
+      // dropdown 설정값은 admin/GST 가 view 측에서 매핑
+      setState(() {
+        _selectedValueMap[item['id']] = value;
+      });
+      _upsertNow(...);
+    },
+  );
+}
+```
+
+→ **schema 변경 0**: 51a placeholder 그대로 + admin 이 Step 4 에서 material_id 매핑 변경 시 BE override 자동 적용. FE 코드 변경 최소.
+
+### checklist_record 영역 — 5-07 사용자 결정 옵션 X 채택 (Codex D5-01 정정)
+
+```
+checklist_record (기존 컬럼 + 신규 1 컬럼):
+  selected_value         VARCHAR     — 표시용 string (옵션 Y full spec)
+  selected_material_id   INTEGER     — ⭐ NEW (D5-01 옵션 X 채택, FK → material_master)
+                                       ELEC/TM=NULL, MECH 신규 record 부터 채움
+
+옛 패턴 (51a placeholder 시, legacy record):
+  selected_value = "MKS GE50A | 5 SLM | 0.5 MPa | 0.1-0.7 MPa"
+  selected_material_id = NULL  (옛 placeholder 영역 자재 매핑 X)
+
+신규 패턴 (admin material_id 매핑 후, 신규 record):
+  selected_value = "MFC | MRC | 25 SLM | P:0.2~1 / W:0.4"  (BE 가 enrich 한 옵션 Y string)
+  selected_material_id = 12  (자재 ID FK 추적, admin 매핑 영역에서 추출)
+                          ↑ Step 3 BE override 가 selected_value 와 함께 selected_material_id 도 저장
+```
+
+### 옵션 X 채택 영역 — 운영 가치
+
+```
+✅ 자재 변경 영향 분석:
+   "자재 1110006700 변경됐는데 영향받는 시리얼?"
+   → SELECT * FROM checklist_record WHERE selected_material_id = 12
+
+✅ 자재 통계:
+   "어느 자재가 가장 자주 사용되나?"
+   → SELECT material_id, COUNT(*) FROM checklist_record GROUP BY material_id
+
+✅ Phase 3 AI 비전 검증 prerequisite:
+   AI 자재 명판 인식 → material_id 추출 → checklist_record.selected_material_id 직접 매칭
+```
+
+### BE 측 변경 영역 (Step 3 BE override) — Codex NEW-M-01 정정 (역추적 폐기)
+
+```python
+# checklist_service.py — checklist_record INSERT/UPDATE 영역
+# ⭐ Codex 라운드 3 NEW-M-01 정정: _resolve_material_id_from_display_string() 역추적 설계 폐기
+#    근거: material_master.UNIQUE 제약 = item_code 만 (item_name + spec 조합 UNIQUE X)
+#    → 동일 display string 이 여러 material_id 매핑 가능 → 잘못된 FK 저장 위험
+#
+# 정정 후 설계: FE 가 selected_material_id 를 직접 전달, BE 는 검증 / 보조 저장만
+
+def upsert_checklist_record(serial_number, master_id, selected_value, selected_material_id, ...):
+    """checklist_record INSERT/UPDATE — FE 가 material_id 직접 전달.
+    
+    Args:
+        selected_value: 표시용 string (FE 에서 dropdown 의 visible text 그대로 전송)
+        selected_material_id: 자재 ID (FE 에서 dropdown 의 underlying value, INTEGER)
+                              MECH SELECT 영역에서 옵션 선택 시 FE 가 동봉 전송
+                              ELEC/TM 또는 옛 placeholder 영역 = NULL
+    """
+    # 1. 검증 — selected_material_id 가 NULL 아닌 경우 material_master 존재 + is_active 확인
+    if selected_material_id is not None:
+        cur.execute("""
+            SELECT id FROM checklist.material_master
+             WHERE id = %s AND is_active = TRUE
+        """, (selected_material_id,))
+        if not cur.fetchone():
+            raise ValueError(
+                f"INVALID_MATERIAL_ID: {selected_material_id} 미등록 또는 비활성 — "
+                f"FE 측 select_options 동기화 필요"
+            )
+    
+    # 2. INSERT/UPDATE
+    cur.execute("""
+        INSERT INTO checklist.checklist_record
+            (serial_number, master_id, selected_value, selected_material_id, ...)
+        VALUES (%s, %s, %s, %s, ...)
+        ON CONFLICT ... DO UPDATE SET
+            selected_value = EXCLUDED.selected_value,
+            selected_material_id = EXCLUDED.selected_material_id,
+            ...
+    """, (serial_number, master_id, selected_value, selected_material_id, ...))
+```
+
+### FE 측 변경 영역 (mech_checklist_screen.dart) — Codex NEW-M-01 정정
+
+```dart
+// frontend/lib/screens/checklist/mech_checklist_screen.dart
+// ⭐ Codex NEW-M-01 정정: BE 가 enrich 시점에 material_id ↔ string mapping 동봉 응답
+//    FE 는 dropdown 선택 시 material_id + display_string 양쪽 추출 후 BE 전송
+
+// BE 응답 양식 변경 (Step 3 _enrich_select_options):
+// 옛 양식 (라운드 2 까지):
+//   select_options: ["MFC | MRC | 25 SLM | P:0.2~1 / W:0.4", ...]  ← string 배열
+// 
+// 신규 양식 (라운드 3 정정):
+//   select_options: [
+//     {"material_id": 12, "display": "MFC | MRC | 25 SLM | P:0.2~1 / W:0.4"},
+//     {"material_id": 14, "display": "MFC | HORIBA | 50 SLM | P:1~1.5"},
+//     ...
+//   ]
+//   ↑ legacy string 배열 (placeholder) 도 호환 — display 만 보유, material_id=null
+
+Widget _buildSelectDropdown(Map<String, dynamic> item) {
+  final selectOptions = (item['select_options'] as List?)
+      ?.map((e) => e is Map ? e : {'material_id': null, 'display': e.toString()})
+      .toList() ?? [];
+  
+  return DropdownButton<Map<String, dynamic>>(
+    value: _selectedOptionMap[item['id']],
+    isExpanded: true,
+    items: selectOptions.map((opt) => DropdownMenuItem<Map<String, dynamic>>(
+      value: opt,
+      child: Text(opt['display'] as String, ...),
+    )).toList(),
+    onChanged: _currentPhase == 2 ? null : (selected) {
+      setState(() {
+        _selectedOptionMap[item['id']] = selected;
+      });
+      // ⭐ BE 호출 시 material_id + display 양쪽 전송
+      _upsertNow(
+        masterId: item['id'],
+        selectedValue: selected?['display'] as String?,
+        selectedMaterialId: selected?['material_id'] as int?,  // ⭐ 직접 전달
+      );
+    },
+  );
+}
+```
+
+### 응답 양식 호환성 영역 (Step 3 BE override 보강)
+
+```python
+# _enrich_select_options() 정정 (Codex NEW-M-01 영역)
+
+def _enrich_select_options(select_options, cur):
+    """BE 응답 시 [{material_id, display}, ...] 양식으로 enrich.
+    
+    legacy string 배열 → display 만 보유 (material_id=null, FE 가 NULL 인지)
+    신규 int 배열 → material_master JOIN → {material_id, display} dict
+    """
+    if not select_options:
+        return select_options
+    
+    if all(isinstance(x, str) for x in select_options):
+        # legacy placeholder string 영역
+        return [{'material_id': None, 'display': s} for s in select_options]
+    
+    if all(isinstance(x, int) for x in select_options):
+        # 신규 int 배열 영역
+        cur.execute("""
+            SELECT id, item_name, spec_1, spec_2, is_active
+              FROM checklist.material_master
+             WHERE id = ANY(%s)
+             ORDER BY array_position(%s::int[], id)
+        """, (select_options, select_options))
+        result = []
+        seen_ids = set()
+        for _id, item_name, spec_1, spec_2, is_active in cur.fetchall():
+            seen_ids.add(_id)
+            parts = [item_name]
+            if spec_1: parts.append(spec_1)
+            if spec_2: parts.append(spec_2)
+            result.append({
+                'material_id': _id,
+                'display': " | ".join(parts) + ("" if is_active else " [INACTIVE]"),
+            })
+        # 누락 영역 ([INACTIVE:id] marker 보존, A-R2-03 정합)
+        for opt_id in select_options:
+            if opt_id not in seen_ids:
+                result.append({
+                    'material_id': opt_id,
+                    'display': f"[INACTIVE:{opt_id}]",
+                })
+        return result
+    
+    return select_options  # 혼합 / fallback
+```
+
+→ **NEW-M-01 정정 영역**: BE 가 enrich 시점에 `{material_id, display}` dict 동봉 → FE 가 dropdown 선택 시 material_id 직접 추출 → BE 호출 시 직접 전달. **역추적 영역 완전 폐기**.
+
+### NEW-A-01 정정 — selected_value ↔ selected_material_id 불일치 복구 전략
+
+```
+불일치 시나리오:
+  - selected_material_id 가 NULL 인데 selected_value 가 존재 (legacy placeholder 영역)
+  - selected_material_id 존재인데 material_master 에서 비활성 / 삭제 (자재 변경 영역)
+  - selected_value 의 display string ↔ material_master.spec 불일치 (자재 spec 변경 영역)
+
+복구 전략:
+  ① BE 응답 시점 (GET /checklist/mech) 검증
+     - selected_material_id 가 비활성 material 이면 [INACTIVE:id] marker (A-R2-03 정합)
+     - selected_value 표시는 selected_material_id 우선 (FK 기반, 자재 spec 변경 자동 반영)
+       → 즉 응답 영역 display = material_master JOIN spec (selected_value 무시 영역)
+  
+  ② admin 측 정정 영역
+     - 비활성 material 매핑 영역 admin 측 알림 (WARN 로그 + admin UI 알림)
+     - admin 이 select_options 재매핑 또는 자재 활성화 결정
+  
+  ③ 정합성 검증 SQL (배치 cron 또는 사후 진단)
+     SELECT cr.id, cr.serial_number, cr.selected_value, cr.selected_material_id, mm.is_active
+       FROM checklist.checklist_record cr
+       LEFT JOIN checklist.material_master mm ON cr.selected_material_id = mm.id
+      WHERE cr.selected_material_id IS NOT NULL
+        AND (mm.id IS NULL OR mm.is_active = FALSE);
+     → 비활성/삭제 자재 매핑 record 영역 정기 점검
+```
+
+→ **NEW-A-01 정합 영역**: 단방향 (material_id → spec) 우선 + admin 측 알림 + 정기 점검 SQL.
+
+### 함정 / 위험 영역 (Step 3)
+
+| # | 영역 | 검증 |
+|---|---|---|
+| 1 | **51a placeholder 호환성** | `_enrich_select_options()` 가 legacy string 배열 영역도 `{material_id: None, display: "..."}` dict 배열로 정규화 → 옛 placeholder 영역 변경 0, 작업자 측 회귀 0 (Codex 라운드 4 NEW-A-01 정정) |
+| 2 | **material_id ARRAY 타입 영역** | PostgreSQL `int[]` ANY 연산자 호환 검증 — `ANY(%s)` 패턴 + `array_position` 정렬 영역 |
+| 3 | **N+1 query 위험** | `_get_checklist_by_category()` 가 73 항목 (MECH) 마다 enrich 호출 시 73 번 SELECT 발생 — 성능 영역 검증. 최적화 영역 = 73 항목 select_options 일괄 collect → 단일 SELECT (BATCHED) |
+| 4 | **혼합 양식 영역** | string + int 혼합 시 fallback 처리 + WARN 로그. admin UI 정정 영역 |
+| 5 | **selected_value + selected_material_id 양쪽 컬럼 호환** | selected_value (display string) + selected_material_id (INTEGER FK, Step 1 ADD COLUMN 으로 확정 — L38234~38242 정합). NEW-M-01 정정 후 FE 가 selected_material_id 직접 전달 (Codex 라운드 4 NEW-A-02 정정) |
+| 6 | **ELEC/TM 영역 회귀** | `_enrich_select_options()` 가 모든 카테고리 호출됨. ELEC/TM 의 51a 옛 placeholder 영역도 dict 배열 정규화 (display 만 채움, material_id=None) — 회귀 0 |
+
+### N+1 query 최적화 영역 (Step 3 권장)
+
+```python
+# 73 항목 일괄 처리 (BATCHED enrich)
+
+def _get_checklist_by_category(...):
+    items = [...]  # 73 row 의 select_options 추출
+    
+    # Step 1: 모든 material_id 수집 (set)
+    all_material_ids = set()
+    for row in items:
+        select_opts = row['select_options'] or []
+        for opt in select_opts:
+            if isinstance(opt, int):
+                all_material_ids.add(opt)
+    
+    # Step 2: 단일 SELECT 으로 모든 material 조회
+    material_map = {}  # id → "item_name | spec_1 | spec_2"
+    if all_material_ids:
+        cur.execute("""
+            SELECT id, item_name, spec_1, spec_2
+              FROM checklist.material_master
+             WHERE id = ANY(%s) AND is_active = TRUE
+        """, (list(all_material_ids),))
+        for _id, item_name, spec_1, spec_2 in cur.fetchall():
+            parts = [item_name]
+            if spec_1:
+                parts.append(spec_1)
+            if spec_2:
+                parts.append(spec_2)
+            material_map[_id] = " | ".join(parts)
+    
+    # Step 3: 각 row 의 select_options enrich (in-memory 변환)
+    # ⭐ Codex 라운드 2 A-R2-03 / D4-04 정정: 비활성/누락 material 영역 명시 marker
+    for row in items:
+        select_opts = row['select_options'] or []
+        if all(isinstance(x, int) for x in select_opts):
+            enriched = []
+            for opt in select_opts:
+                if opt in material_map:
+                    enriched.append(material_map[opt])
+                else:
+                    # 미등록 / 비활성 material — 명시 marker (raw ID string 노출 X)
+                    enriched.append(f"[INACTIVE:{opt}]")
+                    logger.warning(
+                        "[checklist] select_options 의 material_id=%d 미등록 또는 비활성, "
+                        "admin UI 정정 권장", opt
+                    )
+            row['select_options'] = enriched
+        # string / 혼합은 그대로
+    
+    return items
+```
+
+→ N+1 → N+1 (단일 SELECT) 최적화. 성능 영역 안정.
+
+**A-R2-03 / D4-04 정정 영역**:
+- `material_map.get(opt, str(opt))` 영역 = bare numeric 노출 위험
+- 정정 후 = `[INACTIVE:12]` 명시 marker + WARN 로그 (admin 측 정정 영역 인지)
+- 작업자 측 dropdown 에 의미 없는 숫자 노출 X (운영 영역 안전)
+
+### pytest TC (Step 3, 3건)
+
+```python
+# tests/backend/test_step3_dynamic_select_options.py
+
+def test_enrich_select_options_legacy_string_array():
+    """옛 placeholder string 배열 → 그대로 반환 (호환 영역)."""
+    placeholder = ["MKS GE50A | 5 SLM | 0.5 MPa", "Brooks 5850E | 10 SLM | 0.7 MPa"]
+    result = _enrich_select_options(placeholder, mock_cur)
+    assert result == placeholder
+
+def test_enrich_select_options_material_id_array():
+    """신규 material_id 배열 → 옵션 Y full spec 변환."""
+    # given: material_master 에 자재 2개 INSERT (1110006700 + 1120094300)
+    # when: select_options = [1, 2] (material_id)
+    # then: ["MFC | MRC | 25 SLM | P:0.2~1 / W:0.4", "MFC | HORIBA | 50 SLM | P:1~1.5"]
+    ...
+
+def test_get_checklist_mech_returns_enriched_select_options():
+    """GET /checklist/mech 응답 시 select_options 가 enriched 양식."""
+    # given: checklist_master.select_options = [1, 2, 3] (material_id 배열)
+    # when: GET /checklist/mech?serial_number=GBWS-6408
+    # then: 응답의 select_options 가 string 배열 (BE enrich 완료)
+    ...
+```
+
+### 회귀 위험 (Step 3)
+
+```
+회귀 위험 = 0
+  ├─ BE additive 변경 (옛 placeholder 그대로 + 신규 enrich 추가)
+  ├─ FE schema 변경 0 (string 배열 처리 동일)
+  ├─ 51a seed DB 변경 0 (admin UI Step 4 에서 사용자 매핑)
+  └─ ELEC/TM 영향 0 (legacy 호환 영역, 옵션 Y 변환은 신규 매핑 시점부터)
+
+선행 의존성 = Step 1+2 완료
+```
+
+### Rollback (Step 3)
+
+```python
+# git revert (BE 1 file + FE 1 file 변경)
+# DB 변경 0 → DB rollback 불필요
+```
+
+→ git revert 1 commit. BE override 함수 제거 + FE 변경 (없음 또는 기존 패턴 복원). 회귀 0.
+
+### Cowork 추측 작성 실수 영역 사전 차단
+
+ADR-023 표준 준수:
+- ELEC `_get_checklist_by_category()` 패턴 그대로 차용 (확정 영역)
+- material_master JOIN 영역 — Step 1+2 schema 정합 검증
+- N+1 최적화 — pytest TC 로 성능 영역 검증 (73 항목 단일 SELECT)
+- FE 변경 최소 — schema 변경 0, BE 가 변환 완료 string 받음
+- 옵션 Y 형식 ("item_name | spec_1 | spec_2") 명시 — cowork 추측 작성 영역 차단
+
+---
+
+## 🤔 Step 3 점검 영역 — 사용자 검증 받을 영역
+
+1. **BE override 패턴** — 51a placeholder 그대로 + 신규 material_id 매핑 시 BE enrich 변환. 호환 영역 OK?
+2. **옵션 Y 형식** — "item_name | spec_1 | spec_2" 표기. 예: "MFC | MRC | 25 SLM | P:0.2~1 / W:0.4". OK? 또는 다른 형식?
+3. **N+1 최적화** — 73 항목 일괄 BATCHED SELECT. 성능 영역 검증 받기?
+4. **selected_value + selected_material_id 양쪽 컬럼** — selected_value (display string) + selected_material_id (INTEGER FK, Step 1 Migration 053 의 `ADD COLUMN IF NOT EXISTS selected_material_id INTEGER` 로 확정 반영, L38234~38242). NEW-M-01 정정 후 FE 가 selected_material_id 직접 전달 + BE 검증 (Codex 라운드 4 NEW-A-02 정정).
+5. **ELEC/TM 회귀 영역** — `_enrich_select_options()` 가 모든 카테고리 호출됨. legacy 호환 영역 OK?
+6. **pytest TC 3건** — 추가 영역 필요?
+
+→ 답 받으면 Step 4 (AXIS-VIEW 자재 등록 / 체크리스트 관리 페이지) 영역 작성 진행.
+
+---
+
+## 🔵 Step 4 — AXIS-VIEW 자재 등록 / 체크리스트 관리 페이지 (Step 3 ordered deploy)
+
+### 변경 범위 (선택지 1 — ordered deploy with feature flag, Codex M-R2-04 정정)
+
+| 영역 | 변경 |
+|---|---|
+| AXIS-VIEW | `/materials` 페이지 신규 (검색 / 직접 입력 / Excel 업로드 / 비활성화) |
+| AXIS-VIEW | `/checklists` 관리 페이지 — select_options 매핑 영역 추가 |
+| BE | `/api/admin/materials` CRUD (GET / POST / PATCH / 비활성화) |
+| BE | `/api/admin/materials/upload` Excel 일괄 업로드 |
+| BE | `/api/admin/checklists/master/:id/options` 매핑 API |
+| 권한 | admin + GST 인원 |
+| pytest | 신규 TC 5건 (CRUD + upload + 매핑 + 권한) |
+
+### AXIS-VIEW `/materials` 페이지 설계
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ 자재 마스터 관리                                  [+ 추가] [📤 Excel] │
+├─────────────────────────────────────────────────────────────────┤
+│ 검색: [카테고리▼] [자재내역 검색...]                  [필터 적용] │
+├─────────────────────────────────────────────────────────────────┤
+│ 자재코드        | 자재내역    | 카테고리       | 규격1     | 규격2  │
+│ 1310225400     | ANCHOR..   | ANCHOR BR..   | O3 DEST.. | STAND.. │
+│ 1100618000     | CENTER O.. | CENTER O-RING | NW100 PVC.| NW100,P │
+│ 1110006700     | MFC        | MFC           | MRC | 25..| P:0.2~1 │
+│ ...                                                              │
+│ [페이지네이션]                                  186 자재 중 1-50 │
+└─────────────────────────────────────────────────────────────────┘
+
+[+ 추가] 클릭 시 모달:
+┌────────────────────────────┐
+│ 자재 추가                   │
+├────────────────────────────┤
+│ 자재코드: [_______________] │
+│ 자재내역: [_______________] │
+│ 카테고리: [▼ MFC / O-RING…] │
+│ 규격1:    [_______________] │
+│ 규격2:    [_______________] │
+│ 단위:     [▼ EA]            │
+│ [취소]              [저장]  │
+└────────────────────────────┘
+
+[📤 Excel] 클릭 시 모달:
+┌─────────────────────────────────────────────────┐
+│ Excel 업로드 (csv 양식)                         │
+├─────────────────────────────────────────────────┤
+│ 양식: 품번,고객사,모델,자재코드,자재내역,        │
+│       규격1,규격2,수량,단위,생성일              │
+│                                                  │
+│ [파일 선택...] 또는 드래그 앤 드롭              │
+│                                                  │
+│ 미리보기 (1,640 row 분석 결과):                 │
+│  ✓ 신규 자재: 5건 (초록 highlight)              │
+│  ⚠ 변경 자재: 2건 (노랑, before/after diff)     │
+│  • 동일 자재: 178건 (회색)                      │
+│                                                  │
+│ ○ 일괄 UPDATE (변경된 것 모두 갱신)             │
+│ ○ 변경된 것만 UPDATE (직접 선택)                │
+│ ○ skip 모두 (옛 데이터 보존)                    │
+│                                                  │
+│ [취소]                              [업로드 실행] │
+└─────────────────────────────────────────────────┘
+```
+
+### AXIS-VIEW `/checklists` 관리 페이지 — select_options 매핑 영역
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ 체크리스트 관리                                                  │
+├─────────────────────────────────────────────────────────────────┤
+│ 카테고리: [▼ MECH] | 그룹: [▼ LNG]                              │
+├─────────────────────────────────────────────────────────────────┤
+│ 검사 항목                          | 타입    | 매핑   | 상태     │
+│ MFC Maker / Spec / Flow Rate / .. | SELECT | [매핑] | 6 자재   │
+│ Speed Controller 방향              | CHECK  | -      | -        │
+│ Speed Controller 수량              | INPUT  | -      | -        │
+│ INLET S/N Left #1                  | INPUT  | -      | -        │
+│ ...                                                              │
+└─────────────────────────────────────────────────────────────────┘
+
+[매핑] 클릭 시 모달:
+┌─────────────────────────────────────────────────────────┐
+│ "MFC Maker / Spec ..." 자재 매핑                         │
+├─────────────────────────────────────────────────────────┤
+│ 자재 검색: [카테고리: MFC ▼] [maker 검색...]   [검색]    │
+├─────────────────────────────────────────────────────────┤
+│ ☑ 1110006700 MFC | MRC | 25 SLM | P:0.2~1 / W:0.4       │
+│ ☑ 1120094300 MFC | HORIBA | 50 SLM | P:1~1.5            │
+│ ☑ 1110298800 MFC | MKP | 50 SLM | P:0.3~2.5 / W:0.3     │
+│ ☐ 1110049600 MFC | MRC | 50 SLM | P:0.3 / W:2~5    (CDA) │
+│ ☑ 1110020400 MFC | MRC | 50 SLM | P:2~5 / W:0.3         │
+│ ...                                                      │
+├─────────────────────────────────────────────────────────┤
+│ 선택된 6 자재 (LNG 가스 호환):                          │
+│ [순서 변경 ▲▼]                                          │
+├─────────────────────────────────────────────────────────┤
+│ [취소]                                          [저장]  │
+└─────────────────────────────────────────────────────────┘
+
+저장 시:
+  → checklist_master.select_options = [12, 14, 18, 22, 24, 30] (material_id)
+  → BE 가 작업자 측 응답 시 material_master JOIN → string 변환
+```
+
+### BE — `/api/admin/materials` CRUD API (Step 4 검증 영역 ⭐)
+
+```python
+# backend/app/routes/admin_materials.py (신규 파일)
+from flask import Blueprint, request, jsonify
+# ⭐ Codex 라운드 1 D3-01 정정 (cowork 실수 #7): 잔존 import 정정
+# ⭐ Codex 라운드 1 D3-02 정정: @jwt_required 추가 (gst_or_admin_required 가 g.worker_id 의존)
+from app.middleware.jwt_auth import jwt_required, gst_or_admin_required
+
+bp = Blueprint('admin_materials', __name__, url_prefix='/api/admin/materials')
+
+
+@bp.route('/', methods=['GET'])
+@jwt_required           # ⭐ D3-02 정정: g.worker_id 채움
+@gst_or_admin_required  # ⭐ admin OR GST company 검증 (Sprint 27 v1.7.4 표준)
+def list_materials():
+    """자재 마스터 검색 + 페이지네이션."""
+    category = request.args.get('category')
+    keyword = request.args.get('keyword')
+    page = int(request.args.get('page', 1))
+    per_page = int(request.args.get('per_page', 50))
+    
+    # SELECT * FROM checklist.material_master
+    #  WHERE (category = $1 OR $1 IS NULL)
+    #    AND (item_name ILIKE $2 OR $2 IS NULL)
+    #    AND is_active = TRUE
+    #  ORDER BY item_code
+    #  LIMIT $3 OFFSET $4
+    ...
+    return jsonify({'items': [...], 'total': N, 'page': page})
+
+
+@bp.route('/', methods=['POST'])
+@jwt_required
+@gst_or_admin_required
+def create_material():
+    """직접 입력 자재 추가."""
+    payload = request.get_json()
+    # validation: item_code 필수 + 중복 체크 (ON CONFLICT DO UPDATE)
+    # INSERT INTO checklist.material_master (item_code, item_name, category, spec_1, spec_2, unit)
+    #   VALUES (...) ON CONFLICT (item_code) DO UPDATE SET ...
+    ...
+    return jsonify({'id': new_id, 'item_code': payload['item_code']}), 201
+
+
+@bp.route('/upload', methods=['POST'])
+@jwt_required
+@gst_or_admin_required
+def upload_excel():
+    """Excel 일괄 업로드 (csv 양식, P1 #6 정정 — 매핑 dict 명시)."""
+    file = request.files['file']
+    mode = request.form.get('mode', 'preview')  # preview (DB 변경 0) / commit (실 INSERT/UPDATE)
+    update_strategy = request.form.get('strategy', 'all')  # all / selected / skip
+    
+    # ⭐ P1 #6 정정: 한글 → 영문 컬럼 매핑 dict 명시 (csv 양식 5-07 사용자 결정)
+    CSV_COLUMN_MAP = {
+        '품번':     'product_code',  # plan.product_info.product_code 와 매칭 (soft FK)
+        '고객사':   'customer',
+        '모델':     'model',
+        '자재코드': 'item_code',     # material_master.item_code (UNIQUE)
+        '자재내역': 'item_name',     # material_master.item_name + category 그대로 사용
+        '규격1':    'spec_1',
+        '규격2':    'spec_2',
+        '수량':     'quantity',      # product_bom.quantity
+        '단위':     'unit',          # material_master.unit
+        '생성일':   '_ignored',      # csv 의 옛 timestamp 무시 (DB created_at 자동)
+    }
+    
+    # CSV 파싱 (한글 헤더 → 영문 dict 변환)
+    rows = parse_csv_bom_format(file, column_map=CSV_COLUMN_MAP)
+    
+    if mode == 'preview':
+        # ⭐ P2 #11 정정: preview = DB 변경 0 (read-only 분석)
+        # 미리보기 결과 (신규 / 변경 / 동일 분류)
+        return jsonify({
+            'new_materials': [...],       # material_master 에 없는 자재
+            'changed_materials': [...],   # before/after diff (UPDATE 대상)
+            'unchanged_materials': [...], # 동일 (skip 대상)
+            'new_bom_mappings': [...],    # product_bom 신규 매핑
+            'changed_bom_mappings': [...],
+        })
+    elif mode == 'commit':
+        # 실 INSERT/UPDATE 실행
+        # 5-07 사용자 결정: 중복 자재 = UPDATE + ON CONFLICT DO UPDATE
+        # 의문 C 채택: BOM 영역 동시 INSERT (자재 + product_bom 한 번에)
+        # 의문 D 채택: material_master 미등록 자재 자동 신규 등록 (자재 정보 충분 시)
+        # ⭐ P2 #11 정정: 동일 파일 2번 commit 시 ON CONFLICT idempotent — 회귀 0 보장
+        ...
+        return jsonify({'inserted': N, 'updated': M, 'skipped': K, 'rejected': R}), 200
+
+
+@bp.route('/<int:material_id>', methods=['PATCH'])
+@jwt_required
+@gst_or_admin_required
+def update_material(material_id):
+    """자재 사양 수정."""
+    payload = request.get_json()
+    # UPDATE checklist.material_master SET ... WHERE id = $1
+    # → 자동으로 select_options 매핑된 모든 체크리스트 항목에 spec 변경 반영
+    #   (BE override 가 응답 시점에 material_master JOIN → 신규 spec 표시)
+    ...
+    return jsonify({'updated': True}), 200
+
+
+@bp.route('/<int:material_id>/deactivate', methods=['PATCH'])
+@jwt_required
+@gst_or_admin_required
+def deactivate_material(material_id):
+    """자재 비활성화 (실 삭제 X)."""
+    # UPDATE checklist.material_master SET is_active = FALSE WHERE id = $1
+    # → admin UI 검색 자동 제외
+    # → select_options 매핑된 항목은 BE override 에서 'is_active = TRUE' 필터 → 옵션 자동 제외
+    ...
+    return jsonify({'deactivated': True}), 200
+```
+
+### BE — `/api/admin/checklists/master/:id/options` 매핑 API
+
+```python
+# backend/app/routes/admin_checklists.py (신규)
+
+@bp.route('/master/<int:master_id>/options', methods=['PATCH'])
+@jwt_required
+@gst_or_admin_required
+def update_select_options(master_id):
+    """checklist_master.select_options 매핑 (material_id 배열).
+    
+    5-07 사용자 결정: 옵션 Y full spec, admin/GST 매핑 권한.
+    """
+    payload = request.get_json()
+    material_ids = payload.get('material_ids', [])  # [12, 14, 18, 22, 24, 30]
+    
+    # validation: material_master 에 모두 존재 + is_active=TRUE 검증
+    if not _validate_material_ids(material_ids):
+        return jsonify({'error': 'INVALID_MATERIAL_IDS'}), 400
+    
+    # UPDATE checklist.checklist_master
+    #    SET select_options = $1::jsonb,
+    #        updated_at = CURRENT_TIMESTAMP
+    #  WHERE id = $2
+    #    AND item_type = 'SELECT'
+    cur.execute("""
+        UPDATE checklist.checklist_master
+           SET select_options = %s::jsonb,
+               updated_at = CURRENT_TIMESTAMP
+         WHERE id = %s
+           AND item_type = 'SELECT'
+    """, (json.dumps(material_ids), master_id))
+    
+    return jsonify({'master_id': master_id, 'material_ids': material_ids}), 200
+
+
+@bp.route('/master/<int:master_id>/options', methods=['GET'])
+@jwt_required
+@gst_or_admin_required
+def get_select_options(master_id):
+    """현재 매핑 + material spec 정보 조회 (admin UI 표시용).
+    
+    ⭐ Codex 라운드 1 D4-01 정정: dual-format 영역 — legacy string array 영역 raise 위험
+    → SQL 에서 정수 cast 영역 제거 + Python 측 분기 처리
+    
+    ⭐ Codex 라운드 1 D4-02 정정: array_position 으로 admin 매핑 순서 보존
+    """
+    cur.execute("""
+        SELECT cm.id, cm.item_name, cm.select_options
+          FROM checklist.checklist_master cm
+         WHERE cm.id = %s
+    """, (master_id,))
+    row = cur.fetchone()
+    if not row:
+        return jsonify({'error': 'NOT_FOUND'}), 404
+    
+    select_options = row[2] or []
+    materials = []
+    
+    # ⭐ D4-01 정정: Python 측에서 양식 분기 (SQL 정수 cast X)
+    if select_options and all(isinstance(x, int) for x in select_options):
+        # 신규 양식 (material_id 정수 배열)
+        # ⭐ D4-02 정정: array_position 으로 매핑 순서 보존
+        cur.execute("""
+            SELECT id, item_code, item_name, spec_1, spec_2, is_active
+              FROM checklist.material_master
+             WHERE id = ANY(%s)
+             ORDER BY array_position(%s::int[], id)
+        """, (select_options, select_options))
+        materials = [
+            {
+                'id': r[0], 'item_code': r[1], 'item_name': r[2],
+                'spec_1': r[3], 'spec_2': r[4], 'is_active': r[5],
+            }
+            for r in cur.fetchall()
+        ]
+    elif select_options and all(isinstance(x, str) for x in select_options):
+        # 옛 placeholder string 배열 — 그대로 표시 (legacy 호환)
+        materials = [{'legacy_string': s} for s in select_options]
+    
+    return jsonify({
+        'master_id': row[0],
+        'item_name': row[1],
+        'select_options_raw': select_options,
+        'materials': materials,
+    })
+```
+
+### 권한 가드 — 2단 적층 (`@jwt_required` + `@gst_or_admin_required`) (Codex M-R2-02 정정)
+
+```python
+# backend/app/middleware/jwt_auth.py L263 (Sprint 27 v1.7.4 도입, 이미 존재)
+# 신규 작성 X — 기존 표준 그대로 import 후 사용
+
+# backend/app/routes/admin_materials.py (신규 파일)
+from flask import Blueprint, request, jsonify
+# ⭐ Codex 라운드 1 D3-02 정정: @jwt_required + @gst_or_admin_required 2단 적층
+# ⭐ Codex 라운드 2 M-R2-02 정정: 모든 예시 스니펫도 2단 적층 통일
+from app.middleware.jwt_auth import jwt_required, gst_or_admin_required
+
+bp = Blueprint('admin_materials', __name__, url_prefix='/api/admin/materials')
+
+
+@bp.route('/', methods=['GET'])
+@jwt_required           # ⭐ g.worker_id 채움 (gst_or_admin_required prerequisite)
+@gst_or_admin_required  # ⭐ admin OR GST company 검증 (Sprint 27 v1.7.4 표준)
+def list_materials():
+    ...
+```
+
+**P0 #2 + #6 cowork 추측 작성 실수 #6 정정 영역**:
+- 5-07 cowork 가 신규 `@require_admin_or_gst` 작성 = ADR-023 "기존 코드 cross-check" 영역 위반
+- **기존 표준** `@gst_or_admin_required` (jwt_auth.py L263) 그대로 사용 — Sprint 27 v1.7.4 도입
+- 코드 cross-check 영역: `Grep gst_or_admin_required` 으로 즉시 발견 가능했던 영역
+- DRY 원칙 + CLAUDE.md L1009-1015 인증 표준 준수
+- ⭐ Codex 라운드 2 M-R2-02 추가 정정: 모든 예시 스니펫도 `@jwt_required` 이중 적층
+
+→ Step 4 의 모든 `/api/admin/*` endpoint 에 `@jwt_required + @gst_or_admin_required` 2단 적층 (신규 데코레이터 작성 0).
+
+### AXIS-VIEW Step 4 변경 영역 — ⭐ 별 repo 별 sprint (P0 #4 정정)
+
+**Repo 분리 명시** — Sprint 39 (`AXIS-VIEW/DESIGN_FIX_SPRINT.md`) 패턴 따라:
+
+```
+본 Sprint (AXIS-OPS repo) 영역:
+  ├─ Step 1+2: BE Migration 053 + 053a
+  ├─ Step 3: BE _enrich_select_options() override + FE mech_checklist_screen.dart
+  └─ Step 4 BE 영역만:
+      ├─ /api/admin/materials CRUD (신규 routes/admin_materials.py)
+      └─ /api/admin/checklists/master/:id/options 매핑 API
+
+별 Sprint (AXIS-VIEW repo) 영역 — 신규 BACKLOG 등록 권장:
+  ├─ Sprint ID: FEAT-AXIS-VIEW-MATERIALS-AND-CHECKLISTS-MGMT-20260507 (~3h+)
+  ├─ 신규 파일:
+  │   ├─ src/pages/MaterialsPage.tsx         (~250 LoC)
+  │   ├─ src/pages/ChecklistsManagePage.tsx  (~200 LoC)
+  │   ├─ src/components/MaterialFormModal.tsx (~150 LoC)
+  │   ├─ src/components/MaterialUploadModal.tsx (~200 LoC, csv 미리보기 + diff)
+  │   ├─ src/components/ChecklistOptionMapModal.tsx (~180 LoC, 자재 검색 + 다중 선택)
+  │   ├─ src/api/materials.ts                (~80 LoC, CRUD wrapper)
+  │   └─ src/api/checklists.ts               (~50 LoC, master options API)
+  ├─ 기존 파일 수정:
+  │   ├─ src/router.tsx                       (~10 LoC, 라우팅 추가)
+  │   └─ src/components/Sidebar.tsx           (~10 LoC, 메뉴 추가)
+  ├─ 선행: 본 OPS sprint Step 1+2 배포 + Step 3 BE override 배포
+  └─ ordered deploy 영역: OPS Step 3 BE override 먼저 prod 적용 후 AXIS-VIEW 별 sprint deploy (Codex D6-03 / M-R2-04 정정)
+
+```
+
+### Step 3+4 ordered deploy 통합 검증 시나리오 ⭐
+
+```
+권한 매트릭스 (5-07 사용자 결정):
+  ├─ admin / GST 인원 = /materials, /checklists 페이지 (자재 + 매핑 관리)
+  └─ 작업자 (현장 worker) = MECH 체크리스트 화면만 (material 직접 진입 X)
+       ↑ material_master / product_bom 페이지 접근 권한 X (401/403)
+
+시나리오 (T+0 v2.12.2 prod 배포 후):
+
+[admin / GST 영역] 자재 + 매핑 관리
+
+1. admin 이 AXIS-VIEW /materials 진입
+   → 186 자재 검색 + 표시 ✅
+   
+2. admin 이 /checklists 관리 페이지 진입
+   → MECH 카테고리 LNG 그룹 선택
+   → "MFC Maker / Spec ..." 검사 항목 매핑 클릭
+   → 자재 검색 (MFC LNG 호환 6자재) → 다중 선택 → 저장
+   → DB: checklist_master.select_options = [1, 4, 5, 6, 7] (material_id)
+
+[작업자 영역] MECH 체크리스트 화면 dropdown 동적 표시
+       ⭐ 작업자는 material_master / product_bom 페이지 진입 X
+       ⭐ MECH 체크리스트 화면에서 dropdown 옵션만 동적 표시 받음
+
+3. 작업자가 MECH 체크리스트 화면 진입 (모바일 앱, 시리얼 단위)
+   → BE GET /checklist/mech 응답 시 _enrich_select_options() 호출
+   → material_id 배열 → material_master JOIN → 옵션 Y string 배열 변환
+   → 응답: ["MFC | MRC | 25 SLM | P:0.2~1 / W:0.4", "MFC | HORIBA | 50 SLM | P:1~1.5", ...]
+   → MECH 체크리스트 dropdown 동적 표시 ✅
+   → 작업자는 material_master 영역 / 자재 마스터 페이지 접근 X (admin only)
+
+4. 작업자 dropdown 선택 → checklist_record.selected_value 저장 (string)
+   → 1차 PASS/NA + 사양 입력 완료
+   → 2차 검수 시 read-only 표시 (Sprint 65-BE 패턴)
+
+[admin 영역] 자재 spec 변경 → 자동 반영
+
+5. admin 이 자재 spec 수정 (예: maker 정보 갱신)
+   → material_master UPDATE
+   → 다음 작업자 MECH 체크리스트 진입 시 BE override 가 신규 spec 자동 표시
+   → ⭐ select_options 재매핑 불필요 (material_id 배열 기반)
+   → ⭐ 작업자 측 material 직접 진입 영역 0 (체크리스트 dropdown 만)
+```
+
+### 사용자 의도 명확화 (5-07)
+
+```
+본 sprint 의 핵심 의도 = 체크리스트 MFC / Flow Sensor / SI 영역의 확장성:
+  ├─ 51a placeholder 영역 영구 해결 (실 자재 데이터)
+  ├─ admin / GST 가 자재 등록 + 체크리스트 SELECT 옵션 매핑 가능
+  ├─ 작업자 측 영향 = MECH 체크리스트 dropdown 동적 표시 (편의)
+  └─ 작업자 측 material_master / product_bom 직접 진입 X
+       ↑ 자재 마스터는 운영 인프라, 작업자는 체크리스트 화면만 사용
+```
+
+### 함정 / 위험 영역 (Step 4 + Step 3 묶음)
+
+| # | 영역 | 검증 |
+|---|---|---|
+| 1 | **권한 가드 영역** | `@gst_or_admin_required` 가 정확히 admin OR GST company 만 통과 — pytest 4 조합 (admin/GST/non-admin/non-GST) |
+| 2 | **Excel 업로드 인코딩** | csv 한글 헤더 정합 영역 — 사용자 답변 1번 (영문 BE 컬럼 매핑). `csv.DictReader` + 한글 → 영문 매핑 함수 필수 |
+| 3 | **중복 자재 UPDATE 미리보기 모달** | before/after diff 정확 표기 + 사용자 선택 (일괄/개별/skip) |
+| 4 | **material_id ANY 연산 영역** | PostgreSQL `array_agg` + `array_position` 호환 검증 (Step 3 의 N+1 최적화와 정합) |
+| 5 | **권한 분리 영역** | 작업자 측 `/checklist/*` API 는 자재 수정 불가, admin/GST 만 수정 |
+| 6 | **ordered deploy 영역** | Step 3 BE override prod 먼저 + Step 4 admin GUI feature flag deploy — 호환성 영역 검증 (Codex M-R2-04 정정) |
+
+### pytest TC (Step 4 + Step 3 묶음, 5건 + 3건 = 8건)
+
+```python
+# Step 3 (BE override) 3건 — 위에서 이미 작성
+
+# Step 4 (admin CRUD + 매핑) 5건 — 신규
+def test_admin_materials_crud_admin_only():
+    """admin 권한으로 자재 CRUD 정상 동작 + non-admin reject."""
+    ...
+
+def test_admin_materials_excel_upload_preview_diff():
+    """Excel 업로드 시 신규/변경/동일 분류 정확."""
+    ...
+
+def test_admin_materials_excel_upload_commit_with_update():
+    """Excel commit 시 UPDATE 패턴 (5-07 결정) 정상."""
+    ...
+
+def test_admin_checklists_master_options_mapping():
+    """select_options material_id 배열 매핑 + GET 응답 정합."""
+    ...
+
+def test_admin_checklists_options_invalid_material_id_rejects():
+    """material_master 미존재 material_id 매핑 시 400 reject."""
+    ...
+
+# 통합 테스트 (Step 3+4 묶음)
+def test_integration_admin_mapping_and_worker_dropdown():
+    """admin 매핑 → 작업자 GET /checklist/mech 응답 정합."""
+    # given: admin 이 LNG MFC SELECT 항목에 6 material_id 매핑
+    # when: 작업자가 GET /checklist/mech 호출
+    # then: select_options = ["MFC | MRC | 25 SLM | ...", ...] (옵션 Y string 변환)
+    ...
+```
+
+### 회귀 위험 (Step 4 + Step 3 묶음)
+
+```
+회귀 위험 = 낮음 (admin 영역 신규 + BE override 호환 영역)
+  ├─ admin /materials, /checklists 페이지 = 신규 (기존 기능 영향 0)
+  ├─ /api/admin/materials CRUD = 신규 (기존 API 영향 0)
+  ├─ checklist_master.select_options 양식 변경 = 호환 (string + int 배열 양쪽 지원)
+  ├─ 51a placeholder 그대로 유지 (admin 미매핑 영역) — legacy 호환
+  └─ ELEC/TM 영역 영향 = 0 (legacy 호환 영역, 옵션 Y 변환은 신규 매핑 시점부터)
+
+선행 의존성 = Step 1+2 release 완료 (v2.12.0 + v2.12.1)
+```
+
+### ⭐ Codex 라운드 1 D6-01 정정 — Deploy 순서 (Feature flag, "ordered deploy")
+
+**5-07 사용자 결정 — 선택지 1 의 정확한 영역**:
+
+```
+"묶음 atomic" 표현은 misleading (D6-03) — Step 4 가 별 repo 분리 영역.
+→ 정확한 표현 = "ordered deploy with feature flag" (D6-01)
+
+Deploy 순서 (hard contract):
+  ① Step 3 BE override deploy (v2.12.2 OPS) — _enrich_select_options() 활성화
+       ↓ legacy string 배열 + 신규 material_id 배열 양쪽 처리 가능 상태
+       ↓ 작업자 측 회귀 0 (51a placeholder 그대로 유지)
+  ② AXIS-VIEW Step 4 deploy (별 repo, 별 sprint)
+       ↓ admin GUI 활성화 + 매핑 시작 가능
+       ↓ admin 매핑 결과 = material_id 배열 → BE override 가 즉시 string 변환
+
+Feature flag (선택, 위험 분리):
+  - Step 4 admin GUI 의 "매핑 저장" 버튼에 ENABLE_MATERIAL_ID_MAPPING flag
+  - Step 3 BE override prod 검증 완료 후 flag enable
+  - flag disabled 시 admin 매핑 저장 X (DB 변경 0)
+```
+
+### ⭐ Codex 라운드 1 D6-02 정정 — Rollback 영역 명확화 (destructive 인지)
+
+**원래 표현 "DB 변경 0" 모순**: v2.12.2 가 `select_options` 영역에 material_id 배열 저장 영역 — Rollback 시 admin 매핑 결과 잔존.
+
+**정확한 Rollback 시나리오**:
+
+```
+시나리오 R1 — Step 4 deploy 직후 / admin 매핑 0건:
+  → git revert + Migration rollback 0
+  → DB 변경 0 (admin 측 미사용 영역)
+  → Rollback 안전
+
+시나리오 R2 — Step 4 + admin 일부 매핑 진행 후 rollback:
+  ⚠️ select_options 의 material_id 배열 영역 잔존
+  → Step 3 BE override 미적용 시 작업자 측 dropdown 깨짐 위험
+  → 옵션 R2-A: select_options 잔존 정수 배열 NULL 변환 (옛 placeholder 영역 보존)
+  → 옵션 R2-B: 매핑 결과 보존 + 별 hotfix 로 BE override 재적용
+  → Rollback 결정 시점 admin 매핑 양 검증 후 옵션 선택
+
+시나리오 R3 — Step 4 + admin 전체 매핑 완료 후 rollback:
+  ⚠️ 모든 select_options 가 material_id 배열 (옛 placeholder 영역 영구 손실 가능)
+  → Pre-rollback 백업 필수 (jsonb 컬럼 snapshot)
+  → 옵션 R3-A: snapshot 으로 select_options 복원
+  → 옵션 R3-B: BE override 재적용 (단방향 진행)
+```
+
+**Pre-rollback 백업 SQL** (시나리오 R2/R3 대비):
+
+```sql
+-- Step 4 deploy 직전 select_options snapshot (backup table)
+CREATE TABLE IF NOT EXISTS checklist._select_options_backup_v2120 AS
+SELECT id, item_name, select_options, NOW() AS backup_at
+  FROM checklist.checklist_master
+ WHERE select_options IS NOT NULL;
+
+-- Rollback 시 복원 (시나리오 R2-A / R3-A)
+UPDATE checklist.checklist_master cm
+   SET select_options = b.select_options,
+       updated_at = CURRENT_TIMESTAMP
+  FROM checklist._select_options_backup_v2120 b
+ WHERE cm.id = b.id;
+```
+
+### Rollback 명확화
+
+```python
+# git revert v2.12.2 (BE 1 file + AXIS-VIEW 7+ files 별 repo)
+
+# 시나리오별 DB 영역:
+#   R1 (admin 매핑 0건) → DB 변경 0 (안전)
+#   R2 (admin 일부 매핑) → select_options 정수 배열 잔존 영역 처리 결정
+#   R3 (admin 전체 매핑) → snapshot 으로 복원 (백업 prerequisite)
+```
+
+→ Rollback 시점에 admin 매핑 진행률 검증 + 시나리오 분기 결정. **"DB 변경 0" 표현 부정확 — destructive 영역 인지**.
+
+---
+
+## 🤔 Step 4 점검 영역 — 사용자 검증 받을 영역
+
+1. **AXIS-VIEW 페이지 구성** — `/materials` (자재 관리) + `/checklists` (체크리스트 관리) 2 페이지. OK?
+2. **Excel 업로드 미리보기 모달** — 신규/변경/동일 분류 + 일괄/개별/skip 선택. OK?
+3. **자재 매핑 모달** — 자재 검색 → 다중 선택 → 순서 변경 → 저장. 추가 영역?
+4. **권한 가드** — `@gst_or_admin_required` (admin OR GST company). OK?
+5. **API endpoint 양식** — `/api/admin/materials/*` + `/api/admin/checklists/*` (RESTful). OK?
+6. **ordered deploy 검증 시나리오 5단계** — admin 매핑 → BE override → 작업자 dropdown 정합 검증. 추가 영역? (Codex M-R2-04 정정)
+7. **pytest TC 5+3 = 8건** — 추가 영역 필요?
+
+→ 답 받으면 사후 기록 양식 + Codex 검토 라운드 권고 영역 작성 + 본 sprint 설계서 종료.
+
+---
+
+## ✅ 5-07 사용자 결정 영역 — 의문 C, D 권장안 채택
+
+### 의문 C — Excel 업로드 시 자재 + BOM 동시 INSERT (채택)
+
+```
+csv 한 파일 업로드 시:
+  ① 자재 정보 (자재코드/자재내역/규격1/규격2/단위) → material_master INSERT
+  ② BOM 매핑 (품번/고객사/모델 + 자재코드 + 수량) → product_bom INSERT (material_id JOIN)
+  ③ 두 단계 동시 처리 (1640 row 자재 추출 + BOM 매핑 동시)
+
+장점:
+  ├─ 사용자 1번 업로드로 자재 + BOM 둘 다 등록
+  ├─ csv 양식 (5-07 사용자 양식) 그대로 활용
+  └─ 운영 마찰 ↓ (자재 등록 → BOM 등록 2단계 작업 불필요)
+```
+
+### 의문 D — material_master 미등록 자재 자동 신규 등록 (채택)
+
+```
+BOM Excel 업로드 시 자재코드가 material_master 에 없으면:
+  ✓ 필수 컬럼 (자재코드 + 자재내역) 검증
+     ├─ 둘 다 있음 → material_master 자동 신규 등록 + product_bom INSERT
+     └─ 자재내역 NULL → reject + 사용자 확인 (정보 부족)
+  ✓ 선택 컬럼 (카테고리 / 규격1 / 규격2 / 단위) — 있으면 사용, 없으면 NULL
+
+장점:
+  ├─ 운영 마찰 ↓ (별 자재 등록 → BOM 등록 흐름 X)
+  ├─ csv 한 번 업로드로 신규 자재 자동 흡수
+  └─ 정보 부족 시 reject = 데이터 무결성 보호
+```
+
+---
+
+## 📋 Sprint 사후 기록 양식 (배포 후 작성)
+
+```
+✅ FEAT-MATERIAL-MASTER-AND-BOM-INTEGRATION-20260507 종합 결과
+   (작성일: 2026-05-XX, ordered deploy with feature flag v2.12.0~v2.12.2)
+
+Step 1 (Migration 053 — schema):
+  ├─ 시각: 2026-05-XX KST, v2.12.0
+  ├─ 변경: public → checklist 이전 + material_master CREATE
+  ├─ 사전 검증 SQL 4건: ___ (PASS/FAIL)
+  ├─ pytest TC 1건: ___ (PASS/FAIL)
+  └─ Sentry 0 건 / Railway boot 정상: ___ (Y/N)
+
+Step 2 (Migration 053a — seed):
+  ├─ 시각: 2026-05-XX KST, v2.12.1
+  ├─ material_master row 카운트: ___ (기대 186)
+  ├─ product_bom row 카운트: ___ (기대 1640)
+  ├─ MFC 13 자재 검증: ___ (Y/N)
+  ├─ pytest TC 2건: ___ (PASS/FAIL)
+  └─ plan.product_info 매칭률: ___% (4100xxxx 누락 영역 기록)
+
+Step 3+4 묶음 (BE override + AXIS-VIEW):
+  ├─ 시각: 2026-05-XX KST, v2.12.2 (ordered deploy with feature flag)
+  ├─ admin /materials 페이지 검증: ___ (Y/N)
+  ├─ admin /checklists 매핑 검증: ___ (Y/N)
+  ├─ 작업자 MECH 체크리스트 dropdown 표시 검증: ___ (Y/N)
+  ├─ Excel 업로드 미리보기 + diff 검증: ___ (Y/N)
+  ├─ pytest TC 8건 (3+5): ___ (PASS/FAIL)
+  └─ 권한 가드 검증 (admin/GST/non-admin/non-GST): ___ (Y/N)
+
+운영 검증 시나리오 5단계 (5-07 명시):
+  ├─ 1. admin /materials 진입 → 186 자재 표시: ___ (Y/N)
+  ├─ 2. admin /checklists 매핑 → DB material_id 배열 저장: ___ (Y/N)
+  ├─ 3. 작업자 MECH 체크리스트 dropdown 동적 표시: ___ (Y/N)
+  ├─ 4. 작업자 dropdown 선택 → checklist_record.selected_value: ___ (Y/N)
+  └─ 5. admin 자재 spec 수정 → 자동 반영 (재매핑 X): ___ (Y/N)
+
+확장성 영역:
+  ├─ 51a placeholder 영역 영구 해결: ___ (Y/N)
+  ├─ DB 직접 수정 의존 → admin UI 등록: ___ (Y/N)
+  └─ MECH + SI BOM 단일 자재 마스터 공유 인프라: ___ (Y/N)
+
+후속 sprint 진행 권고:
+  ├─ FEAT-SI-HOOKUP-CHECKLIST-FLOW-20260508 (Sprint 64 이후, P2): ___ (대기/진행)
+  └─ FEAT-MATERIAL-AI-VISION-VERIFY-20260508 (Sprint 64 이후, P3): ___ (대기/진행)
+
+memory.md ADR-027 (자재 마스터 인프라 도입) 신설: ___ (Y/N)
+
+⭐ P2 #12 정정 — DB_SCHEMA_MAP.md 갱신 plan:
+  Step 1 후 즉시 갱신:
+    ├─ public schema: 19 → 17 (product_bom + bom_checklist_log DROP)
+    └─ checklist schema: 2 → 5 (material_master + product_bom + bom_checklist_log 신설)
+  Step 2 후 갱신:
+    └─ 자재 카운트 정보 추가 (186 자재 + 1640 BOM)
+
+⭐ P2 #13 정정 — 운영 검증 시점 (Sprint 65-BE 패턴):
+  T+1h (배포 직후):
+    ├─ Railway boot 정상 + 새 schema 정상 CREATE 확인
+    ├─ Sentry 0 issue + ERROR 0
+    └─ pytest GREEN
+  T+24h (다음 날):
+    ├─ admin /materials 페이지 사용 시작
+    ├─ 매핑 진행 영역 (LNG MFC SELECT 항목 등)
+    └─ 작업자 측 회귀 0 (51a placeholder 영역 영향 0)
+  T+1주:
+    ├─ admin 매핑 4 가스 (LNG/CDA/O2/N2 + GN2) 모두 완료
+    ├─ 작업자 측 dropdown 옵션 Y 정상 표시
+    ├─ 운영 자재 변경 영역 (자재 spec 수정 → 자동 반영) 검증
+    └─ Sentry 1주 누적 0 / 회귀 0
+```
+
+---
+
+## 🔍 Codex 검토 라운드 권고
+
+### 자동 이관 권장 (Codex 라운드 1)
+
+본 sprint 는 다음 영역에 부합 → Codex 자동 이관 권장:
+- ② **자동 체크리스트 인증·권한 로직** (admin/GST 권한 + select_options 매핑 영역)
+- ⑤ **신규 schema (3 테이블) + BE 양식 변경** (material_master + product_bom + bom_checklist_log)
+- ⑦ **AXIS-VIEW 신규 페이지 + BE CRUD API 신설** (admin UX 영역)
+- ⑨ **ordered deploy with feature flag 검증 영역** (Step 3+4 호환성 영역, Codex D6-03/M-R2-04 정정)
+
+### 라운드 1 검증 권장 영역 (Codex 측)
+
+```
+M (Must) — 필수 정정:
+  □ schema 정합성 (FK + UNIQUE + 인덱스)
+  □ Migration 053 의 update_updated_at_column() 함수 영역
+  □ 권한 가드 정합 (admin OR GST 정확)
+  □ N+1 query 최적화 영역 (Step 3 BATCHED 패턴)
+  □ Excel 업로드 인코딩 (한글 헤더 → 영문 매핑) 영역
+
+A (Advisory) — 권고:
+  □ Excel 업로드 미리보기 모달 UX 영역
+  □ select_options 매핑 모달 자재 검색 패턴
+  □ csv 양식 표준화 (영문 BE 매핑 정확성)
+
+N (Nice to have) — 선택:
+  □ 자재 spec JSONB 컬럼 향후 확장 영역 (현재 spec_1/spec_2 VARCHAR)
+  □ admin UI 페이지 분리 (/materials + /checklists 양쪽 존재 시 통합 검토)
+
+AV (Advisory + 별 sprint):
+  □ FEAT-SI-HOOKUP-CHECKLIST-FLOW (BACKLOG entry 등록 ✅)
+  □ FEAT-MATERIAL-AI-VISION-VERIFY (BACKLOG entry 등록 ✅)
+```
+
+### Pre-deploy Gate (모든 단계)
+
+```
+Step 1 (v2.12.0):
+  ✓ Migration 053 사전 검증 SQL 4건 통과
+  ✓ pytest test_migration_053_schema 1건 PASS
+  ✓ Railway boot 정상 + checklist schema 의 3 테이블 CREATE 확인
+
+Step 2 (v2.12.1):
+  ✓ pytest test_migration_053a_seed 2건 PASS
+  ✓ material_master 186 + product_bom 1640 row 정합
+  ✓ MFC 13 자재 + 4100xxxx prefix soft FK 영역 정합
+
+Step 3+4 (v2.12.2 ordered deploy with feature flag):
+  ✓ pytest 8 TC (Step 3 3건 + Step 4 5건) 모두 PASS
+  ✓ admin 매핑 → 작업자 dropdown 통합 시나리오 PASS
+  ✓ AXIS-VIEW Excel 업로드 미리보기 모달 검증
+  ✓ 권한 가드 4 조합 (admin/GST/non-admin/non-GST)
+  ✓ 51a placeholder legacy 호환 검증 (admin 매핑 미적용 항목 영향 0)
+
+배포 후 24h 관찰:
+  ✓ Sentry 새 ERROR 0건
+  ✓ Railway logs 정상
+  ✓ 작업자 측 회귀 0 (51a placeholder 영역 무영향)
+```
+
+---
+
+## 🤝 Cowork 추측 작성 실수 사전 차단 (ADR-023 표준 — 부분 반영, 추가 보강 필요)
+
+⭐ **Codex 라운드 2 A-R2-07/08 정정**: ADR-023 cross-check "완료" 표현 부정확 — 실제 cowork 추측 작성 실수 #6 (require_admin_or_gst) + #7 (정정 누락 영역) 발생. **부분 반영 + 추가 보강 진행 중** 표현이 정확.
+
+본 sprint 작성 시 ADR-023 의 11 영역 (Flutter 6 + DB 5) 표준 부분 반영:
+
+```
+DB / SQL 영역 (정합):
+  ✅ 마이그레이션 003 (옛 product_bom) + 006 (RENAME 영역 무관) + 045 등 시간순 grep 완료
+  ✅ 코드 cross-check (services/checklist_service.py / routes 영역)
+  ✅ information_schema 검증 SQL 11건 (Codex Pre-val gap 7항 추가, A-R2-05)
+  ✅ 트랜잭션 BEGIN/COMMIT 패턴 + ON CONFLICT idempotent
+  ✅ 단일 row 다중 컬럼 영역 (material_master FK) RESTRICT 정합
+  ✅ google_doc_id → qr_doc_id 표준 준수 (Codex D1-01)
+
+Flutter / FE 영역 (정합):
+  ✅ ELEC `_get_checklist_by_category` 패턴 그대로 차용 (BE)
+  ✅ mech_checklist_screen.dart SELECT widget 패턴 정합 (FE schema 변경 0)
+  ✅ BE schema 정확 확인 (select_options JSON 호환)
+  ✅ 위젯 시각 차용 (옵션 Y full spec 표시 형식)
+  ✅ 모든 동등 위젯 일관 적용 (string 배열 처리 동일)
+
+데코레이터 / 함수 영역 (cowork 실수 #6 + #7 catch 후 정정):
+  ✅ @gst_or_admin_required 기존 표준 사용 (jwt_auth.py L263, Sprint 27 v1.7.4)
+  ✅ @jwt_required 이중 적층 (g.worker_id 채움)
+  ⚠️ 정정 작업 자체에도 grep 재검증 누락 영역 (실수 #7) — Phase 4 ADR 보강 필요
+
+미진 영역 (사용자 측 검증 필요):
+  □ 통합 csv 1654 row → SQL INSERT 자동 변환 스크립트 (Step 2 시점)
+  □ AXIS-VIEW 페이지 코드 영역 (Step 4 시점, React 패턴)
+  □ ADR-023 의 신규 표준 (정정 작업 시 grep 재검증) 명문화 (Phase 4)
+```
+
+**ADR-023 보강 영역 (Phase 4 진행 권장)**:
+- Cowork 추측 작성 실수 trail #7 추가 (정정 누락 영역)
+- 신규 표준: "정정 작업 시 grep 재검증 의무" 명문화
+- ADR-024 분리 검토 (사용자 결정 영역)
+
+---
+
+## 🔍 Codex 라운드 2 추가 보강 영역
+
+### A-R2-05 — Pre-validation SQL 7항 (Codex Pre-validation gap)
+
+기존 사전 검증 SQL (Step 1: 4건 + Step 2: 3건) 외에 다음 7건 추가:
+
+```sql
+-- ⭐ Codex Pre-val gap #1: pg_depend / pg_class / pg_views / pg_proc 검증
+-- (DB-side 의존성 영역 — backend/ grep 만으로 부족)
+SELECT
+    classid::regclass AS dependent_type,
+    objid::regclass    AS dependent_object,
+    refobjid::regclass AS depends_on
+FROM pg_depend
+WHERE refobjid IN (
+    'public.product_bom'::regclass,
+    'public.bom_checklist_log'::regclass,
+    'public.bom_csv_import'::regclass
+);
+-- 기대: 0 row (의존성 0 — 안전한 DROP)
+
+-- ⭐ Codex Pre-val gap #2: exact-shape assertion (CREATE TABLE IF NOT EXISTS 영역 schema drift 방지)
+SELECT column_name, data_type, is_nullable, column_default
+  FROM information_schema.columns
+ WHERE table_schema = 'checklist'
+   AND table_name IN ('material_master', 'product_bom', 'bom_checklist_log')
+ ORDER BY table_name, ordinal_position;
+-- 기대: 설계서 명시 컬럼 영역 100% 정합
+
+-- ⭐ Codex Pre-val gap #3: search_path assertion
+-- (update_updated_at_column() 가 public.update_updated_at_column 으로 resolve)
+SHOW search_path;
+SELECT pg_get_functiondef('public.update_updated_at_column'::regprocedure);
+
+-- ⭐ Codex Pre-val gap #4: 중복 키 source 검증 (Step 2 generator 진행 전)
+-- (이미 generate_migration_053a.py 에 fail-fast 영역 포함, 보너스 SQL 검증)
+SELECT '자재코드' AS check_type, "자재코드", COUNT(*)
+  FROM public.bom_csv_import  -- 사용자 임시 테이블 (Step 1 묶음 DROP 전)
+ GROUP BY "자재코드"
+HAVING COUNT(*) > 1;
+-- 기대: MFC 1110299900 LNG/O2 영역 1건만 표시 (양쪽 등장)
+
+-- ⭐ Codex Pre-val gap #5: 필수 필드 NULL/blank 검증
+SELECT 'item_code NULL' AS issue, COUNT(*) FROM public.bom_csv_import WHERE "자재코드" IS NULL OR "자재코드" = ''
+ UNION ALL
+SELECT 'item_name NULL', COUNT(*) FROM public.bom_csv_import WHERE "자재내역" IS NULL OR "자재내역" = ''
+ UNION ALL
+SELECT 'product_code NULL (BOM only)', COUNT(*) FROM public.bom_csv_import WHERE "품번" IS NULL OR "품번" = '';
+-- 기대: 처음 두 건 = 0 / product_code NULL = MFC 14건 (자재 마스터만)
+
+-- ⭐ Codex Pre-val gap #6: join completeness 영역 (Step 2 INSERT 후 anti-join)
+SELECT b."자재코드"
+  FROM public.bom_csv_import b
+ WHERE NOT EXISTS (
+     SELECT 1 FROM checklist.material_master mm
+      WHERE mm.item_code = b."자재코드"
+ );
+-- 기대: 0 row (모든 자재코드 가 material_master 에 존재)
+
+-- ⭐ Codex Pre-val gap #7: select_options content-shape 검증 (Step 4 deploy 전)
+SELECT
+    cm.id, cm.item_name,
+    jsonb_typeof(cm.select_options) AS top_type,
+    CASE
+        WHEN jsonb_typeof(cm.select_options) = 'array'
+             AND EXISTS (SELECT 1 FROM jsonb_array_elements(cm.select_options) AS e
+                          WHERE jsonb_typeof(e) = 'string')
+        THEN 'legacy_string_array'
+        WHEN jsonb_typeof(cm.select_options) = 'array'
+             AND EXISTS (SELECT 1 FROM jsonb_array_elements(cm.select_options) AS e
+                          WHERE jsonb_typeof(e) = 'number')
+        THEN 'new_int_array'
+        ELSE 'unknown'
+    END AS content_shape
+  FROM checklist.checklist_master cm
+ WHERE cm.item_type = 'SELECT'
+   AND cm.select_options IS NOT NULL;
+-- 기대: 모두 legacy_string_array (Step 4 deploy 전) → admin 매핑 후 new_int_array 로 전환
+```
+
+### A-R2-06 — TC-NEW-01~09 9건 신규 pytest TC (Codex 추가 권고)
+
+```python
+# tests/backend/test_step3_step4_codex_round1_gaps.py
+
+[TC-NEW-01] test_admin_materials_requires_jwt_and_gst_or_admin
+  # 4 조합 검증: 401 (no token) / 401 (invalid) / 200 (admin) / 200 (GST) / 403 (non-GST/admin)
+  # → Step 4 auth contract (D3-02 정정 영역)
+
+[TC-NEW-02] test_admin_checklists_get_options_supports_legacy_string_array
+  # legacy placeholder string 배열 영역 GET 200 + 정수 cast fail X
+  # → Step 4 backward compatibility (D4-01 정정 영역)
+
+[TC-NEW-03] test_admin_checklists_get_options_preserves_saved_material_order
+  # [m3, m1, m2] 저장 → GET 응답이 [m3, m1, m2] 순서 유지
+  # → Step 4 ordering behavior (D4-02 정정 영역)
+
+[TC-NEW-04] test_update_select_options_rejects_non_select_master
+  # CHECK / INPUT master row 에 PATCH → 400/404 + DB UPDATE 0
+  # → Step 4 admin mapping correctness
+
+[TC-NEW-05] test_get_mech_checklist_with_deactivated_material_does_not_leak_raw_ids
+  # 비활성 material 매핑 영역 → worker GET 응답에 [INACTIVE:id] marker 표기
+  # → Step 3 enrich edge case (D4-04 정정 영역)
+
+[TC-NEW-06] test_batched_enrich_empty_material_id_array_returns_empty_list
+  # SELECT item 에 [] 매핑 → worker GET 응답 [] + SQL error 0
+  # → Step 3 empty-list path
+
+[TC-NEW-07] test_generate_migration_053a_rejects_duplicate_item_code_rows
+  # 중복 item_code source → fail-fast (SQL 생성 X)
+  # → Step 2 seed safety (D2-02 정정 영역)
+
+[TC-NEW-08] test_generate_migration_053a_parses_quoted_commas_quotes_and_nulls
+  # "NW100,PVC", embedded quotes, blank optional cells 영역 → 정상 SQL emit
+  # → Step 2 CSV parsing (D2-03 정정 영역)
+
+[TC-NEW-09] test_migration_053_schema_uses_qr_doc_id_not_google_doc_id
+  # checklist.bom_checklist_log schema 에 qr_doc_id 컬럼 + google_doc_id 부재
+  # → Step 1 standards compliance (D1-01 정정 영역)
+```
+
+### A-R2-01 — generator pytest TC 추가 (Step 2 영역)
+
+```python
+# tests/scripts/test_generate_migration_053a.py (신규 파일)
+
+def test_validate_source_keys_rejects_duplicate_item_code():
+    """fail-fast: 중복 자재코드 source → ValueError raise (D2-02 정정 영역)."""
+    rows = [
+        {'자재코드': '1110006700', '자재내역': 'MFC', ...},
+        {'자재코드': '1110006700', '자재내역': 'MFC', ...},  # 중복
+    ]
+    with pytest.raises(ValueError, match='source csv 검증 실패'):
+        validate_source_keys(rows)
+
+def test_validate_source_keys_rejects_missing_required_field():
+    """fail-fast: item_name NULL → ValueError raise."""
+    rows = [
+        {'자재코드': '1110006700', '자재내역': '', ...},  # item_name 누락
+    ]
+    with pytest.raises(ValueError):
+        validate_source_keys(rows)
+
+def test_validate_source_keys_passes_valid_csv():
+    """정상 csv → 통과 + 통계 출력."""
+    rows = [
+        {'자재코드': '1110006700', '자재내역': 'MFC', ...},
+        {'자재코드': '1310225400', '자재내역': 'ANCHOR BRACKET', ...},
+    ]
+    result = validate_source_keys(rows)
+    assert len(result) == 2
+```
+
+---
+
+## 📋 본 Sprint 설계서 작성 완료 (5-07 KST)
+
+| 영역 | 상태 |
+|---|---|
+| BACKLOG entry 등록 | ✅ Step A |
+| Sprint 설계서 본문 (Step 1~4) | ✅ Step 2~5 점검 받음 |
+| Sprint 64+ 분리 영역 (FEAT-SI-HOOKUP / FEAT-AI-VISION) BACKLOG 등록 | ✅ |
+| 사후 기록 양식 + Codex 검토 라운드 권고 | ✅ |
+| memory.md ADR-027 후보 (별 PR 작성 권고) | 🟡 미진 (Step 1 진행 시점에 작성) |
+
+### 사용자 측 진행 영역 (Step 1 진행 시점)
+
+```
+1. cowork 측 — 통합 csv (1654 row) → SQL INSERT 자동 변환 스크립트 작성
+   (scripts/generate_migration_053a.py)
+2. 사용자 측 — Migration 053 사전 검증 SQL 4건 실행
+3. cowork 측 — Migration 053 SQL 파일 작성 + Codex 라운드 1
+4. 사용자 측 — 라운드 1 검증 + 정정 사항 반영
+5. release v2.12.0 (Step 1)
+6. ... Step 2 → Step 3+4 묶음 ...
+```
+
+### DB Pool V4.x reminder
+
+```
+2026-05-09 (토요일) ± 1d 시점 V4.1~V4.3 검증 진행:
+  ├─ V4.1: Railway logs 5-09 시점 사고 재발 또는 자가 회복 확인
+  ├─ V4.2: Sentry 1주 누적 issue / event 카운트
+  └─ V4.3: Postgres 1주 누적 conn 안정성
+
+시나리오 분기:
+  ├─ 🟢 A (이상적): 0/0 출력 0건 → keepalive 자체 차단 효과
+  ├─ 🟡 B (정상 fallback): 0/0 출력 + 15분 안 자가 회복 작동
+  └─ 🔴 C (실패): 0/0 출력 + 15분+ 지속 → 재진단 필요
+```
+
+

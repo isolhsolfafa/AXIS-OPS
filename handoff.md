@@ -1,7 +1,87 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-07 KST (T+24h DB Pool 검증 STRONG PASS — keepalive 4h+ alive 입증, worker 수 anomaly 5-09 V4.4 추가 진단 / v2.11.7 Sprint 65-BE 5-06 release 종결)
+> 마지막 업데이트: 2026-05-07 23:30 KST (🎯 v2.12.0 release — FEAT-MATERIAL Step 1: Migration 053 schema 이전 + material_master CREATE 운영 적용 + pytest 9/9 GREEN)
+
+## 🎯 2026-05-07 23:30 KST — v2.12.0 release (FEAT-MATERIAL Step 1)
+
+> **한 줄 요약**: Sprint 63 의 51a seed placeholder 영구 차단 catch (5-07) 후속 — 자재 마스터 인프라 4 step sprint 의 Step 1 (schema 영역) 운영 적용 완료. Codex 설계서 라운드 1~5 GREEN + Step 1 implementation 라운드 1 GREEN 후 진행.
+
+### 진행 trail
+
+| 단계 | 결과 |
+|---|---|
+| 사전 검증 SQL 11건 | ✅ 모두 GREEN (public 3 테이블 0 row / pg_depend 외부 의존성 0 / select_options 8건 모두 legacy_string_array) |
+| Migration 053 SQL 작성 | ✅ 175 LOC (DROP×3 / CREATE TABLE×3 / CREATE INDEX×7 / ALTER TABLE×1 / CREATE TRIGGER×3 / COMMENT×4) |
+| pytest 9 TC 작성 | ✅ Codex A1+A2 정정 후 9/9 PASS (40s) |
+| Codex 라운드 1 (Step 1 impl) | ✅ M=0/A=2/N=11 GREEN (A 즉시 정정) |
+| 운영 DB psql 직접 적용 | ✅ BEGIN/COMMIT 정상 + migration_history INSERT |
+| version bump | ✅ v2.11.7 → v2.12.0 (BE + FE) |
+
+### 다음 step
+
+- **Step 2** (Migration 053a seed): material_master 186 자재 + product_bom 1640 BOM 매핑 INSERT → v2.12.1
+  - cowork 측 generate_migration_053a.py 자동 SQL 생성 (csv 통합 1654 row → SQL VALUES)
+  - 사전 검증 SQL 3~6번 (중복키 / NULL / join completeness)
+  - pytest TC 2건 + generator pytest TC 2건
+- **Step 3** (BE override): _enrich_select_options + selected_material_id 직접 전달 → v2.12.2 OPS
+- **Step 4** (AXIS-VIEW 별 sprint): admin GUI 자재 등록 + 매핑 → AXIS-VIEW v1.X.X (별 repo)
+
+### T+1h 검증 영역 (다음 세션 또는 Twin파파 측)
+
+- Railway boot 정상 + Sentry 새 ERROR 0
+- 작업자 측 회귀 0 (51a placeholder 그대로 유지 — Step 3 까지 select_options 양식 변경 X)
+- 운영 영역 직접 적용이라 Railway 재배포 시 migration_runner 가 053 'already executed' 인식
+
+### 후속 BACKLOG 영역 (Step 4 완료 후)
+
+- FEAT-SI-HOOKUP-CHECKLIST-FLOW-20260508 (P2)
+- FEAT-MATERIAL-AI-VISION-VERIFY-20260508 (P3)
+
+---
+
+## 🎯 2026-05-07 20:54 KST — v2.11.6 자가 회복 메커니즘 첫 실전 작동 ✅
+
+> **한 줄 요약**: 4-29 → 5-04 → 5-07 5일 주기 사고 패턴 재발했으나 v2.11.6 자가 회복이 15분 안 자동 처리. WATCHDOG (v2.10.16) → 자가 회복 (v2.11.6) 통합 효과 첫 입증. **부수 발견**: per-worker 자가 회복 사각지대 (worker B 풀 dead 시 warmup cron 미실행으로 trigger 도달 불가능) → 별 sprint 등록.
+
+### 사고 timeline + 자가 회복 9ms latency 입증
+
+| 시각 (KST) | 이벤트 | 출처 |
+|---|---|---|
+| 5-07 14:24:38 | gunicorn 2 worker boot (pid=2 + pid=3) | Railway logs |
+| 5-07 20:39~20:54 | warmup 0/0 conn warmed × 3 cycles (15분간 풀 dead) | scheduler logs |
+| 5-07 20:54:48.706 | **Sentry alert: `re-initializing pool (pid=2)` ERROR 격상** | v2.10.16 WATCHDOG |
+| 5-07 20:54:48.715 | **DB pid 205810 backend_start (Sentry +9ms)** | pg_stat_activity |
+| 5-07 20:54:48.884 | DB pid 205814 (5번째, +178ms) — 5 conn 모두 fresh | pg_stat_activity |
+| 5-07 21:46 | 사후 측정: 5 conn idle, max_idle 107s — 정상 cycle 복귀 | V2.2/V4.3 SQL |
+
+→ `init_pool()` 호출 직후 **168ms 안 5 conn 모두 생성** 입증. 시나리오 B (정상 fallback) 확정.
+
+### 사고 단계 감소 (관찰성 + 자동화 효과 입증)
+
+| 사고 | 시점 | 처리 방식 | 사용자 영향 시간 |
+|---|---|---|---|
+| 1차 | 4-29 23:31 KST | Railway Restart 수동 | 1.5h+ (10시간 silent) |
+| 2차 | 5-04 11:38~12:32 KST | Railway Restart 수동 | 40분 |
+| **3차** | **5-07 20:54 KST** | **자가 회복 자동 (init_pool)** | **~15분 (3 cycles × 5분)** ✅ |
+
+### ⚠️ 부수 발견 — Worker B 풀 사각지대 (CRITICAL, 별 sprint 등록)
+
+- **Sentry 알람**: worker pid=2 만 자가 회복 메시지 출력
+- **Boot logs**: pid=2 + pid=3 동시 boot (Procfile `-w 2` 정합) = 2 worker 운영 확정
+- **pg_stat_activity 21:46 측정**: 5 conn 만 (단일 클러스터 205810-205814)
+- → **Worker A (scheduler owner)**: 자가 회복 ✅
+- → **Worker B (HTTP only)**: 풀 dead 추정 (warmup cron 가 fcntl lock 으로 scheduler owner 만 실행 → Worker B 의 `_consecutive_zero_warmup` 은 영원히 0 → 자가 회복 trigger 도달 불가능)
+- **사용자 영향**: Worker B 의 HTTP 요청은 `_create_direct_conn()` fallback (+0.3~0.5s 지연) 으로 silent degradation
+- **별 sprint**: `OBSERV-PER-WORKER-POOL-RECOVERY-20260507` 등록 (BACKLOG L+1)
+
+### 검증 데이터 + 문서 업데이트
+
+- 측정 SQL: `DB_POOL_VERIFICATION_QUERIES_20260427.md` V4.1 + V2.2 + V4.3 + V4.4 결과란 모두 채움 완료
+- ADR-025 보강: `memory.md` (per-worker gap 실측 trail 추가)
+- 1주 추적 plan: 5-13 또는 다음 5일 주기 (5-12 ± 1d) 시점에 V4.1 재측정
+
+---
 
 ## ✅ Sprint 65-BE — 정식 종료 (v2.11.7 release, 2026-05-06)
 

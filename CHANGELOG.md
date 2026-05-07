@@ -6,6 +6,50 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.12.0] - 2026-05-07 — FEAT-MATERIAL Step 1: schema 이전 + material_master CREATE (Migration 053, BE only, P1)
+
+> Sprint 63 의 51a seed `select_options` placeholder 영구 차단 catch 후속 — 자재 마스터 인프라 도입 4 step sprint 의 Step 1. `public.product_bom` + `bom_checklist_log` + `bom_csv_import` 폐기 → `checklist` schema 의 `material_master` + `product_bom` + `bom_checklist_log` CREATE + `checklist_record.selected_material_id` ADD COLUMN. Codex 라운드 1~5 합의 영역 (D1-01 qr_doc_id / D1-02 NOT NULL / D1-03 DROP 순서 / NEW-M-01 selected_material_id) 모두 반영.
+
+### 변경
+
+- **DB Migration 053** (175 lines, `backend/migrations/053_material_master_and_bom_schema_migration.sql`)
+  - `public.bom_csv_import` + `bom_checklist_log` + `product_bom` DROP RESTRICT (자식→부모 순)
+  - `checklist.material_master` CREATE (10 컬럼, item_code UNIQUE, NOT NULL boolean/timestamp)
+  - `checklist.product_bom` CREATE (9 컬럼, hard FK material_id RESTRICT, UNIQUE (product_code, material_id))
+  - `checklist.bom_checklist_log` CREATE (17 컬럼, **qr_doc_id (D1-01)**, hard FK bom_item_id RESTRICT, AI 검증 영역 보존)
+  - `checklist.checklist_record.selected_material_id` ADD COLUMN (NEW-M-01: FK RESTRICT, partial idx WHERE NOT NULL)
+  - 인덱스 7건 (partial WHERE is_active 2건 + WHERE selected_material_id IS NOT NULL 1건)
+  - 트리거 3건 (DROP IF EXISTS → CREATE 패턴, idempotent)
+  - COMMENT ON 4건 (운영 영역 trail)
+
+- **TEST** `tests/backend/test_migration_053_schema.py` 신규 9 TC
+  - [1] checklist 신규 3 테이블 / [2] public 폐기 3 테이블 부재
+  - [3] FK 정합 + RESTRICT 3건 / [4] UNIQUE 컬럼 명시 검증 (Codex A1)
+  - [5] NOT NULL D1-02 / [6] selected_material_id NEW-M-01
+  - [7] qr_doc_id D1-01 + google_doc_id 부재 (TC-NEW-09)
+  - [8] 트리거 3건 / [9] 인덱스 + partial predicate 검증 (Codex A2)
+
+- **버전**: `version.py` 2.11.7 → 2.12.0 (MINOR — schema 신규 + 자재 마스터 인프라) + `app_version.dart` 동기화
+
+### Codex 라운드 trail
+
+- 설계서 라운드 1~5: M=8/A=6/N=9 → M=2/A=7/N=9 → M=1/A=2/N=1 → M=0/A=0/N=2 → **M=0/A=0/N=0 GREEN**
+- Step 1 implementation 라운드 1: **M=0/A=2/N=11 GREEN** (A 2건 즉시 정정)
+
+### 운영 적용
+
+- 운영 DB 직접 적용 (psql) → 검증 SQL 11건 GREEN
+- pytest 9 TC 모두 GREEN (40s)
+- migration_runner 자동 실행 호환 (Railway 재배포 시 IF NOT EXISTS / IF EXISTS 안전)
+
+### 후속 step (Sprint 진행 중)
+
+- Step 2 (Migration 053a — seed): material_master 186 자재 + product_bom 1640 BOM 매핑 INSERT → v2.12.1
+- Step 3 (BE override): _enrich_select_options + selected_material_id 직접 전달 → v2.12.2 OPS
+- Step 4 (AXIS-VIEW 별 sprint): admin GUI 자재 등록 + 매핑 → AXIS-VIEW v1.X.X (별 repo)
+
+---
+
 ## [2.11.7] - 2026-05-06 — Sprint 65-BE MECH 성적서 분기 hotfix (qr_doc_id 명시, BE only, P1)
 
 > VIEW `/partner/report` 성적서 MECH 섹션의 input_value 가 '—' 로 렌더링되는 문제 hotfix. Root cause: `get_checklist_report` 의 `else` 분기에서 `qr_doc_id=''` (default) 로 SELECT → DB record (`DOC_<sn>`) 와 매칭 0건 → LEFT JOIN cr 컬럼 NULL → VIEW '—' 표시. ELEC 패턴 차용 (Phase 1/2 분리) + `_normalize_qr_doc_id()` 명시 호출로 모바일 앱 record 정확 매칭. ADR-026 신설.

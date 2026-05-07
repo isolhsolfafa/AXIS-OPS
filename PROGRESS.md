@@ -3,10 +3,71 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: **v2.11.7 (Sprint 65-BE MECH 성적서 분기 hotfix — qr_doc_id 명시 + Phase 1/2 분리, 2026-05-06)** — BE only ~25 LOC + pytest 3 TC / 22/22 PASS / VIEW '—' 표시 fix
-> **선행 release**: v2.11.6 (DB Pool 자가 회복 — keepalive + warmup self-recovery) — BE only ~30 LOC + pytest 4 TC / 8/8 PASS / 5-09 ± 1d 재발 차단
+> **현재 버전**: **v2.12.0 (FEAT-MATERIAL Step 1 — schema 이전 + material_master CREATE, 2026-05-07)** — BE only Migration 053 (175 LOC) + pytest 9 TC / 9/9 PASS / 운영 적용 완료
+> **선행 release**: v2.11.7 (Sprint 65-BE MECH 성적서 분기 hotfix — qr_doc_id 명시 + Phase 1/2 분리) — BE only ~25 LOC + pytest 3 TC / 22/22 PASS
 > **선행 인프라**: FIX-DB-POOL-MAX-SIZE-20260427 — Railway env DB_POOL_MAX 20→30 (2026-04-27, 코드 변경 0)
 > **D+1 운영 검증 (2026-04-28)**: 출근 peak 측정 PASS — Pool exhausted 0 / direct conn fallback 0 / OPS conn 6~7 안정 / Sentry 새 issue 0 → 옵션 X1 유지, OBSERV-WARMUP COMPLETED 확정, v2.10.11 HOTFIX-06b 불필요
+
+---
+
+## v2.12.0 (FEAT-MATERIAL Step 1 — schema 이전 + material_master CREATE, 2026-05-07)
+
+**Sprint**: `FEAT-MATERIAL-MASTER-AND-BOM-INTEGRATION-20260507 Step 1` (P1, Codex 설계서 라운드 1~5 GREEN + Step 1 implementation 라운드 1 GREEN)
+
+**배경**: Sprint 63 의 51a seed `select_options` placeholder ("MKS GE50A | 5 SLM | ...") 가 운영 영구 차단 영역. 5-07 Twin파파 catch — 실 자재 데이터 (csv 1640 row + MFC xlsx 14 자재 = 186 unique) 으로 영구 해결 목표. 4 step 분할 sprint 의 Step 1 (schema 영역) 완료.
+
+### Codex 검증 trail
+
+- **설계서 라운드 1~5**: M=8/A=6/N=9 → M=2/A=7/N=9 → M=1/A=2/N=1 → M=0/A=0/N=2 → **M=0/A=0/N=0 GREEN**
+  - 합의 영역: D1-01 google_doc_id→qr_doc_id / D1-02 NOT NULL 제약 / D1-03 DROP 자식→부모 / NEW-M-01 selected_material_id 직접 전달 / D6-01 ordered deploy 등
+- **Step 1 implementation 라운드 1**: **M=0/A=2/N=11 GREEN** (A 2건 즉시 정정 — UNIQUE 컬럼 명시 + index partial predicate 검증)
+
+### 변경 (2 신규 파일)
+
+**`backend/migrations/053_material_master_and_bom_schema_migration.sql`** (신규, 175 LOC, BEGIN/COMMIT atomic):
+
+- DROP `public.bom_csv_import` + `bom_checklist_log` + `product_bom` (자식→부모 순, RESTRICT)
+- CREATE `checklist.material_master` (10 컬럼, item_code UNIQUE, NOT NULL boolean/timestamp)
+- CREATE `checklist.product_bom` (9 컬럼, hard FK material_id RESTRICT, UNIQUE (product_code, material_id))
+- CREATE `checklist.bom_checklist_log` (17 컬럼, **qr_doc_id (D1-01)**, hard FK bom_item_id RESTRICT, AI 검증 영역 보존)
+- ALTER `checklist.checklist_record` ADD COLUMN `selected_material_id` INTEGER (NEW-M-01: FK RESTRICT, partial idx WHERE NOT NULL)
+- 인덱스 7건 (partial WHERE is_active 2건 + WHERE NOT NULL 1건)
+- 트리거 3건 (DROP IF EXISTS → CREATE 패턴, idempotent)
+- COMMENT ON 4건
+
+**`tests/backend/test_migration_053_schema.py`** (신규, 9 TC):
+
+- [1] checklist 신규 3 테이블 / [2] public 폐기 3 테이블 부재
+- [3] FK 정합 + RESTRICT 3건 / [4] UNIQUE 컬럼 명시 검증 (Codex A1)
+- [5] NOT NULL D1-02 / [6] selected_material_id NEW-M-01
+- [7] qr_doc_id D1-01 + google_doc_id 부재 (TC-NEW-09)
+- [8] 트리거 3건 / [9] 인덱스 + partial predicate 검증 (Codex A2 — pg_get_expr() 괄호 wrapping 정합)
+- 결과: **9/9 PASS** (40s)
+
+### 운영 적용 (2026-05-07 KST)
+
+- 운영 DB 직접 적용 (psql) → BEGIN/DROP×3/CREATE TABLE×3/CREATE INDEX×7/ALTER TABLE/CREATE TRIGGER×3/COMMIT 정상 실행
+- 검증 SQL (사전 11건 + 사후 4건) 모두 GREEN
+- migration_history INSERT 완료 (Railway 재배포 시 중복 실행 차단)
+
+### 사전 검증 SQL 11건 GREEN trail
+
+- update_updated_at_column public schema / search_path "$user", public
+- public.product_bom + bom_checklist_log + bom_csv_import = 모두 0 row
+- pg_depend = 외부 view/function/trigger 의존성 0 (internal 영역만)
+- select_options content_shape = 8 SELECT 항목 모두 legacy_string_array (Step 4 deploy 전 영역)
+- selected_material_id 컬럼 부재 → ADD COLUMN 안전
+
+### 영향
+
+- **회귀 위험 = 0** — 신규 테이블 + 신규 컬럼만 (기존 코드 영향 0). select_options 양식 변경 X (Step 3 BE override 단계에서 dual-format 호환).
+- **운영 의도** — 자재 마스터 인프라 도입 + admin/GST 측 자재 등록 기반 마련. Step 2 (seed) → Step 3 (BE override) → Step 4 (AXIS-VIEW admin GUI) 단계별 진행.
+
+### 후속 step
+
+- **Step 2** (Migration 053a seed): material_master 186 자재 + product_bom 1640 BOM 매핑 INSERT → v2.12.1
+- **Step 3** (BE override): _enrich_select_options + selected_material_id 직접 전달 → v2.12.2 OPS
+- **Step 4** (AXIS-VIEW 별 sprint): admin GUI 자재 등록 + 매핑 → AXIS-VIEW v1.X.X (별 repo, FEAT-AXIS-VIEW-MATERIALS-AND-CHECKLISTS-MGMT-20260507)
 
 ---
 
