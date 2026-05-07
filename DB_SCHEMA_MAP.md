@@ -1,7 +1,8 @@
 # AXIS-OPS Database Schema Map
 
-> 운영 DB (Railway PostgreSQL 15) 기준 — 최종 업데이트: 2026-04-07
-> 8개 스키마, 43개 테이블, 3개 ENUM
+> 운영 DB (Railway PostgreSQL 15) 기준 — 최종 업데이트: 2026-05-07
+> 8개 스키마, 34개 테이블, 3개 ENUM (alert_type_enum 24값)
+> v2.11.7 (2026-05-06) 시점 정합 — Sprint 40-C/41-B/61-BE/63-BE/65-BE 반영
 
 ---
 
@@ -9,7 +10,7 @@
 
 | 스키마 | 테이블 수 | 용도 |
 |--------|----------|------|
-| **public** | 18 | APP 운영 (workers, tasks, alerts, QR, 설정) |
+| **public** | 19 | APP 운영 (workers, tasks, alerts, QR, 설정, migration_history) |
 | **plan** | 2 | 생산관리 (product_info, production_confirm) |
 | **hr** | 3 | 인사/근태 (출퇴근, PIN 인증) |
 | **checklist** | 2 | 체크리스트 (마스터 + 기록) |
@@ -22,7 +23,7 @@
 
 ## public 스키마 (18 테이블)
 
-### workers (13컬럼) — 작업자/관리자 계정
+### workers (16컬럼) — 작업자/관리자 계정
 ```
 id                  SERIAL PK
 name                VARCHAR(255) NOT NULL
@@ -37,6 +38,9 @@ created_at          TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 updated_at          TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 company             VARCHAR(50)
 active_role         VARCHAR(10)
+is_active           BOOLEAN DEFAULT true NOT NULL  -- Sprint 40-C: 비활성 사용자 관리
+deactivated_at      TIMESTAMPTZ                     -- Sprint 40-C: 비활성화 시각
+last_login_at       TIMESTAMPTZ                     -- Sprint 40-C: 마지막 로그인 시각
 ```
 
 ### app_task_details (22컬럼) — 작업 상세
@@ -136,7 +140,7 @@ pause_duration_minutes INTEGER
 created_at          TIMESTAMPTZ DEFAULT now()
 ```
 
-### app_alert_logs (12컬럼) — 알림 로그
+### app_alert_logs (13컬럼) — 알림 로그
 ```
 id                  SERIAL PK
 alert_type          alert_type_enum NOT NULL
@@ -150,6 +154,7 @@ is_read             BOOLEAN DEFAULT false
 read_at             TIMESTAMPTZ
 created_at          TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 updated_at          TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+task_detail_id      INTEGER NULL  -- Sprint 61-BE: 알람 에스컬레이션 task 추적
 ```
 
 ### admin_settings (6컬럼) — 관리자 설정
@@ -282,6 +287,16 @@ timestamp           TIMESTAMP
 serial_number       VARCHAR(128)
 ```
 
+### migration_history (3컬럼) — Migration 자동 실행 시스템 (INFRA-1, v2.7.0)
+```
+id                  SERIAL PK
+filename            VARCHAR(255) NOT NULL UNIQUE
+executed_at         TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+```
+- `migration_runner.py` 가 boot 시 자동 생성 (앱 코드 내 `_ensure_migration_table()`)
+- 이미 실행된 migration filename 추적 → 중복 실행 방지
+- `assert_migrations_in_sync()` 가 disk vs DB 정합 검증 (v2.10.8)
+
 ---
 
 ## plan 스키마 (2 테이블)
@@ -377,7 +392,7 @@ updated_at          TIMESTAMPTZ DEFAULT now()
 
 ## checklist 스키마 (2 테이블)
 
-### checklist.checklist_master (17컬럼) — 체크리스트 마스터
+### checklist.checklist_master (19컬럼) — 체크리스트 마스터
 ```
 id                  SERIAL PK
 product_code        VARCHAR(100) NOT NULL
@@ -388,14 +403,16 @@ description         TEXT
 is_active           BOOLEAN DEFAULT true
 created_at          TIMESTAMPTZ DEFAULT now()
 updated_at          TIMESTAMPTZ DEFAULT now()
-item_group          VARCHAR(50)              -- BURNER/REACTOR/EXHAUST/TANK / PANEL 검사/조립 검사/JIG 검사
-item_type           VARCHAR(10) DEFAULT 'CHECK' -- CHECK/SELECT/INPUT
+item_group          VARCHAR(50)              -- BURNER/REACTOR/EXHAUST/TANK / PANEL 검사/조립 검사/JIG 검사 / Speed Controller / MFC / Flow Sensor / INLET 등
+item_type           VARCHAR(10) DEFAULT 'CHECK' CHECK ('CHECK'/'SELECT'/'INPUT')  -- Sprint 63-BE: INPUT 추가
 checker_role        VARCHAR(20) DEFAULT 'WORKER' -- WORKER/QI (Sprint 57: GST 담당자 구분)
 phase1_na           BOOLEAN DEFAULT false    -- Sprint 57-C: 1차 해당없음 (deprecated → phase1_applicable)
 select_options      JSONB DEFAULT NULL       -- Sprint 57-C: SELECT 타입 옵션 목록
 phase1_applicable   BOOLEAN NOT NULL DEFAULT true  -- Sprint 60-BE: 1차 배선 적용 여부
 qi_check_required   BOOLEAN NOT NULL DEFAULT false -- Sprint 60-BE: GST QI 확인 필요 여부
 remarks             TEXT                     -- Sprint 60-BE: 개정일자/사유
+scope_rule          VARCHAR(30) DEFAULT 'all' -- Sprint 63-BE: 모델 분기 매크로 (all/tank_in_mech/DRAGON)
+trigger_task_id     VARCHAR(50)              -- Sprint 63-BE: 1차 입력 토스트 발화 task_id (UTIL_LINE_1/UTIL_LINE_2/WASTE_GAS_LINE_2/NULL)
 ```
 UNIQUE: (product_code, category, item_group, item_name)
 
@@ -516,15 +533,26 @@ product_bom ←── bom_checklist_log (bom_item_id)
 ### approval_status_enum
 `pending, approved, rejected`
 
-### alert_type_enum (18값)
+### alert_type_enum (24값)
 ```
+-- 기본 알림 (Sprint 1~30)
 PROCESS_READY, UNFINISHED_AT_CLOSING, DURATION_EXCEEDED,
 REVERSE_COMPLETION, DUPLICATE_COMPLETION, LOCATION_QR_FAILED,
 WORKER_APPROVED, WORKER_REJECTED,
 TMS_TANK_COMPLETE, TANK_DOCKING_COMPLETE,
 TASK_REMINDER, SHIFT_END_REMINDER, TASK_ESCALATION,
 BREAK_TIME_PAUSE, BREAK_TIME_END,
-CHECKLIST_TM_READY, CHECKLIST_ISSUE, ELEC_COMPLETE
+
+-- 체크리스트 (Sprint 52/57/63 — TM/ELEC/MECH 순)
+CHECKLIST_TM_READY, CHECKLIST_ISSUE, ELEC_COMPLETE,
+CHECKLIST_MECH_READY,        -- Sprint 63-BE (migration 051)
+
+-- 비활성 사용자 + 릴레이 + 에스컬레이션
+WORKER_DEACTIVATION_REQUEST, -- Sprint 40-C (migration 041)
+RELAY_ORPHAN,                -- Sprint 41-B (migration 042)
+TASK_NOT_STARTED,            -- Sprint 61-BE (migration 049)
+CHECKLIST_DONE_TASK_OPEN,    -- Sprint 61-BE (migration 049)
+ORPHAN_ON_FINAL              -- Sprint 61-BE (migration 049)
 ```
 
 ---
