@@ -1,8 +1,9 @@
 # AXIS-OPS Database Schema Map
 
-> 운영 DB (Railway PostgreSQL 15) 기준 — 최종 업데이트: 2026-05-07
+> 운영 DB (Railway PostgreSQL 15) 기준 — 최종 업데이트: 2026-05-07 (운영 DB 직접 조회 검증 완료)
 > 8개 스키마, 34개 테이블, 3개 ENUM (alert_type_enum 24값)
 > v2.11.7 (2026-05-06) 시점 정합 — Sprint 40-C/41-B/61-BE/63-BE/65-BE 반영
+> ※ `public.bom_csv_import` (10컬럼, 0 row) = 테스트 임시 테이블 — drop 예정, 본 doc 제외
 
 ---
 
@@ -416,7 +417,7 @@ trigger_task_id     VARCHAR(50)              -- Sprint 63-BE: 1차 입력 토스
 ```
 UNIQUE: (product_code, category, item_group, item_name)
 
-### checklist.checklist_record (15컬럼) — 체크리스트 기록
+### checklist.checklist_record (14컬럼) — 체크리스트 기록
 ```
 id                  SERIAL PK
 serial_number       VARCHAR(100) NOT NULL
