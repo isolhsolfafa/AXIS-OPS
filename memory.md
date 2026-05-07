@@ -2,11 +2,50 @@
 
 > 세션 간 누적되는 의사결정, 아키텍처 판단, 감사 결과를 기록합니다.
 > CLAUDE.md = 프로젝트 고정 정보 / memory.md = 누적 학습 / handoff.md = 세션 인계
-> 마지막 업데이트: 2026-05-06 (ADR-026 신규 — 신규 체크리스트 카테고리 phase split 표준 v2.11.7)
+> 마지막 업데이트: 2026-05-07 (ADR-023 2차 보강 — 추측 작성 실수 #6 누적 + 데코레이터/함수 grep cross-check 표준 추가, ADR-024 분리 검토 영역 명시)
 
 ---
 
 ## 1. 아키텍처 의사결정 기록 (ADR)
+
+### ADR-027: 자재 마스터 인프라 도입 — material_id 직접 전달 + dual-format 호환 (2026-05-07, v2.12.0 FEAT-MATERIAL Step 1)
+
+**맥락**: Sprint 63 의 51a seed `checklist_master.select_options` 가 placeholder JSON ("MKS GE50A | 5 SLM | 0.5 MPa | 0.1-0.7 MPa") 영구 차단 — 현장 작업자 무관 + DB 직접 수정 외 변경 불가. 5-07 Twin파파 catch — csv 1640 row + MFC xlsx 14 자재 = 186 unique 자재 데이터 보유. 4 step sprint (Migration 053 schema → 053a seed → BE override → AXIS-VIEW admin GUI) 도입.
+
+**결정 — material_id 직접 전달 + dual-format 호환 + selected_material_id FK 분리 컬럼**:
+
+| 영역 | 결정 | 이유 |
+|:---|:---|:---|
+| **schema 정규화** | `checklist.material_master` 신설 (item_code UNIQUE) — 같은 자재가 여러 product_code 등장 (max 105회) | 정규화 정합 + admin 측 자재 spec 변경 시 자동 반영 |
+| **schema 위치 이전** | public.product_bom + bom_checklist_log + bom_csv_import → checklist schema 이전 | 5-Tier 아키텍처 (plan / app / checklist / hr / defect) 정합 |
+| **표준 식별자** | `qr_doc_id` (D1-01 Codex 라운드 1) | google_doc_id 폐기 — CLAUDE.md L72 표준 준수, ADR-018 정합 |
+| **NOT NULL 제약** | boolean / timestamp 영역 (D1-02) | partial WHERE is_active 영역의 silent NULL drop 방지 |
+| **DROP 순서** | bom_checklist_log → product_bom (자식→부모) | FK direction `bom_item_id → product_bom.id` 기반 |
+| **material_id 전달** | FE 가 dropdown underlying value (material_id) 직접 전달 (NEW-M-01 Codex 라운드 3) | 역추적 (display string → material_id) 비결정성 차단 — item_name+spec 조합 UNIQUE 부재 |
+| **selected_material_id 분리 컬럼** | `checklist_record.selected_material_id INTEGER FK RESTRICT` 추가 (NEW-M-01) | selected_value (display string) ↔ selected_material_id (FK 추적) 양쪽 보유 — 자재 spec 변경 시 BE override 자동 반영 |
+| **dual-format 호환** | 옛 51a placeholder string 배열 + 신규 material_id int 배열 양쪽 지원 | 작업자 측 회귀 0 (admin 매핑 미적용 영역 그대로 legacy 동작) |
+| **deploy 순서** | ordered deploy with feature flag (D6-01 Codex 라운드 1) | "atomic" misleading — Step 4 가 별 repo 분리 영역. Step 3 BE first → Step 4 admin GUI |
+| **권한 가드** | `@jwt_required` + `@gst_or_admin_required` 2단 적층 (D3-02 Codex 라운드 1) | jwt_auth.py L263 표준 (Sprint 27 v1.7.4 도입) — DRY + ADR-023 cross-check |
+
+**Codex 검증 trail (5 라운드)**: M=8/A=6/N=9 → M=2/A=7/N=9 → M=1/A=2/N=1 → M=0/A=0/N=2 → **M=0/A=0/N=0 GREEN**
+
+**Step 1 implementation 라운드 1 (2026-05-07)**: M=0/A=2/N=11 GREEN. A 2건 즉시 정정 — UNIQUE 컬럼 명시 검증 (key_column_usage JOIN) + index partial predicate 검증 (pg_get_expr() 괄호 wrapping 정합).
+
+**적용 영역 (Step 1 v2.12.0 운영 적용 2026-05-07)**:
+
+- `backend/migrations/053_material_master_and_bom_schema_migration.sql` (175 LOC)
+- `tests/backend/test_migration_053_schema.py` (9 TC, 9/9 PASS)
+- 운영 DB psql 직접 적용 + migration_history INSERT
+
+**후속 step**:
+
+- Step 2 (Migration 053a seed, 186 자재 + 1640 BOM) → v2.12.1
+- Step 3 (BE _enrich_select_options + selected_material_id 직접 전달) → v2.12.2 OPS
+- Step 4 (AXIS-VIEW 별 sprint, admin GUI) → AXIS-VIEW v1.X.X (별 repo)
+
+**연관 ADR**: ADR-018 (qr_doc_id 표준), ADR-023 (cowork 추측 작성 차단), ADR-026 (체크리스트 phase split)
+
+---
 
 ### ADR-026: 신규 체크리스트 카테고리 phase split 표준 (2026-05-06, v2.11.7 Sprint 65-BE)
 
@@ -116,6 +155,21 @@ if warmed == 0 and len(conns) == 0:
 - `test_zero_warmup_logger_error_captured`
 - `test_normal_warmup_resets_consecutive_counter`
 
+**🎯 첫 실전 작동 입증 (2026-05-07 20:54 KST, T+1d)**:
+- 4-29 → 5-04 → **5-07** 5일 주기 사고 패턴 재발 확인 (Railway proxy idle disconnect 가설 입증)
+- Sentry alert: `[db_pool] 0/0 warmed for 3 consecutive cycles — re-initializing pool (pid=2)` ERROR 정상 발화 ✅
+- **9ms self-recovery latency**: Sentry breadcrumb 5-07 11:54:48.706 UTC ↔ DB pid 205810 backend_start 20:54:48.715 KST = +9ms 일치 + 168ms 안 5 conn 모두 fresh 생성
+- 사용자 영향: 1.5h+ (4-29 수동 Restart) → 40분 (5-04 수동 Restart) → **15분 자동** (5-07 자가 회복) → 단계 감소 입증
+- 시나리오 B (정상 fallback) 확정 — `DB_POOL_VERIFICATION_QUERIES_20260427.md` V4.1 결과란 채움 완료
+
+**⚠️ 부수 발견 — per-worker 카운터 의도의 사각지대 (2026-05-07 21:46 KST 사후 측정)**:
+- Boot logs: `[2]` + `[3]` 동시 boot (Procfile `-w 2` 정합) = 2 worker 운영
+- pg_stat_activity: 5 conn 만 (단일 클러스터 205810~205814 sequential pid) → Worker A 만 활성 conn
+- **사각지대 본질**: warmup_pool 이 fcntl lock 으로 단일 worker (scheduler owner) 만 실행 → 다른 worker 의 `_consecutive_zero_warmup` counter 는 영원히 0 → 자가 회복 trigger 도달 불가능
+- Worker B 풀 dead 시 HTTP 요청은 `_create_direct_conn()` fallback (+0.3~0.5s) silent degradation
+- → 본 ADR-025 의 'per-worker 카운터 의도' 가 실 운영에서 사각지대 발생함을 5-07 측정으로 확인
+- → 별 sprint **`OBSERV-PER-WORKER-POOL-RECOVERY-20260507`** 등록 (옵션 B — HTTP path getconn 실패 시 자가 회복 hook 권장)
+
 ---
 
 ### ADR-024: phase=2 GET 시 phase=1 데이터 inherit BE SQL 표준 (2026-05-06, v2.11.5 hotfix)
@@ -207,7 +261,58 @@ COALESCE(cr.input_value,    cr_p1.input_value)    AS input_value
 - DB 스키마 작업 (ALTER/RENAME 영향 큰 컬럼) 시 동일 표준 (시간순 마이그레이션 grep + 코드 cross-check + information_schema 검증 + 트랜잭션 패턴)
 - 사용자에게 SQL 제공 시 사전 검증 쿼리 동봉 + ROLLBACK 가이드 첨부
 
-**Cowork 추측 작성 실수 trail 누적 5건** (이번 보강 포함) — 다음 동일 패턴 catch 6번째 발생 시 ADR-024 신규 분리 검토
+**Cowork 추측 작성 실수 trail 누적 6건** (2026-05-07 2차 보강) — ADR-024 분리 검토 영역 도달
+
+---
+
+### 🔄 2026-05-07 2차 보강 — 추측 작성 실수 #6 + 신규 표준 영역
+
+**맥락**:
+- Sprint FEAT-MATERIAL-MASTER-AND-BOM-INTEGRATION-20260507 작성 중 cowork 가 신규 인증 데코레이터 `@require_admin_or_gst` 작성
+- 사용자 측 자체 검증 라운드 1 P0 #2 발견 — **기존 표준** `@gst_or_admin_required` (`backend/app/middleware/jwt_auth.py:263`, Sprint 27 v1.7.4 도입) 이 이미 존재
+- **간단한 grep `gst_or_admin_required` 으로 즉시 발견 가능했던 영역** — cowork 가 cross-check 누락
+- DRY 원칙 + CLAUDE.md L1009-1015 인증 표준 (`@admin_required` / `@manager_or_admin_required`) 위반
+
+**추측 작성 실수 trail (6건 누적)**:
+```
+1. GxColors.background/surface/mistLight (commit 21c581e 사용자 fix)
+2. check_result null 처리 (BE 400, 사용자 운영 catch)
+3. ELEC `_get_checklist_by_category` SQL 차용 시 phase 단일 join 한계
+4. description 표시 영역 _buildInputField 만 적용 + _buildCheckRadio/_buildSelectDropdown 누락
+5. completion_status.ee_completed (실제 elec_completed, Sprint 6 RENAME 미확인)
+6. ⭐ NEW (2026-05-07) — @require_admin_or_gst (실제 @gst_or_admin_required, Sprint 27 v1.7.4 미확인)
+```
+
+**신규 표준 영역 (2026-05-07 추가)**:
+
+### ✅ 권장 — 신규 데코레이터 / 함수 / 헬퍼 작성 시 (보강 신규)
+1. **신규 작성 전 grep 필수** — `Grep <name>` / `Grep <역할 keyword>` 으로 기존 코드 cross-check
+   - 데코레이터: `Grep "_required\b"` 또는 `Grep "def.*required"` 또는 `Grep "@.*_required"`
+   - 함수: `Grep "def <similar_name>"` 또는 `Grep "<core_keyword>"` (예: `gst`, `admin`, `auth`)
+   - 헬퍼: `services/`, `utils/`, `middleware/` 디렉토리 grep
+2. **인증/권한 영역 = jwt_auth.py 우선 grep** — `backend/app/middleware/jwt_auth.py` + `backend/app/auth.py` 전수 검토
+3. **CLAUDE.md L1009-1015 표준 데코레이터 5종 명시** — `@admin_required` / `@manager_or_admin_required` / `@gst_or_admin_required` / `@view_access_required` / `@jwt_required` 중 정확 선택
+4. **새 데코레이터 도입 권장 시 ADR 등록** — 5 표준에 6번째 추가 시 ADR 신설 필수
+
+### ❌ 금지
+- **기존 표준 cross-check 없이 신규 데코레이터 / 함수 작성** — DRY 위반 + 운영 표준 분열
+- **role / permission 영역 신규 작성** — 기존 jwt_auth.py 패턴 복제 X
+- **추측해서 데코레이터 작성** — Sprint 27 v1.7.4 같은 기존 도입 영역 미확인
+
+### 📋 Pre-deploy Gate 강화 (2026-05-07 추가)
+- 신규 작성 전 `Grep <name>` cross-check 결과 명시 (Sprint 설계서 본문에 trail 보존)
+- 인증/권한 영역 = pytest 4 조합 (admin / 매니저 / GST / 일반 worker) 검증
+
+**ADR-024 분리 검토 영역 (2026-05-07)**:
+- 6건 catch 도달 = 분리 시점
+- ADR-024 후보: "신규 코드 작성 시 기존 표준 cross-check 의무 표준" (데코레이터 / 함수 / 헬퍼 영역 grep + ADR 등록)
+- ADR-023 (Flutter + DB 영역) 와 분리 시 명확성 ↑
+- 사용자 결정 영역 — 본 sprint 진행 후 시점에 분리 권장
+
+**적용 가능 영역**:
+- 향후 모든 신규 데코레이터 / 함수 / 헬퍼 작성 시 grep cross-check 표준
+- Sprint 설계서 본문에 grep trail 명시 (cowork 추측 작성 실수 영역 사전 차단)
+- Codex 라운드 1 자동 검증 영역 (인증 영역 표준 정합 체크)
 
 ---
 
