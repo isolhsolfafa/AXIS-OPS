@@ -16,7 +16,7 @@
 선행 작업 : v2.11.6 — FIX-DB-POOL-SELF-RECOVERY (BE only ~30 LOC + pytest 4 TC). 4-29 23:31 + 5-04 11:38 KST 5일 주기 사고 차단 — keepalive + warmup 자가 회복. ADR-025 신설.
 이전 트랙 : v2.11.5 phase=2 inherit + CHECK desc / v2.11.4 옵션 C UI / v2.11.3 R1 null + R2 read-only / v2.11.2 진입점 / v2.11.1 Sprint 63-FE / v2.11.0 Sprint 63-BE / v2.10.17 HOTFIX-09
 이전 트랙 : v2.10.16 watchdog / v2.10.15 access_log 90d / v2.10.14 KPI v2.4 / v2.10.13 묶음 / v2.10.12 DURATION_WARNINGS
-진행 중   : ✅ T+1h CLEAN PASS (5-06: V1.1 5/5×3 + V1.2 TCP_OVERWINDOW 제어 패킷 only + V1.3 Sentry 0) → ⏳ T+24h (5-07) → ⏳ T+1주 (5-09 ± 1d) 효과 정량 검증
+진행 중   : ✅ T+1h CLEAN PASS (5-06) + ✅ T+24h STRONG PASS (5-07: V2.2 max_idle_sec=14s warmup 직접 증거 + V2.3 oldest conn 4h 12m alive = 5-06 대비 6배 / ⚠️ OPS conn 5 vs 예상 10 worker 수 anomaly) → ⏳ T+1주 (5-09 ± 1d) V4.1~V4.4 결정적 검증
 대기 중   : push (퇴근 후 main + Railway 자동 재배포) / AXIS-VIEW Sprint 39 (~0.5d, 별 repo) / BUG-TM-...-STALE-TC (P3, 1h)
 ```
 

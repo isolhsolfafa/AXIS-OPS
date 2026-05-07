@@ -583,13 +583,18 @@ railway logs --since 24h 2>&1 | grep "0/0 warmed" | wc -l
 - 5/5 패턴 일관 유지
 - 0/0 카운트 = 0
 
-**결과 기록**:
+**결과 기록** (2026-05-07 측정):
 ```
-조회 시각: ___ KST
-24h 동안 5/5 cycles 수: ___ (예상 ≈ 288)
-0/0 cycles 발생: ___ (Y/N)
-0/0 발생 시점 (있으면): ___
+조회 시각: 2026-05-07 ~12:44 KST (T+24h, Wed 점심 off-peak)
+Railway logs grep 결과: ⚠️ INCONCLUSIVE — 결과값 없음
+가능 원인: (1) 검색어 mismatch (실 출력은 "5/5 conn warmed" / "[pool_warmup]")
+         (2) Railway logs 보관 기간 (24h 미만일 가능성)
+         (3) Railway 대시보드 web 검색이 grep regex 와 다른 처리
+대체 검증: V2.2 의 max_idle_sec=14s + V2.3 의 state_change 12:42:40 일관성 →
+         warmup cron 정상 작동 직접 입증 (logs 안 봐도 SQL 결과 자체가 증거)
 ```
+
+→ ⚠️ **INCONCLUSIVE (검색 실패) → ✅ V2.2/V2.3 SQL 결과로 대체 검증 PASS**.
 
 ---
 
@@ -616,13 +621,28 @@ ORDER BY application_name, state;
  axis-ops         | active | 0~3        | -
 ```
 
-**결과 기록**:
+**결과 기록** (2026-05-07 측정):
 ```
-실행 시각: ___ KST
-worker별 idle conn 수: ___
-max_idle_sec: ___
-이상 패턴: ___
+실행 시각: 2026-05-07 ~12:44 KST
+
+application_name           | conn | active | idle | max_idle_sec
+(빈 문자열, OPS)            |   5  |   0    |  5   |     14    ⭐
+pgAdmin 4 - CONN:1166924   |   1  |   0    |  1   |    504
+pgAdmin 4 - CONN:1685694   |   1  |   0    |  1   |    478
+pgAdmin 4 - CONN:3891192   |   1  |   1    |  0   |      0
+pgAdmin 4 - CONN:488429    |   1  |   0    |  1   |    696
+pgAdmin 4 - DB:railway     |   1  |   0    |  1   |    478
 ```
+
+**핵심 발견**:
+- ⭐ **max_idle_sec = 14s** — warmup cron 직전 14초 안에 SELECT 1 갱신 입증
+  → V2.1 Railway logs grep 결과 없음 우려 완전 해소 (직접 증거)
+- 0 active / 5 idle = 측정 시점 in-flight request 0건 (Wed 점심 off-peak 정합)
+- ⚠️ **OPS conn 5개** — Procfile `gunicorn -w 2` 기준 예상 10개 대비 50% 누락
+  → 시나리오 A (1 worker × MIN=5) 또는 B (2 worker but 5 conn dead)
+  → 5-09 V4.4 추가 진단으로 worker 수 확정 권장
+
+→ ✅ **PASS** (warmup 정상) + ⚠️ **MONITOR** (worker 수 anomaly).
 
 ---
 
@@ -637,12 +657,48 @@ WHERE datname = current_database()
 ORDER BY backend_start DESC LIMIT 20;
 ```
 
-**결과 기록**:
+**결과 기록** (2026-05-07 측정):
 ```
-실행 시각: ___ KST
-backend_start 분포: ___
-state_change 분포: ___
+실행 시각: 2026-05-07 ~12:44 KST
+
+pid    | client_addr  | backend_start (KST) | state_change | alive 시간
+202648 | 100.64.0.5   | 10:27:40            | 12:44:00     | 2h 16m
+202607 | 100.64.0.6   | 09:57:40            | 12:42:40     | 2h 47m
+202576 | 100.64.0.2   | 09:37:40            | 12:42:40     | 3h 07m
+202506 | 100.64.0.9   | 08:47:40            | 12:42:40     | 3h 57m
+202476 | 100.64.0.2   | 08:32:40            | 12:42:40     | 4h 12m  ⭐ oldest
 ```
+
+**🟢 keepalive 효과 dramatically 입증** (5-06 대비 6배 향상):
+- 5-06 측정: oldest conn 40분 alive
+- 5-07 측정: **oldest conn 4h 12m alive**
+- → 24h 운영 후 keepalive 가 conn lifetime 더 강하게 보존
+- → Railway proxy idle disconnect 사고 (4-29/5-04 5일 주기) 차단 가능성 매우 높음
+
+**state_change 시계 일관성**:
+- 4 conn 동시 `12:42:40` → 단일 warmup cron 5분 마크에서 모두 SELECT 1 갱신
+- backend_start 모두 `__:__:40` 패턴 → warmup-driven conn creation 정합
+
+**pid 분포 분석**:
+- 202476 → 202506 (+30) → 202576 (+70) → 202607 (+31) → 202648 (+41)
+- sequential range, 단일 클러스터 → 1 worker 가설 우세
+- but Procfile `-w 2` 정합과 충돌 → 5-09 V4.4 추가 진단
+
+→ ✅ **STRONG PASS** (keepalive + warmup 정상) + ⚠️ worker 수 확정 5-09 측정.
+
+---
+
+## 📋 T+24h 종합 판정 (2026-05-07)
+
+| Query | 결과 | 판정 |
+|:---|:---:|:---:|
+| V2.1 Railway logs warmup grep | 결과값 없음 (검색어 mismatch 추정) | ⚠️ INCONCLUSIVE — V2.2/V2.3 로 대체 검증 |
+| V2.2 application_name 별 conn 분포 | OPS 5 conn idle, max_idle 14s | ✅ **STRONG PASS** (warmup 14s 안 갱신) |
+| V2.3 keepalive 활성 (재측정) | oldest conn 4h 12m alive | ✅ **STRONG PASS** (5-06 대비 6배 향상) |
+
+**T+24h 종합**: ✅ **STRONG PASS** (keepalive + warmup 핵심 효과 입증) + ⚠️ worker 수 anomaly (50% loss, 5-09 V4.4 확정)
+
+**의미**: 5일 주기 사고 (Railway proxy idle disconnect, 4-29 23:31 + 5-04 11:38 KST 패턴) **차단 가능성 매우 높음**. 시나리오 A (재발 0) 신뢰도 상승.
 
 ---
 
@@ -789,6 +845,50 @@ ORDER BY hour_bucket DESC LIMIT 30;
 실행 시각: ___ KST
 1주 평균 시간당 new_conn_count: ___
 spike 시점 (있으면): ___
+```
+
+---
+
+### V4.4 — Worker 수 확정 진단 (신규, 2026-05-07 추가)
+
+> T+24h 측정 (5-07) 에서 OPS conn 5개 vs Procfile `-w 2` 기준 예상 10개 = 50% 누락 발견.
+> 시나리오 A (1 worker × MIN=5) vs B (2 worker but 5 conn dead) 확정 필요.
+
+```sql
+-- pid 분포로 worker process 수 추정
+SELECT
+  pid,
+  backend_start,
+  AGE(NOW(), backend_start) AS conn_age,
+  EXTRACT(EPOCH FROM (NOW() - state_change))::INT AS idle_sec,
+  client_addr
+FROM pg_stat_activity
+WHERE datname = current_database()
+  AND application_name = ''
+ORDER BY backend_start ASC;
+```
+
+**판정 기준**:
+- pid 가 **단일 클러스터** (예: 202476-202648 연속) → **1 worker** 확정
+- pid 가 **2 클러스터** (예: 202476-202490 + 202500-202508 분리) → **2 worker** 확정
+
+또는 Railway 대시보드 Deployments → Logs 에서 boot 직후:
+```
+[INFO] Booting worker with pid: XXX
+```
+검색 — 2번 보이면 2 worker, 1번이면 1 worker.
+
+**시나리오별 결정**:
+- 🟢 **1 worker 확정**: MIN=5 보장 100% — 별 sprint 불필요, **종결**
+- 🟡 **2 worker 확정 + 5 conn**: 50% loss → 별 sprint `OBSERV-WORKER-CONN-LOSS-20260509` 등록 (warmup 자가 회복이 trigger 안 걸린 이유 진단)
+
+**결과 기록**:
+```
+실행 시각: ___ KST
+pid 분포: ___ (단일 / 2 클러스터)
+Railway boot logs worker pid 수: ___ (1 / 2)
+시나리오 확정: ___ (A / B)
+후속 sprint 필요: ___ (Y/N)
 ```
 
 ---

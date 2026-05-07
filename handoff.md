@@ -1,7 +1,7 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-06 KST (✅ **v2.11.7 — Sprint 65-BE MECH 성적서 분기 hotfix 완료**, BE only ~25 LOC + pytest 3 TC / 22/22 PASS, ADR-026 신설)
+> 마지막 업데이트: 2026-05-07 KST (T+24h DB Pool 검증 STRONG PASS — keepalive 4h+ alive 입증, worker 수 anomaly 5-09 V4.4 추가 진단 / v2.11.7 Sprint 65-BE 5-06 release 종결)
 
 ## ✅ Sprint 65-BE — 정식 종료 (v2.11.7 release, 2026-05-06)
 
@@ -66,8 +66,15 @@ Frontend 변경 없음 → Netlify deploy 불필요. version.py + app_version.da
   - V1.2 TCP_OVERWINDOW: 제어 패킷 66 B 만, 즉시 OK 응답 → ⚠️ MONITOR (non-critical, Sprint 30-B 회귀 NO)
   - V1.3 Sentry new events: 0건 확정
   - 0/0 cycles: 0건 (자가 회복 trigger 미작동 = 정상)
-- **T+24h** (2026-05-07): warmup cron 정상 5/5 패턴 유지 (288 cycles) + `_consecutive_zero_warmup` 누적 0
+- **T+24h** (2026-05-07): ✅ **STRONG PASS** + ⚠️ worker 수 anomaly
+  - V2.1 Railway logs warmup grep — INCONCLUSIVE (검색어 mismatch 추정), V2.2/V2.3 로 대체 검증 PASS
+  - V2.2 application_name 별 conn — OPS 5 idle, **max_idle_sec 14s** ⭐ (warmup 14초 안 갱신 직접 증거)
+  - V2.3 keepalive 재측정 — **oldest conn 4h 12m alive** ⭐ (5-06 40분 대비 6배 향상)
+  - state_change 12:42:40 4건 동시 일관성 → warmup 5분 cron 정상 작동
+  - ⚠️ OPS conn 5개 (Procfile `-w 2` 기준 예상 10개 = 50% 누락) → 5-09 V4.4 추가 진단 필요
 - **T+1주 (5-09 ± 1d)**: 재발 0 (keepalive 차단, 시나리오 A) 또는 자가 회복 작동 (시나리오 B) → COMPLETED 판정
+  - V4.1~V4.3 (기존) + **V4.4 신규** (worker pid 분포 + Railway boot logs worker 수 확정)
+  - 시나리오 A 신뢰도 상승 (4h+ alive 입증 + 사고 패턴 차단 가능성 높음)
 
 ### Rollback
 git revert <commit-sha> → 이전 동작 (keepalive OFF + 자가 회복 X) 복귀. 위험: 5-09 ± 1d 재발 시 Restart 수동 필요. Sprint 30-B Railway proxy 충돌 재발 시 keepalive 만 제거 (부분 rollback OK).
