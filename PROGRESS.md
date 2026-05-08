@@ -3,10 +3,77 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: **v2.12.0 (FEAT-MATERIAL Step 1 — schema 이전 + material_master CREATE, 2026-05-07)** — BE only Migration 053 (175 LOC) + pytest 9 TC / 9/9 PASS / 운영 적용 완료
-> **선행 release**: v2.11.7 (Sprint 65-BE MECH 성적서 분기 hotfix — qr_doc_id 명시 + Phase 1/2 분리) — BE only ~25 LOC + pytest 3 TC / 22/22 PASS
+> **현재 버전**: **v2.12.1 (Sprint 66-BE FEAT-MATERIAL Step 2 — 185 자재 + 1626 BOM seed + description 컬럼, 2026-05-08)** — Migration 053a 자동 생성 (115.5 KB) + 053b (description backfill) + Generator (~270 LOC) + pytest 11 TC / 11/11 PASS + 회귀 9/9 GREEN = 20/20 / 운영 적용 완료
+> **선행 release**: v2.12.0 (FEAT-MATERIAL Step 1 — schema 이전 + material_master CREATE, 2026-05-07) — BE only Migration 053 (175 LOC) + pytest 9 TC / 9/9 PASS
 > **선행 인프라**: FIX-DB-POOL-MAX-SIZE-20260427 — Railway env DB_POOL_MAX 20→30 (2026-04-27, 코드 변경 0)
 > **D+1 운영 검증 (2026-04-28)**: 출근 peak 측정 PASS — Pool exhausted 0 / direct conn fallback 0 / OPS conn 6~7 안정 / Sentry 새 issue 0 → 옵션 X1 유지, OBSERV-WARMUP COMPLETED 확정, v2.10.11 HOTFIX-06b 불필요
+
+---
+
+## v2.12.1 (Sprint 66-BE FEAT-MATERIAL Step 2 — 185 자재 + 1626 BOM seed + description 컬럼, 2026-05-08)
+
+**Sprint**: `Sprint 66-BE / FEAT-MATERIAL-MASTER-AND-BOM-INTEGRATION-20260507 Step 2` (P1, Codex 설계서 라운드 5 GREEN + Step 2 implementation 라운드 1~5 GREEN)
+
+**배경**: Sprint 66 R3 4-step의 Step 2 — 통합 csv (1654 row) + MFC xlsx 정합 → 185 unique 자재 + 1626 product_bom 매핑 prod 적용. 5-08 description 컬럼 추가 보완 (admin AXIS-VIEW 측 ILIKE 검색 보조).
+
+### Codex 검증 trail
+
+- **Step 2 implementation 라운드 1~5**: M=3/A=4 → M=2/A=2 → M=1/A=1 → M=0/A=2 → **M=0/A=1 GREEN**
+  - 핵심 정정: ① **MFC 단일 'MFC' 카테고리 합의 위반 catch (Twin파파, ADR-023 cross-check)** — Codex M4 advisory 따라 'MFC LNG/CDA/O2/N2' 분리 적용 → 5-07 합의 위반. 사용자 발견 후 즉시 'MFC' 단일 복원. ADR-023 표준 1차 입증 #5 사례. ② **'-' placeholder 자재 reject** (M1) — 186→185, 1640→1626. ③ **description 컬럼 추가 (053b)** — 1110299900 LNG/O2 dual-use → 단일 row + description='LNG,O2' (RFC 4180 quote). ④ **Generator self-containment** — 053a SQL 최상단 ALTER ADD COLUMN IF NOT EXISTS prefix.
+- **A 1건** (라운드 5) = AXIS-VIEW Step 4 dropdown 회귀 검증은 별 repo 영역 → BACKLOG 처리
+
+### 변경
+
+**`backend/migrations/053a_material_master_and_bom_seed.sql`** (신규 자동 생성, 115.5 KB):
+- 최상단 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS description TEXT` (self-containment, alphabetic 순서로 053b 보다 먼저 실행되어도 안전)
+- material_master 185 INSERT + ON CONFLICT (item_code) DO UPDATE
+- product_bom 1626 INSERT (FROM VALUES + JOIN material_master.item_code) + ON CONFLICT (product_code, material_id) DO UPDATE
+- BEGIN/COMMIT atomic
+
+**`backend/migrations/053b_material_master_add_description.sql`** (신규):
+- ALTER TABLE checklist.material_master ADD COLUMN IF NOT EXISTS description TEXT
+- 13 MFC 자재 description backfill UPDATE atomic (LNG×5 + LNG,O2×1 + CDA×2 + O2×4 + N2×1)
+- DO block validation (described_count != 13 RAISE EXCEPTION)
+
+**`backend/scripts/generate_migration_053a.py`** (신규, ~270 LOC, 자동 생성):
+- `CSV_COLUMN_MAP` 한글→영문 매핑 (비고:description 포함)
+- `parse_csv_bom_format()` — D2-03 csv.DictReader + placeholder '-' reject
+- `validate_source_keys(strict)` — D2-02 fail-fast 중복키 검증 (WARN/RAISE 분기)
+- `dedup_material_master()` / `dedup_product_bom()` — 옵션 A 첫 등장 보존
+- `emit_sql()` — BEGIN/COMMIT + ON CONFLICT DO UPDATE + ALTER prefix self-contained
+- MFC 자재: item_name + category 모두 단일 'MFC' (가스 분기 = description, ADR-023)
+
+**`tests/backend/test_migration_053a_seed.py`** (신규, 11 TC):
+- [1] 185 unique materials / [2] 1626 product_bom + JOIN 정합 + orphan 0
+- [3] MFC 13 단일 category + 1110299900 description='LNG,O2'
+- [4] **`test_mfc_description_backfill_13_rows`** (5-08 신규) — 분포 (LNG 6 / O2 5 / CDA 2 / N2 1) + ILIKE 검색 + 1110299900 dual-use 양쪽 매칭
+- [5] product_code 41200076 BOM JOIN sample
+- [6~9] TC-NEW-07/07b/07c/08 (generator dedup + WARN/strict + quoted/NULL/blank)
+- [10~11] TC-M2 placeholder reject + missing required field
+- 결과: **11/11 PASS** (Step 1 회귀 9/9 + Step 2 11/11 = 총 20/20 GREEN)
+
+**`/Users/twinfafa/Desktop/GST/material_master_통합.csv`** (사용자 측 수정):
+- 헤더에 `비고` 컬럼 추가
+- 1110299900 = LNG/O2 dual-use → 두 row를 단일 row로 합침 (item_name='MFC', spec_2='P:2~4 / W:0.3', 비고='"LNG,O2"')
+- 13 MFC row 비고 채움
+- 결과: 1654 → 1653 data rows (1110299900 dedup)
+
+### 운영 적용 (2026-05-07~08 KST)
+
+- **5-07 23:16~** — 053a (185 + 1626) prod psql 직접 적용 GREEN
+- **5-08 09:55** — 053b ALTER + 13 UPDATE atomic + DO block 검증 PASS
+- migration_history INSERT — 053 / 053a / 053b 모두 등록 (Railway 재배포 중복 차단)
+- prod 검증: 185 자재 / 1626 매핑 / 13 description / ILIKE LNG 6 / O2 5 / 1110299900 dual-use 양쪽 매칭
+
+### 영향
+
+- **회귀 위험 = 0** — 신규 INSERT (기존 코드 영향 0). select_options 양식 변경 X (Step 3 BE override 단계에서 dual-format 호환).
+- **운영 의도** — admin AXIS-VIEW Step 4 측 자재 등록 시 ILIKE 검색 보조 (가스 종류 description). 작업자 측 변경 0 (Step 3 까지).
+
+### 후속 step
+
+- **Step 3** (BE override): _enrich_select_options + selected_material_id 직접 전달 → v2.12.2 OPS (~2h, BE+FE)
+- **Step 4** (AXIS-VIEW 별 sprint): admin GUI 자재 등록 + 매핑 → AXIS-VIEW v1.X.X (별 repo)
 
 ---
 

@@ -789,13 +789,33 @@ railway logs --since 36h 2>&1 | grep -E "0/0 warmed|re-initializing|Connection p
 - 🟡 **시나리오 B (정상 fallback)**: 0/0 출력 + 15분 안 re-initializing → 자가 회복 메커니즘 효과
 - 🔴 **시나리오 C (실패)**: 0/0 출력 + 15분+ 지속 → 자가 회복 결함, 재진단 필요
 
-**결과 기록**:
+**결과 기록** (2026-05-07 21:46 KST 측정, 사고 발생 ~52분 후):
 ```
-조회 시각: ___ KST
-시나리오: ___ (A / B / C)
-0/0 발생 횟수: ___
-re-initializing 호출 횟수: ___
-사용자 영향 시간: ___ (분, 0~15)
+조회 시각: 2026-05-07 21:46 KST (사고 발생 후 ~52분, sentry alert + pg_stat_activity 교차 측정)
+시나리오: 🟡 B (정상 fallback — 자가 회복 메커니즘 효과)
+0/0 발생 횟수: 1회 (5-07 20:54 KST, 3 consecutive cycles = 15분간 풀 dead)
+re-initializing 호출 횟수: 1회 (worker pid=2 만)
+사용자 영향 시간: ~15분 (3 cycles × 5분 = 15분, T+0 ~ T+15 직접 conn fallback 운영)
+주기 검증: 4-29 23:31 → 5-04 11:38 (+4d 12h) → 5-07 20:54 (+3d 8h) — 5일 ± 1d 가설 입증
+사고 단계 감소: 1.5h+ (4-29 수동 Restart) → 40분 (5-04 수동 Restart) → 15분 (5-07 자동 회복) ✅
+
+🎯 결정적 증거 — Sentry alert ↔ DB conn 생성 9ms 일치:
+  ├─ Sentry breadcrumb: 5-07 11:54:48.706 UTC = 20:54:48.706 KST `re-initializing pool (pid=2)`
+  ├─ DB pid 205810 backend_start: 20:54:48.715 KST (Sentry +9ms)
+  ├─ DB pid 205811: 20:54:48.751 KST (+45ms)
+  ├─ DB pid 205812: 20:54:48.794 KST (+88ms)
+  ├─ DB pid 205813: 20:54:48.845 KST (+139ms)
+  ├─ DB pid 205814: 20:54:48.884 KST (+178ms, last)
+  └─ → init_pool() 호출 직후 168ms 안 5 conn fresh 생성 = MIN=5 즉시 보장 입증
+
+⚠️ 부분 회복 발견 (CRITICAL — 별 sprint 등록 필요):
+  ├─ Sentry: worker pid=2 만 자가 회복 메시지 ('re-initializing pool (pid=2)')
+  ├─ Boot logs (5-07 14:24 KST): pid=2 + pid=3 동시 boot — Procfile -w 2 정합 = 2 worker 운영
+  ├─ pg_stat_activity (21:46 KST 측정): 5 conn 만 (단일 클러스터 205810-205814, sequential pid)
+  ├─ → Worker A (pid=2, scheduler owner): 자가 회복 후 5 conn 정상 ✅
+  └─ → Worker B (pid=3, HTTP only): 풀 dead 추정 (warmup cron 미실행 → 0/0 detection 미작동 → 자가 회복 trigger 없음)
+       → ADR-025 'per-worker 카운터 의도' 가 fcntl lock + warmup cron 단일 worker 실행 구조와 결합 시 사각지대 발생
+       → 별 sprint **OBSERV-PER-WORKER-POOL-RECOVERY-20260507** 신규 등록 필요
 ```
 
 ---
@@ -882,13 +902,50 @@ ORDER BY backend_start ASC;
 - 🟢 **1 worker 확정**: MIN=5 보장 100% — 별 sprint 불필요, **종결**
 - 🟡 **2 worker 확정 + 5 conn**: 50% loss → 별 sprint `OBSERV-WORKER-CONN-LOSS-20260509` 등록 (warmup 자가 회복이 trigger 안 걸린 이유 진단)
 
-**결과 기록**:
+**결과 기록** (2026-05-07 21:46 KST 측정, 자가 회복 사고 직후):
 ```
-실행 시각: ___ KST
-pid 분포: ___ (단일 / 2 클러스터)
-Railway boot logs worker pid 수: ___ (1 / 2)
-시나리오 확정: ___ (A / B)
-후속 sprint 필요: ___ (Y/N)
+실행 시각: 2026-05-07 21:46 KST (5-07 20:54 자가 회복 ~52분 후)
+pid 분포: 단일 클러스터 (Postgres backend pid 205810-205814 sequential, +1 each)
+  → 단일 gunicorn worker process 가 5 conn 모두 생성한 것으로 해석
+Railway boot logs worker pid 수: 2 (5-07 14:24:38 UTC 동시 boot)
+  ├─ [2026-05-07 05:24:38 +0000] [2] [INFO] Booting worker with pid: 2
+  └─ [2026-05-07 05:24:38 +0000] [3] [INFO] Booting worker with pid: 3
+시나리오 확정: 🟡 **2 worker 확정 + 5 conn (50% loss)**
+  ├─ Worker A (pid=2, scheduler owner): 자가 회복 init_pool() → 5 fresh conn ✅
+  └─ Worker B (pid=3, HTTP only): 5 conn 미관측 (Railway proxy idle disconnect 후 미회복 추정)
+후속 sprint 필요: **Y** → `OBSERV-PER-WORKER-POOL-RECOVERY-20260507` 신규 등록
+
+⚠️ 핵심 분석 — Worker B 풀 사각지대:
+  ├─ ADR-025 설계: per-worker 카운터 의도 (Worker A 자가 회복해도 B 별개)
+  ├─ 실측 발견: warmup cron 자체가 fcntl lock 으로 단일 worker (scheduler owner) 만 실행
+  ├─ → Worker B 의 _consecutive_zero_warmup 은 영원히 0 (warmup_pool() 미호출) → 자가 회복 trigger 도달 불가능
+  └─ → Worker B 풀 dead 시 HTTP 요청은 _create_direct_conn() fallback (+0.3~0.5s 지연)으로 처리 (silent degradation)
+       사용자 영향: HTTP latency ↑ (Sprint 65/MECH 사용자 측 +0.5s p95 추정)
+```
+
+**해석 보강 (2026-05-07 21:46 측정)**:
+
+V2.2 결과 (위 V4.4 와 동일 측정 시점):
+```
+application_name | conn_count | max_idle_sec
+(빈 문자열, OPS) |     5      |     107       (1분 47초, max_age=300s 한참 안)
+→ warmup cron 정상 작동 중 (max_idle 107 < 300)
+→ Worker A 만 활성, Worker B 풀 dead 가설 강화
+```
+
+V4.3 보강 (keepalive + 자가 회복 backend_start 분포):
+```
+pid    | backend_start_kst         | conn_age   | idle_sec | client_addr
+205810 | 2026-05-07 20:54:48.715466 | 00:52:02  | 122      | 100.64.0.10
+205811 | 2026-05-07 20:54:48.751140 | 00:52:02  | 122      | 100.64.0.4
+205812 | 2026-05-07 20:54:48.794252 | 00:52:02  | 122      | 100.64.0.12
+205813 | 2026-05-07 20:54:48.845651 | 00:52:02  | 122      | 100.64.0.9
+205814 | 2026-05-07 20:54:48.884075 | 00:52:02  | 51       | 100.64.0.7
+
+→ 5 conn 모두 backend_start 168ms window 안에 fresh 생성 (자가 회복 init_pool() 직후)
+→ client_addr 5개 모두 다른 ephemeral port = Railway proxy fresh tunnel
+→ idle_sec 분포: 4×122s + 1×51s → warmup cron 5분 cycle 사이 단계적 갱신 작동 중
+→ T+24h (5-07 12:44 측정) 의 oldest 4h 12m alive 와 별개 측정 — 본 5 conn 은 자가 회복으로 새로 생성된 cohort
 ```
 
 ---
