@@ -68,13 +68,35 @@
 - 운영 DB psql 직접 적용 + migration_history INSERT (053 / 053a / 053b)
 - pytest 총 34/34 PASS
 
+**Step 4 implementation 라운드 1 (2026-05-08, v2.12.3, OPS BE 측)**: **M=0 / A=6 GREEN** (전부 advisory, BACKLOG 처리). admin endpoints 신규 7건 (자재 마스터 CRUD 5 + 체크리스트 매핑 2). AXIS-VIEW Sprint 42 (별 repo) 가 consume 할 인프라 확보. **Sprint 66-BE OPS 측 100% 완료** (Step 1+2+3+4 prod 적용 + 총 47/47 pytest GREEN). 핵심 정합:
+1. **권한 정합 (ADR-023 #6)** — `@jwt_required + @gst_or_admin_required` 2단 적층. 새 데코레이터 작성 X (jwt_auth.py L263 표준 활용).
+2. **dual-format 호환** — GET options 의 select_options_raw 분기: int array → JOIN+array_position 순서 보존 / string array → legacy_string flag.
+3. **xmax trick idempotent** — POST `RETURNING id, (xmax = 0) AS created` PostgreSQL trick — 1차 INSERT created=true / 2차 ON CONFLICT UPDATE created=false.
+4. **5종 validation** (PATCH options) — list / int (bool 차단) / 중복 / material_master 존재+is_active=TRUE / item_type='SELECT'.
+5. **db_pool RealDictCursor 정합** — 1차 시도 실패 후 row[0] → row['id'] dict access fix (db_pool.py default cursor_factory).
+
+**Codex A 6건 (BACKLOG 처리)**:
+- I-1: inactive material stale mapping round-trip (admin 가시성 의도, AXIS-VIEW FE 시각 마킹)
+- I-3: NULL vs `[]` 매핑 구분 소실 (FE 처리 규약 문서화)
+- B-legacy: legacy string CI 커버리지 조건부 (seed fixture)
+- B-coerce: PATCH string ID coercion 미구현 (AXIS-VIEW Sprint 42 측 int 전송 보장 필수)
+- D-race: validation-update race window (운영 빈도 낮음)
+- F-wildcard: ILIKE wildcard escape 미구현 (검색 의미론, 보안 X)
+
+**적용 영역 (Sprint 66-BE 전체 — 4 step prod 적용 2026-05-07~08)**:
+
+- Step 1 (v2.12.0): `backend/migrations/053_material_master_and_bom_schema_migration.sql` (175 LOC)
+- Step 2 (v2.12.1): `backend/migrations/053a_material_master_and_bom_seed.sql` + `053b_material_master_add_description.sql` + `backend/scripts/generate_migration_053a.py` (~270 LOC)
+- Step 3 (v2.12.2): `backend/app/services/checklist_service.py` (4 신규 함수) + `backend/app/routes/checklist.py` (2 endpoint 수정) + `frontend/lib/screens/checklist/mech_checklist_screen.dart` (5 변경 + 재진입 hydrate)
+- Step 4 (v2.12.3): `backend/app/routes/admin_materials.py` (5 endpoint) + `backend/app/routes/admin_checklists.py` (2 endpoint) + `backend/app/__init__.py` (2 blueprint 등록)
+- pytest 총 47/47 GREEN (9 + 11 + 14 + 13)
+- migration_history INSERT — 053 / 053a / 053b 모두 등록
+
 **후속 step**:
 
-- Step 4 (AXIS-VIEW 별 sprint, admin GUI) → AXIS-VIEW v1.X.X (별 repo, FEAT-AXIS-VIEW-MATERIALS-AND-CHECKLISTS-MGMT-20260507)
-  - `/api/admin/materials/*` CRUD endpoint
-  - `/api/admin/checklists/master/:id/options` 매핑 endpoint
-  - admin GUI 자재 등록 + checklist_master.select_options 매핑 (string → material_id int array)
-  - 배포 후 작업자 화면이 동적 자재 옵션 수신 시작 (Step 3 BE override 자동 작동)
+- **AXIS-VIEW Sprint 42** (별 repo) — `/materials` admin GUI + `/checklists` 매핑 GUI consume
+  - admin 매핑 시 BE override (Step 3) 자동 작동 → 작업자 동적 자재 옵션 수신 시작
+- Sprint 66-BE OPS 측은 v2.12.3 release 로 **종결**
 
 **연관 ADR**: ADR-018 (qr_doc_id 표준), ADR-023 (cowork 추측 작성 차단), ADR-026 (체크리스트 phase split)
 

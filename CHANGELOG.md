@@ -6,6 +6,65 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.12.3] - 2026-05-08 — FEAT-MATERIAL Step 4 (OPS BE): admin endpoints — 자재 마스터 CRUD + 체크리스트 매핑 (BE only, P1)
+
+> Sprint 66-BE R3 4-step 의 마지막 step (OPS BE 측). AXIS-VIEW Sprint 42 (별 repo) 의 admin GUI 가 consume 할 endpoint 인프라 신규. **Sprint 66-BE OPS 측 100% 완료** (Step 1+2+3+4 prod 적용 + 47/47 pytest GREEN).
+
+### 변경
+
+- **BE** `backend/app/routes/admin_materials.py` 신규 (5 endpoint)
+  - `GET /api/admin/materials` — 검색 + 페이지네이션 (category 정확 일치 / keyword ILIKE on item_name+item_code / description ILIKE / is_active 분기 [true|false|all] / page / per_page max 200)
+  - `POST /api/admin/materials` — create (ON CONFLICT DO UPDATE idempotent, RETURNING `(xmax = 0) AS created` PostgreSQL trick — 1차 created=true / 2차 false)
+  - `PATCH /api/admin/materials/<id>` — 화이트리스트 갱신 (item_name/category/spec_1/spec_2/unit/description) — item_code 변경 차단 (식별자 보호)
+  - `PATCH /api/admin/materials/<id>/deactivate` — soft delete (is_active=FALSE, RESTRICT FK 안전)
+  - `PATCH /api/admin/materials/<id>/reactivate` — admin 실수 복구
+
+- **BE** `backend/app/routes/admin_checklists.py` 신규 (2 endpoint)
+  - `GET /api/admin/checklists/master/<id>/options` — 매핑 조회 + dual-format 분기 (Codex D4-01: int array → material_master JOIN + array_position 순서 보존 / string array → legacy_string flag legacy compat)
+  - `PATCH /api/admin/checklists/master/<id>/options` — 매핑 갱신 + 5종 검증 (list / int (bool 차단) / 중복 / material_master 존재+is_active=TRUE / item_type='SELECT')
+
+- **BE** `backend/app/__init__.py` — admin_materials_bp + admin_checklists_bp 2 블루프린트 등록
+
+- **TEST** `tests/backend/test_sprint66_be_step4_admin.py` 신규 13 TC (13/13 PASS)
+  - list (default + ILIKE description + ILIKE category 3건)
+  - create idempotent (1차 created=true / 2차 false) + validation 400
+  - update whitelist (item_code 차단)
+  - deactivate/reactivate roundtrip
+  - get options legacy + patch validation 4건 + patch roundtrip
+  - 권한 (JWT 부재 401 / partner 403 / GST 200)
+
+### 권한 정합 (ADR-023 cross-check 준수)
+
+- 모든 endpoint 에 `@jwt_required + @gst_or_admin_required` 2단 적층 (jwt_auth.py L263 표준 — Sprint 27 v1.7.4 도입)
+- 새 데코레이터 작성 X — DRY + ADR-023 #6 (cowork 추측 작성 차단)
+
+### Codex 검증
+
+- 라운드 1: **M=0 / A=6 GREEN** (전부 advisory, BACKLOG 처리)
+  - I-1: inactive material stale mapping round-trip — admin 가시성 영역 (의도된 동작) → AXIS-VIEW FE 시각 마킹 BACKLOG
+  - I-3: NULL vs `[]` 매핑 구분 소실 — FE 처리 규약 문서화 BACKLOG
+  - B-legacy: legacy string CI 커버리지 조건부 — seed fixture BACKLOG
+  - B-coerce: PATCH string ID coercion 미구현 — AXIS-VIEW Sprint 42 측 int 전송 보장 확인 필수
+  - D-race: validation-update race window — 운영 빈도 낮음, advisory
+  - F-wildcard: ILIKE wildcard escape 미구현 — 보안 X, 검색 의미론 영역 advisory
+
+### 회귀
+
+- pytest 13/13 PASS (Step 4) + Step 1+2+3 = 34/34 = **총 47/47 GREEN**
+- 회귀 위험 0 (신규 endpoint, 기존 API 영향 0)
+
+### 영향
+
+- **Sprint 66-BE OPS 측 100% 완료** — Step 1+2+3+4 prod 적용 + 47/47 GREEN
+- AXIS-VIEW Sprint 42 (별 repo) admin GUI 가 consume 할 endpoint 인프라 확보
+- AXIS-VIEW 측 admin 매핑 시 BE override (Step 3) 자동 작동 → 작업자 동적 자재 옵션 수신 시작
+
+### 후속
+
+- AXIS-VIEW Sprint 42 (별 repo) — `/materials` admin GUI + `/checklists` 매핑 GUI consume
+
+---
+
 ## [2.12.2] - 2026-05-08 — FEAT-MATERIAL Step 3: checklist_master 동적 자재 조회 + selected_material_id 직접 전달 (BE+FE atomic, P1)
 
 > Sprint 66-BE R3 4-step의 Step 3. checklist_master.select_options 동적 자재 조회 + dual-format 호환 (옛 51a string array + 신규 int material_id array) + FE re-entry hydrate. 작업자 화면 회귀 0 (현재 prod 8개 string_array 영역 그대로 표시) — Step 4 admin GUI 매핑 후부터 자재 동적 표시 활성.

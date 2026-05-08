@@ -1,7 +1,47 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-08 KST (🎯 v2.12.2 release — Sprint 66-BE FEAT-MATERIAL Step 3: checklist_master 동적 자재 조회 + selected_material_id 직접 전달 + FE re-entry hydrate, pytest 34/34 GREEN, BE+FE 운영 적용 완료)
+> 마지막 업데이트: 2026-05-08 KST (🎯 v2.12.3 release — Sprint 66-BE FEAT-MATERIAL Step 4 (OPS BE): admin endpoints 자재 마스터 CRUD + 체크리스트 매핑, pytest 47/47 GREEN — **Sprint 66-BE OPS 측 100% 완료**)
+
+## 🎯 2026-05-08 KST — v2.12.3 release (Sprint 66-BE FEAT-MATERIAL Step 4 OPS BE) ⭐ Sprint 66 OPS 100% 완료
+
+> **한 줄 요약**: Sprint 66-BE R3 4-step 의 마지막 step (OPS BE 측) 운영 적용 완료. admin endpoints 7건 신규 (자재 마스터 5 + 체크리스트 매핑 2) — AXIS-VIEW Sprint 42 (별 repo) 가 consume 할 인프라 확보. Codex 라운드 1 M=0/A=6 GREEN (advisory 전체 BACKLOG). **Sprint 66-BE OPS 측 100% 완료** (Step 1+2+3+4 prod 적용 + 총 47/47 pytest GREEN).
+
+### 진행 trail
+
+| 단계 | 결과 |
+|---|---|
+| BE admin_materials.py 신규 (5 endpoint) | ✅ GET list / POST create idempotent (xmax trick) / PATCH update whitelist / PATCH deactivate / PATCH reactivate |
+| BE admin_checklists.py 신규 (2 endpoint) | ✅ GET options dual-format / PATCH options 5종 validation |
+| Blueprint 등록 | ✅ admin_materials_bp + admin_checklists_bp 2 신규 |
+| 권한 정합 (ADR-023) | ✅ 모든 endpoint @jwt_required + @gst_or_admin_required 2단 적층 (Sprint 27 v1.7.4 표준) — 새 데코레이터 작성 X |
+| pytest 13 TC | ✅ 13/13 PASS (db_pool RealDictCursor 정합 정정 후) |
+| 회귀 (Step 1+2+3+4) | ✅ **총 47/47 GREEN** (9 + 11 + 14 + 13) |
+| Codex 라운드 1 (Step 4 impl) | ✅ M=0 / A=6 GREEN (전부 advisory, BACKLOG) |
+| Railway BE 배포 | ⏳ push 후 자동 배포 검증 예정 |
+
+### Codex A 6건 (BACKLOG 처리)
+
+- I-1: inactive material stale mapping round-trip — admin 가시성 의도 (AXIS-VIEW FE 시각 마킹)
+- I-3: NULL vs `[]` 매핑 구분 소실 — FE 처리 규약 문서화
+- B-legacy: legacy string CI 커버리지 조건부 — seed fixture
+- B-coerce: PATCH string ID coercion 미구현 — AXIS-VIEW Sprint 42 측 int 전송 보장 필수
+- D-race: validation-update race window — 운영 빈도 낮음
+- F-wildcard: ILIKE wildcard escape 미구현 — 검색 의미론, 보안 X
+
+### 영향
+
+- **Sprint 66-BE OPS 측 100% 완료** — Step 1+2+3+4 prod 적용 + 47/47 GREEN
+- AXIS-VIEW Sprint 42 (별 repo) admin GUI consume endpoint 인프라 확보
+- AXIS-VIEW 측 admin 매핑 시 BE override (Step 3) 자동 작동 → 작업자 동적 자재 옵션 수신 시작
+- 회귀 위험 0 (신규 endpoint, 기존 API 영향 0)
+
+### 다음 step
+
+- **AXIS-VIEW Sprint 42** (별 repo) — `/materials` admin GUI + `/checklists` 매핑 GUI consume
+- Sprint 66-BE OPS 측은 이번 release 로 종결
+
+---
 
 ## 🎯 2026-05-08 KST — v2.12.2 release (Sprint 66-BE FEAT-MATERIAL Step 3)
 

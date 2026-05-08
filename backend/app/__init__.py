@@ -212,6 +212,8 @@ def create_app(config_class: type = Config) -> Flask:
     from app.routes.factory import factory_bp  # Sprint 29: 공장 API
     from app.routes.analytics import analytics_bp  # Sprint 32: 사용자 분석
     from app.routes.production import production_bp  # Sprint 33: 생산실적
+    from app.routes.admin_materials import admin_materials_bp    # Sprint 66-BE Step 4: 자재 마스터 admin
+    from app.routes.admin_checklists import admin_checklists_bp  # Sprint 66-BE Step 4: 체크리스트 매핑 admin
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(work_bp)
@@ -227,7 +229,9 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(factory_bp)
     app.register_blueprint(analytics_bp)
     app.register_blueprint(production_bp)
-    logger.info("Blueprints registered: auth, work, product, alert, admin, sync, gst, checklist, hr, notices, qr, factory, analytics, production")
+    app.register_blueprint(admin_materials_bp)    # Sprint 66-BE Step 4
+    app.register_blueprint(admin_checklists_bp)   # Sprint 66-BE Step 4
+    logger.info("Blueprints registered: auth, work, product, alert, admin, sync, gst, checklist, hr, notices, qr, factory, analytics, production, admin_materials, admin_checklists")
 
     # Sprint 32: 사용자 행위 트래킹 (access log)
     import time as _time

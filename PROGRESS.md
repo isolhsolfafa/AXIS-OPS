@@ -3,10 +3,62 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: **v2.12.2 (Sprint 66-BE FEAT-MATERIAL Step 3 — checklist_master 동적 자재 조회 + selected_material_id 직접 전달, 2026-05-08)** — BE checklist_service.py 4 신규 함수 + N+1 BATCHED 단일 SELECT + FE mech_checklist_screen.dart 재진입 hydrate + pytest 14 TC / 14/14 PASS / 회귀 20/20 GREEN = 34/34
-> **선행 release**: v2.12.1 (FEAT-MATERIAL Step 2 — 185 자재 + 1626 BOM seed + description 컬럼, 2026-05-08) — Migration 053a + 053b + Generator (~270 LOC) + pytest 11 TC
+> **현재 버전**: **v2.12.3 (Sprint 66-BE FEAT-MATERIAL Step 4 — admin endpoints 자재 마스터 CRUD + 체크리스트 매핑, 2026-05-08)** — BE only admin_materials.py + admin_checklists.py 신규 (5 + 2 endpoint) + pytest 13 TC / 13/13 PASS + 회귀 34/34 GREEN = **47/47** / **Sprint 66-BE OPS 측 100% 완료**
+> **선행 release**: v2.12.2 (FEAT-MATERIAL Step 3 — checklist_master 동적 자재 조회, 2026-05-08) — BE checklist_service.py 4 신규 함수 + FE mech_checklist_screen.dart 재진입 hydrate + pytest 14 TC
 > **선행 인프라**: FIX-DB-POOL-MAX-SIZE-20260427 — Railway env DB_POOL_MAX 20→30 (2026-04-27, 코드 변경 0)
 > **D+1 운영 검증 (2026-04-28)**: 출근 peak 측정 PASS — Pool exhausted 0 / direct conn fallback 0 / OPS conn 6~7 안정 / Sentry 새 issue 0 → 옵션 X1 유지, OBSERV-WARMUP COMPLETED 확정, v2.10.11 HOTFIX-06b 불필요
+
+---
+
+## v2.12.3 (Sprint 66-BE FEAT-MATERIAL Step 4 — admin endpoints 자재 마스터 CRUD + 체크리스트 매핑, 2026-05-08)
+
+**Sprint**: `Sprint 66-BE / FEAT-MATERIAL-MASTER-AND-BOM-INTEGRATION-20260507 Step 4 (OPS BE)` (P1, Codex 라운드 1 GREEN — M=0/A=6 advisory)
+
+**배경**: Sprint 66 R3 4-step 의 마지막 step (OPS BE 측). AXIS-VIEW Sprint 42 (별 repo) 의 admin GUI 가 consume 할 endpoint 인프라 신규. **Sprint 66-BE OPS 측 100% 완료**.
+
+### Codex 검증 trail
+
+- **Step 4 implementation 라운드 1**: **M=0 / A=6 GREEN** (전부 advisory, BACKLOG 처리)
+  - I-1: inactive material stale mapping round-trip — admin 가시성 영역 (의도된 동작). AXIS-VIEW FE 시각 마킹 BACKLOG
+  - I-3: NULL vs `[]` 매핑 구분 소실 — FE 처리 규약 문서화 BACKLOG
+  - B-legacy: legacy string CI 커버리지 조건부 — seed fixture BACKLOG
+  - B-coerce: PATCH string ID coercion 미구현 — AXIS-VIEW Sprint 42 측 int 전송 보장 확인 필수
+  - D-race: validation-update race window — 운영 빈도 낮음, advisory
+  - F-wildcard: ILIKE wildcard escape 미구현 — 검색 의미론, 보안 X
+
+### 변경 (BE 2 신규 파일 + Blueprint 등록 + pytest 1 신규)
+
+**`backend/app/routes/admin_materials.py`** 신규 (5 endpoint):
+- `GET /api/admin/materials` — 검색 + 페이지네이션 (category 정확 / keyword ILIKE on item_name+item_code / description ILIKE / is_active 분기 [true|false|all] / page / per_page max 200)
+- `POST /api/admin/materials` — ON CONFLICT DO UPDATE idempotent + RETURNING `(xmax = 0) AS created`
+- `PATCH /api/admin/materials/<id>` — 화이트리스트 갱신 (item_name/category/spec_1/spec_2/unit/description) — item_code 식별자 보호
+- `PATCH /api/admin/materials/<id>/deactivate` — soft delete (RESTRICT FK 안전, is_active=FALSE)
+- `PATCH /api/admin/materials/<id>/reactivate` — admin 실수 복구
+
+**`backend/app/routes/admin_checklists.py`** 신규 (2 endpoint):
+- `GET /api/admin/checklists/master/<id>/options` — dual-format 분기 (Codex D4-01: int → JOIN+array_position 순서 보존 / string → legacy_string flag legacy compat)
+- `PATCH /api/admin/checklists/master/<id>/options` — 5종 검증 (list / int (bool 차단) / 중복 / material_master 존재+is_active=TRUE / item_type='SELECT')
+
+**`backend/app/__init__.py`** — admin_materials_bp + admin_checklists_bp 2 블루프린트 등록
+
+**권한 정합 (ADR-023 cross-check 준수)**:
+- 모든 endpoint 에 `@jwt_required + @gst_or_admin_required` 2단 적층 (jwt_auth.py L263 표준 — Sprint 27 v1.7.4 도입)
+- 새 데코레이터 작성 X — DRY + ADR-023 #6 (cowork 추측 작성 차단)
+
+**`tests/backend/test_sprint66_be_step4_admin.py`** 신규 13 TC:
+- list (default + ILIKE description + ILIKE category) / create idempotent (1차 created=true, 2차 false) + validation 400 / update whitelist (item_code 차단) / deactivate-reactivate roundtrip / get options legacy / patch validation 4건 / patch roundtrip + array_position 순서 보존 / 권한 (JWT 부재 401 + partner 403 + GST 200)
+- 결과: **13/13 PASS** (Step 1+2+3 회귀 34/34 + Step 4 13/13 = **총 47/47 GREEN**)
+
+### 영향
+
+- **Sprint 66-BE OPS 측 100% 완료** — Step 1+2+3+4 prod 적용 + 47/47 pytest GREEN
+- 회귀 위험 0 (신규 endpoint, 기존 API 영향 0)
+- AXIS-VIEW Sprint 42 (별 repo) admin GUI consume endpoint 인프라 확보
+
+### 후속
+
+- AXIS-VIEW Sprint 42 (별 repo): `/materials` admin GUI + `/checklists` 매핑 GUI consume
+  - admin 매핑 시 BE override (Step 3) 자동 작동 → 작업자 동적 자재 옵션 수신 시작
 
 ---
 
