@@ -1,7 +1,55 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-07 23:30 KST (🎯 v2.12.0 release — FEAT-MATERIAL Step 1: Migration 053 schema 이전 + material_master CREATE 운영 적용 + pytest 9/9 GREEN)
+> 마지막 업데이트: 2026-05-08 KST (🎯 v2.12.2 release — Sprint 66-BE FEAT-MATERIAL Step 3: checklist_master 동적 자재 조회 + selected_material_id 직접 전달 + FE re-entry hydrate, pytest 34/34 GREEN, BE+FE 운영 적용 완료)
+
+## 🎯 2026-05-08 KST — v2.12.2 release (Sprint 66-BE FEAT-MATERIAL Step 3)
+
+> **한 줄 요약**: Sprint 66-BE R3 4-step 의 Step 3 (BE+FE atomic) 운영 적용 완료 — checklist_master 동적 자재 조회 + selected_material_id 직접 전달 + FE re-entry hydrate. Codex 라운드 1 M=2 (G+D silent NULL overwrite) 정정 후 라운드 2 GREEN. **Sprint 66-BE OPS 측 75% 완료 (3/4 step), Step 4 = AXIS-VIEW 별 repo 영역**.
+
+### 진행 trail
+
+| 단계 | 결과 |
+|---|---|
+| 사전 검증 SQL | ✅ select_options 분포 — MECH 7 + ELEC 1 + TM 0 = 8 array 모두 string_array (legacy 51a) |
+| BE checklist_service.py 4 신규 함수 | ✅ _collect_material_ids / _fetch_material_master_map (N+1 BATCHED) / _enrich_select_options (tuple) / _validate_material_id |
+| BE _get_checklist_by_category SQL + 응답 | ✅ COALESCE(cr.selected_material_id, cr_p1.selected_material_id) 추가 + select_material_ids + selected_material_id 응답 필드 |
+| BE upsert_mech_check + upsert_elec_check | ✅ selected_material_id 인자 + validation + INSERT/UPDATE 컬럼 갱신 |
+| BE routes/checklist.py 2 endpoint | ✅ PUT /mech/check + /elec/check 에 selected_material_id 전달 |
+| FE mech_checklist_screen.dart 5 변경 | ✅ _selectMaterialIdMap + onChanged idx lookup + PASS/NA 동봉 + 재진입 hydrate |
+| pytest 14 TC | ✅ 14/14 PASS (회귀 Step 1+2 = 20/20 + Step 3 14/14 = 총 34/34 GREEN) |
+| Codex 라운드 1 (Step 3 impl) | ⚠️ M=2 (G+D 동일 경로 — re-entry _selectMaterialIdMap 복원 누락) / A=2 / N=3 |
+| Codex 라운드 2 (M+A 정정) | ✅ M=0 / A=1 GREEN (A 1건 = Codex sandbox pytest 미설치 운영성) |
+| Railway BE 배포 | ✅ v2.12.2 / build_date 2026-05-08 (3회 측정 일치) |
+| Netlify FE 배포 | ✅ gaxis-ops.netlify.app 배포 완료 |
+
+### 옵션 Y 표시 형식 (5-08 사용자 결정)
+
+- description 있으면 `name (description) | spec_1 | spec_2` (예: `MFC (LNG) | MKP | 50 SLM | P:0.3~2.5 / W:0.3`)
+- description NULL → `name | spec_1 | spec_2` (비 MFC 자재)
+- 같은 spec MFC LNG/O2 분리 가시성 보장
+
+### 다음 step (Step 4 — AXIS-VIEW 별 repo 영역)
+
+- **Step 4** (AXIS-VIEW 별 sprint): admin GUI 자재 등록 + 매핑 → AXIS-VIEW v1.X.X (별 repo, FEAT-AXIS-VIEW-MATERIALS-AND-CHECKLISTS-MGMT-20260507)
+  - `/api/admin/materials/*` CRUD endpoint (4건)
+  - `/api/admin/checklists/master/:id/options` 매핑 endpoint
+  - admin GUI 자재 등록 + checklist 매핑 화면
+  - 배포 후 admin 매핑 시 BE override 자동 작동 → 작업자 동적 자재 옵션 수신 시작
+
+### 영향
+
+- **회귀 위험 0** — 현재 prod 8개 string_array 영역 모두 legacy compat 경로 (작업자 화면 표시 동일)
+- **응답 필드 additive** — select_material_ids / selected_material_id (기존 FE 무시 시 0 영향)
+- **운영 의도** — Step 4 admin GUI 배포 후 동적 자재 옵션 활성. 현재는 placeholder 그대로 표시.
+
+### T+1h 검증 영역
+
+- Railway boot 정상 + Sentry 새 ERROR 0
+- 작업자 측 MECH 체크리스트 진입 시 placeholder 그대로 표시 (회귀 0)
+- pytest 환경 격리 — test DB 만 영향, 운영 DB 무관
+
+---
 
 ## 🎯 2026-05-07 23:30 KST — v2.12.0 release (FEAT-MATERIAL Step 1)
 

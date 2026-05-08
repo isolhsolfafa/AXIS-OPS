@@ -6,6 +6,68 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.12.2] - 2026-05-08 — FEAT-MATERIAL Step 3: checklist_master 동적 자재 조회 + selected_material_id 직접 전달 (BE+FE atomic, P1)
+
+> Sprint 66-BE R3 4-step의 Step 3. checklist_master.select_options 동적 자재 조회 + dual-format 호환 (옛 51a string array + 신규 int material_id array) + FE re-entry hydrate. 작업자 화면 회귀 0 (현재 prod 8개 string_array 영역 그대로 표시) — Step 4 admin GUI 매핑 후부터 자재 동적 표시 활성.
+
+### 변경
+
+- **BE** `backend/app/services/checklist_service.py` (4 신규 함수 + 3 함수 수정)
+  - `_collect_material_ids` / `_fetch_material_master_map` (N+1 BATCHED 단일 SELECT, Codex P0 #3) / `_enrich_select_options` (tuple 반환) / `_validate_material_id` (None=no-op / 미존재=ValueError)
+  - `_get_checklist_by_category()` SQL `COALESCE(cr.selected_material_id, cr_p1.selected_material_id)` (FE re-entry hydrate, ADR-026 phase split 정합) + items 빌드 후 enrich + 응답에 `select_material_ids` + `selected_material_id` 추가
+  - `upsert_mech_check()` + `upsert_elec_check()` — `selected_material_id` 인자 + validation + INSERT/UPDATE 컬럼 갱신
+
+- **BE** `backend/app/routes/checklist.py` (2 endpoint 수정)
+  - PUT `/api/app/checklist/mech/check` + `/api/app/checklist/elec/check` — `selected_material_id` 전달
+
+- **FE** `frontend/lib/screens/checklist/mech_checklist_screen.dart` (5 변경)
+  - `_selectMaterialIdMap` 신규 + `_debouncedUpsert` / `_upsertNow` 시그니처 + PUT body 동봉
+  - `_buildSelectDropdown` onChanged idx lookup → material_id 추적
+  - PASS/NA 라디오 onTap 동봉 (번들 PUT 정합)
+  - **`_fetchChecklist()` 재진입 hydrate** (Codex M 정정) — BE `selected_material_id` 응답에서 복원
+
+- **TEST** `tests/backend/test_sprint66_be_step3_enrich.py` 신규 14 TC
+  - _enrich 6 + _validate 3 + integration 2 + upsert 2 + Codex A 보강 2 (proxy cursor 단일 쿼리 / INVALID_MATERIAL_ID 특정)
+  - 결과: 14/14 PASS / 회귀 Step 1+2 = 20/20 GREEN / 총 34/34 GREEN
+
+### Codex 검증
+
+- 라운드 1: M=2 (G+D 동일 경로 — re-entry `_selectMaterialIdMap` 복원 누락 silent NULL overwrite) / A=2 / N=3
+- 라운드 2: **M=0 / A=1 GREEN** (A 1건 = Codex 측 sandbox pytest 미설치 운영성, 코드 결함 아님)
+
+### 옵션 Y 표시 형식 (5-08 사용자 결정)
+
+- `name (description) | spec_1 | spec_2` (예: `MFC (LNG) | MKP | 50 SLM | P:0.3~2.5 / W:0.3`)
+- description NULL → `name | spec_1 | spec_2` (비 MFC 자재)
+- 같은 spec MFC LNG/O2 분리 가시성 보장
+
+### 영향
+
+- **회귀 위험 0** — 현재 prod 8개 string_array 영역 모두 legacy compat 경로
+- **응답 필드 additive** — 기존 FE 무시 시 0 영향
+- **Step 4 활성** — admin GUI 배포 후 admin 매핑 시 BE override 자동 작동
+
+---
+
+## [2.12.1] - 2026-05-08 — FEAT-MATERIAL Step 2: 185 자재 + 1626 BOM seed + description 컬럼 (Migration 053a + 053b + Generator, P1)
+
+> Sprint 66-BE R3 4-step의 Step 2. 통합 csv (1654 row) + MFC xlsx 정합 → 185 unique 자재 + 1626 product_bom 매핑 prod 적용. 5-08 description 컬럼 추가 보완 (admin AXIS-VIEW 측 ILIKE 검색 보조).
+
+### 변경
+
+- **DB Migration 053a** (자동 생성, 115.5 KB) — 최상단 ALTER TABLE ADD COLUMN IF NOT EXISTS description TEXT (self-containment) + material_master 185 INSERT + product_bom 1626 INSERT (ON CONFLICT DO UPDATE atomic)
+- **DB Migration 053b** — ALTER + 13 MFC backfill UPDATE atomic (LNG×5 + LNG,O2×1 + CDA×2 + O2×4 + N2×1) + DO block validation
+- **Script** `backend/scripts/generate_migration_053a.py` (~270 LOC, 자동 생성) — CSV_COLUMN_MAP 비고:description / D2-02/D2-03 fail-fast / 옵션 A dedup / MFC 자재 단일 'MFC' override (5-08 ADR-023 정합)
+- **CSV** `material_master_통합.csv` 사용자 측 수정 — 비고 컬럼 + 1110299900 단일 row 합침 + 13 MFC 가스 종류
+- **TEST** `tests/backend/test_migration_053a_seed.py` 신규 11 TC (11/11 PASS / 회귀 9/9 = 20/20)
+
+### Codex 검증
+
+- 라운드 1~5: M=3/A=4 → ... → **M=0/A=1 GREEN**
+- 핵심 정정: ① MFC 단일 'MFC' 카테고리 합의 위반 catch (ADR-023 #5 사례) ② '-' placeholder reject ③ description 컬럼 추가 ④ Generator self-containment
+
+---
+
 ## [2.12.0] - 2026-05-07 — FEAT-MATERIAL Step 1: schema 이전 + material_master CREATE (Migration 053, BE only, P1)
 
 > Sprint 63 의 51a seed `select_options` placeholder 영구 차단 catch 후속 — 자재 마스터 인프라 도입 4 step sprint 의 Step 1. `public.product_bom` + `bom_checklist_log` + `bom_csv_import` 폐기 → `checklist` schema 의 `material_master` + `product_bom` + `bom_checklist_log` CREATE + `checklist_record.selected_material_id` ADD COLUMN. Codex 라운드 1~5 합의 영역 (D1-01 qr_doc_id / D1-02 NOT NULL / D1-03 DROP 순서 / NEW-M-01 selected_material_id) 모두 반영.
