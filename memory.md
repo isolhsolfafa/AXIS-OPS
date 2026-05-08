@@ -31,16 +31,25 @@
 
 **Step 1 implementation 라운드 1 (2026-05-07)**: M=0/A=2/N=11 GREEN. A 2건 즉시 정정 — UNIQUE 컬럼 명시 검증 (key_column_usage JOIN) + index partial predicate 검증 (pg_get_expr() 괄호 wrapping 정합).
 
-**적용 영역 (Step 1 v2.12.0 운영 적용 2026-05-07)**:
+**Step 2 implementation 라운드 1~5 (2026-05-08)**: M=3/A=4 → M=2/A=2 → M=1/A=1 → M=0/A=2 → **M=0/A=1 GREEN**. 핵심 정정:
+1. **MFC 단일 'MFC' 카테고리 합의 위반 catch (Twin파파, ADR-023 cross-check)** — Codex M4 advisory 따라 'MFC LNG/CDA/O2/N2' 분리 적용 → 5-07 사용자 합의 위반. 사용자 발견 후 즉시 'MFC' 단일 복원 + DB UPDATE 13건. ADR-023 cross-check 표준 1차 입증 #5 사례.
+2. **'-' placeholder 자재 reject** (M1) — generator `parse_csv_bom_format()` 에 `if mapped['item_code'] == '-': continue` 추가. 186→185 unique, 1640→1626 BOM.
+3. **description 컬럼 추가 (053b)** — admin AXIS-VIEW Step 4 측 ILIKE 검색 보조. 1110299900 = LNG/O2 dual-use → 단일 row + description='LNG,O2' (RFC 4180 quote csv).
+4. **Generator self-containment** — 053a SQL 최상단 `ALTER TABLE ADD COLUMN IF NOT EXISTS description TEXT` prefix 추가. test DB fresh boot 시 alphabetic 순서로 053a > 053b 실행되어 INSERT 실패 → 자체 보장.
 
-- `backend/migrations/053_material_master_and_bom_schema_migration.sql` (175 LOC)
+**적용 영역 (Step 1 v2.12.0 + Step 2 v2.12.1 운영 적용 2026-05-07~08)**:
+
+- `backend/migrations/053_material_master_and_bom_schema_migration.sql` (175 LOC, Step 1)
+- `backend/migrations/053a_material_master_and_bom_seed.sql` (115.5 KB, 자동 생성, Step 2)
+- `backend/migrations/053b_material_master_add_description.sql` (Step 2 보완)
+- `backend/scripts/generate_migration_053a.py` (~270 LOC, 자동 생성 스크립트)
 - `tests/backend/test_migration_053_schema.py` (9 TC, 9/9 PASS)
-- 운영 DB psql 직접 적용 + migration_history INSERT
+- `tests/backend/test_migration_053a_seed.py` (11 TC, 11/11 PASS)
+- 운영 DB psql 직접 적용 + migration_history INSERT (053 / 053a / 053b)
 
 **후속 step**:
 
-- Step 2 (Migration 053a seed, 186 자재 + 1640 BOM) → v2.12.1
-- Step 3 (BE _enrich_select_options + selected_material_id 직접 전달) → v2.12.2 OPS
+- Step 3 (BE `_enrich_select_options` + selected_material_id 직접 전달) → v2.12.2 OPS
 - Step 4 (AXIS-VIEW 별 sprint, admin GUI) → AXIS-VIEW v1.X.X (별 repo)
 
 **연관 ADR**: ADR-018 (qr_doc_id 표준), ADR-023 (cowork 추측 작성 차단), ADR-026 (체크리스트 phase split)
