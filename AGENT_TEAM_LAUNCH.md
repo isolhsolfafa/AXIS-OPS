@@ -38018,7 +38018,7 @@ elif cat == 'MECH':
 > **작성자**: Cowork (Twin파파 측 운영 catch + 설계 합의 5-07)
 > **우선순위**: 🔴 P1 (운영 flow 우선, Sprint 64 후순위 명시)
 > **추정 시간**: ~6.5h+ (R3 4 step 분할 / 단계별 release)
-> **상태**: ✅ OPS 100% COMPLETED (Step 1+2+3+4 prod 적용 + 47/47 PASS, AXIS-VIEW Sprint 42 별 repo 진행)
+> **상태**: ✅ OPS 100% COMPLETED — v2.12.0 (Step 1) → v2.12.1 (Step 2) → v2.12.2 (Step 3) → v2.12.3 (Step 4 OPS BE) 모두 prod 적용 + 47/47 pytest GREEN, AXIS-VIEW Sprint 42 별 repo 진행
 > **MECH 체크리스트 완성 prerequisite** — Sprint 63-BE/FE + Sprint 65-BE 후속 필수 완성 영역
 > **별 repo Sprint**: `AXIS-VIEW Sprint 42` (FEAT-AXIS-VIEW-MATERIALS-AND-CHECKLISTS-MGMT-20260507) — 5-08 cowork 측 catch 영역 정정 (Sprint 40/41 이미 prod 적용 완료, Sprint 42 가 자연스러운 numbering)
 
