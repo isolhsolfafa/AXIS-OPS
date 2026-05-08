@@ -72,6 +72,10 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
   // SELECT 드롭다운 현재 값 (master_id → option string)
   final Map<int, String> _selectValueMap = {};
 
+  // Sprint 66-BE Step 3 (v2.12.2): SELECT 의 underlying material_id 추적
+  // (master_id → material_id, legacy placeholder 영역은 null)
+  final Map<int, int?> _selectMaterialIdMap = {};
+
   // INPUT TextField controller (master_id → controller)
   final Map<int, TextEditingController> _inputControllers = {};
 
@@ -140,6 +144,9 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
       // R2-4: 받은 record 의 PASS/NA 상태 _checkResultMap 에 sync
       final newCheckResultMap = <int, String>{};
       final newSelectValueMap = <int, String>{};
+      // ⭐ Sprint 66-BE Step 3 (v2.12.2): _selectMaterialIdMap 재진입 hydrate (Codex M 정정)
+      //   재진입 시 PASS/NA 라디오 탭 → selected_material_id null 덮어쓰기 silent bug 차단
+      final newSelectMaterialIdMap = <int, int?>{};
       for (final g in groups) {
         final items = g['items'] as List? ?? [];
         for (final item in items) {
@@ -149,6 +156,9 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
           if (cr != null) newCheckResultMap[mid] = cr;
           final sv = item['selected_value'] as String?;
           if (sv != null) newSelectValueMap[mid] = sv;
+          // ⭐ selected_material_id 복원 (BE COALESCE 응답)
+          final smid = item['selected_material_id'];
+          if (smid is int) newSelectMaterialIdMap[mid] = smid;
           // INPUT controller 초기화 (input_value 기존 값 보존)
           final iv = item['input_value'] as String?;
           if (item['item_type'] == 'INPUT') {
@@ -174,6 +184,9 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
         _selectValueMap
           ..clear()
           ..addAll(newSelectValueMap);
+        _selectMaterialIdMap
+          ..clear()
+          ..addAll(newSelectMaterialIdMap);
         _isLoading = false;
       });
     } catch (e) {
@@ -258,6 +271,7 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
     String? selectedValue,
     String? inputValue,
     String? note,
+    int? selectedMaterialId,  // Sprint 66-BE Step 3 (v2.12.2)
   }) {
     final masterId = item['master_id'] as int?;
     if (masterId == null) return;
@@ -271,6 +285,7 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
         selectedValue: selectedValue,
         inputValue: inputValue,
         note: note,
+        selectedMaterialId: selectedMaterialId,
       );
     });
   }
@@ -281,6 +296,7 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
     String? selectedValue,
     String? inputValue,
     String? note,
+    int? selectedMaterialId,  // Sprint 66-BE Step 3 (v2.12.2)
   }) async {
     final masterId = item['master_id'] as int?;
     if (masterId == null) return;
@@ -312,6 +328,9 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
       if (selectedValue != null) putData['selected_value'] = selectedValue;
       if (inputValue != null) putData['input_value'] = inputValue;
       if (note != null) putData['note'] = note;
+      // Sprint 66-BE Step 3 (v2.12.2): selected_material_id 직접 전달 (NEW-M-01)
+      // legacy placeholder (51a string array) 영역은 null → BE 측에서 NULL 저장
+      if (selectedMaterialId != null) putData['selected_material_id'] = selectedMaterialId;
 
       await apiService.put('/app/checklist/mech/check', data: putData);
 
@@ -701,11 +720,13 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
           : () {
               setState(() => _checkResultMap[masterId] = value);
               // M5: PASS/NA 라디오 변경 시 번들 PUT (현재 input_value / selected_value 동시 전송)
+              // Sprint 66-BE Step 3 (v2.12.2): selectedMaterialId 도 함께 전송 (NEW-M-01 정합)
               _debouncedUpsert(
                 item: item,
                 checkResult: value,
                 inputValue: _inputControllers[masterId]?.text,
                 selectedValue: _selectValueMap[masterId],
+                selectedMaterialId: _selectMaterialIdMap[masterId],
               );
             },
       borderRadius: BorderRadius.circular(GxRadius.sm),
@@ -741,6 +762,10 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
     final masterId = item['master_id'] as int?;
     if (masterId == null) return const SizedBox.shrink();
     final options = ((item['select_options'] as List?) ?? []).cast<String>();
+    // Sprint 66-BE Step 3 (v2.12.2): material_id 평행 배열 (option idx ↔ material_id)
+    // null 또는 list element null 영역 = legacy 51a placeholder (material_master 미매핑)
+    final materialIds = (item['select_material_ids'] as List?)
+        ?.map((e) => e is int ? e : null).toList();
 
     if (options.isEmpty) {
       // Q7-B
@@ -813,11 +838,20 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
                 .toList(),
             onChanged: isPhase2 ? null : (value) {  // ⭐ v2.11.3 R2: 2차 disabled
               if (value == null) return;
-              setState(() => _selectValueMap[masterId] = value);
+              // Sprint 66-BE Step 3 (v2.12.2): 선택된 옵션의 idx → material_id 추출
+              final idx = options.indexOf(value);
+              final matId = (materialIds != null && idx >= 0 && idx < materialIds.length)
+                  ? materialIds[idx]
+                  : null;
+              setState(() {
+                _selectValueMap[masterId] = value;
+                _selectMaterialIdMap[masterId] = matId;
+              });
               // M4 + Q6-C: debounce + 번들 PUT (1차만)
               _debouncedUpsert(
                 item: item,
                 selectedValue: value,
+                selectedMaterialId: matId,
                 checkResult: _getCurrentCheckResult(masterId),
               );
             },

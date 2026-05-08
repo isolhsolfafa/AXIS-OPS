@@ -47,10 +47,34 @@
 - `tests/backend/test_migration_053a_seed.py` (11 TC, 11/11 PASS)
 - 운영 DB psql 직접 적용 + migration_history INSERT (053 / 053a / 053b)
 
+**Step 3 implementation 라운드 1~2 (2026-05-08, v2.12.2)**: M=2 (G+D 동일 경로) → **M=0/A=1 GREEN**. 핵심 정정:
+1. **FE re-entry hydrate (G+D)** — Codex 라운드 1 catch — `_selectMaterialIdMap` 재진입 시 비어있어 PASS/NA 라디오 탭 시 selected_material_id NULL 덮어쓰기 silent bug. 정정: BE GET 응답에 `COALESCE(cr.selected_material_id, cr_p1.selected_material_id)` 추가 + FE `_fetchChecklist` 에서 `_selectMaterialIdMap` 복원 (`smid is int` 가드).
+2. **N+1 BATCHED 정합 (Codex P0 #3)** — `_collect_material_ids` set 수집 + `_fetch_material_master_map` 단일 SELECT `WHERE id = ANY(%s)` (psycopg2 parametrized, SQL injection 안전). pytest `_CountingCursor` proxy 로 1 호출 검증.
+3. **dual-format 호환** — 옛 string array (51a placeholder) 그대로 + 신규 int array (material_id) → tuple `(display_strings, material_ids)` parallel 반환. invalid material_id WARN log + skip (작업자 noise 0).
+4. **옵션 Y 표시 형식** — 5-08 사용자 결정 — `name (description) | spec_1 | spec_2` (description 있으면 괄호 포함, 같은 spec MFC LNG/O2 분리 가시성).
+
+**적용 영역 (Step 1 v2.12.0 + Step 2 v2.12.1 + Step 3 v2.12.2 운영 적용 2026-05-07~08)**:
+
+- `backend/migrations/053_material_master_and_bom_schema_migration.sql` (Step 1)
+- `backend/migrations/053a_material_master_and_bom_seed.sql` (Step 2 자동 생성)
+- `backend/migrations/053b_material_master_add_description.sql` (Step 2 보완)
+- `backend/scripts/generate_migration_053a.py` (Step 2 자동 생성 스크립트)
+- `backend/app/services/checklist_service.py` (Step 3 — 4 신규 함수 + 3 함수 수정)
+- `backend/app/routes/checklist.py` (Step 3 — 2 endpoint 수정)
+- `frontend/lib/screens/checklist/mech_checklist_screen.dart` (Step 3 — 4 변경 + re-entry hydrate)
+- `tests/backend/test_migration_053_schema.py` (9 TC)
+- `tests/backend/test_migration_053a_seed.py` (11 TC)
+- `tests/backend/test_sprint66_be_step3_enrich.py` (14 TC)
+- 운영 DB psql 직접 적용 + migration_history INSERT (053 / 053a / 053b)
+- pytest 총 34/34 PASS
+
 **후속 step**:
 
-- Step 3 (BE `_enrich_select_options` + selected_material_id 직접 전달) → v2.12.2 OPS
-- Step 4 (AXIS-VIEW 별 sprint, admin GUI) → AXIS-VIEW v1.X.X (별 repo)
+- Step 4 (AXIS-VIEW 별 sprint, admin GUI) → AXIS-VIEW v1.X.X (별 repo, FEAT-AXIS-VIEW-MATERIALS-AND-CHECKLISTS-MGMT-20260507)
+  - `/api/admin/materials/*` CRUD endpoint
+  - `/api/admin/checklists/master/:id/options` 매핑 endpoint
+  - admin GUI 자재 등록 + checklist_master.select_options 매핑 (string → material_id int array)
+  - 배포 후 작업자 화면이 동적 자재 옵션 수신 시작 (Step 3 BE override 자동 작동)
 
 **연관 ADR**: ADR-018 (qr_doc_id 표준), ADR-023 (cowork 추측 작성 차단), ADR-026 (체크리스트 phase split)
 

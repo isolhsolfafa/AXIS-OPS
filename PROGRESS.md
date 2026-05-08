@@ -3,10 +3,74 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: **v2.12.1 (Sprint 66-BE FEAT-MATERIAL Step 2 — 185 자재 + 1626 BOM seed + description 컬럼, 2026-05-08)** — Migration 053a 자동 생성 (115.5 KB) + 053b (description backfill) + Generator (~270 LOC) + pytest 11 TC / 11/11 PASS + 회귀 9/9 GREEN = 20/20 / 운영 적용 완료
-> **선행 release**: v2.12.0 (FEAT-MATERIAL Step 1 — schema 이전 + material_master CREATE, 2026-05-07) — BE only Migration 053 (175 LOC) + pytest 9 TC / 9/9 PASS
+> **현재 버전**: **v2.12.2 (Sprint 66-BE FEAT-MATERIAL Step 3 — checklist_master 동적 자재 조회 + selected_material_id 직접 전달, 2026-05-08)** — BE checklist_service.py 4 신규 함수 + N+1 BATCHED 단일 SELECT + FE mech_checklist_screen.dart 재진입 hydrate + pytest 14 TC / 14/14 PASS / 회귀 20/20 GREEN = 34/34
+> **선행 release**: v2.12.1 (FEAT-MATERIAL Step 2 — 185 자재 + 1626 BOM seed + description 컬럼, 2026-05-08) — Migration 053a + 053b + Generator (~270 LOC) + pytest 11 TC
 > **선행 인프라**: FIX-DB-POOL-MAX-SIZE-20260427 — Railway env DB_POOL_MAX 20→30 (2026-04-27, 코드 변경 0)
 > **D+1 운영 검증 (2026-04-28)**: 출근 peak 측정 PASS — Pool exhausted 0 / direct conn fallback 0 / OPS conn 6~7 안정 / Sentry 새 issue 0 → 옵션 X1 유지, OBSERV-WARMUP COMPLETED 확정, v2.10.11 HOTFIX-06b 불필요
+
+---
+
+## v2.12.2 (Sprint 66-BE FEAT-MATERIAL Step 3 — checklist_master 동적 자재 조회 + selected_material_id 직접 전달, 2026-05-08)
+
+**Sprint**: `Sprint 66-BE / FEAT-MATERIAL-MASTER-AND-BOM-INTEGRATION-20260507 Step 3` (P1, Codex 설계서 라운드 5 GREEN + Step 3 implementation 라운드 1~2 GREEN)
+
+**배경**: Sprint 66 R3 4-step의 Step 3 — checklist_master.select_options 동적 자재 조회 + selected_material_id 직접 전달 (NEW-M-01) + dual-format 호환 (옛 51a string array + 신규 int material_id array). 작업자 화면 회귀 0 (현재 prod 8개 string_array 영역 그대로 표시) — Step 4 admin GUI 매핑 후부터 자재 동적 표시 활성.
+
+### Codex 검증 trail
+
+- **Step 3 implementation 라운드 1**: M=2 (G+D 동일 경로) / A=2 / N=3
+  - **M (G+D)**: FE re-entry 시 `_selectMaterialIdMap` 복원 누락 → PASS/NA 라디오 탭 시 selected_material_id NULL 덮어쓰기 silent bug
+- **Step 3 implementation 라운드 2**: **M=0 / A=1 GREEN**
+  - 정정: BE GET SQL 에 `COALESCE(cr.selected_material_id, cr_p1.selected_material_id)` 추가 + FE `_fetchChecklist` 에서 `_selectMaterialIdMap` 복원 (`smid is int` 가드)
+  - TC 보강: `test_fetch_material_master_map_single_select` (proxy cursor 단일 쿼리 검증) + `test_validate_material_id_invalid_raises_specific` (master_id 우회 직접 검증)
+  - **A 1건**: Codex 측 sandbox pytest 미설치 (운영성, 코드 결함 아님 — 우리 환경 14/14 PASS 검증 완료)
+
+### 변경 (BE 2 파일 + FE 1 파일 + pytest 1 신규)
+
+**`backend/app/services/checklist_service.py`** (4 신규 함수 + 3 함수 수정):
+- `_collect_material_ids(items) -> set` — items 영역 select_options 의 material_id (int) 일괄 수집 (bool 가드)
+- `_fetch_material_master_map(cur, material_ids) -> Dict` — 단일 SELECT `WHERE id = ANY(%s) AND is_active = TRUE` (N+1 BATCHED, Codex P0 #3)
+- `_enrich_select_options(select_options, material_map) -> tuple` — `(display_strings, material_ids)` parallel arrays:
+  - 옛 string 배열 → (그대로, [None]*N) — legacy compat
+  - 신규 int 배열 → ("name (description) | spec_1 | spec_2", material_id) — 5-08 사용자 결정 description 포함
+  - invalid material_id → WARN log + skip (작업자 noise 0, Sentry capture)
+  - 혼합 영역 → WARN + str(x) fallback
+- `_validate_material_id(cur, selected_material_id)` — None=no-op / 미존재=ValueError(INVALID_MATERIAL_ID)
+- `_get_checklist_by_category()` 수정 — SQL `COALESCE(cr.selected_material_id, cr_p1.selected_material_id)` (FE re-entry hydrate, ADR-026 phase split 정합) + items 빌드 후 N+1 BATCHED enrich + 응답 dict 에 `select_material_ids` + `selected_material_id` 추가
+- `upsert_mech_check()` + `upsert_elec_check()` 수정 — `selected_material_id: Optional[int] = None` 인자 + `_validate_material_id()` 호출 + INSERT/UPDATE 컬럼 갱신
+
+**`backend/app/routes/checklist.py`** (2 endpoint 수정):
+- PUT `/api/app/checklist/mech/check` — `selected_material_id=data.get('selected_material_id')` 전달
+- PUT `/api/app/checklist/elec/check` — 동일 패턴 (대칭성)
+
+**`frontend/lib/screens/checklist/mech_checklist_screen.dart`** (5 변경):
+- `_selectMaterialIdMap: Map<int, int?>` 신규 — masterId → material_id 추적
+- `_debouncedUpsert()` + `_upsertNow()` 시그니처에 `int? selectedMaterialId` 인자 + PUT body에 selected_material_id 동봉
+- `_buildSelectDropdown()` — `materialIds` 로컬 + onChanged idx lookup → `_selectMaterialIdMap[masterId]` 갱신
+- PASS/NA 라디오 onTap — `_selectMaterialIdMap[masterId]` 동봉 (번들 PUT)
+- **`_fetchChecklist()` 재진입 hydrate** (Codex M 정정) — BE `selected_material_id` 응답에서 `_selectMaterialIdMap` 복원
+
+**`tests/backend/test_sprint66_be_step3_enrich.py`** (신규, 14 TC):
+- [1~6] _enrich_select_options 단위 (legacy / int / description / invalid / mixed / none)
+- [7~9] _validate_material_id (None / active / nonexistent raise)
+- [10] _get_checklist_by_category N+1 batched 동작 검증
+- [11~12] upsert_mech_check (null OK / invalid raise)
+- [13] **`test_fetch_material_master_map_single_select`** (Codex A 정정) — `_CountingCursor` proxy class 로 단일 SELECT 검증
+- [14] **`test_validate_material_id_invalid_raises_specific`** (Codex A 정정) — INVALID_MATERIAL_ID 메시지 + material_id 디버그 영역 특정 검증
+- 결과: **14/14 PASS** (Step 1 회귀 9/9 + Step 2 회귀 11/11 + Step 3 14/14 = 총 34/34 GREEN)
+
+### 영향
+
+- **회귀 위험 = 0** — 작업자 화면 표시 영역 그대로 (현재 prod 8개 string_array 영역 모두 legacy compat 경로). 추가 응답 필드 (`select_material_ids`, `selected_material_id`) additive (기존 FE 무시 시 0 영향).
+- **운영 의도** — Step 4 admin GUI (별 repo) 배포 후 admin 이 material_id int array 매핑 시 BE override 자동 작동 → 작업자 화면이 옵션 Y 형식 동적 자재 옵션 수신.
+- **재진입 hydrate** — Codex M 정정으로 silent NULL overwrite 차단. PASS/NA 탭 시 자재 추적 보존.
+
+### 후속 step
+
+- **Step 4** (AXIS-VIEW 별 sprint, admin GUI): admin GUI 자재 등록 + 매핑 → AXIS-VIEW v1.X.X (별 repo, FEAT-AXIS-VIEW-MATERIALS-AND-CHECKLISTS-MGMT-20260507)
+  - `/api/admin/materials/*` CRUD endpoint
+  - `/api/admin/checklists/master/:id/options` 매핑 endpoint
+  - 배포 후 작업자 화면이 동적 자재 옵션 수신 시작 (Step 3 BE override 자동 작동)
 
 ---
 

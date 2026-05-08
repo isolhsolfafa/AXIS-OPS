@@ -18,6 +18,124 @@ from app.db_pool import put_conn
 logger = logging.getLogger(__name__)
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# Sprint 66-BE Step 3 (v2.12.2): select_options enrich — material_master JOIN
+#
+#   - 옛 양식 (51a placeholder): string 배열 → 그대로 반환 (legacy compat)
+#   - 신규 양식 (admin 매핑 후): int 배열 (material_id) → "name (desc) | spec_1 | spec_2"
+#   - N+1 방지: items 73개 일괄 collect → 단일 SELECT (Codex P0 #3 BATCHED)
+#   - invalid material_id (미존재 / is_active=FALSE): WARN log + skip (작업자 noise 0)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _collect_material_ids(items: List[Dict[str, Any]]) -> set:
+    """items 영역 select_options 의 material_id (int) 일괄 수집."""
+    all_ids: set = set()
+    for item in items:
+        opts = item.get('select_options')
+        if opts and isinstance(opts, list):
+            for x in opts:
+                if isinstance(x, int) and not isinstance(x, bool):
+                    all_ids.add(x)
+    return all_ids
+
+
+def _fetch_material_master_map(cur, material_ids: set) -> Dict[int, Dict[str, Any]]:
+    """material_master 일괄 조회 → {id: {item_name, spec_1, spec_2, description}} dict.
+
+    N+1 방지: items 73개 → 단일 SELECT (ANY array).
+    """
+    if not material_ids:
+        return {}
+    cur.execute("""
+        SELECT id, item_name, spec_1, spec_2, description
+          FROM checklist.material_master
+         WHERE id = ANY(%s) AND is_active = TRUE
+    """, (list(material_ids),))
+    return {row['id']: dict(row) for row in cur.fetchall()}
+
+
+def _enrich_select_options(
+    select_options: Optional[List],
+    material_map: Dict[int, Dict[str, Any]],
+) -> tuple:
+    """select_options 양식 자동 판단 후 (display_strings, material_ids) tuple 반환.
+
+    옛 양식 (legacy): string 배열 → (그대로, [None]*N) — material_ids 모두 NULL
+    신규 양식: int 배열 (material_id) → ("name (description) | spec_1 | spec_2" 배열, material_id 배열 동기)
+    혼합 영역: WARN log + str(x) fallback + None ids (admin UI 정정 권장)
+
+    5-08 사용자 결정: description 포함 (LNG/O2/CDA/N2 가스 종류 표시 — 같은 spec MFC 분리).
+    invalid material_id 영역: WARN log + skip (작업자 dropdown noise 0, admin alert 별 BACKLOG).
+
+    Returns:
+        (display_strings, material_ids) — 동일 길이 배열, FE 가 dropdown 선택 시 idx 로 material_id 추적.
+        select_options=None → (None, None)
+    """
+    if not select_options:
+        return (select_options, None)
+
+    # 모두 string → 옛 placeholder (51a seed) — material_ids 모두 NULL
+    if all(isinstance(x, str) for x in select_options):
+        return (list(select_options), [None] * len(select_options))
+
+    # 모두 int → 신규 material_id 영역
+    if all(isinstance(x, int) and not isinstance(x, bool) for x in select_options):
+        display_strings: List[str] = []
+        material_ids: List[Optional[int]] = []
+        invalid_ids: List[int] = []
+        for material_id in select_options:
+            mat = material_map.get(material_id)
+            if not mat:
+                invalid_ids.append(material_id)
+                continue
+            name = mat.get('item_name') or ''
+            desc = mat.get('description') or ''
+            spec_1 = mat.get('spec_1') or ''
+            spec_2 = mat.get('spec_2') or ''
+            # description 있으면 "name (description)" 단일화 (5-08 사용자 결정 — 같은 spec MFC 분리)
+            name_part = f"{name} ({desc})" if desc else name
+            parts = [name_part]
+            if spec_1:
+                parts.append(spec_1)
+            if spec_2:
+                parts.append(spec_2)
+            display_strings.append(' | '.join(parts))
+            material_ids.append(material_id)
+        if invalid_ids:
+            # WARN log — Sentry capture (작업자 dropdown 미표시 영역, admin 정정 trigger)
+            logger.warning(
+                "[checklist] _enrich_select_options invalid material_id (skipped): %s",
+                invalid_ids,
+            )
+        return (display_strings, material_ids)
+
+    # 혼합 영역 (일부 string + 일부 int) — admin UI 정정 권장
+    logger.warning(
+        "[checklist] select_options 혼합 양식 감지, admin 매핑 정정 권장: %s",
+        select_options,
+    )
+    return ([str(x) for x in select_options], [None] * len(select_options))
+
+
+def _validate_material_id(cur, selected_material_id: Optional[int]) -> None:
+    """selected_material_id 가 NULL 아닌 경우 material_master 존재 + is_active 검증.
+
+    Raises:
+        ValueError: INVALID_MATERIAL_ID — 미등록 / 비활성 / FE 동기화 누락 영역
+    """
+    if selected_material_id is None:
+        return
+    cur.execute("""
+        SELECT id FROM checklist.material_master
+         WHERE id = %s AND is_active = TRUE
+    """, (selected_material_id,))
+    if not cur.fetchone():
+        raise ValueError(
+            f"INVALID_MATERIAL_ID: {selected_material_id} 미등록 또는 비활성 — "
+            f"FE 측 select_options 동기화 필요"
+        )
+
+
 def _get_checklist_by_category(
     cur,
     serial_number: str,
@@ -92,7 +210,9 @@ def _get_checklist_by_category(
             cr.note,
             -- ⭐ v2.11.5 R1: phase=1 record 의 input/select 우선 (1차 데이터 inherit)
             COALESCE(cr.selected_value, cr_p1.selected_value) AS selected_value,
-            COALESCE(cr.input_value,    cr_p1.input_value)    AS input_value
+            COALESCE(cr.input_value,    cr_p1.input_value)    AS input_value,
+            -- ⭐ Sprint 66-BE Step 3 (v2.12.2): selected_material_id COALESCE — FE 재진입 hydrate (Codex M 정정)
+            COALESCE(cr.selected_material_id, cr_p1.selected_material_id) AS selected_material_id
         FROM checklist.checklist_master cm
         LEFT JOIN checklist.checklist_record cr
             ON cr.master_id      = cm.id
@@ -156,6 +276,7 @@ def _get_checklist_by_category(
             'phase1_applicable': phase1_applicable,
             'qi_check_required': row.get('qi_check_required', False),
             'select_options': select_options,
+            'select_material_ids': None,  # Sprint 66-BE Step 3 (v2.12.2): enrich 시점에 채워짐
             'scope_rule': row.get('scope_rule'),
             'trigger_task_id': row.get('trigger_task_id'),
             'check_result': check_result,
@@ -164,12 +285,28 @@ def _get_checklist_by_category(
             'note': row['note'],
             'selected_value': row.get('selected_value'),
             'input_value': row.get('input_value'),
+            # ⭐ Sprint 66-BE Step 3 (v2.12.2): selected_material_id 응답 — FE 재진입 hydrate (Codex M 정정)
+            'selected_material_id': row.get('selected_material_id'),
         })
         total += 1
         if check_result in ('PASS', 'NA'):
             checked += 1
 
     percent = round(checked / total * 100, 1) if total > 0 else 0.0
+
+    # ⭐ Sprint 66-BE Step 3 (v2.12.2): select_options enrich (N+1 BATCHED)
+    #   items 일괄 collect → 단일 SELECT → in-memory map → row 별 변환
+    #   각 item 의 select_options 는 (display_strings, material_ids) tuple 반환
+    #   FE 가 dropdown 선택 시 idx 기반 select_material_ids[idx] 로 material_id 추적
+    material_ids_set = _collect_material_ids(items)
+    if material_ids_set:
+        material_map = _fetch_material_master_map(cur, material_ids_set)
+    else:
+        material_map = {}
+    for item in items:
+        display, mat_ids = _enrich_select_options(item['select_options'], material_map)
+        item['select_options'] = display
+        item['select_material_ids'] = mat_ids
 
     return {
         'category': category,
@@ -939,8 +1076,13 @@ def upsert_elec_check(
     selected_value: Optional[str] = None,
     input_value: Optional[str] = None,
     qr_doc_id: str = '',
+    selected_material_id: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """ELEC 체크리스트 항목 체크 (UPSERT) — Sprint 57/57-C. manager 제한 없음."""
+    """ELEC 체크리스트 항목 체크 (UPSERT) — Sprint 57/57-C. manager 제한 없음.
+
+    Sprint 66-BE Step 3 (v2.12.2): selected_material_id 인자 추가 (대칭성 — MECH 패턴 복제).
+    현재 ELEC 영역은 material_master 매핑 무관 (id=67 TUBE 색상 등 string options만) — 일반적으로 NULL.
+    """
     if check_result not in ('PASS', 'NA'):
         raise ValueError(f"INVALID_CHECK_RESULT: '{check_result}'")
 
@@ -956,25 +1098,29 @@ def upsert_elec_check(
         if not cur.fetchone():
             raise ValueError(f"MASTER_NOT_FOUND: master_id={master_id} (ELEC)")
 
+        # Sprint 66-BE Step 3 (v2.12.2): material_id 검증
+        _validate_material_id(cur, selected_material_id)
+
         cur.execute(
             """
             INSERT INTO checklist.checklist_record
                 (serial_number, master_id, judgment_phase, check_result,
                  checked_by, checked_at, note, selected_value, input_value,
-                 qr_doc_id, updated_at)
-            VALUES (%s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s, NOW())
+                 qr_doc_id, selected_material_id, updated_at)
+            VALUES (%s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s, %s, NOW())
             ON CONFLICT (serial_number, master_id, judgment_phase, qr_doc_id) DO UPDATE
-            SET check_result   = EXCLUDED.check_result,
-                checked_by     = EXCLUDED.checked_by,
-                checked_at     = EXCLUDED.checked_at,
-                note           = EXCLUDED.note,
-                selected_value = EXCLUDED.selected_value,
-                input_value    = EXCLUDED.input_value,
-                updated_at     = NOW()
+            SET check_result         = EXCLUDED.check_result,
+                checked_by           = EXCLUDED.checked_by,
+                checked_at           = EXCLUDED.checked_at,
+                note                 = EXCLUDED.note,
+                selected_value       = EXCLUDED.selected_value,
+                input_value          = EXCLUDED.input_value,
+                selected_material_id = EXCLUDED.selected_material_id,
+                updated_at           = NOW()
             RETURNING id
             """,
             (serial_number, master_id, judgment_phase, check_result, worker_id,
-             note, selected_value, input_value, qr_doc_id)
+             note, selected_value, input_value, qr_doc_id, selected_material_id)
         )
         conn.commit()
 
@@ -1434,12 +1580,17 @@ def upsert_mech_check(
     selected_value: Optional[str] = None,
     input_value: Optional[str] = None,
     qr_doc_id: str = '',
+    selected_material_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """MECH 체크리스트 항목 체크 UPSERT (Sprint 63-BE) — ELEC 패턴 복제.
 
     item_type='CHECK': PASS/NA 라디오
-    item_type='SELECT': selected_value (드롭다운 값)
+    item_type='SELECT': selected_value (드롭다운 표시 string) + selected_material_id (FK, Sprint 66-BE Step 3 v2.12.2)
     item_type='INPUT': input_value (자유 텍스트)
+
+    Sprint 66-BE Step 3 (v2.12.2):
+    - selected_material_id 직접 전달 (NEW-M-01) — FE 가 dropdown underlying value 동봉
+    - validation: material_master 존재 + is_active 검증 → INVALID_MATERIAL_ID raise
     """
     if check_result not in ('PASS', 'NA'):
         raise ValueError(f"INVALID_CHECK_RESULT: '{check_result}'")
@@ -1459,25 +1610,30 @@ def upsert_mech_check(
         if not cur.fetchone():
             raise ValueError(f"MASTER_NOT_FOUND: master_id={master_id} (MECH)")
 
+        # Sprint 66-BE Step 3 (v2.12.2): material_id 검증
+        _validate_material_id(cur, selected_material_id)
+
         cur.execute(
             """
             INSERT INTO checklist.checklist_record
                 (serial_number, master_id, judgment_phase, check_result,
                  checked_by, checked_at, note, selected_value, input_value,
-                 qr_doc_id, updated_at)
-            VALUES (%s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s, NOW())
+                 qr_doc_id, selected_material_id, updated_at)
+            VALUES (%s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s, %s, NOW())
             ON CONFLICT (serial_number, master_id, judgment_phase, qr_doc_id) DO UPDATE
-            SET check_result   = EXCLUDED.check_result,
-                checked_by     = EXCLUDED.checked_by,
-                checked_at     = EXCLUDED.checked_at,
-                note           = EXCLUDED.note,
-                selected_value = EXCLUDED.selected_value,
-                input_value    = EXCLUDED.input_value,
-                updated_at     = NOW()
+            SET check_result         = EXCLUDED.check_result,
+                checked_by           = EXCLUDED.checked_by,
+                checked_at           = EXCLUDED.checked_at,
+                note                 = EXCLUDED.note,
+                selected_value       = EXCLUDED.selected_value,
+                input_value          = EXCLUDED.input_value,
+                selected_material_id = EXCLUDED.selected_material_id,
+                updated_at           = NOW()
             RETURNING id
             """,
             (serial_number, master_id, judgment_phase, check_result,
-             worker_id, note, selected_value, input_value, normalized_qr)
+             worker_id, note, selected_value, input_value, normalized_qr,
+             selected_material_id)
         )
         conn.commit()
 

@@ -1131,6 +1131,7 @@ def upsert_elec_check_api():
             selected_value=data.get('selected_value'),
             input_value=data.get('input_value'),
             qr_doc_id=data.get('qr_doc_id', ''),
+            selected_material_id=data.get('selected_material_id'),  # Sprint 66-BE Step 3 (v2.12.2)
         )
         return jsonify(result), 200
     except ValueError as ve:
@@ -1229,6 +1230,7 @@ def upsert_mech_check_api():
             selected_value=data.get('selected_value'),
             input_value=data.get('input_value'),
             qr_doc_id=data.get('qr_doc_id', ''),
+            selected_material_id=data.get('selected_material_id'),  # Sprint 66-BE Step 3 (v2.12.2)
         )
         return jsonify(result), 200
     except ValueError as ve:
