@@ -820,6 +820,68 @@ re-initializing 호출 횟수: 1회 (worker pid=2 만)
 
 ---
 
+**T+1주 결과 기록** (2026-05-10 02:17 KST 측정, Railway logs + Sentry breadcrumb 교차 검증):
+```
+조회 시각: 2026-05-10 02:17 KST (T+1주 = 4-27 v2.10.13 deploy 기준 13일+, 5-07 자가 회복 +2d 5h)
+시나리오: 🟢 A (이상적 — keepalive 차단 효과 + 자가 회복 안전망 정합)
+24h window 신규 events: 0건 (Railway logs --since 36h grep + Sentry 24h column 모두 0)
+1주 window 신규 events: 0건 (Sentry PYTHON-FLASK-B = 5-07 사고 트래킹, 신규 발생 X)
+사용자 영향 시간: 0분 (5-07 사고 이후 무중단)
+
+🎯 5일 주기 가설 — 안전망 효과로 패턴 끊김 입증:
+  ├─ 4-29 23:31 (수동 Restart 1.5h+) → 5-04 11:38 (수동 Restart 40분) → 5-07 20:54 (자동 회복 15분)
+  ├─ → 5-12 ± 1d 다음 예상 시점 (T-2d 영역), 측정 시점 0/0 0건 = 가설 break 진행 중
+  └─ 자가 회복 메커니즘 (v2.10.16 watchdog + v2.10.17 cleanup fix) 안전망 + keepalive 차단 효과 동시 작동
+
+🎯 Sentry PYTHON-FLASK-B breadcrumb (5-07 사고 결정적 증거 — 사용자 공유):
+  ├─ 5-07 05:24:38.707 UTC = 5-07 14:24:38 KST: apscheduler Scheduler started + Added job (Worker boot)
+  ├─ 5-07 11:54:48.706 UTC = 5-07 20:54:48 KST:
+  │   ├─ INFO: Running job "DB Pool warmup (매 5분, max_age 시계 리셋)"
+  │   ├─ WARNING: '[db_pool] warmup getconn failed (skip): connection pool exhausted'
+  │   └─ ERROR: '[db_pool] 0/0 warmed for 3 consecutive cycles — re-initializing pool (pid=2)'
+  └─ → ms 단위 일치 trace = init_pool 호출 → 5 conn fresh 생성 (이전 결정적 증거 9~178ms 일치 정합)
+
+🎯 pg_stat_activity 클러스터 분석 (5-10 02:17 KST):
+  ├─ Cluster A (안정): pid 210255-210258 (5-09 16:45:52 KST, 9.5h age) = 3 conn
+  ├─                  pid 210332 (5-09 17:50:52 KST, +1h05m, 8.5h age) = 1 conn (성장)
+  ├─                  pid 210342 (5-09 18:00:00 KST, +1h14m, 8.3h age) = 1 conn (5/5 도달)
+  ├─ Cluster B (warmup): pid 210853-210855 (5-10 02:15:46 KST, 3min age) = 3 conn (warmup_pool 5분 cycle 직전)
+  ├─ pgAdmin: pid 210847-210848 (사용자 측 도구) = 2 conn
+  ├─ psql: pid 210860 (현재 측정 쿼리) = 1 conn
+  └─ → OPS 총 8 conn (Cluster A 5 + Cluster B 3) — MIN=5/MAX=30 정상 범위, 9.5h 무중단 (5-09 16:45 이후 worker re-init 흔적 0건)
+
+✅ 시나리오 A 확정 결정 근거:
+  ├─ Railway logs --since 36h (5-09 17:00 ~ 5-10 02:17): 0/0 / re-initializing 0건 (사용자 확인)
+  ├─ Sentry 1주 window 신규 [db_pool] issue: 0건 (PYTHON-FLASK-B = 5-07 사고 기존 트래킹, 신규 발생 X — 사용자 확인)
+  ├─ Sentry 24h window: 0 issue 신규 (5-09 ~ 5-10 안정)
+  ├─ pg_stat_activity: Cluster A 9.5h 무중단 (current window worker re-init 흔적 0건)
+  └─ → keepalive (v2.10.13 PGCONNECT_TIMEOUT + tcp_keepalive_idle/interval/count) + 자가 회복 (v2.10.16/17 watchdog) 안전망 동시 작동 효과 입증
+
+📋 Sentry 기존 known logs (5-07 이전 트래킹, 신규 0건 검증 영역 외):
+  ├─ PYTHON-FLASK-B: db_pool 0/0 5-07 사고 (1 event, breadcrumb trace 정합)
+  ├─ PYTHON-FLASK-7/8/9: migration 051a duplicate key 5-05 (3 events, known)
+  ├─ PYTHON-FLASK-A: SMTP work.request_deactivation 7 events 5-06~5-08 (known, 사용자 측 잘못된 이메일)
+  ├─ PYTHON-FLASK-5: cleanup get_db_connection 4 events @ 5-03 (HOTFIX-09 v2.10.17 fix 직후 잔존, 5-03 이후 0건 = fix 정합)
+  ├─ PYTHON-FLASK-6: SMTP auth.verify_email 11 events @ ~5-03 (known)
+  └─ → 모두 사용자 측 확인된 known logs, V4.1 신규 발생 영역 외
+
+⚠️ 잔존 영역 (다음 측정 사이클까지):
+  └─ Worker B silent fail 가설: 5-07 측정 시 단일 클러스터 (Worker A 만 5 conn) — 5-10 측정 시 8 conn (Cluster A+B 분리이지만 sequential pid 영역, Worker 분리 명확치 않음). 별 sprint **OBSERV-PER-WORKER-POOL-RECOVERY-20260507** 진행 시점에 추가 진단.
+
+🎯 V4.1 1차 측정 통과 — Phase B 3일 관찰 windows GREEN:
+  ├─ T+0 (5-07): 사고 발생 → 자가 회복 15분 안 처리 ✅
+  ├─ T+1d (5-08): 신규 사고 0건 ✅
+  ├─ T+3d (5-10): 신규 사고 0건 ✅ (1차 측정)
+  └─ → 사용자 결정 — 5-15 까지 추가 점검 (5-12 ± 1d 예상 사고 시점 통과 확인)
+
+📅 후속 측정 일정 (사용자 측 5-10~5-15 모니터링):
+  ├─ T+5d (5-12 ± 1d): 5일 주기 가설 예상 사고 시점 — 통과 시 가설 확정 break
+  ├─ T+8d (5-15): 추가 점검 종료 — 통과 시 V4.1 영구 종결
+  └─ V5 측정 사이클: 별 sprint 진행 시점 (현재 placeholder)
+```
+
+---
+
 ### V4.2 — Sentry 1주 누적 issue / event 카운트
 
 ```
