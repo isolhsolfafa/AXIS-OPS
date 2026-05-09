@@ -1,7 +1,42 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-08 KST (🎯 v2.12.3 release — Sprint 66-BE FEAT-MATERIAL Step 4 (OPS BE): admin endpoints 자재 마스터 CRUD + 체크리스트 매핑, pytest 47/47 GREEN — **Sprint 66-BE OPS 측 100% 완료**)
+> 마지막 업데이트: 2026-05-10 KST (🟢 DB Pool V4.1 1차 측정 통과 — 시나리오 A 이상적 확정. 5-15까지 추가 점검 진행 중)
+
+## 🟢 2026-05-10 KST — DB Pool V4.1 T+1주 측정 (1차 통과 — 시나리오 A 이상적)
+
+> **한 줄 요약**: 4-27 v2.10.13 deploy 의 keepalive 차단 효과 + 자가 회복 안전망 1차 검증 통과. 5-07 자가 회복 사고 +2d 5h 측정 시점 신규 사고 0건. 사용자 측 5-15까지 추가 점검 진행 (5-12 ± 1d 예상 사고 시점 통과 확인 후 V4.1 영구 종결).
+
+### 측정 결과 (2026-05-10 02:17 KST)
+
+| 영역 | 결과 |
+|---|---|
+| Railway logs --since 36h (5-09~5-10) | 0/0 / re-initializing 0건 ✅ |
+| Sentry 1주 신규 [db_pool] | 0건 ✅ (PYTHON-FLASK-B = 5-07 사고 기존 트래킹) |
+| pg_stat_activity OPS conn | 8 conn (Cluster A 5 + warmup B 3) — MIN=5/MAX=30 정상 |
+| Cluster A 안정성 | 9.5h 무중단 (5-09 16:45 boot 이후 worker re-init 0건) |
+| 5일 주기 가설 | break 진행 중 (4-29 → 5-04 → 5-07 → 5-10 0건) |
+
+### Sentry 기존 known logs (V4.1 신규 발생 영역 외, 사용자 확인 완료)
+
+- PYTHON-FLASK-B: 5-07 db_pool 사고 트래킹
+- PYTHON-FLASK-7/8/9: migration 051a duplicate key 5-05 (3 events)
+- PYTHON-FLASK-A: SMTP work.request_deactivation 7 events (잘못된 이메일)
+- PYTHON-FLASK-5: cleanup get_db_connection 4 events @ 5-03 (HOTFIX-09 fix 직후 잔존, 5-03 이후 0건 = fix 정합)
+- PYTHON-FLASK-6: SMTP auth.verify_email 11 events
+
+### 다음 단계
+
+- **사용자 측 5-15까지 추가 점검** (T+8d window) — 5-12 ± 1d 예상 사고 시점 통과 확인
+- 통과 시 **V4.1 영구 종결** + FIX-DB-POOL-MAX-SIZE-20260427 → COMPLETED + Phase B task #26 close
+- 별 sprint 잔존: **OBSERV-PER-WORKER-POOL-RECOVERY-20260507** (Worker B silent fail 가설, 사용자 결정 영역 — 진행/보류/폐기)
+
+---
+
+## 🎯 2026-05-08 KST — v2.12.3 release (Sprint 66-BE FEAT-MATERIAL Step 4 OPS BE) ⭐ Sprint 66 OPS 100% 완료
+
+> **헤더 갱신 (5-10)**: Sprint 66-BE OPS 측 100% 완료 영역은 5-08 release 그대로 유지 (별 영역).
+> 마지막 업데이트 (이전): 2026-05-08 KST (🎯 v2.12.3 release — Sprint 66-BE FEAT-MATERIAL Step 4)
 
 ## 🎯 2026-05-08 KST — v2.12.3 release (Sprint 66-BE FEAT-MATERIAL Step 4 OPS BE) ⭐ Sprint 66 OPS 100% 완료
 
