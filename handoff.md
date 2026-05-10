@@ -1,7 +1,35 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-10 KST (🟢 DB Pool V4.1 1차 측정 통과 — 시나리오 A 이상적 확정. 5-15까지 추가 점검 진행 중)
+> 마지막 업데이트: 2026-05-10 KST (🎯 v2.12.4 release — FIX-ELEC-IF-NAMING-DOCKING-CLARITY: IF_1/IF_2 task_name 도킹 전/후 명시. pytest 28/28 PASS, prod 370 row UPDATE 적용 완료)
+
+## 🎯 2026-05-10 KST — v2.12.4 release (FIX-ELEC-IF-NAMING-DOCKING-CLARITY)
+
+> **한 줄 요약**: 작업자 측 운영 catch — IF_1/IF_2 의 1/2 기준이 도킹 전/후 인지 혼동. 명시적 라벨 (`(도킹 전)` / `(도킹 후)`) 부여로 영구 해결. task_id 변경 0 (식별자 보존), FE 코드 변경 0, 회귀 위험 0.
+
+### 변경 trail
+
+| 단계 | 결과 |
+|---|---|
+| BE task_seed.py L77-78 | ✅ TaskTemplate task_name 정정 (IF_1/IF_2) |
+| BE task_service.py L495 | ✅ ELEC IF_2 알림 message 정정 |
+| Migration 054 작성 + atomic | ✅ BEGIN/COMMIT + UPDATE 2건 + DO block 검증 |
+| Migration 054 prod 적용 | ✅ IF_1 185 + IF_2 185 = 370 row UPDATE, DO block PASS |
+| migration_history 등록 | ✅ 054 등록 완료 |
+| pytest 갱신 (2 파일) | ✅ test_company_task_filtering + test_issue46_workers_mapping |
+| pytest 회귀 검증 | ✅ 28/28 PASS (회귀 0) |
+| version bump | ✅ v2.12.3 → v2.12.4 (BE + FE) |
+| Railway BE 배포 | ⏳ push 후 자동 배포 검증 예정 |
+| Netlify FE 배포 | ⏳ build 완료, deploy 진행 예정 |
+
+### 영향
+
+- task_id 변경 X → 코드/알림/체크리스트 매칭 로직 영향 0
+- FE 코드 변경 0 → task_name display 그대로 (BE 응답 변경 자동 반영)
+- 회귀 위험 0
+- 작업자 화면 즉시 효과: `I.F 1` → `I.F 1 (도킹 전)`, `I.F 2` → `I.F 2 (도킹 후)`
+
+---
 
 ## 🟢 2026-05-10 KST — DB Pool V4.1 T+1주 측정 (1차 통과 — 시나리오 A 이상적)
 
