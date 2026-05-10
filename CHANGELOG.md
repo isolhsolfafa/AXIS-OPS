@@ -6,6 +6,33 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.12.4] - 2026-05-10 — FIX-ELEC-IF-NAMING-DOCKING-CLARITY: IF_1/IF_2 task_name 도킹 전/후 명시 (BE + Migration, P3)
+
+> 사용자 측 운영 catch — 작업자들이 IF_1/IF_2 의 1/2 기준이 도킹 전/후 인지 혼동. 명시적 라벨 부여로 영구 해결. task_id 변경 X (식별자 보존), task_name display only.
+
+### 변경
+
+- **BE** `backend/app/services/task_seed.py` L77-78
+  - `TaskTemplate('IF_1', 'I.F 1', ...)` → `'I.F 1 (도킹 전)'`
+  - `TaskTemplate('IF_2', 'I.F 2', ...)` → `'I.F 2 (도킹 후)'`
+- **BE** `backend/app/services/task_service.py` L495 — 알림 message 정정
+  - `'I.F 2 완료 — 체크리스트 미완료 항목이 있습니다.'` → `'I.F 2 (도킹 후) 완료 — ...'`
+- **DB Migration 054** `backend/migrations/054_elec_if_task_name_docking_clarity.sql`
+  - BEGIN/COMMIT atomic + UPDATE 2건 + DO block 검증 (옛 이름 잔존 0 + 신규 이름 적용 카운트)
+  - idempotent: WHERE task_name = 'I.F 1' / 'I.F 2' 조건 (재실행 시 매칭 0 row → no-op)
+  - 운영 적용: IF_1 185 row + IF_2 185 row = 총 370 row UPDATE
+- **TEST** `tests/backend/test_company_task_filtering.py` L541-542 — task_name 갱신
+- **TEST** `tests/backend/test_issue46_workers_mapping.py` L353/359/363 — task_name 갱신
+
+### 영향
+
+- **task_id 변경 0** (식별자 보존, 코드/알림/체크리스트 매칭 로직 무관)
+- **FE 코드 변경 0** (task_name display only)
+- **회귀 위험 0** (작업자 측 표시 영역만, 매칭 로직 무관)
+- **운영 적용**: prod 직접 psql + migration_history 등록
+
+---
+
 ## [2.12.3] - 2026-05-08 — FEAT-MATERIAL Step 4 (OPS BE): admin endpoints — 자재 마스터 CRUD + 체크리스트 매핑 (BE only, P1)
 
 > Sprint 66-BE R3 4-step 의 마지막 step (OPS BE 측). AXIS-VIEW Sprint 42 (별 repo) 의 admin GUI 가 consume 할 endpoint 인프라 신규. **Sprint 66-BE OPS 측 100% 완료** (Step 1+2+3+4 prod 적용 + 47/47 pytest GREEN).

@@ -492,7 +492,7 @@ class TaskService:
         if task.task_category == 'ELEC' and task.task_id == 'IF_2':
             response['elec_close_blocked'] = elec_close_blocked
             if elec_close_blocked:
-                response['message'] = 'I.F 2 완료 — 체크리스트 미완료 항목이 있습니다.'
+                response['message'] = 'I.F 2 (도킹 후) 완료 — 체크리스트 미완료 항목이 있습니다.'
                 response['checklist_ready'] = True
                 response['checklist_category'] = 'ELEC'
 

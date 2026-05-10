@@ -538,8 +538,8 @@ class TestGALLANTCompanyFilter:
             ('PANEL_WORK', '판넬 작업'),
             ('CABINET_PREP', '케비넷 준비 작업'),
             ('WIRING', '배선 포설'),
-            ('IF_1', 'I.F 1'),
-            ('IF_2', 'I.F 2'),
+            ('IF_1', 'I.F 1 (도킹 전)'),
+            ('IF_2', 'I.F 2 (도킹 후)'),
             ('INSPECTION', '자주검사 (검수)'),
         ]:
             cursor.execute("""

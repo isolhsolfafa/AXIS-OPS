@@ -350,17 +350,17 @@ def test_tc46_04_completion_log_join(client, db_conn, get_auth_token, seed_test_
     worker_id = _create_worker_direct(db_conn, email, 'ISS46 Worker04')
 
     task_detail_id = _insert_task_detail(db_conn, sn, qr_doc_id, worker_id,
-                                          category='ELEC', task_id='IF_1', task_name='I.F 1')
+                                          category='ELEC', task_id='IF_1', task_name='I.F 1 (도킹 전)')
     started_at = datetime.now(timezone.utc) - timedelta(hours=3)
     completed_at = datetime.now(timezone.utc) - timedelta(hours=1)
     duration = 120
 
     _insert_start_log(db_conn, task_detail_id, worker_id, sn, qr_doc_id,
-                      started_at=started_at, category='ELEC', task_id_ref='IF_1', task_name='I.F 1')
+                      started_at=started_at, category='ELEC', task_id_ref='IF_1', task_name='I.F 1 (도킹 전)')
     _insert_completion_log(db_conn, task_detail_id, worker_id, sn, qr_doc_id,
                            started_at=started_at, completed_at=completed_at,
                            duration_minutes=duration,
-                           category='ELEC', task_id_ref='IF_1', task_name='I.F 1')
+                           category='ELEC', task_id_ref='IF_1', task_name='I.F 1 (도킹 전)')
 
     try:
         admin_token = get_auth_token(worker_id=worker_id, role='ELEC', is_admin=True)

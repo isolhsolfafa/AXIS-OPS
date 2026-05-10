@@ -3,7 +3,8 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: **v2.12.3 (Sprint 66-BE FEAT-MATERIAL Step 4 — admin endpoints 자재 마스터 CRUD + 체크리스트 매핑, 2026-05-08)** — BE only admin_materials.py + admin_checklists.py 신규 (5 + 2 endpoint) + pytest 13 TC / 13/13 PASS + 회귀 34/34 GREEN = **47/47** / **Sprint 66-BE OPS 측 100% 완료**
+> **현재 버전**: **v2.12.4 (FIX-ELEC-IF-NAMING-DOCKING-CLARITY — IF_1/IF_2 task_name 도킹 전/후 명시, 2026-05-10)** — BE 2 line + Migration 054 (370 row UPDATE atomic) + pytest 28/28 PASS / task_id 변경 0 / FE 코드 변경 0 / 회귀 위험 0
+> **선행 release**: v2.12.3 (Sprint 66-BE FEAT-MATERIAL Step 4 OPS BE — admin endpoints, 2026-05-08) — Sprint 66 OPS 측 100% 완료
 > **선행 release**: v2.12.2 (FEAT-MATERIAL Step 3 — checklist_master 동적 자재 조회, 2026-05-08) — BE checklist_service.py 4 신규 함수 + FE mech_checklist_screen.dart 재진입 hydrate + pytest 14 TC
 > **선행 인프라**: FIX-DB-POOL-MAX-SIZE-20260427 — Railway env DB_POOL_MAX 20→30 (2026-04-27, 코드 변경 0)
 > **D+1 운영 검증 (2026-04-28)**: 출근 peak 측정 PASS — Pool exhausted 0 / direct conn fallback 0 / OPS conn 6~7 안정 / Sentry 새 issue 0 → 옵션 X1 유지, OBSERV-WARMUP COMPLETED 확정, v2.10.11 HOTFIX-06b 불필요

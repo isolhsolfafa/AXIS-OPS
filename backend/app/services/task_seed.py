@@ -74,8 +74,8 @@ ELEC_TASKS: List[TaskTemplate] = [
     TaskTemplate('PANEL_WORK',   '판넬 작업',         'PRE_DOCKING',  False),
     TaskTemplate('CABINET_PREP', '케비넷 준비 작업',   'PRE_DOCKING',  False),
     TaskTemplate('WIRING',       '배선 포설',          'PRE_DOCKING',  False),
-    TaskTemplate('IF_1',         'I.F 1',             'PRE_DOCKING',  False),
-    TaskTemplate('IF_2',         'I.F 2',             'POST_DOCKING', False),
+    TaskTemplate('IF_1',         'I.F 1 (도킹 전)',   'PRE_DOCKING',  False),
+    TaskTemplate('IF_2',         'I.F 2 (도킹 후)',   'POST_DOCKING', False),
     TaskTemplate('INSPECTION',   '자주검사 (검수)',    'POST_DOCKING', False),
 ]
 
