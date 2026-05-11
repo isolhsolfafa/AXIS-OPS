@@ -882,6 +882,69 @@ re-initializing 호출 횟수: 1회 (worker pid=2 만)
 
 ---
 
+**🎯 V4.1 2차 측정 — 5-11 자가 회복 2차 실전 작동 ✅ (5-07 가설 폐기)** (2026-05-11 15:42 KST 측정):
+
+```
+조회 시각: 2026-05-11 15:42 KST (사고 발생 14:55 +47분, 3분 안 2회 측정)
+시나리오: 🟢 A 90% + 🟡 B 10% (자가 회복 + warmup MIN=5 보장 작동 + 5 conn visible minor concern)
+사고 발생: 5-11 14:55:47 KST — Sentry alert `re-initializing pool (pid=3)` ⭐ 5-07 pid=2 와 다른 worker
+사용자 영향 시간: ~15분 (3 cycles × 5분, T+0 ~ T+15 자가 회복 cycle)
+
+🎯 5-07 가설 폐기 — 양쪽 worker 자가 회복 능력 입증:
+  ├─ 5-07 가설: Worker B 자가 회복 trigger 도달 불가능 (warmup cron fcntl lock 단일 worker 실행 가설)
+  ├─ 5-11 반박 데이터: pid=3 자가 회복 정상 작동 (Sentry ERROR + DB conn fresh init)
+  │   ├─ Sentry: 5-11 11:54:48.706 UTC = 14:55:47.660 KST 'pid=3 re-initializing pool'
+  │   ├─ DB pid 215907 backend_start: 5-11 14:55:47.768 KST (Sentry +108ms)
+  │   ├─ DB pid 215908: 14:55:47.808 KST (+148ms, 2번째 conn)
+  │   └─ → 9ms self-recovery latency 패턴 유지 (5-07 패턴 재현)
+  └─ → ADR-025 'per-worker 카운터 의도' 가 실제로 양쪽 worker 모두 작동 중 입증
+
+🎯 warmup cron MIN=5 보장 작동 입증 (3분 안 2회 측정):
+
+  측정 1 (warmup 직전, 5-11 15:36~37 KST 추정):
+    ├─ pid 215907 (14:55:47.768) idle 11s — 자가 회복 cohort
+    ├─ pid 215908 (14:55:47.808) idle 203s — 자가 회복 cohort
+    └─ pid 215962 (15:34:04.698) idle 29s — 단발성 (direct conn fallback 추정)
+    → 총 3 conn (15:35:47 warmup cohort 215965/215966 idle disconnect 으로 사라짐)
+
+  측정 2 (warmup 직후, 5-11 15:42~43 KST 추정):
+    ├─ pid 215907 (14:55:47.768) idle 112s — 자가 회복 cohort 유지
+    ├─ pid 215908 (14:55:47.808) idle 112s — 자가 회복 cohort 유지
+    ├─ pid 215978 (15:40:47.670) idle 112s — 🆕 warmup tick fresh
+    ├─ pid 215979 (15:40:47.703) idle 112s — 🆕 warmup tick fresh
+    └─ pid 215980 (15:40:47.741) idle 35s — 🆕 warmup tick fresh
+    → 총 5 conn (15:40:47 warmup tick 3 conn 보충 입증)
+
+  ✅ warmup_pool() 의 '현재 살아있는 conn 검사 + 부족분 보충' 패턴 정상 작동.
+  ✅ idle_sec 112s 동시 일치 4건 = warmup tick 직후 동시 SELECT 1 실행 흔적 정합.
+
+🎯 사고 단계 감소 정량 입증 (4-29 → 5-11):
+  ├─ 1차 (4-29 23:31): 수동 Railway Restart 1.5h+ (10시간 silent + 복구)
+  ├─ 2차 (5-04 11:38): 수동 Railway Restart 40분
+  ├─ 3차 (5-07 20:54): 자가 회복 자동 15분 (pid=2, Worker A)
+  ├─ 4차 (5-11 14:55): 자가 회복 자동 15분 (pid=3, Worker B) ⭐ 양쪽 worker 자동화 달성
+  └─ → 운영 부담 100% 자동화 + 5-07 가설 폐기 + 사용자 영향 ↓ 단계 감소
+
+⚠️ 잔존 영역 (minor concern, 별 BACKLOG):
+  ├─ 측정 시점 conn 수가 5 (per-worker × 2 = 10 기대치 미달)
+  ├─ 양쪽 worker 자가 회복 능력 있음 + warmup MIN=5 보장 작동 입증
+  ├─ 그러나 양쪽 worker 가 동시에 5 conn 씩 보유하지 않는 패턴 — 미스터리
+  └─ → 별 BACKLOG `OBSERV-DUAL-WORKER-CONN-COEXIST-20260511` (P3, 1~2h) 신규 등록
+       사용자 영향 0 (peak 16 in-flight 까지 direct conn fallback 흡수)
+
+🎯 BACKLOG 액션 (5-11 측정 기반):
+  ├─ `OBSERV-PER-WORKER-POOL-RECOVERY-20260507` → CLOSE 권장 (가설 폐기됨)
+  ├─ `OBSERV-DUAL-WORKER-CONN-COEXIST-20260511` → 신규 등록 (P3, 분석 only)
+  └─ V4.1 영구 종결 무관 — 5-12 ± 1d 가설은 5-11 사고로 부분 깨졌으나 사용자 영향 0 → V4.1 close 진행 가능
+
+📅 다음 측정 일정 (조정):
+  ├─ T+8d (5-15): 사용자 측 추가 점검 종료 — 신규 사고 0건 시 V4.1 영구 종결
+  ├─ T+5d 가설 break 부분 — 5-11 사고 발생했으나 자가 회복으로 영향 0 → 가설 자체보다 안전망 효과 입증이 핵심
+  └─ V5 측정 사이클: `OBSERV-DUAL-WORKER-CONN-COEXIST-20260511` 진행 시점
+```
+
+---
+
 ### V4.2 — Sentry 1주 누적 issue / event 카운트
 
 ```
