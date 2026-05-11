@@ -3,13 +3,82 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: **v2.12.6 (HOTFIX-SPRINT66BE-CREATE-MASTER-ITEM-TYPE-AND-CONFLICT-MSG — POST INSERT item_type + select_options 정정, 2026-05-11)** — BE only patch (~50 LoC) / cowork 실수 #19 / 회귀 위험 0 / ADR-024 분리 정책 결정 시급
+> **현재 버전**: **v2.13.0 (Sprint 64-BE v3 SPRINT-64-BE-WORK-BATCH-V2-20260511 — Work Batch 엔드포인트 신규, 2026-05-11)** — BE only minor / 신규 파일 2개 분리 (CLAUDE.md L545 정합) / pytest 30 TC GREEN / Codex 5 라운드 검증 (M=6→0) / 회귀 위험 0
+> **선행 release**: v2.12.6 (HOTFIX-SPRINT66BE-CREATE-MASTER-ITEM-TYPE-AND-CONFLICT-MSG — POST INSERT 정정, 2026-05-11)
 > **선행 release**: v2.12.5 (FIX-ADMIN-OPTIONS-LISTS-SCROLL-ALERT-DEFAULT + HOTFIX-SPRINT66BE-MASTER-LIST-ITEM-TYPE — 4건 묶음, 2026-05-11)
 > **선행 release**: v2.12.4 (FIX-ELEC-IF-NAMING-DOCKING-CLARITY — IF_1/IF_2 task_name 도킹 전/후 명시, 2026-05-10) — BE 2 line + Migration 054 (370 row UPDATE atomic) + pytest 28/28 PASS
 > **선행 release**: v2.12.2 (FEAT-MATERIAL Step 3 — checklist_master 동적 자재 조회, 2026-05-08) — BE checklist_service.py 4 신규 함수 + FE mech_checklist_screen.dart 재진입 hydrate + pytest 14 TC
 > **선행 인프라**: FIX-DB-POOL-MAX-SIZE-20260427 — Railway env DB_POOL_MAX 20→30 (2026-04-27, 코드 변경 0)
 > **D+1 운영 검증 (2026-04-28)**: 출근 peak 측정 PASS — Pool exhausted 0 / direct conn fallback 0 / OPS conn 6~7 안정 / Sentry 새 issue 0 → 옵션 X1 유지, OBSERV-WARMUP COMPLETED 확정, v2.10.11 HOTFIX-06b 불필요
 > **DB Pool V4.1 T+1주 검증 (2026-05-10)**: 🟢 시나리오 A 이상적 1차 통과 — Railway 36h 0/0 0건, Sentry 1주 신규 0건, Cluster A 9.5h 무중단. 5일 주기 가설 break 진행 중 (4-29 → 5-04 → 5-07 → 5-10 0건). 사용자 측 5-15까지 추가 점검 (5-12 ± 1d 예상 사고 시점 통과 확인)
+
+---
+
+## v2.13.0 (Sprint 64-BE v3 — Work Batch 엔드포인트 신규, 2026-05-11)
+
+**Sprint**: `SPRINT-64-BE-WORK-BATCH-V2-20260511` (BE only, P1, Codex 5 라운드 검증 GREEN)
+
+**상태**: ✅ COMPLETED (5-11 release, Railway 배포 진행 중 — Twin파파 측 AXIS-VIEW 직접 검증 예정)
+
+**배경**: 2026-04-28 등록 후 Codex 라운드 1 catch (M=6 Critical) → 2026-05-11 v2 재설계 (best-effort sequential helper reuse) → Codex 5 라운드 검증 → 구현 진입. AXIS-VIEW Sprint 40 v1.40.0 (TM Tank Module 일괄 시작/종료 admin 액션) prod 배포 완료 — BE 측 batch 엔드포인트 신규 추가로 graceful degrade 영역 해제.
+
+### 변경 파일 5개
+
+| 파일 | 변경 | LOC |
+|------|------|-----|
+| `backend/app/routes/work_batch.py` ⭐ **신규** | 3 route (start-batch / complete-batch / by-order) + `_validate_batch_input` helper | +117 |
+| `backend/app/services/task_service_batch.py` ⭐ **신규** | start/complete_work_batch + 3 helper (`_fetch_task_product_map` / `_filter_eligible_ids` / `_match_manager_company`) + 매핑표 2건 | +209 |
+| `backend/app/__init__.py` | `from app.routes import work_batch` import 1줄 (register_blueprint 전 필수) | +1 |
+| `tests/conftest.py` | fixture 3종 신규 (`seed_tank_module_tasks_batch` / `seed_manager_company_matrix` / `assert_audit_log_count`) | +~150 |
+| `tests/backend/test_work_batch.py` ⭐ **신규** | 30 TC (Unit 13 + Integration 17) | +~280 |
+
+**기존 `work.py` (1,355 LOC 🔴) + `task_service.py` (1,551 LOC ⛔) touch 0** — CLAUDE.md L545 "필수 분할 파일 새 로직 추가 금지" 정합.
+
+### 결정 사항 (v3)
+
+- **신규 파일 2개 분리**: 기존 비대화 파일 touch 0, 분리 정책 100% 준수
+- **30건 상한**: helper task당 7~9 query (start) / 10~15 query (complete) → 30 × 15 = 450 query / pool MAX=30 안전
+- **Best-effort sequential**: 각 task 마다 기존 `start_work()`/`complete_work()` helper 호출 — audit log + start guards + complete logic 자동 흡수
+- **`_match_manager_company()`**: work.py L340-356 reactivate 패턴 정합 (TMS = `module_outsourcing OR mech_partner`, MECH = `mech_partner only`)
+- **응답 shape**: `_task_to_dict()` 전체 shape 재사용 — FE Sprint 40 contract 정합
+
+### Codex 검증 5 라운드 trail
+
+| 라운드 | 결과 | 정정 |
+|--------|------|------|
+| 1 | M=6/A=3 | v1 all-or-nothing 폐기 → v2 helper reuse 패턴 (audit log escape / TMS 매핑 회귀 / start guards / complete logic / schema 가정 / 응답 contract 정정) |
+| 2 | M=4/A=1/N=3 | 분리 파일 + 30건 + complete pseudo code + 16+ TC |
+| 3 | M=1/A=3/N=3 | 12 case 전수 + TC-AUDIT-02 id + import 순서 + gate 측정 환경 |
+| 4 | M=1/A=1/N=2 | prefix 충돌 정정 (Blueprint url_prefix 영역 + register_blueprint 매개변수 영역 제거) |
+| **5** | **M=0/A=1/N=3 GREEN** | pool warm-up 한 줄 추가 → 구현 진입 권고 |
+
+### pytest 30 TC GREEN (Unit 13 + Integration 17, staging DB 22분 10초 실측)
+
+**Unit** (DB 무관, ~0.27초):
+- TC-MATCH-UNIT-01 C1~C12 (12 case 전수): TMS/MECH 매핑 + suffix 제거 + empty + NULL fallback + PI/QI/SI 영역 외 False
+- A-1 substring 보조 (BAT vs COMBAT — 운영 미발생, 후속 BACKLOG)
+
+**Integration** (Railway staging DB, ~22분):
+- 입력 검증 4: 빈 / 누락 / >30 / 비-정수
+- 화이트리스트+매니저 5: admin 30건 / TMS(M) 매칭 / FNI 다른 회사 FORBIDDEN / FNI mech_partner 매칭 / 모두 NOT_TANK_MODULE → 400
+- TC-AUDIT-01/02 (audit log 1:1): work_start_log + work_completion_log row 증가 = succeeded 건수
+- TC-SHAPE-01/02 (응답 shape): start/complete `_task_to_dict()` 전체 필드 (is_paused / total_pause_minutes / force_closed / close_reason / closed_by_name / task_type 등)
+- Skipped reason 매트릭스 4: NOT_FOUND / ALREADY_STARTED / TC-COMPLETE-01 FORBIDDEN_WORKER / TC-COMPLETE-02 ALREADY_COMPLETED
+
+### pytest catch 2건 (Codex 5 라운드 못 catch — pytest 자체 catch 가치 입증)
+
+1. **C1 case 인자 오기**: 설계서 + TC 작성 시점 `('TMS', 'TMS', 'FNI', 'FNI') → True` 오기 (manager 'TMS' vs mod 'FNI' mismatch). 정정 → `('TMS', 'TMS', 'TMS', 'FNI')` (TMS module_outsourcing match 의미 정합)
+2. **complete TC reason 예상값**: `complete_work()` L217 `_worker_has_started_task` False 분기가 L233 `task.started_at None` 분기보다 **먼저 발동**. admin 이 cross-worker GST 영역 아닌 경우 FORBIDDEN 분기 (시작 안 한 task complete 차단 = 보안 정합). 정정 → reason `FORBIDDEN_WORKER`. NOT_STARTED 도달은 cross-worker GST 영역에서만 가능
+
+### 후속 BACKLOG
+
+- `BUG-MATCH-COMPANY-SUBSTRING-FALSE-POSITIVE-20260511` 🟢 P3 Advisory — substring 매칭 boundary issue (BAT vs COMBAT). 운영 데이터 기준 발생 케이스 0. work.py L347 reactivate 패턴 정합 보존 영역. 분기별 1회 모니터링.
+
+### 회귀 위험
+
+- 0 — 기존 `/work/start` `/work/complete` 영향 0 (Flutter 모바일 앱 흐름 보존)
+- DB schema 변경 0, migration 불필요
+- `_task_to_dict()` 시그니처 변경 0, helper 시그니처 변경 0
 
 ---
 

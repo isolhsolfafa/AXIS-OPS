@@ -644,6 +644,169 @@ def sample_qr_code() -> Dict[str, str]:
     }
 
 
+# ── Sprint 64-BE v3: Work Batch 영역 fixture 3종 ──────────────────
+
+@pytest.fixture
+def seed_tank_module_tasks_batch(db_conn, create_test_worker):
+    """Sprint 64-BE: TM Tank Module task N건 batch seed.
+
+    Args:
+        n: 생성할 task 수 (default 30)
+        partner: 영역 매핑 영역 — 'TMS' / 'FNI' / 'BAT' 등
+        task_category: 'TMS' (default) / 'MECH'
+
+    Returns:
+        Function(n, partner, task_category) -> List[int] task_detail_ids
+    """
+    if db_conn is None:
+        pytest.skip("DB not available")
+
+    created_serial_numbers = []
+    created_qr_doc_ids = []
+
+    def _seed(n: int = 30, partner: str = 'TMS', task_category: str = 'TMS') -> list:
+        # 1) Worker 영역 생성 (1회)
+        worker_id = create_test_worker(
+            email=f'batch-worker-{partner}@test.axisos.com',
+            password='BatchTest123!',
+            name=f'Batch Worker {partner}',
+            role='MECH',
+            company=f'{partner}(M)' if partner == 'TMS' else partner,
+        )
+
+        cur = db_conn.cursor()
+        task_detail_ids = []
+
+        for i in range(n):
+            sn = f'BATCH-TEST-{partner}-{i:03d}'
+            qr = f'DOC_{sn}'
+            created_serial_numbers.append(sn)
+            created_qr_doc_ids.append(qr)
+
+            # 2) plan.product_info INSERT (mech_partner / module_outsourcing 영역)
+            mech_p = partner if task_category == 'MECH' else None
+            mod_out = partner if task_category == 'TMS' else None
+            cur.execute("""
+                INSERT INTO plan.product_info
+                    (serial_number, model, mech_partner, module_outsourcing, sales_order)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (serial_number) DO UPDATE SET
+                    mech_partner = EXCLUDED.mech_partner,
+                    module_outsourcing = EXCLUDED.module_outsourcing,
+                    sales_order = EXCLUDED.sales_order
+            """, (sn, 'GAIA', mech_p, mod_out, f'O/N-BATCH-{partner}'))
+
+            # 3) qr_registry INSERT
+            cur.execute("""
+                INSERT INTO qr_registry (qr_doc_id, serial_number, status)
+                VALUES (%s, %s, 'active')
+                ON CONFLICT (qr_doc_id) DO NOTHING
+            """, (qr, sn))
+
+            # 4) app_task_details INSERT (TANK_MODULE)
+            cur.execute("""
+                INSERT INTO app_task_details
+                    (worker_id, serial_number, qr_doc_id,
+                     task_category, task_id, task_name, is_applicable)
+                VALUES (%s, %s, %s, %s, 'TANK_MODULE', 'Tank Module', TRUE)
+                RETURNING id
+            """, (worker_id, sn, qr, task_category))
+            task_detail_ids.append(cur.fetchone()[0])
+
+        db_conn.commit()
+        return task_detail_ids
+
+    yield _seed
+
+    # Teardown — created 영역 데이터 영역 cleanup
+    try:
+        cur = db_conn.cursor()
+        if created_serial_numbers:
+            cur.execute(
+                "DELETE FROM app_task_details WHERE serial_number = ANY(%s)",
+                (created_serial_numbers,)
+            )
+            cur.execute(
+                "DELETE FROM qr_registry WHERE qr_doc_id = ANY(%s)",
+                (created_qr_doc_ids,)
+            )
+            cur.execute(
+                "DELETE FROM plan.product_info WHERE serial_number = ANY(%s)",
+                (created_serial_numbers,)
+            )
+            db_conn.commit()
+    except Exception:
+        db_conn.rollback()
+
+
+@pytest.fixture
+def seed_manager_company_matrix(db_conn, create_test_worker):
+    """Sprint 64-BE: manager 영역 매트릭스 영역 — (admin, TMS_M, FNI_M, BAT_M) 4종.
+
+    Returns: dict { 'admin': worker_id, 'tms_m': worker_id, 'fni_m': worker_id, 'bat_m': worker_id }
+    """
+    if db_conn is None:
+        pytest.skip("DB not available")
+
+    return {
+        'admin': create_test_worker(
+            email='batch-admin@test.axisos.com',
+            password='AdminTest123!',
+            name='Batch Admin',
+            role='QI',
+            is_admin=True,
+        ),
+        'tms_m': create_test_worker(
+            email='batch-tms-m@test.axisos.com',
+            password='ManagerTest123!',
+            name='Batch TMS(M) Manager',
+            role='MECH',
+            is_manager=True,
+            company='TMS(M)',
+        ),
+        'fni_m': create_test_worker(
+            email='batch-fni-m@test.axisos.com',
+            password='ManagerTest123!',
+            name='Batch FNI Manager',
+            role='MECH',
+            is_manager=True,
+            company='FNI',
+        ),
+        'bat_m': create_test_worker(
+            email='batch-bat-m@test.axisos.com',
+            password='ManagerTest123!',
+            name='Batch BAT Manager',
+            role='MECH',
+            is_manager=True,
+            company='BAT',
+        ),
+    }
+
+
+@pytest.fixture
+def assert_audit_log_count(db_conn):
+    """Sprint 64-BE: audit log row 영역 1:1 정합 검증 helper.
+
+    Returns:
+        Function(table, task_detail_ids, expected) -> bool
+    """
+    def _assert(table: str, task_detail_ids: list, expected: int) -> int:
+        if db_conn is None:
+            return -1
+        cur = db_conn.cursor()
+        cur.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE task_id = ANY(%s)",
+            (task_detail_ids,)
+        )
+        actual = cur.fetchone()[0]
+        assert actual == expected, (
+            f"{table} row count mismatch: expected={expected}, actual={actual}, "
+            f"task_detail_ids={task_detail_ids}"
+        )
+        return actual
+    return _assert
+
+
 # 타임존 설정 (KST)
 @pytest.fixture(scope='session', autouse=True)
 def set_timezone():

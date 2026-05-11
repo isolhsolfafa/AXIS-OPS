@@ -6,6 +6,71 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.13.0] - 2026-05-11 — Sprint 64-BE v3 (SPRINT-64-BE-WORK-BATCH-V2-20260511) Work Batch 엔드포인트 신규
+
+> TM Tank Module 일괄 처리 BE 엔드포인트 신규 (AXIS-VIEW Sprint 40 v1.40.0 contract BE 측 구현). 신규 파일 2개 분리 (CLAUDE.md L545 정합, 기존 work.py/task_service.py touch 0). Codex 5 라운드 검증 (M=6→4→1→1→0 GREEN). pytest 30 TC GREEN (Unit 13 + Integration 17, staging DB 22분 10초 실측). 회귀 위험 0.
+
+### 변경
+
+- **BE 신규 파일 2개** (CLAUDE.md L545 "필수 분할 파일 새 로직 추가 금지" 정합)
+  - `backend/app/routes/work_batch.py` (+117 LOC) — `work_bp` blueprint 재사용 + 3 route:
+    - `POST /api/app/work/start-batch` — 최대 30건 일괄 시작
+    - `POST /api/app/work/complete-batch` — 최대 30건 일괄 완료
+    - `GET /api/app/tasks/by-order/<sales_order>` — FE prefetch (N+1 제거)
+  - `backend/app/services/task_service_batch.py` (+209 LOC) — helper reuse 패턴
+    - `start_work_batch()` / `complete_work_batch()` — best-effort sequential (기존 helper 자체 트랜잭션 commit)
+    - `get_tasks_by_order()` — 단일 JOIN 쿼리
+    - 3 helper: `_fetch_task_product_map()` / `_filter_eligible_ids()` / `_match_manager_company()`
+    - 매핑표 2건: `_START_ERROR_TO_REASON` (7 항목) / `_COMPLETE_ERROR_TO_REASON` (5 항목)
+- **BE 기존 파일 1개** `backend/app/__init__.py` (+1 line)
+  - `from app.routes import work_batch` — `register_blueprint(work_bp)` 전 필수 (side effect: `@work_bp.route(...)` decorator 실행)
+- **테스트 신규 파일 1개** `tests/backend/test_work_batch.py` (+~280 LOC, 30 TC)
+  - Unit 13개 (TC-MATCH-UNIT-01 C1~C12 + A-1 substring 보조)
+  - Integration 17개: 입력 검증 4 + 화이트리스트/매니저 5 + Audit log 1:1 정합 2 (TC-AUDIT-01/02) + 응답 shape 2 (TC-SHAPE-01/02) + Skipped reason 4 (TC-COMPLETE-01~03 + TC-SHAPE-02)
+- **테스트 기존 파일 1개** `tests/conftest.py` (+~150 LOC)
+  - fixture 3종 신규: `seed_tank_module_tasks_batch` / `seed_manager_company_matrix` / `assert_audit_log_count`
+- **version bump** `backend/version.py` + `frontend/lib/utils/app_version.dart`: 2.12.6 → 2.13.0
+
+### 결정 사항 (v3)
+
+- **신규 파일 2개 분리**: 기존 `work.py` 1,355 LOC (🔴) + `task_service.py` 1,551 LOC (⛔) touch 0
+- **30건 상한**: helper task당 7~9 query (start) / 10~15 query (complete) → 30 × 15 = 450 query / pool MAX=30 안전
+- **Best-effort sequential**: 각 task 마다 기존 `start_work()`/`complete_work()` helper 호출 → audit log + start guards + complete logic 자동 흡수
+- **`_match_manager_company()`**: work.py L340-356 reactivate 패턴 정합 (TMS = `module_outsourcing OR mech_partner`, MECH = `mech_partner only`)
+- **응답 shape**: `_task_to_dict()` (work.py L77-106) 전체 shape 재사용 — FE Sprint 40 contract 정합
+
+### Codex 검증 5 라운드 trail
+
+| 라운드 | 결과 | 정정 |
+|--------|------|------|
+| 1 | M=6/A=3 | v1 all-or-nothing 폐기 → v2 helper reuse 패턴 |
+| 2 | M=4/A=1/N=3 | 분리 파일 + 30건 하향 + complete pseudo code + 16+ TC |
+| 3 | M=1/A=3/N=3 | 12 case 전수 + TC-AUDIT-02 id + import 순서 + gate 측정 |
+| 4 | M=1/A=1/N=2 | prefix 충돌 정정 (Blueprint url_prefix 영역) |
+| **5** | **M=0/A=1/N=3 GREEN** | pool warm-up 한 줄 추가 → 구현 진입 권고 |
+
+### pytest catch 2건 (Codex 5 라운드 못 catch, pytest 자체 catch)
+
+1. **C1 case 인자 오기**: `('TMS', 'TMS', 'FNI', 'FNI')` → expected True 오기 (manager 'TMS' vs mod 'FNI' mismatch). 정정 → `('TMS', 'TMS', 'TMS', 'FNI')` (TMS module_outsourcing match 의미 정합)
+2. **complete TC reason 예상값**: `complete_work()` L217 `_worker_has_started_task` False 분기가 L233 `task.started_at None` 분기보다 **먼저 발동**. admin이 시작 안 한 task complete 호출 = FORBIDDEN 분기 (cross-worker GST 영역 아님). NOT_STARTED 도달은 cross-worker GST 영역에서만 가능. 정정 → reason `FORBIDDEN_WORKER`
+
+### 후속 BACKLOG
+
+- `BUG-MATCH-COMPANY-SUBSTRING-FALSE-POSITIVE-20260511` 🟢 P3 Advisory — `_match_manager_company()` substring 매칭 false positive (BAT vs COMBAT 같은 boundary issue). work.py L347 reactivate 패턴 정합 보존 영역. 운영 데이터 기준 발생 케이스 0. 분기별 1회 모니터링.
+
+### 회귀 위험
+
+- 0 — 기존 `/work/start` `/work/complete` 영향 0 (Flutter 모바일 앱 흐름 보존)
+- DB schema 변경 0, migration 불필요
+- `_task_to_dict()` 시그니처 변경 0, helper 시그니처 변경 0
+
+### 검증
+
+- pytest 30 TC GREEN: Unit 13/13 + Integration 17/17 (staging DB 22분 10초 실측)
+- AXIS-VIEW Sprint 40 v1.40.0 prod 배포 완료 — Twin파파 측 VIEW 직접 검증 예정
+
+---
+
 ## [2.12.6] - 2026-05-11 — HOTFIX-SPRINT66BE-CREATE-MASTER-ITEM-TYPE-AND-CONFLICT-MSG (cowork 실수 #19, S2)
 
 > v2.12.5 release 직후 사용자 측 catch — AXIS-VIEW "+ 항목 추가" 모달에서 신규 SELECT/INPUT 항목 추가 시 묵음 회귀 (DB DEFAULT 'CHECK' 저장) + CONFLICT 응답 비식별 영역.

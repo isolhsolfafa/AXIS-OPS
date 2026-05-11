@@ -35494,82 +35494,612 @@ OPEN → COMPLETED 전환
 
 ---
 
-## Sprint 64-BE — Work Start/Complete Batch 엔드포인트 (TM Tank Module 일괄 처리, 2026-04-28 등록)
+## Sprint 64-BE — Work Start/Complete Batch 엔드포인트 (TM Tank Module 일괄 처리, 2026-04-28 등록 / 2026-05-11 v2 재설계)
 
-> 등록일: 2026-04-28 | 상태: 설계 확정 (FE Sprint 40 동반) → Codex 교차검증 대기 → 구현 착수
+> 등록일: 2026-04-28 | **2026-05-11 v2 재설계 (Codex 라운드 1 catch M=6/A=3 정정)** | 상태: 라운드 2 검증 대기
 > 트랙: OPS BE (VIEW FE Sprint 40 동반 설계)
 > 선행: 기존 `/work/start` `/work/complete` (Flutter 모바일 앱용) 구조 위에 batch 엔드포인트 신설
 > 설계서: 본 엔트리 + `AXIS-VIEW/DESIGN_FIX_SPRINT.md` Sprint 40
-> 교차검증: Claude Cowork → Claude Code Opus Lead → Codex (2026-04-28 착수 예정)
-> ⚠️ **번호 정정**: 본래 "Sprint 63-BE" 으로 고려했으나 AXIS-VIEW Sprint 39 (MECH 체크리스트 VIEW 연동) 의 BE 의존이 이미 Sprint 63-BE 로 예약 → **Sprint 64-BE 로 재번호**
+> 교차검증: Claude Cowork → Claude Code Opus Lead → Codex (라운드 1 catch 6 critical → v2 재설계 → 라운드 2 위임)
+> ⚠️ **번호 정정**: 본래 "Sprint 63-BE" 으로 고려했으나 AXIS-VIEW Sprint 39 의 BE 의존이 이미 Sprint 63-BE 로 예약 → **Sprint 64-BE 로 재번호**
+
+---
+
+## ⚠️ Codex 라운드 1 catch — 설계 재정리 trail (2026-05-11)
+
+**평가 결과**: M=6 (Critical 다수) / A=3 — 단순 batch wrapper 가 아닌 기존 work flow 의 핵심 동작 누락 우려
+
+| # | catch 항목 | 원래 설계 문제 | v2 정정 |
+|---|---|---|---|
+| M1 | Trans + 로그 | `work_start_log` / `work_completion_log` 누락 — 기존 helper 가 별 connection 으로 write → batch trans 외부 escape → audit 무결성 깨짐 | **all-or-nothing transaction 폐기** → 기존 `task_service.start_work()` / `complete_work()` 순차 호출로 audit log 자동 흡수 (각 helper 가 자체 transaction commit) |
+| M2 | TMS 회사 매핑 | 설계가 `module_outsourcing` only → 기존 work.py L352-356 = `module_outsourcing OR mech_partner` (둘 다 허용) → manager 가 정상 task 거부됨 (기능 회귀) | **기존 매핑 패턴 그대로 재사용** (`category == 'TMS' → module_outsourcing OR mech_partner`). 별 helper 추출 또는 inline 복제 |
+| M3 | 시작 가드 누락 | 기존 `start_work()` 의 `is_applicable` / `phase_block_enabled` / Location QR 검증 미반영 → 비정상 데이터 생성 | **helper 재사용으로 자동 흡수** — 모든 가드가 helper 안에서 작동 |
+| M4 | Complete 단순화 | 기존 `complete_work()` 는 pause/resume + worker별 completion_log + duration_validator + finalize 로직 — 설계의 `completed_at=NOW()` 단순 UPDATE 가 아님 → duration 0 + multi-worker man-hour 계산 깨짐 | **helper 재사용으로 자동 흡수** — finalize=True 기본값 + pause 시간 차감 + man-hour 합산 모두 그대로 작동 |
+| M5 | Schema 가정 미검증 | `app_task_workers ON CONFLICT (task_detail_id, worker_id)` PK 가정 — 실 schema 확인 0건, 기존 시스템은 `work_start_log` 사용 → runtime ConflictError 가능 | **`app_task_workers` INSERT 자체를 제거** — 기존 시스템은 `work_start_log` table 로 worker 별 시작 trail 관리 (helper 내부 자동) |
+| M6 | 응답 contract drift | 기존 `_task_to_dict()` 전체 shape (`is_paused`, `total_pause_minutes`, `force_closed`, `close_reason`, `closed_by`, `closed_by_name`, `task_type` 등) vs 설계 샘플의 partial raw row → FE Sprint 40 응답 mismatch | **`_task_to_dict()` (work.py L77-106) 재사용** — 응답 shape 1:1 보존, FE Sprint 40 contract 정합 |
+
+**Advisory (A1~A3)**:
+- A1 (EXISTS N+1): pre-loop 단계에서 task_details + product_info 단일 쿼리로 batch 조회 → 회사 매핑은 사전 계산
+- A2 (manager_or_admin_required): 기존 `backend/app/middleware/jwt_auth.py` L223 데코레이터 재사용 (Sprint 33 force-close 동일 패턴)
+- A3 (pytest TC): rollback with logs / manager TMS 매트릭스 / skipped 혼합 / VIEW Sprint 40 응답 shape 검증 TC 추가
+
+**의미론 전환**: "전체 ROLLBACK all-or-nothing" → "best-effort with explicit per-task skipped reasons". FE Sprint 40 v1.40.0 이 이미 succeeded + skipped 양쪽 모두 처리하므로 **사용자 가시 영향 0**.
+
+---
+
+## ⚠️ Codex 라운드 2 catch — v3 재정정 trail (2026-05-11)
+
+**평가 결과**: M=4 / A=1 / N=3 — **HOLD** (구현 진입 전 보완 필수)
+
+| # | catch 항목 | v2 문제 | v3 정정 |
+|---|---|---|---|
+| **M-1** | pytest TC 누락 | NULL fallback / `_match_manager_company()` unit / audit log 1:1 정합 TC 누락 + 테스트 경로 `backend/tests/...` 오기 (실 관례 `tests/backend/...`) | **테스트 경로 `tests/backend/test_work_batch.py` 정정 + TC 4건 추가**: NULL fallback (둘 다 NULL → FORBIDDEN_COMPANY) / `_match_manager_company()` 단독 unit (BAT vs COMBAT substring 영역 포함) / audit log 1:1 정합 (`work_start_log` row 증가 = succeeded 건수) / `_task_to_dict()` 응답 shape 전체 필드 보유 검증 |
+| **M-2** | 성능 가정 부족 | task당 ~3 query 가정 오류 (실제 start_work 7~9 query: get_task + admin_settings × 2 + product + worker checks × 2 + work_start_log + start_task + checklist alert). 50건 × 9 = **최대 450 query 영역**. pool MIN=5/MAX=30 전제 설계서 봉인 X | **50건 → 30건 상한 하향** (실 query 추정 9/task × 30 = 270 query, pool MAX=30 안에서 안전). 설계서에 helper query 분해 명시 (start: 7~9 / complete: 더 많음 — pause/duration_validator/work_completion_log 등) + pool 전제 MIN=5/MAX=30 명문화 + Pre-deploy Gate 30건 staging 실측 추가 |
+| **M-3** | 코드 크기 충돌 | work.py 1,355 LOC (🔴 800줄+) + task_service.py 1,551 LOC (⛔ 1,200줄+) 에 +85/+145 LOC 추가 → CLAUDE.md L545 "필수 분할 파일 새 로직 추가 금지" 정면 충돌 | **신규 파일 2개 분리**: `backend/app/routes/work_batch.py` (~90 LOC, work_bp blueprint 재사용 + 3 route) + `backend/app/services/task_service_batch.py` (~160 LOC, `start_work_batch()` + `complete_work_batch()` + `_match_manager_company()` + 매핑 표) + 기존 work.py / task_service.py touch 0 (helper import only). `__init__.py` 영역 import 추가 |
+| **M-4** | complete 생략 처리 | `complete_work_batch()` 본문 "동일 구조 생략" → cowork 실수 #18/#19 (Sprint 66-BE GET/POST 영역 누락) 재발 위험 구조 | **full pseudo code 전개** + start/complete 대칭 체크리스트 명문화 (응답 키 / 매핑 표 / pre-loop 검증 영역 / error 코드 1:1 정합) |
+
+**Advisory (A-1)**:
+- A-1: `_match_manager_company()` substring 매칭 false positive (예: `BAT` vs `COMBAT`) — reactivate 패턴 (work.py L347 `company_base in mech_partner`) 자체 boundary-safe 여부 미검증 → **별 BACKLOG entry 등록** (`BUG-MATCH-COMPANY-SUBSTRING-FALSE-POSITIVE`, 운영 데이터 기준 현재 발생 케이스 0 — Advisory)
+
+**N (정합 GREEN 3건)**:
+- v2 본문 완전성 — 라운드 1 M1~M6 반영 ✅
+- error 코드 매핑표 완전성 — start_work 7종 / complete_work 5종 전수 대조 ✅
+- best-effort + Sentry 정합 — `LoggingIntegration(event_level=logging.ERROR)` 활성 ✅
+
+---
+
+## v3 재정정 본문 (Codex 라운드 2 catch 정정 반영)
+
+### 변경 결정 사항 (v2 → v3 차이)
+
+| # | 항목 | v2 | v3 (정정) |
+|---|---|---|---|
+| 1 | 파일 구조 | 기존 work.py + task_service.py 안에 추가 | **신규 파일 2개 분리** — `work_batch.py` + `task_service_batch.py` (CLAUDE.md L545 정합) |
+| 2 | 상한 | 50건 | **30건** (실 helper query 추정 9/task × 30 = 270 query / pool MAX=30 안전) |
+| 3 | complete_work_batch() | "동일 구조 생략" | **full pseudo code 전개** + 대칭 체크리스트 |
+| 4 | pytest TC | 12+ TC | **16+ TC** (NULL fallback / `_match_manager_company()` unit / audit log 1:1 / 응답 shape 영역 추가) |
+| 5 | 테스트 경로 | `backend/tests/test_work_batch.py` 오기 | **`tests/backend/test_work_batch.py`** 정정 (실 관례 정합) |
+| 6 | 성능 가정 | "task당 ~3 query / <1s" | **task당 7~9 query 명시 / 30건 × 9 = 270 query / pool MIN=5/MAX=30 명문화 / Pre-deploy Gate staging 30건 실측** |
+
+### 1️⃣ 신규 파일 — `backend/app/routes/work_batch.py` (~90 LOC)
+
+```python
+"""
+Work Batch 엔드포인트 (Sprint 64-BE v3)
+
+분리 근거: CLAUDE.md L545 — work.py 1,355 LOC (🔴 800줄+) 필수 분할 영역.
+신규 로직 별 파일 분리. work_bp blueprint 재사용 (URL prefix 정합 보존).
+"""
+from typing import Tuple, Dict, Any
+from flask import request, jsonify
+
+from app.routes.work import work_bp  # 기존 blueprint 재사용
+from app.middleware.jwt_auth import jwt_required, manager_or_admin_required, get_current_worker
+from app.services import task_service_batch
+
+
+@work_bp.route("/work/start-batch", methods=["POST"])
+@jwt_required
+@manager_or_admin_required
+def start_work_batch_route() -> Tuple[Dict[str, Any], int]:
+    """TM Tank Module 일괄 시작 (Sprint 40 / 64-BE v3)
+
+    Request Body: { "task_detail_ids": [int, ...] }  // 최소 1개, 최대 30개
+    Response 200: { succeeded: [...], skipped: [...], total: int }
+    Response 400: INVALID_REQUEST | NOT_TANK_MODULE_ANY
+    Response 403: 데코레이터에서 처리
+    """
+    data = request.get_json()
+    task_detail_ids = data.get('task_detail_ids') if data else None
+
+    if not task_detail_ids or not isinstance(task_detail_ids, list):
+        return jsonify({'error': 'INVALID_REQUEST', 'message': 'task_detail_ids 배열이 필요합니다.'}), 400
+    if len(task_detail_ids) > 30:
+        return jsonify({'error': 'INVALID_REQUEST', 'message': '최대 30개까지 일괄 처리 가능합니다.'}), 400
+    if not all(isinstance(i, int) for i in task_detail_ids):
+        return jsonify({'error': 'INVALID_REQUEST', 'message': 'task_detail_ids 는 정수 배열이어야 합니다.'}), 400
+
+    worker = get_current_worker()
+    response, status_code = task_service_batch.start_work_batch(
+        worker_id=worker.id,
+        task_detail_ids=task_detail_ids,
+        is_admin=worker.is_admin,
+        manager_company=worker.company if (worker.is_manager and not worker.is_admin) else None,
+    )
+    return jsonify(response), status_code
+
+
+@work_bp.route("/work/complete-batch", methods=["POST"])
+@jwt_required
+@manager_or_admin_required
+def complete_work_batch_route() -> Tuple[Dict[str, Any], int]:
+    """TM Tank Module 일괄 완료 — start-batch 대칭 구조"""
+    data = request.get_json()
+    task_detail_ids = data.get('task_detail_ids') if data else None
+
+    if not task_detail_ids or not isinstance(task_detail_ids, list):
+        return jsonify({'error': 'INVALID_REQUEST', 'message': 'task_detail_ids 배열이 필요합니다.'}), 400
+    if len(task_detail_ids) > 30:
+        return jsonify({'error': 'INVALID_REQUEST', 'message': '최대 30개까지 일괄 처리 가능합니다.'}), 400
+    if not all(isinstance(i, int) for i in task_detail_ids):
+        return jsonify({'error': 'INVALID_REQUEST', 'message': 'task_detail_ids 는 정수 배열이어야 합니다.'}), 400
+
+    worker = get_current_worker()
+    response, status_code = task_service_batch.complete_work_batch(
+        worker_id=worker.id,
+        task_detail_ids=task_detail_ids,
+        is_admin=worker.is_admin,
+        manager_company=worker.company if (worker.is_manager and not worker.is_admin) else None,
+    )
+    return jsonify(response), status_code
+
+
+@work_bp.route("/tasks/by-order/<sales_order>", methods=["GET"])
+@jwt_required
+def tasks_by_order_route(sales_order: str) -> Tuple[Dict[str, Any], int]:
+    """FE Sprint 40 prefetch — 동일 O/N TANK_MODULE task 일괄 조회 (N+1 제거)"""
+    task_categories = request.args.get('task_categories', 'TMS,MECH').split(',')
+    task_id = request.args.get('task_id', 'TANK_MODULE')
+    response, status_code = task_service_batch.get_tasks_by_order(
+        sales_order=sales_order,
+        task_categories=task_categories,
+        task_id=task_id,
+    )
+    return jsonify(response), status_code
+```
+
+⚠️ **`__init__.py` import 순서** (Codex 라운드 3 A-1 정정 + 라운드 4 M (prefix 충돌) 재정정):
+
+⚠️ **실 영역 정합 검증** (Codex 라운드 4 M catch):
+- 실제 `work_bp = Blueprint("work", __name__, url_prefix="/api/app")` (`work.py` L37) — **Blueprint 정의 영역에 url_prefix 이미 명시**
+- 실제 `__init__.py` L219 = `app.register_blueprint(work_bp)` (url_prefix 매개변수 영역 없음)
+- ⚠️ 만약 `register_blueprint(work_bp, url_prefix='/api/app')` 명시 시 Flask 2.2+ 영역 prefix 합쳐짐 → `/api/app/api/app/work/start-batch` 영역 중복 → **404 NOT_FOUND 영역 발생**
+
+✅ **정합 정정** (실 영역 패턴 정합):
+```python
+# backend/app/__init__.py 영역 — L200~234 영역 정합
+# 1) 기존 import 블록 영역 (L200 영역) — work_bp Blueprint 정의 영역 import
+from app.routes.work import work_bp
+
+# 2) 신규 추가 (L216 영역 다음) — work_batch import 영역 (side effect: @work_bp.route 영역 등록)
+from app.routes import work_batch   # ⚠️ register_blueprint 영역 전 실행 영역 필수
+
+# 3) register_blueprint 영역 (L219 영역) — 기존 그대로 (url_prefix 영역 명시 X)
+app.register_blueprint(work_bp)   # Blueprint 영역 자체 url_prefix='/api/app' 영역 보존
+```
+
+**근거**:
+- `work_batch.py` 영역 import 시점 → `from app.routes.work import work_bp` → `@work_bp.route("/work/start-batch")` decorator 영역 실행 → blueprint 영역 route 등록 완료
+- 이후 `app.register_blueprint(work_bp)` 시점 → 기존 work route + 신규 batch route 영역 함께 등록
+- url_prefix 영역 = Blueprint 정의 영역 단일 영역 (`/api/app/work/start-batch` 최종)
+- `__init__.py` 영역 logger info 영역 `"Blueprints registered: ..., work, ..."` 영역 영향 0 (별 blueprint 영역 아님, 같은 work_bp 영역 확장 영역)
+
+### 2️⃣ 신규 파일 — `backend/app/services/task_service_batch.py` (~160 LOC)
+
+```python
+"""
+Work Batch 서비스 레이어 (Sprint 64-BE v3)
+
+분리 근거: CLAUDE.md L545 — task_service.py 1,551 LOC (⛔ 1,200줄+) God File 영역.
+신규 batch 로직 별 파일 분리. 기존 task_service.TaskService.start_work() / complete_work() helper 재사용.
+"""
+from typing import Tuple, Dict, Any, List, Optional
+import logging
+
+from app.db_pool import get_db_connection, put_conn
+
+logger = logging.getLogger(__name__)
+
+
+def start_work_batch(
+    worker_id: int,
+    task_detail_ids: List[int],
+    is_admin: bool,
+    manager_company: Optional[str],
+) -> Tuple[Dict[str, Any], int]:
+    """TM Tank Module 일괄 시작 — best-effort sequential helper reuse (v3)"""
+    succeeded: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+
+    # 1️⃣ pre-loop: task_details + product_info batch 조회 (Codex A1 N+1 제거)
+    task_map = _fetch_task_product_map(task_detail_ids)
+
+    # 2️⃣ pre-loop 검증 (helper 호출 전 빠른 차단)
+    eligible_ids = _filter_eligible_ids(
+        task_detail_ids, task_map, manager_company, skipped
+    )
+
+    # 3️⃣ 모두 NOT_TANK_MODULE 이면 400 (기존 동작 보존)
+    if not eligible_ids and skipped and \
+       all(s['reason'] == 'NOT_TANK_MODULE' for s in skipped):
+        return ({
+            'error': 'NOT_TANK_MODULE_ANY',
+            'message': '모든 task 가 TM Tank Module 이 아닙니다.',
+        }, 400)
+
+    # 4️⃣ main loop — 기존 task_service.start_work() helper 재사용
+    from app.services.task_service import TaskService
+    from app.routes.work import _task_to_dict
+    from app.models.task_detail import get_task_by_id
+    svc = TaskService()
+
+    for tid in eligible_ids:
+        result, code = svc.start_work(worker_id=worker_id, task_detail_id=tid)
+        if code == 200:
+            updated_task = get_task_by_id(tid)
+            succeeded.append({
+                'task_detail_id': tid,
+                'updated': _task_to_dict(updated_task) if updated_task else {},
+            })
+        else:
+            reason = _START_ERROR_TO_REASON.get(result.get('error'), 'UNKNOWN_ERROR')
+            skipped.append({'task_detail_id': tid, 'reason': reason})
+
+    return ({
+        'succeeded': succeeded,
+        'skipped': skipped,
+        'total': len(task_detail_ids),
+    }, 200)
+
+
+def complete_work_batch(
+    worker_id: int,
+    task_detail_ids: List[int],
+    is_admin: bool,
+    manager_company: Optional[str],
+) -> Tuple[Dict[str, Any], int]:
+    """TM Tank Module 일괄 완료 — start_work_batch 대칭 구조 (Codex M-4 정정)"""
+    succeeded: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+
+    # 1️⃣ pre-loop: 같은 batch 조회 (start_work_batch 와 대칭)
+    task_map = _fetch_task_product_map(task_detail_ids)
+
+    # 2️⃣ pre-loop 검증 (동일)
+    eligible_ids = _filter_eligible_ids(
+        task_detail_ids, task_map, manager_company, skipped
+    )
+
+    # 3️⃣ 모두 NOT_TANK_MODULE 이면 400
+    if not eligible_ids and skipped and \
+       all(s['reason'] == 'NOT_TANK_MODULE' for s in skipped):
+        return ({
+            'error': 'NOT_TANK_MODULE_ANY',
+            'message': '모든 task 가 TM Tank Module 이 아닙니다.',
+        }, 400)
+
+    # 4️⃣ main loop — 기존 task_service.complete_work() helper 재사용 (finalize=True 기본)
+    from app.services.task_service import TaskService
+    from app.routes.work import _task_to_dict
+    from app.models.task_detail import get_task_by_id
+    svc = TaskService()
+
+    for tid in eligible_ids:
+        result, code = svc.complete_work(
+            worker_id=worker_id, task_detail_id=tid, finalize=True
+        )
+        if code == 200:
+            updated_task = get_task_by_id(tid)
+            succeeded.append({
+                'task_detail_id': tid,
+                'updated': _task_to_dict(updated_task) if updated_task else {},
+            })
+        else:
+            reason = _COMPLETE_ERROR_TO_REASON.get(result.get('error'), 'UNKNOWN_ERROR')
+            skipped.append({'task_detail_id': tid, 'reason': reason})
+
+    return ({
+        'succeeded': succeeded,
+        'skipped': skipped,
+        'total': len(task_detail_ids),
+    }, 200)
+
+
+def get_tasks_by_order(
+    sales_order: str,
+    task_categories: List[str],
+    task_id: str,
+) -> Tuple[Dict[str, Any], int]:
+    """FE Sprint 40 prefetch — 같은 O/N TANK_MODULE task 일괄 조회"""
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT t.* FROM app_task_details t
+              LEFT JOIN qr_registry qr ON qr.qr_doc_id = t.qr_doc_id
+              LEFT JOIN plan.product_info p ON p.serial_number = qr.serial_number
+             WHERE p.sales_order = %s
+               AND t.task_category = ANY(%s)
+               AND t.task_id = %s
+               AND t.is_applicable = TRUE
+        """, (sales_order, task_categories, task_id))
+        rows = cur.fetchall()
+        # _task_to_dict() 영역 적용
+        from app.routes.work import _task_to_dict
+        from app.models.task_detail import TaskDetail
+        tasks = [_task_to_dict(TaskDetail.from_db_row(r)) for r in rows]
+        return ({'tasks': tasks, 'total': len(tasks)}, 200)
+    finally:
+        put_conn(conn)
+
+
+# ── 보조 ─────────────────────────────────────────
+
+def _fetch_task_product_map(task_detail_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+    """pre-loop 단일 JOIN 쿼리 (Codex A1 N+1 제거)"""
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT t.id, t.task_category, t.task_id, t.serial_number, t.qr_doc_id,
+                   t.started_at, t.completed_at, t.is_applicable,
+                   p.mech_partner, p.module_outsourcing
+              FROM app_task_details t
+              LEFT JOIN qr_registry qr ON qr.qr_doc_id = t.qr_doc_id
+              LEFT JOIN plan.product_info p ON p.serial_number = qr.serial_number
+             WHERE t.id = ANY(%s)
+        """, (task_detail_ids,))
+        return {row['id']: dict(row) for row in cur.fetchall()}
+    finally:
+        put_conn(conn)
+
+
+def _filter_eligible_ids(
+    task_detail_ids: List[int],
+    task_map: Dict[int, Dict[str, Any]],
+    manager_company: Optional[str],
+    skipped: List[Dict[str, Any]],
+) -> List[int]:
+    """pre-loop 영역 검증 — NOT_FOUND / NOT_TANK_MODULE / FORBIDDEN_COMPANY"""
+    eligible_ids: List[int] = []
+    for tid in task_detail_ids:
+        row = task_map.get(tid)
+        if not row:
+            skipped.append({'task_detail_id': tid, 'reason': 'NOT_FOUND'})
+            continue
+        if row['task_id'] != 'TANK_MODULE' or row['task_category'] not in ('TMS', 'MECH'):
+            skipped.append({'task_detail_id': tid, 'reason': 'NOT_TANK_MODULE'})
+            continue
+        if manager_company:
+            if not _match_manager_company(
+                manager_company, row['task_category'],
+                row['module_outsourcing'], row['mech_partner']
+            ):
+                skipped.append({'task_detail_id': tid, 'reason': 'FORBIDDEN_COMPANY'})
+                continue
+        eligible_ids.append(tid)
+    return eligible_ids
+
+
+def _match_manager_company(
+    manager_company: str,
+    task_category: str,
+    module_outsourcing: Optional[str],
+    mech_partner: Optional[str],
+) -> bool:
+    """work.py L340-356 reactivate 패턴 정합 (Codex M2 정정).
+
+    TMS: module_outsourcing OR mech_partner
+    MECH: mech_partner only
+    NULL fallback: 둘 다 NULL 시 FORBIDDEN_COMPANY (False 반환)
+
+    ⚠️ substring 매칭 영역 (A-1 BACKLOG): work.py reactivate 패턴 정합 위해
+       `base in mech` 보존. boundary-safe 영역은 별 sprint (운영 미발생 시 BACKLOG).
+    """
+    base = (manager_company or '').upper().replace('(M)', '').replace('(E)', '')
+    if not base:
+        return False
+    mech = (mech_partner or '').upper()
+    mod = (module_outsourcing or '').upper()
+    if task_category == 'MECH':
+        return base == mech or (mech and base in mech)
+    if task_category == 'TMS':
+        return (base == mod or (mod and base in mod)) \
+            or (base == mech or (mech and base in mech))
+    return False
+
+
+# ── error 코드 → batch skipped reason 매핑 표 ─────────
+_START_ERROR_TO_REASON = {
+    'TASK_NOT_FOUND': 'NOT_FOUND',
+    'TASK_NOT_APPLICABLE': 'NOT_APPLICABLE',
+    'TASK_ALREADY_STARTED': 'ALREADY_STARTED',
+    'TASK_ALREADY_COMPLETED': 'ALREADY_COMPLETED',
+    'PHASE_BLOCKED': 'PHASE_BLOCKED',
+    'LOCATION_QR_REQUIRED': 'LOCATION_QR_REQUIRED',
+    'START_FAILED': 'INTERNAL_ERROR',
+}
+
+_COMPLETE_ERROR_TO_REASON = {
+    'TASK_NOT_FOUND': 'NOT_FOUND',
+    'TASK_NOT_STARTED': 'NOT_STARTED',
+    'TASK_ALREADY_COMPLETED': 'ALREADY_COMPLETED',
+    'FORBIDDEN': 'FORBIDDEN_WORKER',
+    'COMPLETE_FAILED': 'INTERNAL_ERROR',
+}
+```
+
+### 3️⃣ start/complete 대칭 체크리스트 (Codex M-4 정정 — cowork 실수 #18/#19 재발 방지)
+
+| 항목 | start_work_batch | complete_work_batch | 대칭? |
+|------|------------------|---------------------|-------|
+| 데코레이터 | `@jwt_required` + `@manager_or_admin_required` | 동일 | ✅ |
+| 입력 검증 | 빈 배열 / 30 초과 / 비-정수 | 동일 | ✅ |
+| pre-loop 쿼리 | `_fetch_task_product_map()` | 동일 helper | ✅ |
+| pre-loop 검증 | `_filter_eligible_ids()` | 동일 helper | ✅ |
+| 매핑 표 | `_START_ERROR_TO_REASON` (7 항목) | `_COMPLETE_ERROR_TO_REASON` (5 항목) | ✅ 별 매핑 표 |
+| main loop helper | `svc.start_work(worker_id, tid)` | `svc.complete_work(worker_id, tid, finalize=True)` | ✅ |
+| 응답 키 | `succeeded` / `skipped` / `total` | 동일 | ✅ |
+| 응답 succeeded[i] | `task_detail_id` + `updated: _task_to_dict()` | 동일 | ✅ |
+| 응답 skipped[i] | `task_detail_id` + `reason` | 동일 | ✅ |
+| 400 분기 | `INVALID_REQUEST` / `NOT_TANK_MODULE_ANY` | 동일 | ✅ |
+
+### 4️⃣ pytest TC 매트릭스 (Codex M-1 정정 — 16+ TC)
+
+테스트 파일: `tests/backend/test_work_batch.py` (실 관례 정합)
+
+**기존 12 TC (v2 본문 보존)**:
+- admin 정상 5건 시작 / 완료
+- manager TMS(M) 자기 회사 task 만 통과
+- manager TMS(M) 다른 회사 → FORBIDDEN_COMPANY
+- manager MECH mech_partner 일치 task 만 통과
+- whitelist 위반 혼합 (SELF_INSPECTION 1 + TANK_MODULE 4) → 1 skipped + 4 succeeded
+- 모두 whitelist 위반 → 400 NOT_TANK_MODULE_ANY
+- 30건 초과 → 400 INVALID_REQUEST
+- 빈 배열 → 400
+- 비-정수 → 400
+- is_applicable=FALSE → NOT_APPLICABLE skip
+- LOCATION_QR_REQUIRED admin setting=TRUE → LOCATION_QR_REQUIRED skip
+- PHASE_BLOCKED admin setting=TRUE → PHASE_BLOCKED skip
+
+**신규 4 TC (Codex M-1)**:
+- **TC-NULL-01**: manager + product.mech_partner=NULL + module_outsourcing=NULL → FORBIDDEN_COMPANY (둘 다 NULL fallback 정합)
+- **TC-MATCH-UNIT-01**: `_match_manager_company()` 단독 unit test 매트릭스 (12 case 전수 명시 — Codex 라운드 3 M-5 정정):
+  - 인자 영역: `(manager_company, task_category, module_outsourcing, mech_partner) → expected`
+  - **C1** `('TMS', 'TMS', 'TMS', 'FNI')` → True (TMS = module_outsourcing match)
+  - **C2** `('TMS', 'TMS', None, 'TMS')` → True (TMS OR mech_partner match — work.py L355 정합)
+  - **C3** `('TMS', 'TMS', None, None)` → False (NULL fallback)
+  - **C4** `('TMS', 'MECH', None, 'TMS')` → True (MECH = mech_partner match)
+  - **C5** `('FNI', 'MECH', 'TMS', 'BAT')` → False (MECH = mech_partner only, module_outsourcing 영역 무시)
+  - **C6** `('FNI', 'MECH', None, None)` → False (NULL fallback)
+  - **C7** `('TMS(M)', 'TMS', 'TMS', 'FNI')` → True (suffix 제거 후 매칭)
+  - **C8** `('TMS(E)', 'TMS', 'TMS', 'FNI')` → True (suffix 제거 후 매칭)
+  - **C9** `('', 'TMS', 'TMS', 'FNI')` → False (empty company)
+  - **C10** `('FNI', 'PI', 'TMS', 'FNI')` → False (PI 카테고리 — `_match_manager_company` 영역 외, 무조건 False 반환)
+  - **C11** `('FNI', 'QI', 'TMS', 'FNI')` → False (QI 카테고리 — 동일)
+  - **C12** `('FNI', 'SI', 'TMS', 'FNI')` → False (SI 카테고리 — 동일)
+  - ⚠️ substring 영역 보조 case (A-1 BACKLOG trail): `('BAT', 'MECH', None, 'COMBAT')` → True (work.py L347 reactivate 패턴 정합 보존 — 운영 미발생 영역)
+- **TC-AUDIT-01**: 5건 start_work_batch 성공 → `work_start_log` row count 증가 = succeeded 건수 1:1 (audit log 자동 흡수 정합 검증)
+- **TC-SHAPE-01**: `succeeded[i].updated` 가 `_task_to_dict()` 전체 shape 보유 검증 (`is_paused`, `total_pause_minutes`, `force_closed`, `close_reason`, `closed_by_name`, `task_type` 등 키 모두 존재)
+
+**대칭 TC (complete_work_batch — Codex 라운드 3 M-5 정정: id 명시)**:
+- **TC-COMPLETE-01**: NOT_STARTED skip 매트릭스
+- **TC-COMPLETE-02**: ALREADY_COMPLETED skip 매트릭스
+- **TC-COMPLETE-03**: FORBIDDEN_WORKER skip 매트릭스 (다른 worker 가 시작한 task)
+- **TC-SHAPE-02**: complete 응답 succeeded[i].updated `_task_to_dict()` 전체 shape (start 대칭)
+- **TC-AUDIT-02**: 5건 complete_work_batch 성공 → `work_completion_log` row count 증가 = succeeded 건수 1:1 (대칭 audit 정합)
+
+총 16+ TC (start 영역 12 unit case + start 4 TC + complete 5 TC + 기존 v2 12 TC + 대칭 = 30+ assert 영역).
+
+### 5️⃣ 성능 분석 (Codex M-2 정정)
+
+**helper query 분해**:
+- `start_work()` 영역 (task_service.py L80-167): **task 당 7~9 query**
+  - get_task_by_id (1)
+  - admin_settings get_setting × 2 (phase_block / location_qr_required) (2)
+  - get_product_by_qr_doc_id (선택, location_qr_required=True 시) (1)
+  - _worker_has_started_task (1)
+  - _worker_already_completed_task (선택) (1)
+  - create_work_start_log (1)
+  - start_task (선택, first worker) (1)
+  - _trigger_mech_checklist_alert (선택, MECH 영역 — TMS task 영역 미발화) (N)
+- `complete_work()` 영역 (task_service.py L210-...): **task 당 10~15 query** (pause/resume + duration_validator + work_completion_log + completion_status update + alert 영역)
+
+**30건 × 10 query = 300 query** → pool MIN=5/MAX=30 안에서 안전. **응답 시간 < 1s 영역 staging 30건 실측 확인** (Pre-deploy Gate 신규).
+
+**상한 변경**: 50 → **30** (Codex M-2). FE Sprint 40 v1.40.0 영역 — 보통 동일 O/N task 5~10건 영역이라 30건 상한 충분.
+
+### 6️⃣ 구현 범위 (v3 정정)
+
+| # | 파일 | 변경 | 라인수 |
+|---|---|---|---|
+| 1 | `backend/app/routes/work_batch.py` ⭐ **신규** | start-batch / complete-batch / by-order 3 route + jwt_auth import | +90 |
+| 2 | `backend/app/services/task_service_batch.py` ⭐ **신규** | start_work_batch / complete_work_batch / get_tasks_by_order / 3 helper (`_fetch_task_product_map` / `_filter_eligible_ids` / `_match_manager_company`) + 매핑 표 2건 | +160 |
+| 3 | `backend/app/__init__.py` | `from app.routes import work_batch` import 추가 (work_bp register 전 영역) | +1 |
+| 4 | `tests/backend/test_work_batch.py` ⭐ **신규** | 16+ TC 매트릭스 (Codex M-1 정정) | +220 |
+| 5 | `tests/conftest.py` (선택, 라운드 3 A-3) | `seed_tank_module_tasks_batch(n=30, partner='TMS')` fixture + `seed_manager_company_matrix()` fixture + `assert_audit_log_count(table, expected)` helper | +30 |
+
+**순 증분: ~501 LOC** (production ~250 + 테스트 ~250 + import 1). 기존 work.py / task_service.py **touch 0** (분리 정책 정합).
+
+각 신규 파일 200줄 미만 (CLAUDE.md L545 1단계 🟡 500줄 경고 영역도 미해당).
+
+⚠️ **conftest fixture 결정** (Codex 라운드 3 A-3 정정): 30건 batch seed + manager company matrix + audit log 정합 영역 = 16+ TC 영역에서 반복 사용 영역. 별 fixture 영역 분리하지 않으면 TC 영역 중복 boilerplate ~20 LOC × N TC. **결정 = 채택** (유지보수 영역 우선).
+
+### 7️⃣ Pre-deploy Gate (Codex M-2 정정 + 라운드 3 A-2 보강)
+
+```
+1. Staging 환경 30건 start_work_batch 실측 < 1s 검증:
+   - pytest 로 fixture 30 TANK_MODULE task seed
+   - ⭐ pool warm-up: 측정 전 1건 batch 실행 후 5초 대기 (cold pool 영역 회피 — 첫 measurement 영역 conn lazy create 분산 영역)
+   - POST /api/app/work/start-batch { task_detail_ids: [...30] }
+   - 응답 시간 측정 → 1s 미만 GREEN
+   - 측정 환경: Railway staging (prod 동일 tier), DB_POOL_MIN=5/MAX=30, peak hours 회피 (오전 7~9시 + 오후 14~17시 KST 제외)
+   - 허용 변동치: 3회 측정 평균 < 1s + 단일 max < 1.5s (네트워크 jitter 영역)
+
+2. complete_work_batch 30건 < 2s 검증 (complete = 10~15 query/task 영역):
+   - 측정 환경 동일 + alert/duration/pause 경로 영역 분산 큰 영역 명시
+   - 허용 변동치: 3회 측정 평균 < 2s + 단일 max < 3s (alert 영역 발화 시 외부 WebSocket / Sentry capture 영역 분산)
+   - 동일 task fixture 사용 (start 후 immediate complete)
+
+3. audit log 정합:
+   - work_start_log row 증가 = succeeded 건수
+   - work_completion_log row 증가 = succeeded 건수
+
+4. Sentry 신규 ERROR 0건
+
+5. _match_manager_company() NULL fallback 운영 데이터 검증 (mech_partner / module_outsourcing 둘 다 NULL 인 task 존재 여부)
+```
+
+### 8️⃣ A-1 BACKLOG 등록 (별 sprint)
+
+```
+BUG-MATCH-COMPANY-SUBSTRING-FALSE-POSITIVE-20260511   🟡 P3 (Advisory)
+  → OPEN (Sprint 64-BE 영역 외)
+
+  영역: _match_manager_company() substring 매칭 영역 (work.py L340-356 reactivate 패턴 정합 보존)
+  catch: BAT vs COMBAT 같은 substring false positive 위험
+  현재 영향: 운영 데이터 기준 발생 케이스 0 (검증 영역 — workers.company × product 매핑 영역 boundary 검증 필요)
+  해결 영역: word boundary (regex \b) 또는 set 매칭 영역. 다만 reactivate 패턴 동시 정정 필요 (정합 보존)
+  추정: 1~2h (work.py L340-356 + task_service_batch._match_manager_company() 동시 정정 + pytest + 운영 데이터 검증)
+```
+
+---
+
+## v2 재설계 본문
 
 ## 배경
 
-VIEW Sprint 40 의 TM Tank Module 시작/종료 일괄 토스트 흐름을 안전하게 지원하려면 BE 트랜잭션 보장이 필요. 기존 `/work/start` `/work/complete` 는 단일 task_detail_id 만 처리 — N번 순차 호출 시 부분 실패·시간 편차 발생 위험.
+VIEW Sprint 40 (v1.40.0, prod 배포 완료 2026-05-04) 의 TM Tank Module 시작/종료 일괄 admin 액션을 BE 측에서 안전하게 처리해야 함. 기존 `/work/start` `/work/complete` 는 단일 task_detail_id 만 처리 — N번 순차 호출 시 부분 실패·시간 편차 + 사용자 측 N 토스트 폭발 위험.
 
-**FE 요구사항** (Sprint 40 결정 #7):
+**FE 요구사항** (Sprint 40 v1.40.0 가 이미 구현 + 배포한 contract):
 1. 단일 요청 1번으로 N개 task_detail_id 일괄 처리
-2. DB 트랜잭션 내 일괄 처리 → 부분 적용 방지 (전체 성공 또는 전체 실패)
-3. skipped (이미 시작/종료/없음) 항목은 응답으로 안내 (FE 가 사용자에게 표시)
+2. 각 task 의 처리 결과를 succeeded / skipped 두 그룹으로 명시 응답
+3. skipped 항목은 reason 코드로 분류 (FE 가 사용자에게 한국어 토스트로 안내)
 
-## 결정 사항 (2026-04-28)
+⚠️ **의미론 정합 (v2 정정)**: 원래 설계 #5 의 "단일 transaction all-or-nothing" 약속은 Codex M1 catch (audit log escape) + FE 실제 contract (best-effort + skipped) 양쪽 측면에서 부적합. **v2 = best-effort sequential helper reuse**.
+
+## 결정 사항 (v2 — 2026-05-11 재정리)
 
 | # | 항목 | 확정 | 이유 |
 |---|---|---|---|
-| 1 | 엔드포인트 | `POST /api/app/work/start-batch` + `POST /api/app/work/complete-batch` | 기존 단일 endpoint 와 동일 prefix, 명명 일관성 |
-| 2 | 인증 | `@jwt_required` + `worker_id = get_current_worker_id()` | 기존 단일 endpoint 와 동일. proxy 모드 없음 — 호출자 본인 worker_id 자동 사용 |
-| 3 | 권한 게이트 | `is_admin OR is_manager` 검증. manager 면 task_detail.workers[].company 가 `currentUser.company` 인 task 만 처리 가능 (다른 회사 task 는 skipped) | Sprint 33 force-close 권한 정책 동일 적용 — manager 회사 경계 분기 |
-| 4 | 화이트리스트 (P2 확장) | **`task_category IN ('TMS','MECH') AND task_id='TANK_MODULE'`** 인 task 만 허용 (Codex M7 P2 채택). 다른 task 가 섞이면 400. 카테고리별 회사 매핑 분기 (TMS→module_outsourcing, MECH→mech_partner) | Sprint 40 결정 #10 P2 일치. 신규 모델 추가 (is_tms 또는 tank_in_mech) 시 코드 변경 0건 자동 대응. 무차별 batch 차단 |
-| 5 | 트랜잭션 | psycopg2 connection 의 단일 트랜잭션 내 모든 처리 → 1건이라도 SQL 에러 시 전체 ROLLBACK. skipped (이미 시작/종료) 는 트랜잭션 성공 유지 | DB 정합성 보장 + 비즈니스 skip 은 일관성 영향 없음 |
-| 6 | 응답 schema | `{ succeeded: [...], skipped: [...], total: int }` skipped reason: `ALREADY_STARTED \| ALREADY_COMPLETED \| NOT_STARTED \| NOT_FOUND \| NOT_TANK_MODULE \| FORBIDDEN_COMPANY` | FE 가 결과 그대로 한국어 toast (Sprint 40 Codex I6 매핑 표) |
-| 7 | 시간 동기화 | 일괄 시작 시 `started_at = NOW()` 모든 row 동일값. 종료 시 `completed_at = NOW()`, `duration_minutes` 자동 계산 | "병렬 진행" 의미 정확 반영 — N대 모두 같은 시작/종료 시간 기록 |
-| 8 | **신규 endpoint** (Codex M3 B안 + M3.1) | `GET /api/app/tasks/by-order/<sales_order>?task_categories=TMS,MECH&task_id=TANK_MODULE` — 같은 O/N 의 TANK_MODULE task 일괄 조회 (FE prefetch 용). P2 카테고리 다중 인자 지원 | FE 가 다른 S/N tasks 한 번에 조회 → N+1 prefetch 제거. 화이트리스트 검증과 동일 카테고리 인자 |
-| 9 | 회사 매핑 (Codex M6) | 시작된 task: `worker.company`. 미시작 + TMS: `product.module_outsourcing`. 미시작 + MECH: `product.mech_partner`. NULL 매핑 task 는 manager 호출 시 `FORBIDDEN_COMPANY` skip (FE 에서 사전에 카운트 제외하고 toast 안내) | manager 회사 경계 정합성. 미시작 task 의 company 검증을 product partner 필드로 추정 (BE 확장 0건, Sprint 34 데이터 활용) |
+| 1 | 엔드포인트 | `POST /api/app/work/start-batch` + `POST /api/app/work/complete-batch` | 기존 단일 endpoint 와 동일 prefix, 명명 일관성 (변경 없음) |
+| 2 | 인증 | `@jwt_required` + `@manager_or_admin_required` (Codex A2) | 기존 데코레이터 재사용 — Sprint 33 force-close 표준 패턴 정합. DRY |
+| 3 | 권한 게이트 | `is_admin`: 모든 task 처리 / `is_manager`: 회사 매핑 일치 task 만 처리 | 데코레이터에서 1차 차단 + service 안에서 manager_company 비교 |
+| 4 | 화이트리스트 (P2 확장) | `task_category IN ('TMS','MECH') AND task_id='TANK_MODULE'` (변경 없음, Codex P2 채택 그대로) | Sprint 40 결정 #10 P2 일치. 신규 모델 (is_tms 또는 tank_in_mech) 자동 흡수 |
+| 5 | **transaction 정책 (v2 정정)** | **best-effort sequential** — 각 task 별로 기존 `task_service.start_work()` / `complete_work()` 호출. 각 helper 가 자체 트랜잭션 commit. 부분 성공 허용, skipped reason 으로 결과 분류 | Codex M1 정합 (audit log 자동 흡수) + FE Sprint 40 실제 contract 정합 |
+| 6 | 응답 schema | `{ succeeded: [...], skipped: [...], total: int }`. succeeded[i].updated = `_task_to_dict()` 전체 shape. skipped reason 확장 (v2): `ALREADY_STARTED \| ALREADY_COMPLETED \| NOT_STARTED \| NOT_FOUND \| NOT_APPLICABLE \| PHASE_BLOCKED \| LOCATION_QR_REQUIRED \| NOT_TANK_MODULE \| FORBIDDEN_COMPANY \| FORBIDDEN_WORKER` | Codex M6 정합 — `_task_to_dict()` (work.py L77) 재사용. skipped reason 은 helper error 코드 매핑 |
+| 7 | 시간 동기화 | helper 가 각 task 호출 시점에 `datetime.now(KST)` 사용 → batch 안 task 들 시작 시각 ms 단위 미세 차이 (보통 < 100ms) | 기존 helper 동작 보존. ms 단위 차이는 사용자 영향 0 ("일괄 시작" 의미는 사용자 액션 1회로 충분히 보장) |
+| 8 | 신규 endpoint (Codex M3 B안) | `GET /api/app/tasks/by-order/<sales_order>?task_categories=TMS,MECH&task_id=TANK_MODULE` — FE prefetch 용. 변경 없음 | Sprint 40 결정 그대로. FE N+1 prefetch 제거 |
+| 9 | 회사 매핑 (v2 정정 — Codex M2) | **시작된 task**: helper 안 cross-worker 체크 + worker.company 매칭. **미시작 task** (manager 호출 시): `category=='TMS' → product.module_outsourcing OR product.mech_partner` / `category=='MECH' → product.mech_partner` — work.py L340-356 reactivate 패턴 정합 | Codex M2 catch 정정 — TMS 카테고리는 `OR mech_partner` 까지 허용해야 manager 회사 거부 회귀 차단. 별 helper `_match_manager_company()` 분리 |
 
-## 엔드포인트 시그니처
+## 구현 구조 (v2)
 
-### `POST /api/app/work/start-batch`
+### 1️⃣ 엔드포인트 — `backend/app/routes/work.py`
 
 ```python
 @work_bp.route("/work/start-batch", methods=["POST"])
 @jwt_required
+@manager_or_admin_required  # Codex A2 — Sprint 33 force-close 표준 데코레이터 재사용
 def start_work_batch() -> Tuple[Dict[str, Any], int]:
     """
-    TM Tank Module 일괄 시작 (Sprint 40 / 64-BE)
+    TM Tank Module 일괄 시작 (Sprint 40 / 64-BE v2)
 
     Request Body:
-        {
-            "task_detail_ids": [int, int, ...]  // 최소 1개, 최대 50개
-        }
+        { "task_detail_ids": [int, ...] }  // 최소 1개, 최대 50개
 
-    Headers:
-        Authorization: Bearer {token}
-
-    Permission:
-        - is_admin: 모든 task_detail 처리 가능
-        - is_manager: task_detail.workers 중 자기 회사 worker 가 있는 task 만 처리
-        - 그 외: 403 Forbidden
-
-    Response 200:
-        {
-            "succeeded": [
-                { "task_detail_id": int, "updated": {...TaskDetail dict} }
-            ],
-            "skipped": [
-                { "task_detail_id": int, "reason": "ALREADY_STARTED|NOT_FOUND|NOT_TANK_MODULE|FORBIDDEN_COMPANY" }
-            ],
-            "total": int  // 입력 task_detail_ids 길이
-        }
-
-    Response 400 (BAD_REQUEST):
-        - INVALID_REQUEST: task_detail_ids 배열 빈 값 / 50개 초과 / 비-정수
-        - NOT_TANK_MODULE_ANY: 모든 입력이 화이트리스트 위반 (task_category != 'TMS' OR task_id != 'TANK_MODULE')
-
-    Response 403 (FORBIDDEN):
-        - NOT_AUTHORIZED: is_admin / is_manager 둘 다 아님
-
-    Response 500 (TRANSACTION_FAILED):
-        - DB 에러로 전체 ROLLBACK
+    Response 200: { succeeded: [...], skipped: [...], total: int }
+    Response 400: INVALID_REQUEST | NOT_TANK_MODULE_ANY
+    Response 403: 데코레이터에서 처리
     """
     data = request.get_json()
     task_detail_ids = data.get('task_detail_ids') if data else None
@@ -35582,28 +36112,25 @@ def start_work_batch() -> Tuple[Dict[str, Any], int]:
     if not all(isinstance(i, int) for i in task_detail_ids):
         return jsonify({'error': 'INVALID_REQUEST', 'message': 'task_detail_ids 는 정수 배열이어야 합니다.'}), 400
 
-    # 권한 게이트
-    current_worker = get_current_worker()
-    if not (current_worker.is_admin or current_worker.is_manager):
-        return jsonify({'error': 'NOT_AUTHORIZED', 'message': 'is_admin 또는 is_manager 권한이 필요합니다.'}), 403
-
-    worker_id = current_worker.id
-
-    # 일괄 처리 (트랜잭션)
+    worker = get_current_worker()
     response, status_code = task_service.start_work_batch(
-        worker_id=worker_id,
+        worker_id=worker.id,
         task_detail_ids=task_detail_ids,
-        is_admin=current_worker.is_admin,
-        manager_company=current_worker.company if current_worker.is_manager and not current_worker.is_admin else None,
+        is_admin=worker.is_admin,
+        manager_company=worker.company if (worker.is_manager and not worker.is_admin) else None,
     )
     return jsonify(response), status_code
+
+
+@work_bp.route("/work/complete-batch", methods=["POST"])
+@jwt_required
+@manager_or_admin_required
+def complete_work_batch() -> Tuple[Dict[str, Any], int]:
+    """동일 구조 — task_service.complete_work_batch() 위임"""
+    # ... (start-batch 와 대칭, 생략)
 ```
 
-### `POST /api/app/work/complete-batch`
-
-동일 구조, `task_service.complete_work_batch()` 호출. skipped reason: `ALREADY_COMPLETED | NOT_STARTED | NOT_FOUND | NOT_TANK_MODULE | FORBIDDEN_COMPANY`.
-
-## 서비스 레이어 — `task_service.start_work_batch()`
+### 2️⃣ 서비스 레이어 — `backend/app/services/task_service.py`
 
 ```python
 def start_work_batch(
@@ -35613,186 +36140,613 @@ def start_work_batch(
     manager_company: Optional[str],
 ) -> Tuple[Dict[str, Any], int]:
     """
-    TM Tank Module 일괄 시작 (트랜잭션 보장)
+    TM Tank Module 일괄 시작 — best-effort sequential helper reuse (v2)
 
-    Returns:
-        ({succeeded, skipped, total}, status_code)
+    핵심:
+      - 각 task 마다 기존 self.start_work(worker_id, tid) 호출
+      - helper 가 audit log + start guards + alert + worker tracking 모두 자동 처리
+      - skipped reason 은 helper error 코드를 batch 매핑 표로 변환
+      - pre-loop: whitelist + manager_company 매핑 검증 (helper 호출 전 차단)
     """
+    succeeded: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+
+    # 1️⃣ pre-loop: task_details + product_info batch 조회 (Codex A1 N+1 제거)
     conn = get_db_connection()
     try:
-        with conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                succeeded = []
-                skipped = []
-
-                # 1단계: 모든 task_detail 조회 (단일 쿼리)
-                cur.execute("""
-                    SELECT id, task_category, task_id, started_at, completed_at,
-                           force_closed, qr_doc_id
-                    FROM app_task_details
-                    WHERE id = ANY(%s)
-                """, (task_detail_ids,))
-                tasks = {row['id']: row for row in cur.fetchall()}
-
-                # 2단계: 각 task 검증 + skip 분류
-                shared_started_at = datetime.now(KST)  # 모든 row 동일 시각
-
-                for tid in task_detail_ids:
-                    task = tasks.get(tid)
-                    if not task:
-                        skipped.append({'task_detail_id': tid, 'reason': 'NOT_FOUND'})
-                        continue
-                    # Sprint 40 화이트리스트 검증
-                    if task['task_id'] != 'TANK_MODULE' or task['task_category'] not in ('TMS', 'MECH'):  # Codex P2 다중 카테고리
-                        skipped.append({'task_detail_id': tid, 'reason': 'NOT_TANK_MODULE'})
-                        continue
-                    if task['started_at'] is not None:
-                        skipped.append({'task_detail_id': tid, 'reason': 'ALREADY_STARTED'})
-                        continue
-                    # manager 회사 경계 검증
-                    if not is_admin and manager_company:
-                        # 해당 task 의 worker(s) company 확인 → 일치 여부
-                        cur.execute("""
-                            SELECT EXISTS(
-                                SELECT 1 FROM app_task_workers atw
-                                JOIN workers w ON atw.worker_id = w.id
-                                WHERE atw.task_detail_id = %s AND w.company = %s
-                            ) AS allowed
-                        """, (tid, manager_company))
-                        if not cur.fetchone()['allowed']:
-                            skipped.append({'task_detail_id': tid, 'reason': 'FORBIDDEN_COMPANY'})
-                            continue
-
-                    # 통과 → INSERT app_task_workers + UPDATE app_task_details
-                    cur.execute("""
-                        INSERT INTO app_task_workers (task_detail_id, worker_id, started_at)
-                        VALUES (%s, %s, %s)
-                        ON CONFLICT (task_detail_id, worker_id) DO UPDATE
-                          SET started_at = EXCLUDED.started_at
-                    """, (tid, worker_id, shared_started_at))
-                    cur.execute("""
-                        UPDATE app_task_details
-                        SET started_at = COALESCE(started_at, %s)
-                        WHERE id = %s
-                    """, (shared_started_at, tid))
-                    succeeded.append({
-                        'task_detail_id': tid,
-                        'updated': _task_row_to_dict(task, started_at=shared_started_at),
-                    })
-
-                # 모두 화이트리스트 위반이면 명시적 400
-                if len(skipped) == len(task_detail_ids) and \
-                   all(s['reason'] == 'NOT_TANK_MODULE' for s in skipped):
-                    return ({
-                        'error': 'NOT_TANK_MODULE_ANY',
-                        'message': '모든 task 가 TM Tank Module 이 아닙니다.',
-                    }, 400)
-
-                return ({
-                    'succeeded': succeeded,
-                    'skipped': skipped,
-                    'total': len(task_detail_ids),
-                }, 200)
-    except psycopg2.Error as e:
-        logger.error(f"start_work_batch DB error: {e}")
-        return ({'error': 'TRANSACTION_FAILED', 'message': str(e)}, 500)
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT t.id, t.task_category, t.task_id, t.serial_number, t.qr_doc_id,
+                   t.started_at, t.completed_at, t.is_applicable,
+                   p.mech_partner, p.module_outsourcing
+              FROM app_task_details t
+              LEFT JOIN qr_registry qr ON qr.qr_doc_id = t.qr_doc_id
+              LEFT JOIN plan.product_info p ON p.serial_number = qr.serial_number
+             WHERE t.id = ANY(%s)
+        """, (task_detail_ids,))
+        task_map = {row['id']: row for row in cur.fetchall()}
     finally:
         put_conn(conn)
+
+    # 2️⃣ pre-loop 검증 (helper 호출 전 빠른 차단)
+    eligible_ids: List[int] = []
+    for tid in task_detail_ids:
+        row = task_map.get(tid)
+        if not row:
+            skipped.append({'task_detail_id': tid, 'reason': 'NOT_FOUND'})
+            continue
+        # Whitelist (Sprint 40 P2)
+        if row['task_id'] != 'TANK_MODULE' or row['task_category'] not in ('TMS', 'MECH'):
+            skipped.append({'task_detail_id': tid, 'reason': 'NOT_TANK_MODULE'})
+            continue
+        # Manager 회사 매핑 (Codex M2 정정 — TMS = OR mech_partner)
+        if manager_company:
+            if not _match_manager_company(
+                manager_company, row['task_category'],
+                row['module_outsourcing'], row['mech_partner']
+            ):
+                skipped.append({'task_detail_id': tid, 'reason': 'FORBIDDEN_COMPANY'})
+                continue
+        eligible_ids.append(tid)
+
+    # 3️⃣ 모두 NOT_TANK_MODULE 이면 400 (기존 동작 보존)
+    if eligible_ids == [] and skipped \
+       and all(s['reason'] == 'NOT_TANK_MODULE' for s in skipped):
+        return ({
+            'error': 'NOT_TANK_MODULE_ANY',
+            'message': '모든 task 가 TM Tank Module 이 아닙니다.',
+        }, 400)
+
+    # 4️⃣ main loop — 기존 self.start_work() helper 재사용 (Codex M1/M3/M4 정합)
+    for tid in eligible_ids:
+        result, code = self.start_work(worker_id=worker_id, task_detail_id=tid)
+        if code == 200:
+            # _task_to_dict() shape 으로 응답 통일 (Codex M6)
+            from app.routes.work import _task_to_dict
+            from app.models.task_detail import get_task_by_id
+            updated_task = get_task_by_id(tid)
+            succeeded.append({
+                'task_detail_id': tid,
+                'updated': _task_to_dict(updated_task) if updated_task else {},
+            })
+        else:
+            # helper error 코드 → batch skipped reason 매핑
+            reason = _START_ERROR_TO_REASON.get(result.get('error'), 'UNKNOWN_ERROR')
+            skipped.append({'task_detail_id': tid, 'reason': reason})
+
+    return ({
+        'succeeded': succeeded,
+        'skipped': skipped,
+        'total': len(task_detail_ids),
+    }, 200)
+
+
+# ── 보조 매핑 표 ─────────────────────────────────────────
+_START_ERROR_TO_REASON = {
+    'TASK_NOT_FOUND': 'NOT_FOUND',
+    'TASK_NOT_APPLICABLE': 'NOT_APPLICABLE',
+    'TASK_ALREADY_STARTED': 'ALREADY_STARTED',
+    'TASK_ALREADY_COMPLETED': 'ALREADY_COMPLETED',
+    'PHASE_BLOCKED': 'PHASE_BLOCKED',
+    'LOCATION_QR_REQUIRED': 'LOCATION_QR_REQUIRED',
+    'START_FAILED': 'INTERNAL_ERROR',
+}
+
+_COMPLETE_ERROR_TO_REASON = {
+    'TASK_NOT_FOUND': 'NOT_FOUND',
+    'TASK_NOT_STARTED': 'NOT_STARTED',
+    'TASK_ALREADY_COMPLETED': 'ALREADY_COMPLETED',
+    'FORBIDDEN': 'FORBIDDEN_WORKER',
+    'COMPLETE_FAILED': 'INTERNAL_ERROR',
+}
+
+
+def _match_manager_company(
+    manager_company: str,
+    task_category: str,
+    module_outsourcing: Optional[str],
+    mech_partner: Optional[str],
+) -> bool:
+    """
+    Manager 회사 매핑 검증 — work.py L340-356 reactivate 패턴 정합 (Codex M2 정정).
+
+    TMS 카테고리: module_outsourcing OR mech_partner (둘 다 허용)
+    MECH 카테고리: mech_partner only
+    """
+    base = (manager_company or '').upper().replace('(M)', '').replace('(E)', '')
+    if not base:
+        return False
+    mech = (mech_partner or '').upper()
+    mod = (module_outsourcing or '').upper()
+    if task_category == 'MECH':
+        return base == mech or (mech and base in mech)
+    if task_category == 'TMS':
+        return (base == mod or (mod and base in mod)) \
+            or (base == mech or (mech and base in mech))
+    return False
 ```
 
-`complete_work_batch()` 도 동일 구조 — `started_at IS NULL` 체크는 `NOT_STARTED`, `completed_at IS NOT NULL` 은 `ALREADY_COMPLETED` 로 skip.
+`complete_work_batch()` 도 동일 구조 — `self.complete_work(worker_id, tid, finalize=True)` 재사용. pre-loop 단계에서 화이트리스트 + manager 매핑 같음.
 
-## 구현 범위
+### 3️⃣ 신규 prefetch endpoint — `GET /api/app/tasks/by-order/<sales_order>` (변경 없음)
 
-### 수정 파일 2개
+원래 설계 그대로. FE Sprint 40 prefetch 용. 별도 service 함수.
+
+## 구현 범위 (v2)
 
 | # | 파일 | 변경 | 라인수 |
 |---|---|---|---|
-| 1 | `backend/app/routes/work.py` | (a) `POST /work/start-batch` 라우트 신규 (위 시그니처) (b) `POST /work/complete-batch` 라우트 신규 (동일 구조) (c) 입력 검증 + 권한 게이트 + 서비스 위임 | +90 |
-| 2 | `backend/app/services/task_service.py` | (a) `start_work_batch()` 함수 신규 (위 구현) (b) `complete_work_batch()` 함수 신규 (대칭 구현) (c) `_task_row_to_dict()` 헬퍼 (단일/일괄 응답 통일) | +130 |
+| 1 | `backend/app/routes/work.py` | (a) `POST /work/start-batch` 라우트 (~30) (b) `POST /work/complete-batch` 라우트 (~30) (c) `GET /tasks/by-order/<sales_order>` (~25) | +85 |
+| 2 | `backend/app/services/task_service.py` | (a) `start_work_batch()` (~60) (b) `complete_work_batch()` (~60) (c) `_match_manager_company()` (~15) (d) 매핑 표 2건 (~10) | +145 |
+| 3 | `backend/tests/test_work_batch.py` | 신규 pytest TC (A3 — rollback/manager TMS matrix/skipped 혼합/응답 shape) | +180 |
 
-**순 증분: ~220 LOC** (각 함수 100줄 미만, route 90줄 — CLAUDE.md BE 코드 크기 1단계 준수).
+**순 증분: ~230 LOC** (production 230 + 테스트 180). 각 함수 100줄 미만, CLAUDE.md BE 코드 크기 1단계 준수.
 
-## 화이트리스트 / 권한 검증 흐름
+## v1 → v2 핵심 차이 요약
+
+| 항목 | v1 (Codex 라운드 1 catch 전) | v2 (정정 후) |
+|---|---|---|
+| transaction | 단일 `with conn:` all-or-nothing | best-effort sequential, helper 별 자체 commit |
+| audit log | ❌ batch trans 외부 escape 위험 | ✅ helper 안에서 자동 (work_start_log / work_completion_log) |
+| start guards | ❌ is_applicable / phase_block / Location QR 누락 | ✅ helper 안에서 자동 |
+| complete logic | ❌ `completed_at=NOW()` 단순 UPDATE | ✅ pause/resume + duration_validator + finalize 모두 helper 안 |
+| schema 가정 | `app_task_workers ON CONFLICT` PK (미확인) | ✅ `work_start_log` (실 운영 schema) |
+| 응답 shape | partial raw row | ✅ `_task_to_dict()` 전체 shape (FE Sprint 40 contract) |
+| 데코레이터 | inline `is_admin OR is_manager` 검증 | ✅ `@manager_or_admin_required` 재사용 |
+| N+1 회사 검증 | task 마다 EXISTS 1쿼리 | ✅ pre-loop 단일 쿼리 (task + product JOIN) |
+| TMS 매핑 | module_outsourcing only | ✅ module_outsourcing OR mech_partner (work.py L352-356 정합) |
+| skipped reason 수 | 5종 | ✅ 10종 (NOT_APPLICABLE / PHASE_BLOCKED / LOCATION_QR_REQUIRED / FORBIDDEN_WORKER 추가) |
+
+## 화이트리스트 / 권한 검증 흐름 (v2)
 
 ```
 [POST /work/start-batch { task_detail_ids: [...] }]
     ↓
-[입력 검증] 빈 배열·>50건·비-int → 400 INVALID_REQUEST
+[입력 검증] 빈 배열 · >50건 · 비-int → 400 INVALID_REQUEST
     ↓
-[권한 게이트] is_admin || is_manager → 통과 / 그 외 → 403 NOT_AUTHORIZED
+[@manager_or_admin_required] is_admin || is_manager → 통과 / 그 외 → 403 FORBIDDEN
     ↓
-[트랜잭션 시작]
+[pre-loop 단일 쿼리] task_details + product_info JOIN (N+1 제거)
     ↓
-[1단계 단일 쿼리로 모든 task_detail 조회] (id ANY(%s))
-    ↓
-[각 task 검증]
+[각 task pre-validate]
    ├─ NOT_FOUND
-   ├─ NOT_TANK_MODULE (category != 'TMS' OR task_id != 'TANK_MODULE')
-   ├─ ALREADY_STARTED
-   ├─ FORBIDDEN_COMPANY (manager + 다른 회사 worker)
-   └─ 통과 → INSERT/UPDATE
+   ├─ NOT_TANK_MODULE (whitelist)
+   └─ FORBIDDEN_COMPANY (manager + TMS OR / MECH only 매핑)
     ↓
-[모두 NOT_TANK_MODULE 이면] → 400 NOT_TANK_MODULE_ANY (트랜잭션은 ROLLBACK)
+[모두 NOT_TANK_MODULE 이면] → 400 NOT_TANK_MODULE_ANY
+    ↓
+[eligible loop] 각 tid → self.start_work(worker_id, tid)
+   ├─ 200 → succeeded[i] = { task_detail_id, updated: _task_to_dict() }
+   └─ 4xx → skipped[i] = { task_detail_id, reason: 매핑된 코드 }
     ↓
 [정상 응답] 200 { succeeded, skipped, total }
-    ↓
-[트랜잭션 COMMIT (with conn 자동)]
 ```
 
 ## 안전 degrade / 호환성
 
-- 기존 `/work/start` `/work/complete` 영향 0건 (Flutter 모바일 앱 흐름 보존)
-- FE Sprint 40 미배포 시 본 endpoint 호출자 0 → 무영향
-- DB schema 변경 없음 (기존 `app_task_details` / `app_task_workers` 테이블 사용)
+- 기존 `/work/start` `/work/complete` 영향 0 (Flutter 모바일 앱 흐름 보존)
+- helper (`start_work` / `complete_work`) 시그니처 변경 0 (refactor 없이 재사용)
+- FE Sprint 40 v1.40.0 contract 정합 (succeeded + skipped + total schema 보존)
+- DB schema 변경 0 (`work_start_log` / `work_completion_log` / `app_task_details` 기존 테이블 그대로)
 - migration 불필요
 
-## 교차검증 필수 항목 (Codex 이관 체크리스트)
+## 교차검증 필수 항목 (Codex 라운드 2 이관 체크리스트)
 
-- ✅ API 응답 계약 변경 (신규 endpoint 2개)
-- ✅ 권한 모델 변경 (is_admin / is_manager 가 정상 시작/종료까지 행사)
-- ✅ 트랜잭션 정책 (psycopg2 with conn 단일 트랜잭션, 전체 성공/실패)
-- ✅ 화이트리스트 정책 (TM Tank Module 만 허용, 무차별 batch 차단)
+- ✅ M1 정정 — audit log 자동 흡수 (helper reuse)
+- ✅ M2 정정 — TMS = module_outsourcing OR mech_partner
+- ✅ M3 정정 — start guards (is_applicable / phase_block / Location QR) helper 안
+- ✅ M4 정정 — complete logic (pause/resume / duration / finalize) helper 안
+- ✅ M5 정정 — `app_task_workers` ON CONFLICT 가정 폐기, `work_start_log` 그대로
+- ✅ M6 정정 — `_task_to_dict()` 전체 shape (Sprint 40 contract)
+- ✅ A1 — pre-loop 단일 JOIN 쿼리
+- ✅ A2 — `@manager_or_admin_required` 재사용
+- ✅ A3 — pytest TC 매트릭스 확장
 
-→ **Codex 교차검증 필수** (CLAUDE.md AI 워크플로우 v2).
+→ **Codex 라운드 2 검증 위임 권장** — v2 본문 + 보조 매핑표 / `_match_manager_company` 검증 영역
+
+## 검증 기준 (v2)
+
+### 설계 단계 (Codex 라운드 2)
+
+- [ ] `_match_manager_company()` 의 TMS OR 매핑 — work.py L340-356 reactivate 패턴 정합 확인
+- [ ] `_START_ERROR_TO_REASON` / `_COMPLETE_ERROR_TO_REASON` 매핑 — 기존 helper 가 반환하는 모든 error 코드 빠짐없이 매핑 (특히 task_service.py `start_work` L80-167 + `complete_work` L210-...의 error 코드 풀 검증)
+- [ ] best-effort semantic — 중간 task 가 INTERNAL_ERROR 일 때 다음 task 까지 계속 처리 vs 즉시 중단? (현재: 계속, skipped 로 분류)
+- [ ] 50건 상한 유지 — helper 가 task 당 ~3 SQL 쿼리 호출 → 50건 = 150 쿼리, 응답 시간 < 1s 예상
+- [ ] manager 회사 매핑 NULL fallback — module_outsourcing / mech_partner 둘 다 NULL 인 task 는 FORBIDDEN_COMPANY (sample data 확인)
+
+### 구현 단계
+
+- [ ] pytest 신규 TC 매트릭스 (`tests/test_work_batch.py`):
+  - admin: 정상 5건 시작 / 완료 / 혼합 (succeeded + skipped 동시 발생)
+  - manager TMS(M): 자기 회사 task 만 통과, 다른 회사 FORBIDDEN_COMPANY
+  - manager MECH: mech_partner 일치 task 만 통과
+  - whitelist 위반 (SELF_INSPECTION 1건 + TANK_MODULE 4건 혼합) → 1 skipped + 4 succeeded
+  - 모두 whitelist 위반 → 400 NOT_TANK_MODULE_ANY
+  - 50건 초과 → 400
+  - 빈 배열 → 400
+  - 비-정수 → 400
+  - is_applicable=FALSE → NOT_APPLICABLE skip
+  - LOCATION_QR_REQUIRED admin setting=TRUE + product.location_qr_id=NULL → LOCATION_QR_REQUIRED skip
+  - PHASE_BLOCKED admin setting=TRUE + TANK_DOCKING 미완 → PHASE_BLOCKED skip (현재 TM 카테고리는 영향 X, but MECH TANK_MODULE 의 경우 검증)
+  - complete: NOT_STARTED / ALREADY_COMPLETED / FORBIDDEN_WORKER 매트릭스
+  - 응답 shape: succeeded[i].updated 가 `_task_to_dict()` 전체 필드 보유 (is_paused, force_closed 등) 확인
+- [ ] FE Sprint 40 v1.40.0 build 환경에서 batch 응답 토스트 노출 정합 (사용자 검증)
+
+### 배포 후
+
+- [ ] 50건 batch 응답 시간 < 1s (sequential helper × 50)
+- [ ] Sentry 새 ERROR 0건
+- [ ] FE Sprint 40 토스트 succeeded/skipped 모두 정상 표시
+- [ ] audit log (`work_start_log` / `work_completion_log`) row 증가 = succeeded 건수 1:1 정합
+
+## 연계
+
+- FE: `AXIS-VIEW/DESIGN_FIX_SPRINT.md` Sprint 40 (TM Tank Module 시작/종료 admin 액션, v1.40.0 prod 배포 완료)
+- 원칙: `CLAUDE.md` BE 코드 크기 1단계 + AI 워크플로우 v2 + ADR-029 Tier 2 (동일 endpoint 그룹 일관성)
+- 기존 endpoint 영향 0 (Flutter 호환성 유지)
+
+### 다음 응용 포인트
+
+- pause-batch / resume-batch — Tank Module 작업 중단 일괄 처리 (helper 재사용 패턴 그대로 확장 가능)
+- 다른 task 화이트리스트 확장 (가압검사 등) — Sprint 40 화이트리스트 일반화 시 동시 변경
+- worker_ids 명시 batch (admin proxy mode) — 다른 worker 명의 일괄 처리 신규 endpoint 분리 (현재 미요청)
+
+---
+
+## Sprint 66-BE-FOLLOWUP — 자재 마스터 Excel 일괄 업로드 endpoint (`POST /api/admin/materials/upload`, 2026-05-11 등록)
+
+> 등록일: 2026-05-11 | 상태: 설계 완료 → Codex 교차검증 위임 → 구현 착수
+> 트랙: OPS BE (Sprint 66-BE 후속, FEAT-MATERIAL-MASTER-AND-BOM-INTEGRATION 의 잔여 영역)
+> 선행 의존성: Sprint 66-BE Step 1~4 prod 배포 완료 ✅ (material_master + product_bom schema, admin_materials.py 5 endpoint)
+> 트리거: AXIS-VIEW Sprint 42 (v1.43.0) 의 `MaterialUploadModal.tsx` 4단계 워크플로우 완료 + prod 배포되어 있으나 BE `/upload` endpoint 미구현으로 404 → 사용자 측 자재 마스터 변경 시 SQL 직접 INSERT 필요 (운영 부담)
+> 참조 문서: `AXIS-VIEW/OPS_API_REQUESTS.md` #63
+> 교차검증: Claude Cowork → Claude Code Opus Lead → Codex (라운드 1 위임 예정)
+
+## 배경 + 사용자 결정 사항
+
+#63 검토 결과 사용자 측 3개 결정 영역 확정 (2026-05-11):
+
+| Q | 결정 | 의미 |
+|---|---|---|
+| **Q1 — MFC 자재 동일 item_code 중복 row 처리** | **(A) 자동 합침** | csv 에 같은 item_code 두 row (LNG + O2) → BE 가 description 자동 합쳐서 단일 row UPSERT (`description='LNG,O2'`). 053a seed 패턴 일관성 |
+| **Q2 — customer/model 변경된 BOM row 처리** | **(A) 컬럼 UPDATE** | 같은 (product_code, item_code) 의 BOM row 에 customer/model 만 변경 시 → 기존 row 의 customer/model 컬럼 UPDATE (변경 추적 가능). UNIQUE 제약 `(product_code, material_id)` 정합 |
+| **Q3 — row-level reject 정책** | **(A) Best-effort** | 1000 행 중 일부 검증 실패 시 → 그 행만 skip + 나머지 정상 처리. 트랜잭션 패턴 = **"검증 트랜잭션 외부 + 정상 행만 트랜잭션 내부"** (Sprint 64-BE v2 동일 패턴) |
+
+## 핵심 설계 — 검증 분리 트랜잭션 패턴
+
+```
+[Phase 1 — 파싱 + 검증 (DB 변경 없음)]
+1. file 인코딩 자동 감지 (chardet → UTF-8 → CP949 → EUC-KR fallback)
+2. CSV / xlsx 파싱 → DataFrame
+3. 한글 헤더 검증 (자재코드 필수 / 자재내역 필수)
+4. CSV_COLUMN_MAP 으로 한글 → 영문 컬럼 rename
+5. 각 row 검증 → 정상 / rejected 분류
+   ├─ MISSING_ITEM_CODE  — 자재코드 빈칸
+   ├─ MISSING_ITEM_NAME  — 자재내역 빈칸
+   ├─ INVALID_QUANTITY   — 수량이 정수 변환 불가
+   └─ INVALID_BOM_KEY    — product_code/customer/model 빈칸 (BOM 매핑 불가)
+6. MFC dual-use 합침 (Q1): 같은 item_code N row → description 합침 (`'LNG,O2'`)
+7. category 자동 추출 (053a generator 패턴):
+   ├─ item_name.startswith('MFC') → item_name='MFC', category='MFC' (가스명은 description)
+   └─ 그 외 → item_name = category = 자재내역 그대로
+    ↓
+[Phase 2 — DB 대조 (DB 변경 없음)]
+8. material_master 조회 → new / changed / unchanged 분류
+   ├─ new       : item_code 미존재
+   ├─ changed   : 존재 + 필드 차이 (item_name/spec_1/spec_2/unit/description)
+   └─ unchanged : 존재 + 동일
+9. product_bom 조회 → bom_new / bom_changed 분류
+   ├─ bom_new     : (product_code, material_id) 미존재
+   └─ bom_changed : 존재 + 수량 OR customer OR model 변경 (Q2 = customer/model 도 변경 추적)
+    ↓
+[Phase 3 — mode 분기]
+10a. mode=preview → JSON 응답 (DB 변경 0)
+10b. mode=commit → strategy 분기 + 단일 트랜잭션 INSERT/UPDATE
+    ├─ all      : 변경 자재 + 신규 자재 + 변경 BOM + 신규 BOM 모두 적용
+    ├─ selected : selected_item_codes 에 포함된 자재만 UPDATE + 신규는 모두 INSERT
+    └─ skip     : 기존 자재 UPDATE 안 함, 신규만 INSERT (보존 우선)
+    ↓
+[Phase 4 — 결과 응답]
+11. UploadResult: {inserted, updated, skipped, rejected, bom_inserted, bom_updated}
+```
+
+## 엔드포인트 시그니처
+
+### `POST /api/admin/materials/upload`
+
+```python
+@admin_materials_bp.route("/upload", methods=["POST"])
+@jwt_required
+@gst_or_admin_required  # Sprint 27 v1.7.4 표준 (admin_materials.py 다른 endpoint 동일)
+def upload_materials() -> Tuple[Dict[str, Any], int]:
+    """
+    자재 마스터 + product_bom Excel/CSV 일괄 업로드 (Sprint 66-BE-FOLLOWUP)
+
+    Content-Type: multipart/form-data
+    Body:
+      file: File (CSV / xlsx / xls)
+      mode: 'preview' | 'commit'
+      strategy: 'all' | 'selected' | 'skip' (mode=commit 시 필수)
+      selected_item_codes: JSON string of string[] (strategy=selected 시 필수)
+
+    Response 200 (mode=preview):
+      UploadPreview { new_materials, changed_materials, unchanged_materials,
+                      bom_mappings_new, bom_mappings_changed, total_rows, rejected_rows }
+
+    Response 200 (mode=commit):
+      UploadResult { inserted, updated, skipped, rejected, bom_inserted, bom_updated }
+
+    Response 400:
+      ENCODING_DETECTION_FAILED | INVALID_HEADER | PARSE_ERROR | INVALID_REQUEST
+    """
+    # 1. mode / file 검증
+    # 2. material_parser.parse_upload_file(file) → rows, rejected_rows (Phase 1)
+    # 3. material_parser.diff_with_db(rows) → new/changed/unchanged + bom_new/changed (Phase 2)
+    # 4. mode 분기 (Phase 3)
+    #    preview → JSON 응답
+    #    commit  → strategy 분기 + 단일 트랜잭션
+```
+
+## 서비스 레이어 — `material_parser.py` 신규 (utils 추출)
+
+```python
+# backend/app/utils/material_parser.py — 신규 파일
+
+import chardet
+import csv
+import io
+from openpyxl import load_workbook
+from typing import Dict, List, Tuple, Optional
+
+# generator 053a 의 CSV_COLUMN_MAP 그대로 재사용
+CSV_COLUMN_MAP = {
+    '품번': 'product_code', '고객사': 'customer', '모델': 'model',
+    '자재코드': 'item_code', '자재내역': 'item_name',
+    '규격1': 'spec_1', '규격2': 'spec_2',
+    '수량': 'quantity', '단위': 'unit',
+    '생성일': '_ignored', '비고': 'description',
+}
+
+
+def detect_encoding(file_bytes: bytes) -> str:
+    """인코딩 자동 감지 — chardet → UTF-8 → CP949 → EUC-KR fallback."""
+    result = chardet.detect(file_bytes)
+    encoding = (result.get('encoding') or '').lower()
+    confidence = result.get('confidence', 0)
+
+    # chardet 신뢰도 < 0.7 → fallback 시도
+    if confidence < 0.7:
+        for candidate in ('utf-8', 'cp949', 'euc-kr'):
+            try:
+                file_bytes.decode(candidate)
+                return candidate
+            except UnicodeDecodeError:
+                continue
+        raise ValueError('ENCODING_DETECTION_FAILED')
+    return encoding
+
+
+def parse_upload_file(file) -> Tuple[List[Dict], List[Dict]]:
+    """
+    파일 파싱 — CSV / xlsx 자동 분기 + 검증 + MFC 합침 + category 추출.
+
+    Returns: (parsed_rows, rejected_rows)
+    """
+    filename = file.filename.lower()
+    if filename.endswith(('.xlsx', '.xls')):
+        rows = _parse_xlsx(file.read())
+    elif filename.endswith('.csv'):
+        rows = _parse_csv(file.read())
+    else:
+        raise ValueError('PARSE_ERROR')
+
+    # 헤더 검증
+    if rows and '자재코드' not in rows[0]:
+        # 영문 헤더가 직접 들어온 경우도 허용
+        if 'item_code' not in rows[0]:
+            raise ValueError('INVALID_HEADER')
+
+    parsed_rows: List[Dict] = []
+    rejected_rows: List[Dict] = []
+
+    # 1차 검증 + row 단위 reject
+    for idx, row in enumerate(rows, start=2):  # row 1 = header
+        mapped = _map_korean_to_english(row)
+        if not mapped.get('item_code'):
+            rejected_rows.append({'row_number': idx, 'reason': 'MISSING_ITEM_CODE'})
+            continue
+        if not mapped.get('item_name'):
+            rejected_rows.append({'row_number': idx, 'reason': 'MISSING_ITEM_NAME'})
+            continue
+        # 수량 정수 변환 (NULL 허용)
+        qty = mapped.get('quantity', '').strip()
+        if qty and not qty.isdigit():
+            rejected_rows.append({'row_number': idx, 'reason': 'INVALID_QUANTITY'})
+            continue
+        # category 자동 추출 (generator 053a 패턴)
+        item_name = mapped['item_name']
+        if item_name.startswith('MFC'):
+            mapped['item_name'] = 'MFC'
+            mapped['category'] = 'MFC'
+        else:
+            mapped['category'] = item_name
+        parsed_rows.append(mapped)
+
+    # Q1: MFC 동일 item_code 중복 row 합침 (description 합쳐서 단일 row)
+    parsed_rows = _merge_duplicate_mfc(parsed_rows)
+
+    return parsed_rows, rejected_rows
+
+
+def _merge_duplicate_mfc(rows: List[Dict]) -> List[Dict]:
+    """동일 item_code 의 description 합침 (Q1 — Twin파파 결정)."""
+    seen: Dict[str, Dict] = {}
+    for row in rows:
+        ic = row['item_code']
+        if ic in seen:
+            # description 합침 (중복 제거 + 정렬)
+            existing_desc = seen[ic].get('description', '') or ''
+            new_desc = row.get('description', '') or ''
+            merged = sorted(set(filter(None, existing_desc.split(',') + new_desc.split(','))))
+            seen[ic]['description'] = ','.join(merged)
+        else:
+            seen[ic] = row
+    return list(seen.values())
+
+
+def diff_with_db(parsed_rows: List[Dict], conn) -> Dict:
+    """DB 와 대조 → new / changed / unchanged + bom_new / bom_changed 분류."""
+    # material_master 조회 (item_code IN 단일 쿼리)
+    # product_bom 조회 ((product_code, item_code) IN 단일 쿼리)
+    # 변경 필드 diff 계산
+    # Q2: customer/model 변경도 BOM changed 로 분류
+    # ... (구현 생략)
+    return {...}
+
+
+def commit_upload(parsed_rows, diff, strategy, selected_item_codes, conn) -> Dict:
+    """
+    Phase 3 — 단일 트랜잭션 INSERT/UPDATE.
+
+    Q3 정합: 검증은 외부 (parse_upload_file), 트랜잭션 안에는 정상 행만 진입.
+    """
+    cur = conn.cursor()
+    try:
+        # 1. material_master UPSERT
+        # 2. product_bom UPSERT (customer/model 도 UPDATE — Q2)
+        # 3. counts 집계
+        conn.commit()
+        return {'inserted': ..., 'updated': ..., ...}
+    except Exception:
+        conn.rollback()
+        raise
+```
+
+## 구현 범위
+
+| # | 파일 | 변경 | 라인수 |
+|---|---|---|---|
+| 1 | `backend/app/utils/material_parser.py` | 신규 — 파싱 + 인코딩 감지 + Q1 합침 + category 추출 + diff + commit | +280 |
+| 2 | `backend/app/routes/admin_materials.py` | `/upload` route 추가 (preview / commit 분기) | +60 |
+| 3 | `backend/tests/test_admin_materials_upload.py` | pytest TC 15건 (#63 12 + Q1/Q2/Q3 trail TC 3) | +220 |
+| 4 | `backend/requirements.txt` | `chardet>=5.2.0` + `openpyxl>=3.1.0` 추가 | +2 |
+
+**순 증분: ~560 LOC** (production 340 + 테스트 220 + 의존성 2). `material_parser.py` 클래스 1개 + 함수 6개 → 각 100 LoC 미만 (CLAUDE.md 코드 크기 1단계 준수).
+
+## pytest TC 매트릭스 (15건)
+
+| # | 케이스 | 검증 |
+|---|---|---|
+| TC-MU-01 | preview — 신규 자재만 | new_materials 카운트 정합 |
+| TC-MU-02 | preview — 동일 파일 재업로드 | unchanged_materials 만 채워짐 |
+| TC-MU-03 | preview — item_name 변경 | changed_materials.changes[0].field='item_name' |
+| TC-MU-04 | preview — 자재코드 누락 row 1 + 정상 N | row 1 = rejected_rows, 나머지 N = parsed (Q3 best-effort 검증) |
+| TC-MU-05 | preview — CP949 인코딩 CSV | 자동 감지 + 파싱 성공 |
+| TC-MU-06 | preview — 손상된 xlsx | 400 PARSE_ERROR |
+| TC-MU-07 | commit strategy=all | changed 전체 UPDATE 확인 |
+| TC-MU-08 | commit strategy=selected | selected_item_codes 만 UPDATE |
+| TC-MU-09 | commit strategy=skip | 기존 자재 UPDATE 안 됨, 신규만 INSERT |
+| TC-MU-10 | commit — BOM 신규 매핑 INSERT 확인 | bom_inserted 카운트 정합 |
+| TC-MU-11 | commit — DB 에러 시 ROLLBACK | 트랜잭션 정합성 (정상 행도 무효, Q3 트랜잭션 패턴) |
+| TC-MU-12 | commit — 빈 selected_item_codes | updated=0, 신규 INSERT 만 |
+| **TC-MU-13** | **Q1 — MFC item_code dual-use** | 같은 item_code 2 row (LNG + O2) → description='LNG,O2' 합쳐서 1 row INSERT |
+| **TC-MU-14** | **category 자동 추출** | MFC* → category='MFC' / 그 외 → category=자재내역 |
+| **TC-MU-15** | **Q2 — BOM customer/model 변경** | 수량 변경 없어도 customer/model 변경 시 bom_changed 분류 + commit 시 UPDATE 확인 |
+
+## 트랜잭션 패턴 (Q3 정합 + Sprint 64-BE v2 학습 적용)
+
+```
+[Phase 1] file 파싱 + 검증 — DB 변경 0
+   ↓
+[Phase 2] DB 대조 (SELECT) — DB 변경 0
+   ↓
+[mode=preview] 응답 — DB 변경 0
+[mode=commit]
+   ↓
+   BEGIN TRANSACTION (Phase 3)
+     ├─ material_master UPSERT (정상 행만, Q1 합쳐진 row)
+     ├─ product_bom UPSERT (Q2 customer/model 도 UPDATE)
+     └─ COMMIT
+   ↓
+   [Phase 4] 카운트 응답 (inserted / updated / rejected)
+```
+
+**핵심**: rejected_rows 는 Phase 1 단계에서 분류 → 트랜잭션 진입 자체 안 함. 트랜잭션 안에는 정상 행만 들어가서 ACID Atomicity 보장 (정상 행 INSERT 도중 DB 에러 시 ROLLBACK).
+
+## 작업량 재추정 (#63 보강)
+
+| 영역 | 예상 시간 |
+|---|---|
+| `material_parser.py` 추출 (인코딩 감지 + 파싱 + Q1 합침 + category 추출) | 0.5d |
+| xlsx 파싱 신규 (openpyxl) | 0.5d |
+| diff_with_db (DB 대조 + 변경 필드 분류) | 0.5d |
+| commit_upload (단일 트랜잭션 + strategy 분기) | 0.5d |
+| `/upload` route + 입력 검증 | 0.3d |
+| pytest 15 TC | 1d |
+| Codex 교차검증 + 정정 | 0.5d |
+| **합계** | **3.3d (~3-4일)** |
+
+#63 Section 8 의 "1-2일" 추정은 generator 재사용 효과 과대 평가 — 실제 generator 재사용은 CSV_COLUMN_MAP 만 (전체의 5%).
+
+## 안전 degrade / 호환성
+
+- 기존 `/api/admin/materials` 5 endpoint (GET / POST / PATCH / deactivate / reactivate) 영향 0
+- FE Sprint 42 v1.43.0 `MaterialUploadModal.tsx` contract 정합 (UploadPreview + UploadResult schema 일치)
+- DB schema 변경 0 (기존 `material_master` + `product_bom` 그대로)
+- migration 불필요
+- 의존성 추가 (`chardet` + `openpyxl`) — requirements.txt 갱신만
+
+## 교차검증 필수 항목 (Codex 라운드 1 이관 체크리스트)
+
+- ✅ API 응답 contract 변경 (preview/commit 신규 2개)
+- ✅ 권한 모델 변경 (gst_or_admin_required — admin_materials.py 표준)
+- ✅ 트랜잭션 정책 (Phase 1 검증 외부 / Phase 3 정상 행만 내부)
+- ✅ Q1 MFC dual-use 자동 합침 로직 검증 (description 정렬 + 중복 제거)
+- ✅ Q2 customer/model 변경 추적 (UPDATE 컬럼 누락 없음 검증)
+- ✅ Q3 row-level reject 정책 (Phase 1 분류 vs Phase 3 트랜잭션)
+
+→ **Codex 교차검증 위임 시 핵심 검증 영역**:
+- `_merge_duplicate_mfc()` 의 description 합침 정확도 (정렬 + 중복 제거)
+- `parse_upload_file()` 의 row 단위 reject vs 전체 raise 분기 (Q3 best-effort)
+- xlsx 파싱 시 빈 시트 / 손상 파일 / 다중 시트 처리
+- 인코딩 감지 fallback 순서 (chardet → UTF-8 → CP949 → EUC-KR) 신뢰성
+- 트랜잭션 ROLLBACK 시 rejected_rows 응답 누락 여부
 
 ## 검증 기준
 
 ### 설계 단계 (Codex)
 
-- [ ] manager 회사 경계 검증의 EXISTS 서브쿼리 — N+1 문제 가능성? (각 task 마다 1쿼리) → 1단계 조회 시 worker company 까지 LEFT JOIN 으로 가져오면 1쿼리 감축 가능 검토
-- [ ] `started_at = COALESCE(started_at, %s)` — 동시 호출 race 시 첫 호출 시간 우선 보존 의도. 정상 동작 확인
-- [ ] 트랜잭션 내 INSERT ON CONFLICT — `app_task_workers` PK 가 (task_detail_id, worker_id) 인지 확인 (스키마 검증)
-- [ ] 50건 상한 — 실제 운영 O/N 의 S/N 최대 개수 (보통 5~10대 추정) 대비 충분, 향후 확장 시 상향 가능
-- [ ] `NOT_TANK_MODULE_ANY` 응답 시 ROLLBACK 동작 — 어차피 이 시점 INSERT 0건이라 무관, 그러나 명시적 ROLLBACK 분기 검토
-- [ ] complete-batch 시 `duration_minutes` 계산 — `started_at` 이 batch 별로 동일값이라 단순 (NOW() - started_at), 모바일 앱의 worker별 누적 종료 흐름과 호환?
+- [ ] `chardet` 신뢰도 < 0.7 fallback 로직 안전성 — 모든 인코딩 실패 시 ENCODING_DETECTION_FAILED 정확 raise 확인
+- [ ] xlsx 파싱 — 첫 번째 시트만 읽는지 / 빈 행 자동 skip / 셀 타입 (숫자/문자) 정합
+- [ ] `_merge_duplicate_mfc()` — 같은 item_code 인데 item_name / spec_1 / spec_2 가 다르면? (LNG row 의 spec vs O2 row 의 spec 충돌 시점 처리)
+- [ ] `diff_with_db()` N+1 차단 — material_master + product_bom 단일 IN 쿼리 검증
+- [ ] strategy=selected + selected_item_codes 빈 배열 → updated=0 정상 동작
+- [ ] commit 트랜잭션 안 material_master 먼저 INSERT → product_bom 의 material_id FK 참조 가능 순서 검증
 
 ### 구현 단계
 
-- [ ] pytest 테스트: 정상 시작 (admin) / 정상 시작 (manager 자기 회사) / FORBIDDEN_COMPANY (manager 다른 회사) / ALREADY_STARTED / NOT_TANK_MODULE / NOT_FOUND
-- [ ] 50건 초과 → 400
-- [ ] 빈 배열 → 400
-- [ ] 모두 NOT_TANK_MODULE → 400 NOT_TANK_MODULE_ANY
-- [ ] 트랜잭션 롤백 시뮬레이션 (DB 에러 주입 → 1번째까지 INSERT 됐어도 모두 ROLLBACK 확인)
-- [ ] 동시 호출 race — 같은 task_detail_id 두 manager 가 동시 시작 → 한쪽만 성공, 다른쪽은 ALREADY_STARTED skip
+- [ ] pytest 15 TC 모두 GREEN
+- [ ] FE Sprint 42 v1.43.0 prod 환경에서 preview / commit 양쪽 토스트 정합 (Twin파파 수동 검증)
+- [ ] sample 파일 (`material_upload_sample_30rows.csv`) 로 preview 응답 + commit strategy=all 1회 검증
+- [ ] 1654행 원본 csv 로 부하 테스트 (응답 시간 < 5s 목표)
 
 ### 배포 후
 
-- [ ] FE Sprint 40 토스트에서 batch 호출 시 응답 시간 < 500ms (50건 기준)
-- [ ] 부분 성공 케이스 — succeeded 비고 skipped 모두 FE 토스트로 안내 잘 노출
-- [ ] manager 가 다른 회사 task 시작 시도 → 403 안 나오고 skipped 로 자연스럽게 처리
+- [ ] Sentry 새 ERROR 0건
+- [ ] 사용자 측 자재 마스터 변경 흐름 — SQL 직접 INSERT 의존 해소
 
 ## 연계
 
-- FE: `AXIS-VIEW/DESIGN_FIX_SPRINT.md` Sprint 40 (TM Tank Module 시작/종료 admin 액션)
-- 원칙: `CLAUDE.md` BE 코드 크기 1단계 (각 신규 함수 100줄 이내), AI 워크플로우 v2 (Codex 교차검증 필수)
-- 기존 endpoint 영향 0 (Flutter 호환성 유지)
+- FE: `AXIS-VIEW/OPS_API_REQUESTS.md` #63 (본 설계서 의 원본 요청)
+- FE: `AXIS-VIEW/MaterialUploadModal.tsx` (Sprint 42 v1.43.0 prod 배포 완료, BE 응답 대기)
+- 원칙: `CLAUDE.md` BE 코드 크기 1단계 + AI 워크플로우 v2 + ADR-029 Tier 2 (CRUD 5 endpoint 일관성)
+- 기존 endpoint 영향 0 (5 endpoint contract 보존)
+- Sprint 64-BE v2 학습 적용: 트랜잭션 분리 패턴 (검증 외부 + 정상 행 내부)
 
 ### 다음 응용 포인트
 
-- 다른 task 화이트리스트 확장 (가압검사 등) — Sprint 40 화이트리스트 일반화 시 동시 변경
-- pause-batch / resume-batch — Tank Module 작업 중단 일괄 처리 필요 시 (현재 미요청)
-- worker_ids 명시 batch (admin proxy mode) — 다른 worker 명의 일괄 처리 필요 시 신규 endpoint 분리
+- 다른 마스터 데이터 일괄 업로드 (e.g., model_config, admin_settings) 시 본 패턴 재사용
+- 정기 backup / restore 영역 — material_parser 의 export 기능 추가 가능
 
 ---
 
