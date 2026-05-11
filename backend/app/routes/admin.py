@@ -68,7 +68,7 @@ SETTING_KEYS: Dict[str, Dict[str, Any]] = {
     'alert_mech_pressure_to_qi_enabled':     {'type': 'bool', 'default': False},
     'alert_tm_tank_module_to_elec_enabled':  {'type': 'bool', 'default': False},
     # bool/int — Sprint 61 미시작·체크리스트·FINAL 알림
-    'alert_task_not_started_enabled':          {'type': 'bool', 'default': True,  'label': '미시작 작업 알람'},
+    'alert_task_not_started_enabled':          {'type': 'bool', 'default': False, 'label': '미시작 작업 알람'},
     'alert_checklist_done_task_open_enabled':   {'type': 'bool', 'default': True,  'label': '체크리스트완료+미종료 알람'},
     'alert_orphan_on_final_enabled':           {'type': 'bool', 'default': True,  'label': 'FINAL 완료시 미시작 알람'},
     'task_not_started_threshold_days':         {'type': 'int',  'default': 2,     'label': '미시작 경과 기준일'},

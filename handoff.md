@@ -1,7 +1,57 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-10 KST (🎯 v2.12.4 release — FIX-ELEC-IF-NAMING-DOCKING-CLARITY: IF_1/IF_2 task_name 도킹 전/후 명시. pytest 28/28 PASS, prod 370 row UPDATE 적용 완료)
+> 마지막 업데이트: 2026-05-11 KST (⏳ v2.12.5 코드 변경 완료 — FIX-ADMIN-OPTIONS-LISTS-SCROLL-ALERT-DEFAULT 3건. **push 보류 — 저녁 진행 예정** (운영 시간 영역 회피, 사용자 결정))
+
+## ⏳ 2026-05-11 KST — v2.12.5 코드 변경 완료 (FIX-ADMIN-OPTIONS-LISTS-SCROLL-ALERT-DEFAULT — push 보류)
+
+> **한 줄 요약**: 사용자 측 5-11 catch — Admin 옵션 화면 3건 정정 (① FE/BE 키 불일치 silent fail / ② 무제한 list 렌더 / ③ 미시작 알람 default 영역). 코드 변경 + flutter analyze 통과 + 회귀 위험 0 확인 완료. **push 보류 (저녁 진행 예정)** — 운영 시간 영역 회피.
+
+### 변경 trail
+
+| 단계 | 결과 |
+|---|---|
+| #1-a FE/BE 키 정정 (silent fail) | ✅ `response['workers']` → `'inactive_workers'`/`'deactivated_workers'` (admin.py L2432/L2471 정합) |
+| #1-b/c 비활성 사용자 + 비활성화 계정 스크롤 | ✅ ConstrainedBox 240px (~3건) wrap |
+| #2 미종료 작업 스크롤 | ✅ ConstrainedBox 240px + SingleChildScrollView wrap |
+| #3 미시작 알람 default off (BE SETTING_KEYS) | ✅ admin.py L71 `True` → `False` |
+| #3 미시작 알람 default off (FE state + fallback) | ✅ admin_options_screen.dart L35 + L324 |
+| Flutter analyze | ✅ error 0 / 9 info (모두 기존 코드, 내 변경 syntax 정합) |
+| pytest 회귀 영역 검증 | ✅ `alert_task_not_started_enabled` 의존 test 0건 |
+| version bump | ✅ v2.12.4 → v2.12.5 (BE + FE) |
+| md 갱신 (CLAUDE/CHANGELOG/PROGRESS/handoff/BACKLOG) | ✅ trail 기록 완료 |
+| **git commit + push** | ⏳ **저녁 진행 예정** (운영 시간 회피) |
+| Netlify FE build + deploy | ⏳ 저녁 |
+| Railway BE 자동 재배포 검증 | ⏳ 저녁 |
+
+### Root cause #3 사용자 시나리오 해석
+
+prod DB 검증: `alert_task_not_started_enabled = false` (5-11 08:26 사용자 설정 marked). 사용자 "업데이트 할때마다 true값으로 변경" = DB key 부재 시 BE `result.setdefault(key, meta['default'])` 가 default `True` 반환 영역. 5-11 catch 직전 first-touch 시점 영역. default 변경 후 신규 admin/staging 환경에서도 OFF 정합.
+
+### 저녁 push 시 작업 영역
+
+1. `git add` BE + FE + md 모두
+2. `git commit` v2.12.5 release message
+3. `git push origin main`
+4. `flutter build web --release` (FE 변경 있음)
+5. Netlify deploy
+6. Railway 자동 재배포 / build_date 2026-05-11 검증
+7. T+1h 검증 (운영 영역)
+
+### 잔존 영역
+
+- **FIX-PIN-FLAG (task #29 pending)** — **5-11 D+14 측정 결과 deploy ↔ storage 손실 상관관계 발견**:
+  - Q1 pin_status_calls 14일 추세 안정 ✅ (backend fallback 활성 입증)
+  - Q3 PIN 재등록 신호: 4-30/5-05/5-07/5-08/5-10 각 1~2건 → **5-11 23건 polynomial spike** ⚠️
+  - 23명 모두 5-11 06:54~09:02 KST 출근 burst 시점 (전 회사 광범위), pin_fail_count 0 (storage 손실, lock 영역 X)
+  - 5-10 evening v2.12.4 Netlify FE deploy 직후 → PWA SW 업데이트 가설 강력
+  - 비교: 5-08 v2.12.3 BE only (FE 빌드 X) → 5-09 PIN 재등록 0건 ✅
+- **사용자 결정 (5-11)**: 5월 = 운영 안정화 + 디버깅 + 편의사항 개선 = 잦은 push 지속 (storage 손실 trade-off 영역). **6월 본격 운영 상태에서 재점검 진행**.
+- **신규 BACKLOG entry 등록**: `OBSERV-PIN-FLAG-DEPLOY-CORRELATION-RE-CHECK-20260601` (6월 재점검 영역)
+- backend fallback (v2.10.6) 효과 입증 ✅ — `/auth/pin-status` 14일 안정. 단 refresh_token 같이 잃은 cohort 영역엔 효과 0 (23명 EmailLogin → 비번 로그인 → PIN 재설정 흐름).
+- task #29 **pending 유지** — 6월 재점검 후 정량 close 결정 영역.
+
+---
 
 ## 🎯 2026-05-10 KST — v2.12.4 release (FIX-ELEC-IF-NAMING-DOCKING-CLARITY)
 

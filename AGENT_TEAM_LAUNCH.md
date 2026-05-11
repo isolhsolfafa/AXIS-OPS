@@ -40211,4 +40211,441 @@ def test_validate_source_keys_passes_valid_csv():
   └─ 🔴 C (실패): 0/0 출력 + 15분+ 지속 → 재진단 필요
 ```
 
+---
+
+# HOTFIX-SPRINT66BE-MASTER-LIST-ITEM-TYPE-20260511 (cowork 실수 #18)
+
+> **Sprint ID**: `HOTFIX-SPRINT66BE-MASTER-LIST-ITEM-TYPE-20260511`
+> **유형**: Sprint 66-BE 직렬화 회귀 hotfix (BE only, v2.12.4 release 예정)
+> **Severity**: 🟠 S2 (admin 자재 매핑 기능 사용 불가 — AXIS-VIEW v1.43.1 SELECT 분기 UI 미동작)
+> **사후 Codex 검토**: 7일 이내 (deadline 2026-05-18)
+> **POST-REVIEW**: BACKLOG `POST-REVIEW-HOTFIX-SPRINT66BE-MASTER-LIST-ITEM-TYPE-20260511` 등록
+> **작성일**: 2026-05-11 KST
+> **트리거**: 사용자 catch — AXIS-VIEW v1.43.1 Netlify 배포 정상 확인 후 admin 자재 매핑 UI 미표시 → master API 응답 점검 → `item_type` 필드 완전 누락 확인
+> **우선순위**: 🔴 P1 (운영 차단 — admin 자재 매핑 기능 사용 불가)
+> **추정 시간**: ~5분 (정정 완료, +2 LoC)
+> **선행 의존성**: Sprint 66-BE Step 3+4 prod 배포 완료 ✅, AXIS-VIEW v1.43.1 Netlify 배포 완료 ✅
+> **Flutter 변경**: 0 (admin 화면 영향 없음)
+
+## 사용자 검증 데이터 (5-11)
+
+**증거 1 — Master API 응답 (id=150 GN₂ MFC Maker, MECH SELECT 항목)**:
+```json
+{
+  "category": "MECH",
+  "checker_role": "WORKER",
+  "description": "",
+  "id": 150,
+  "is_active": true,
+  "item_group": "GN2",
+  "item_name": "MFC Maker: ▶ MFC Spec: ▶Flow Rate ▶Working Pressure ▶Pressure Range",
+  "item_order": 6,
+  "phase1_applicable": true,
+  "product_code": "COMMON",
+  "qi_check_required": false,
+  "remarks": null
+}
+```
+→ `item_type` 필드 완전 누락 (DB 에는 `item_type='SELECT'` 정상 저장 — 별도 schema 검증 완료)
+→ `select_options` 필드도 누락
+
+**증거 2 — AXIS-VIEW v1.43.1 Netlify 배포 정상 확인 (시크릿 모드 동일)**: 사용자 확인 완료, 정상 배포
+
+**증거 3 — React DevTools 컴포넌트 트리**: 프로덕션 minified 빌드 정상 로드 (ChecklistManagePage 라우트 정상)
+
+## Root Cause
+
+`backend/app/routes/checklist.py` `list_checklist_master()` 함수 (L256-368):
+- SELECT 절 (L320-340): `cm.item_type`, `cm.select_options` 컬럼 누락
+- 응답 dict (L343-359): `'item_type'`, `'select_options'` 키 누락
+
+DB `checklist.checklist_master` 스키마에는 두 컬럼 모두 존재 (migration 043a + 051 확인), `services/checklist_service.py` MECH 분기 (L196/L203) 등 다른 엔드포인트는 모두 정상 반환. **admin master list 엔드포인트만** 직렬화 회귀.
+
+## 영향 분석
+
+- **AXIS-VIEW v1.43.1 ChecklistEditModal**: `item.item_type === 'SELECT'` 분기 항상 false → SELECT 매핑 UI (🔍 자재 검색 도움 버튼 + 선택지 입력 + Option Y dropdown) 자체가 렌더링되지 않음
+- **AXIS-VIEW ChecklistAddModal**: 신규 SELECT 항목 추가 시 `item_type` 토글 동작은 정상 (POST 측 영향 0)
+- **Flutter MECH 체크리스트**: 영향 0 (별도 `/api/app/checklist/mech` 엔드포인트 사용, 정상 직렬화)
+- **Sprint 66-BE Step 4 매핑 PATCH/GET**: 영향 0 (별도 `/api/admin/checklists/master/<id>/options` 엔드포인트 사용)
+
+## 변경 사항 (+2 LoC)
+
+`backend/app/routes/checklist.py`:
+
+```python
+# Before (L320-340)
+cur.execute(
+    f"""
+    SELECT
+        cm.id,
+        cm.product_code,
+        cm.category,
+        cm.item_group,
+        cm.item_name,
+        cm.item_order,
+        cm.description,
+        cm.is_active,
+        cm.phase1_applicable,
+        cm.qi_check_required,
+        cm.remarks,
+        cm.checker_role
+    FROM checklist.checklist_master cm
+    WHERE {where_clause}
+    ORDER BY cm.item_order ASC, cm.id ASC
+    """,
+    params
+)
+
+# After (+2 lines)
+cur.execute(
+    f"""
+    SELECT
+        cm.id,
+        cm.product_code,
+        cm.category,
+        cm.item_group,
+        cm.item_name,
+        cm.item_type,           -- ⭐ ADDED (HOTFIX 5-11)
+        cm.select_options,      -- ⭐ ADDED (HOTFIX 5-11)
+        cm.item_order,
+        cm.description,
+        cm.is_active,
+        cm.phase1_applicable,
+        cm.qi_check_required,
+        cm.remarks,
+        cm.checker_role
+    FROM checklist.checklist_master cm
+    WHERE {where_clause}
+    ORDER BY cm.item_order ASC, cm.id ASC
+    """,
+    params
+)
+
+# 응답 dict (L343-359) 도 동일 패턴:
+items = [
+    {
+        'id': row['id'],
+        'product_code': row['product_code'],
+        'category': row['category'],
+        'item_group': row['item_group'],
+        'item_name': row['item_name'],
+        'item_type': row.get('item_type') or 'CHECK',     # ⭐ ADDED
+        'select_options': row.get('select_options'),       # ⭐ ADDED
+        'item_order': row['item_order'],
+        'description': row['description'],
+        'is_active': row['is_active'],
+        'phase1_applicable': row.get('phase1_applicable', True),
+        'qi_check_required': row.get('qi_check_required', False),
+        'remarks': row.get('remarks'),
+        'checker_role': row.get('checker_role') or 'WORKER',
+    }
+    for row in rows
+]
+```
+
+**Fallback 정책**: `item_type` NULL 또는 누락 시 `'CHECK'` 기본값 (legacy seed 데이터 호환 — Sprint 63-BE 이전 시드 일부 NULL 가능성 보호). `select_options` 는 그대로 NULL 통과 (FE 가 `null` 안전 처리).
+
+## 회귀 위험
+
+**0** — additive 응답 (기존 필드 11개 그대로 유지 + 신규 2개 추가). 기존 클라이언트 (Flutter, AXIS-VIEW 이전 버전) 영향 없음. AXIS-VIEW v1.43.1 만 신규 필드 활용.
+
+## pytest TC (P2, BACKLOG 후속)
+
+1. `test_admin_checklist_master_list_returns_item_type` — MECH/COMMON 조회 시 응답 items[*].item_type 키 존재 + 값 = 'CHECK'/'SELECT'/'INPUT' 중 하나
+2. `test_admin_checklist_master_list_select_options_format` — SELECT 항목의 select_options 필드 존재 (값은 string[] 또는 null)
+
+## Rollback
+
+git revert 1 commit (회귀 0 — 신규 필드만 제거되며 기존 동작 그대로).
+
+## 검증 방법 (사용자 측)
+
+1. AXIS-OPS BE 배포 (Railway auto-deploy)
+2. admin 계정 로그인 → AXIS-VIEW → 체크리스트 관리 → MECH/COMMON 선택
+3. SELECT 항목 (예: id=150 GN₂ MFC Maker) "수정" 클릭
+4. 모달 내 표시 확인:
+   - "🔍 자재 검색 도움" 버튼 표시
+   - "선택지 (자재코드, 쉼표 구분 또는 OptionMapModal)" 입력 영역 표시
+   - Option Y dropdown 미리보기 (matched/missing count)
+
+## ADR-024 분리 신호 (cowork 실수 #18)
+
+본 HOTFIX 는 cowork 누적 실수 #18 (Sprint 66-BE 도중 직렬화 누락 미감지). ADR-023 분리 임계 (15+) 초과 — ADR-024 cowork 작업 분리 정책 결정 필요. 별 BACKLOG 등록.
+
+## 연관
+
+- AXIS-VIEW: `HOTFIX-SPRINT42-CHECKLIST-EDIT-MATERIAL-MAPPING-20260509` (v1.43.1, FE 정상)
+- Sprint 66-BE: `FEAT-MATERIAL-MASTER-AND-BOM-INTEGRATION-20260507` Step 3+4 (배포 완료)
+- 회귀 출처: Sprint 52 시점 admin master list 작성 시점부터 누락 가능성 (`item_type` 컬럼은 Sprint 63-BE migration 051 추가 — 그러나 admin master list 가 동기화 갱신 안 됨)
+
+---
+
+# ❌ OBSOLETE — HOTFIX-SPRINT66BE-ENRICH-SELECT-OPTIONS-ITEMCODE-20260509 (5-09 폐기)
+
+> **상태**: ❌ **OBSOLETE** (2026-05-09 폐기)
+> **폐기 사유**: Codex 검토 라운드 catch (M1~M5 + A1~A2)
+>   - M1: 시그니처 불일치 (cur 인자 X, 실 v2.12.2 = material_map: Dict)
+>   - M2: N+1 BATCHED 회귀 (73 query)
+>   - M3: AXIS-VIEW Step 4 PATCH endpoint 충돌 (int 검증 영역)
+>   - M4: description 영역 (5-08 사용자 결정) 위반
+>   - M5: selected_material_id 영구 NULL = ADR-027 옵션 X 위반
+>   - A1+A2: 패턴 brittle + 코드 중복
+> **대신 채택**: 방향 A — AXIS-VIEW HOTFIX-SPRINT42 v1.43.1 영역 정정
+>   - FE 측 자재코드 → material_id 변환 (in-memory 영역, useQuery 캐시 활용)
+>   - DB select_options = number[] 저장 (Sprint 42 Step 4 schema 정합)
+>   - BE 변경 0 (Step 3+4 그대로)
+>   - ADR-027 옵션 X 정합 + BATCHED 정합 + Phase 3 prerequisite 보존
+
+이전 영역 (참조용 영영, 영영 영영 영영):
+
+> **Sprint ID**: `HOTFIX-SPRINT66BE-ENRICH-SELECT-OPTIONS-ITEMCODE-20260509`
+> **유형**: Sprint 66-BE 후속 hotfix (BE only, v2.12.3 release)
+> **Severity**: 🟠 S2 (부분 장애 — 작업자 dropdown 자재 raw 표시 영역)
+> **사후 Codex 검토**: 7일 이내 (deadline 2026-05-16)
+> **POST-REVIEW**: BACKLOG `POST-REVIEW-HOTFIX-SPRINT66BE-ENRICH-SELECT-OPTIONS-ITEMCODE-20260509` 등록
+> **작성일**: 2026-05-09 KST
+> **트리거**: cowork 자체 검증 catch (5-09) + AXIS-VIEW HOTFIX-SPRINT42 v1.43.1 동기 영역
+> **우선순위**: 🔴 P1 (운영 영역 + AXIS-VIEW v1.43.1 동기 release 정합)
+> **추정 시간**: ~1h (정정 ~15 LoC + pytest TC 2건)
+> **선행 의존성**: Sprint 66-BE Step 3 (v2.12.2) prod 배포 완료 ✅
+> **동기 release**: AXIS-VIEW HOTFIX-SPRINT42 v1.43.1
+> **Flutter 변경**: 0 (BE override 만 정정)
+
+---
+
+## 📑 영역 1 — 트리거 + 배경
+
+### 5-09 cowork 자체 검증 catch
+
+```
+AXIS-VIEW HOTFIX-SPRINT42 v1.43.1 영역 = admin GUI 정정:
+  ChecklistEditModal "선택지 (자재코드, 쉼표 구분) *" 영역에 자재코드 직접 입력
+  예: "1110006700, 1120094300, 1110298800"
+  → DB: select_options = ["1110006700", "1120094300", "1110298800"] (자재코드 string[])
+
+OPS BE Step 3 영역 = _enrich_select_options() 자재코드 string[] 처리 X:
+  L78-79: all(isinstance(x, str)) → legacy placeholder 영역으로 처리
+  → material_ids 모두 None
+  → material_master JOIN X
+  → Flutter 측 dropdown = 자재코드 raw 표시 ("1110006700")
+  → 작업자 측 정보 부족
+```
+
+### 사용자 측 운영 영역 영향
+
+```
+admin (5-09 v1.43.1 prod 배포 후):
+  ① ChecklistEditModal 자재코드 입력 + spec 표시 자동 확인 ✅
+  ② [저장] → DB select_options = ["1110006700", ...] 저장 ✅
+  
+작업자 (Flutter mech_checklist_screen.dart):
+  ③ MECH 체크리스트 dropdown 표시 시점:
+      현재: "1110006700"  ← 자재코드 raw, 정보 부족 ⚠️
+      목표: "MFC | MRC | 25 SLM | P:0.2~1 / W:0.4"  ← 옵션 Y full spec ✅
+  → BE _enrich_select_options() 정정 시점에 자동 정합
+```
+
+### Cowork 추측 작성 실수 #16 영역 인정
+
+```
+누적 16건 — ADR-024 분리 검토 영역 도달:
+  16. AXIS-VIEW 단순화 영역 (자재코드 string[] 저장) 결정 시점에 OPS BE
+      _enrich_select_options() 영역 cross-check 누락
+      → 자재코드 string[] vs legacy placeholder string[] 구분 영역 미설계
+      → 본 hotfix 정정 영역
+```
+
+---
+
+## 📑 영역 2 — 변경 영역 (~15 LoC)
+
+### `backend/app/services/checklist_service.py` `_enrich_select_options()` 정정
+
+**기존 영역** (L78-79):
+```python
+# legacy string[] 영역 그대로
+if all(isinstance(x, str) for x in select_options):
+    return (list(select_options), [None] * len(select_options))
+```
+
+**정정 영역** (~15 LoC):
+```python
+# string[] 영역 분기 — 자재코드 패턴 vs legacy placeholder
+if all(isinstance(x, str) for x in select_options):
+    # ⭐ HOTFIX 5-09: 자재코드 패턴 (10자리 숫자 string) 영역 검증
+    is_item_codes = all(
+        s.strip() and s.strip().isdigit() and len(s.strip()) == 10
+        for s in select_options
+    )
+    
+    if is_item_codes:
+        # 자재코드 영역 → material_master JOIN → 옵션 Y 변환
+        codes = [s.strip() for s in select_options]
+        cur.execute("""
+            SELECT item_code, item_name, spec_1, spec_2, is_active
+              FROM checklist.material_master
+             WHERE item_code = ANY(%s)
+               AND is_active = TRUE
+        """, (codes,))
+        materials = {row[0]: row for row in cur.fetchall()}
+        
+        display_strings = []
+        material_ids = []
+        for code in codes:
+            mat = materials.get(code)
+            if mat:
+                # 옵션 Y 양식: "item_name | spec_1 | spec_2"
+                spec_parts = [mat[1]]  # item_name
+                if mat[2]: spec_parts.append(mat[2])  # spec_1
+                if mat[3]: spec_parts.append(mat[3])  # spec_2
+                display_strings.append(" | ".join(spec_parts))
+                material_ids.append(None)  # selected_material_id 영역 X (string-based)
+            else:
+                # 미매칭 자재 영역 = [INACTIVE:code] marker (Codex A-R2-03 정합)
+                display_strings.append(f"[INACTIVE:{code}]")
+                material_ids.append(None)
+        return (display_strings, material_ids)
+    
+    # legacy placeholder string[] 그대로 (이전 영역 유지)
+    return (list(select_options), [None] * len(select_options))
+```
+
+---
+
+## 📑 영역 3 — 흐름 영역 (hotfix 후)
+
+```
+admin (AXIS-VIEW v1.43.1 영역):
+  ① ChecklistEditModal "선택지" 영역 자재코드 입력
+  ② [저장] → DB select_options = ["1110006700", "1120094300", "1110298800"]
+  
+작업자 (Flutter):
+  ③ MECH 체크리스트 진입 → BE GET /checklist/mech 호출
+  
+OPS BE _enrich_select_options() (v2.12.3 정정 영역):
+  ④ select_options = ["1110006700", ...] 영역 검증
+  ⑤ all(isinstance(x, str)) ✅ + 10자리 숫자 패턴 ✅
+  ⑥ → 자재코드 영역 분기 → material_master JOIN
+  ⑦ → 옵션 Y 양식 변환:
+      ["MFC | MRC | 25 SLM | P:0.2~1 / W:0.4",
+       "MFC | HORIBA | 50 SLM | P:1~1.5",
+       "MFC | MKP | 50 SLM | P:0.3~2.5 / W:0.3"]
+  ⑧ Flutter 응답 → dropdown 옵션 Y 표시 ✅
+```
+
+---
+
+## 📑 영역 4 — 테스트 영역 (pytest TC 2건)
+
+### TC-HOTFIX-66BE-01 — 자재코드 string[] enrich
+
+```python
+# tests/backend/test_checklist_service_enrich.py
+
+def test_enrich_select_options_item_codes_pattern():
+    """자재코드 패턴 (10자리 숫자 string) → material_master JOIN."""
+    cur = mock_cursor_with_materials([
+        ('1110006700', 'MFC', 'MRC | 25 SLM', 'P:0.2~1 / W:0.4', True),
+        ('1120094300', 'MFC', 'HORIBA | 50 SLM', 'P:1~1.5', True),
+    ])
+    
+    display, material_ids = _enrich_select_options(
+        ['1110006700', '1120094300'], cur
+    )
+    
+    assert display == [
+        'MFC | MRC | 25 SLM | P:0.2~1 / W:0.4',
+        'MFC | HORIBA | 50 SLM | P:1~1.5',
+    ]
+    assert material_ids == [None, None]
+```
+
+### TC-HOTFIX-66BE-02 — legacy placeholder 그대로
+
+```python
+def test_enrich_select_options_legacy_placeholder_preserved():
+    """legacy placeholder string[] (51a seed) 그대로 (자재코드 패턴 X)."""
+    placeholder = ['MKS GE50A | 5 SLM | 0.5 MPa', 'Brooks 5850E | 10 SLM']
+    
+    display, material_ids = _enrich_select_options(placeholder, mock_cur)
+    
+    assert display == placeholder
+    assert material_ids == [None, None]
+```
+
+---
+
+## 📑 영역 5 — Pre-deploy Gate
+
+```
+v2.12.3 hotfix release:
+  ✓ pytest TC 2건 (TC-HOTFIX-66BE-01 + 02) GREEN
+  ✓ Sprint 66-BE 영역 회귀 0 (기존 pytest GREEN 유지)
+  ✓ Railway logs 정상 boot + Sentry 0 신규 issue
+  
+운영 검증 (배포 후):
+  - admin v1.43.1 자재코드 입력 → DB 저장 ✅
+  - 작업자 Flutter MECH 체크리스트 dropdown:
+    - 자재코드 raw → 옵션 Y full spec 변환 ✅
+  - legacy placeholder 영역 (51a seed) = 그대로 표시 ✅ (회귀 0)
+```
+
+---
+
+## 📑 영역 6 — 회귀 위험 + Rollback
+
+```
+회귀 위험 = 0
+  ├─ string[] 영역 분기 추가 = additive 변경
+  ├─ legacy placeholder 영역 = 그대로 처리 (영향 0)
+  ├─ number[] 영역 (material_id 배열) = 그대로 처리 (영향 0)
+  └─ 자재코드 패턴 영역만 신규 분기 (10자리 숫자 string)
+
+Rollback:
+  git revert v2.12.3 (1 commit) → v2.12.2 복귀
+  DB 변경 0 (admin 매핑 보존)
+  영향: 작업자 측 dropdown = 자재코드 raw 표시 (현재 상태)
+```
+
+---
+
+## 📑 영역 7 — 사후 기록 양식 (배포 후)
+
+```
+✅ HOTFIX-SPRINT66BE-ENRICH-SELECT-OPTIONS-ITEMCODE-20260509 종합 결과
+   (작성일: 2026-05-09 KST, OPS v2.12.3 release)
+
+선행 의존성:
+  ├─ Sprint 66-BE Step 3 prod 배포 (v2.12.2): ✅
+  └─ AXIS-VIEW HOTFIX-SPRINT42 v1.43.1 동기 release: ___ (Y/N)
+
+변경 영역 (~15 LoC):
+  └─ checklist_service.py _enrich_select_options() 정정: ___ LoC
+
+pytest TC (2건):
+  ├─ TC-HOTFIX-66BE-01 자재코드 패턴 enrich: ___ (PASS/FAIL)
+  └─ TC-HOTFIX-66BE-02 legacy placeholder 그대로: ___ (PASS/FAIL)
+
+운영 검증 시나리오:
+  ├─ admin v1.43.1 자재코드 입력 → DB 저장: ___ (Y/N)
+  ├─ 작업자 Flutter dropdown = 옵션 Y full spec: ___ (Y/N)
+  ├─ legacy placeholder 그대로 표시 (회귀 0): ___ (Y/N)
+  └─ 미등록 자재 = [INACTIVE:code] marker: ___ (Y/N)
+
+회귀 영역 검증:
+  ├─ Sprint 66-BE 영역 pytest GREEN 유지: ___ (Y/N)
+  ├─ Sentry 1주 누적 신규 issue: ___ (0건 기대)
+  └─ 작업자 측 MECH 체크리스트 회귀 0: ___ (Y/N)
+```
+
+---
+
+## 🔗 관련 문서
+
+- 본 hotfix = Sprint 66-BE (FEAT-MATERIAL-MASTER-AND-BOM-INTEGRATION-20260507) 후속
+- BACKLOG entry: `AXIS-OPS/BACKLOG.md` § HOTFIX-SPRINT66BE-ENRICH-SELECT-OPTIONS-ITEMCODE-20260509
+- 동기 release: AXIS-VIEW `HOTFIX-SPRINT42-CHECKLIST-EDIT-MATERIAL-MAPPING-20260509` (v1.43.1)
+- POST-REVIEW: `POST-REVIEW-HOTFIX-SPRINT66BE-ENRICH-SELECT-OPTIONS-ITEMCODE-20260509` (deadline 2026-05-16)
+- Cowork 실수 trail #16: 자재코드 string[] vs legacy placeholder 구분 영역 미설계 (ADR-023 보강 권장)
+
 

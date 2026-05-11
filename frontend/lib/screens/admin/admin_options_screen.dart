@@ -32,7 +32,8 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
   bool _alertMechPressureToQiEnabled = false;
 
   // 에스컬레이션 알림 설정 (Sprint 61-BE)
-  bool _alertTaskNotStartedEnabled = true;
+  // 미시작 작업 알람 default off (5-11 사용자 결정 — admin.py SETTING_KEYS L71 정합)
+  bool _alertTaskNotStartedEnabled = false;
   bool _alertChecklistDoneTaskOpenEnabled = true;
   bool _alertOrphanOnFinalEnabled = true;
   bool _elecChecklistIssueAlert = true;
@@ -320,7 +321,8 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
           _alertTmTankModuleToElecEnabled = response['alert_tm_tank_module_to_elec_enabled'] as bool? ?? false;
           _alertMechPressureToQiEnabled = response['alert_mech_pressure_to_qi_enabled'] as bool? ?? false;
           // 에스컬레이션 알림 설정 (Sprint 61-BE)
-          _alertTaskNotStartedEnabled = response['alert_task_not_started_enabled'] as bool? ?? true;
+          // 5-11 정정: 미시작 작업 알람 default off (admin.py SETTING_KEYS L71 정합)
+          _alertTaskNotStartedEnabled = response['alert_task_not_started_enabled'] as bool? ?? false;
           _alertChecklistDoneTaskOpenEnabled = response['alert_checklist_done_task_open_enabled'] as bool? ?? true;
           _alertOrphanOnFinalEnabled = response['alert_orphan_on_final_enabled'] as bool? ?? true;
           _elecChecklistIssueAlert = response['elec_checklist_issue_alert'] as bool? ?? true;
@@ -440,8 +442,9 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
       final response = await apiService.get('/admin/inactive-workers?days=$_inactiveDays');
       if (mounted) {
         setState(() {
+          // BE 응답 키 정합 (admin.py L2432-2433: 'inactive_workers')
           _inactiveWorkers = List<Map<String, dynamic>>.from(
-              response['workers'] as List? ?? []);
+              response['inactive_workers'] as List? ?? []);
           _isLoadingInactive = false;
         });
       }
@@ -457,8 +460,9 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
       final response = await apiService.get('/admin/deactivated-workers');
       if (mounted) {
         setState(() {
+          // BE 응답 키 정합 (admin.py L2471-2472: 'deactivated_workers')
           _deactivatedWorkers = List<Map<String, dynamic>>.from(
-              response['workers'] as List? ?? []);
+              response['deactivated_workers'] as List? ?? []);
         });
       }
     } catch (e) {
@@ -1022,9 +1026,12 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
                         ),
                       )
                     else
-                      ListView.separated(
+                      // 5-11 사용자 결정: 최대 240px (~3건) 표시 + 스크롤
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxHeight: 240),
+                        child: ListView.separated(
                         shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
+                        // physics: 외부 ListView 자체 스크롤 가능 (240px 초과 시)
                         itemCount: _inactiveWorkers.length,
                         separatorBuilder: (_, __) =>
                             const Divider(height: 1, color: GxColors.mist),
@@ -1098,6 +1105,7 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
                           );
                         },
                       ),
+                      ),  // end ConstrainedBox (240px scroll, 5-11)
                   ],
                 ),
               ),
@@ -1131,9 +1139,12 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
                         ),
                       )
                     else
-                      ListView.separated(
+                      // 5-11 사용자 결정: 최대 240px (~3건) 표시 + 스크롤
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxHeight: 240),
+                        child: ListView.separated(
                         shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
+                        // physics: 외부 ConstrainedBox 자체 스크롤 가능 (240px 초과 시)
                         itemCount: _deactivatedWorkers.length,
                         separatorBuilder: (_, __) =>
                             const Divider(height: 1, color: GxColors.mist),
@@ -1198,6 +1209,7 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
                           );
                         },
                       ),
+                      ),  // end ConstrainedBox (240px scroll, 5-11)
                   ],
                 ),
               ),
@@ -1239,8 +1251,14 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
                   ),
                 )
               else
-                Column(
-                  children: _pendingTasks.map((task) => _buildPendingTaskCard(task)).toList(),
+                // 5-11 사용자 결정: 최대 240px (~3건) 표시 + 스크롤
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 240),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      children: _pendingTasks.map((task) => _buildPendingTaskCard(task)).toList(),
+                    ),
+                  ),
                 ),
 
               const SizedBox(height: 24),

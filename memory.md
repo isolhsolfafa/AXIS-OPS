@@ -2,11 +2,44 @@
 
 > 세션 간 누적되는 의사결정, 아키텍처 판단, 감사 결과를 기록합니다.
 > CLAUDE.md = 프로젝트 고정 정보 / memory.md = 누적 학습 / handoff.md = 세션 인계
-> 마지막 업데이트: 2026-05-07 (ADR-023 2차 보강 — 추측 작성 실수 #6 누적 + 데코레이터/함수 grep cross-check 표준 추가, ADR-024 분리 검토 영역 명시)
+> 마지막 업데이트: 2026-05-11 (ADR-028 추가 — 운영 안정화 시기 storage 손실 모니터링 영역 + 6월 본격 운영 상태 재점검 결정)
 
 ---
 
 ## 1. 아키텍처 의사결정 기록 (ADR)
+
+### ADR-028: 운영 안정화 시기 storage 손실 모니터링 + 6월 재점검 (2026-05-11)
+
+**맥락**: 2026-05-11 D+14 FIX-PIN-FLAG 측정 결과 **deploy ↔ storage 손실 상관관계 발견**. 5-10 evening v2.12.4 Netlify FE deploy → 5-11 morning 출근 burst 23명 일괄 PIN 재등록 (06:54~09:02 KST, 전 회사 광범위). 평소 1~2건/일 vs 5-11 23건 = polynomial spike. 5-08 v2.12.3 BE only (FE 빌드 X) → 5-09 PIN 재등록 0건 비교 = **PWA SW 업데이트 ↔ IndexedDB 일괄 손실 가설 강력**.
+
+**결정 — 5월 안정화 시기 trade-off 영역, 6월 본격 재점검**:
+
+| 영역 | 결정 | 이유 |
+|:---|:---|:---|
+| **5월 운영 시기** | 잦은 push 지속 영역, storage 손실 모니터링 (액션 X) | 운영 안정화 + 디버깅 + 편의사항 개선 우선 |
+| **사용자 영향** | 신고 영역 0건 (사용자 측 자체 PIN 재설정 해결 가능) | backend fallback (v2.10.6) + 비번 로그인 폴백 활성 |
+| **6월 재점검 트리거** | 5월 end 도달 (잦은 push 시기 종료) + 신규 BACKLOG `OBSERV-PIN-FLAG-DEPLOY-CORRELATION-RE-CHECK-20260601` | 본격 운영 상태에서 deploy 빈도 ↓ 영역에서 재측정 |
+| **6월 재점검 영역** | (1) 5월 PIN 재등록 일별 추세 (deploy 매핑) (2) deploy 후 D+1 burst 패턴 통계 (3) backend fallback 우회 cohort 분석 (4) FE 측 IndexedDB vs SharedPrefs 측정 (5) 사용자 인터뷰 sample | 데이터 기반 결정 영역 |
+| **잠재 결정 영역 (6월 재점검 결과 후)** | (a) FEAT-AUTH-STORAGE-MIGRATION-FULL 진행 (refresh_token + worker_id + worker_data SharedPrefs sync, 보안 trade-off 검토) (b) UX-LOGIN-FALLBACK-PIN-RESET-LINK 진행 (UX 보조 안내) (c) backend pin-status 흐름 재설계 (storage 의존도 0) | 측정 결과로 우선순위 결정 |
+| **task #29 status** | **pending 유지** — 6월 재점검 후 정량 close 결정 | 정성 close (신고 0) ≠ 정량 close (storage 손실 0) |
+
+**측정 trail (2026-05-11 D+14)**:
+
+- Q1: pin_status_calls 14일 추세 = 93~100% 안정 ✅ (backend fallback 효과 입증)
+- Q2: 활성 7d 54명 / PIN 등록 total 31명 / 비율 22.2% (5-04 31.1% 대비 -8.9pp, 휴일 영역)
+- Q3: PIN 재등록 4-30 ~ 5-10 = 1~2건/일 / **5-11 = 23건 polynomial spike** ⚠️
+- Q4: 23명 모두 5-11 인증 흔적 0건 (login/pin-login/pin-status 모두 0) + set-pin endpoint access_log 미기록 영역 발견
+
+**연관 ADR**: ADR-023 (cowork 추측 작성 차단), ADR-025 (DB Pool per-worker 영역, 별 영역)
+
+**연관 BACKLOG entry**:
+- `OBSERV-PIN-FLAG-DEPLOY-CORRELATION-RE-CHECK-20260601` (6월 재점검 sprint, 신규 등록)
+- `FEAT-AUTH-STORAGE-MIGRATION-FULL-20260427` (P2 OPEN, 6월 결정 영역)
+- `UX-LOGIN-FALLBACK-PIN-RESET-LINK-20260427` (P3 OPEN, 6월 결정 영역)
+
+**Why (긴급도 영역)**: 사용자 5-11 catch — "5월 운영 안정화 시기 잦은 push 영역 = storage 손실 trade-off 영역, 6월 본격 운영 상태에서 재점검". 사용자 측 신고 영역 0건이라 P1 영역 아님. 측정 데이터 명확 영역 = 가설 검증 가능 영역.
+
+---
 
 ### ADR-027: 자재 마스터 인프라 도입 — material_id 직접 전달 + dual-format 호환 (2026-05-07, v2.12.0 FEAT-MATERIAL Step 1)
 

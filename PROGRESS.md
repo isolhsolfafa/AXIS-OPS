@@ -3,12 +3,77 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: **v2.12.4 (FIX-ELEC-IF-NAMING-DOCKING-CLARITY — IF_1/IF_2 task_name 도킹 전/후 명시, 2026-05-10)** — BE 2 line + Migration 054 (370 row UPDATE atomic) + pytest 28/28 PASS / task_id 변경 0 / FE 코드 변경 0 / 회귀 위험 0
-> **선행 release**: v2.12.3 (Sprint 66-BE FEAT-MATERIAL Step 4 OPS BE — admin endpoints, 2026-05-08) — Sprint 66 OPS 측 100% 완료
+> **현재 버전**: **v2.12.5 (FIX-ADMIN-OPTIONS-LISTS-SCROLL-ALERT-DEFAULT — Admin 옵션 3건 정정, 2026-05-11)** — FE 5 변경 + BE 1 line (SETTING_KEYS default) / Flutter analyze error 0 / pytest 의존 0건 / 회귀 위험 0 / **push 보류 (저녁 진행)**
+> **선행 release**: v2.12.4 (FIX-ELEC-IF-NAMING-DOCKING-CLARITY — IF_1/IF_2 task_name 도킹 전/후 명시, 2026-05-10) — BE 2 line + Migration 054 (370 row UPDATE atomic) + pytest 28/28 PASS
 > **선행 release**: v2.12.2 (FEAT-MATERIAL Step 3 — checklist_master 동적 자재 조회, 2026-05-08) — BE checklist_service.py 4 신규 함수 + FE mech_checklist_screen.dart 재진입 hydrate + pytest 14 TC
 > **선행 인프라**: FIX-DB-POOL-MAX-SIZE-20260427 — Railway env DB_POOL_MAX 20→30 (2026-04-27, 코드 변경 0)
 > **D+1 운영 검증 (2026-04-28)**: 출근 peak 측정 PASS — Pool exhausted 0 / direct conn fallback 0 / OPS conn 6~7 안정 / Sentry 새 issue 0 → 옵션 X1 유지, OBSERV-WARMUP COMPLETED 확정, v2.10.11 HOTFIX-06b 불필요
 > **DB Pool V4.1 T+1주 검증 (2026-05-10)**: 🟢 시나리오 A 이상적 1차 통과 — Railway 36h 0/0 0건, Sentry 1주 신규 0건, Cluster A 9.5h 무중단. 5일 주기 가설 break 진행 중 (4-29 → 5-04 → 5-07 → 5-10 0건). 사용자 측 5-15까지 추가 점검 (5-12 ± 1d 예상 사고 시점 통과 확인)
+
+---
+
+## v2.12.5 (FIX-ADMIN-OPTIONS-LISTS-SCROLL-ALERT-DEFAULT — Admin 옵션 3건 정정, 2026-05-11)
+
+**Sprint**: `FIX-ADMIN-OPTIONS-LISTS-SCROLL-ALERT-DEFAULT-20260511` (P2 — 사용자 운영 catch, 3건 묶음)
+
+**상태**: ⏳ **push 보류** (5-11 사용자 결정 — 운영 시간 영역 회피, 저녁 진행 예정)
+
+**배경**: 사용자 측 5-11 catch — Admin 옵션 화면 3건:
+1. 비활성/미로그인 사용자 목록 안 보임 (VIEW 정상)
+2. 미종료 작업 목록 무제한 렌더 (UI 영역 overflow)
+3. 미시작 작업 알람 default 영역 (업데이트 시 자동 true 변경 현상)
+
+### 변경 (FE 5 + BE 1)
+
+**FE** `frontend/lib/screens/admin/admin_options_screen.dart`:
+- **#1-a FE/BE 키 정정** (silent fail catch):
+  - L444: `response['workers']` → `response['inactive_workers']`
+  - L461: `response['workers']` → `response['deactivated_workers']`
+- **#1-b/c/2 스크롤 추가** (5-11 사용자 결정 — 240px max ≈ 3건):
+  - 비활성 사용자 ListView → ConstrainedBox 240px wrap
+  - 비활성화 계정 ListView → ConstrainedBox 240px wrap
+  - 미종료 작업 Column → ConstrainedBox 240px + SingleChildScrollView wrap
+- **#3 미시작 알람 default off** (FE state 정합):
+  - L35: `bool _alertTaskNotStartedEnabled = true` → `false`
+  - L324: fallback `?? true` → `?? false`
+
+**BE** `backend/app/routes/admin.py`:
+- **#3 SETTING_KEYS default off** L71: `'default': True` → `'default': False`
+
+### Root cause 영역
+
+| # | Root cause | 영향 영역 |
+|---|-----------|----------|
+| 1 | FE/BE API 응답 키 불일치 (cowork 실수 영역, Sprint 40-C 도입 시 미동기) | 운영 admin 영역 silent fail (VIEW는 정확한 키 사용 → 정상) |
+| 2 | Column 무제한 렌더 (스크롤 영역 X) | 미종료 작업 다수 시 UI overflow |
+| 3 | SETTING_KEYS default `True` + FE fallback `?? true` | 신규 admin/staging 환경 진입 시 자동 ON |
+
+### Root cause #3 사용자 시나리오 해석
+
+prod DB 검증 결과 `alert_task_not_started_enabled = false` (5-11 08:26 사용자 설정). 사용자 "업데이트 할때마다 true값으로 변경" 현상 = DB key 부재 시 BE GET fallback `result.setdefault(key, meta['default'])` 가 default `True` 반환 영역. 5-11 catch 직전엔 default 적용 영역 (사용자 측 첫 설정 영역).
+
+### 검증
+
+- Flutter analyze: error 0 / 9 info (모두 기존 코드)
+- pytest 영역: `alert_task_not_started_enabled` 의존 test 0건
+- prod DB: 변경 0 (사용자 5-11 08:26 false 그대로)
+
+### 영향
+
+- 회귀 위험 = 0 (test 의존 X, FE 변경은 UI 영역만)
+- 사용자 영향:
+  - #1 비활성 사용자 목록 정상 표시
+  - #2 미종료 작업 다수 시 UI 스크롤 영역 보호
+  - #3 신규 admin 환경 default OFF (사용자 의도 정합)
+
+### 후속 (저녁 진행 예정)
+
+- version bump v2.12.5 (이미 적용)
+- git commit + push origin main
+- Netlify FE build + deploy
+- Railway BE 자동 재배포 검증
+- handoff/BACKLOG 업데이트
+- T+1h 검증
 
 ---
 

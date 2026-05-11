@@ -6,6 +6,58 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.12.5] - 2026-05-11 — FIX-ADMIN-OPTIONS-LISTS-SCROLL-ALERT-DEFAULT + HOTFIX-SPRINT66BE-MASTER-LIST-ITEM-TYPE (4건 묶음, P2 + S2)
+
+> 사용자 측 5-11 운영 catch — Admin 옵션 화면 3건 + AXIS-VIEW v1.43.1 ChecklistEditModal 회귀 영역 hotfix 1건.
+>
+> ④ HOTFIX 영역: `/api/admin/checklist/master` GET 응답에 `item_type` + `select_options` 누락 (cowork 실수 #18, ADR-024 분리 검토 임계 초과) — AXIS-VIEW v1.43.1 SELECT 분기 UI 미동작 회귀 fix.
+
+### 변경
+
+- **FE** `frontend/lib/screens/admin/admin_options_screen.dart`
+  - **#1-a FE/BE 키 정정** (silent fail 영역):
+    - L444: `response['workers']` → `response['inactive_workers']` (admin.py L2432 정합)
+    - L461: `response['workers']` → `response['deactivated_workers']` (admin.py L2471 정합)
+  - **#1-b/c/2 스크롤 추가** — 3 영역 ConstrainedBox 240px max wrap (5-11 사용자 결정 — 약 3건 표시 + overflow scroll):
+    - 비활성 사용자 (n일 미로그인) ListView
+    - 비활성화 계정 ListView
+    - 미종료 작업 Column (SingleChildScrollView wrap)
+  - **#3 미시작 알람 default off** (FE state 정합):
+    - L35: `bool _alertTaskNotStartedEnabled = true` → `false`
+    - L324: fallback `?? true` → `?? false`
+
+- **BE** `backend/app/routes/admin.py`
+  - **#3 SETTING_KEYS default off**:
+    - L71: `'alert_task_not_started_enabled': {'default': True, ...}` → `'default': False`
+
+- **BE** `backend/app/routes/checklist.py` (④ HOTFIX-SPRINT66BE-MASTER-LIST-ITEM-TYPE-20260511)
+  - **list_checklist_master() SELECT + 응답 dict 정정** (+2 LoC, additive):
+    - SELECT 절 추가: `cm.item_type, cm.select_options`
+    - 응답 dict 추가: `'item_type': row.get('item_type') or 'CHECK'` + `'select_options': row.get('select_options')`
+  - 영향: AXIS-VIEW v1.43.1 ChecklistEditModal `item.item_type === 'SELECT'` 분기 정상화 → SELECT 매핑 UI 자동 복구
+
+### 영향
+
+- **prod DB**: 영향 0 (사용자 5-11 08:26 이미 false 설정 — default 변경은 신규/staging 환경만 적용)
+- **회귀 위험**: 0 (test 의존 0건, FE 변경은 UI 영역만)
+- **사용자 영향**:
+  - #1 비활성 사용자 목록 정상 표시 (silent fail 해소)
+  - #2 미종료 작업 다수 시 UI 스크롤 영역 보호 (240px 제한)
+  - #3 신규 admin 환경 진입 시 미시작 알람 default OFF (사용자 의도 정합)
+
+### 검증
+
+- Flutter analyze: error 0 / 9 info (모두 기존 코드)
+- pytest 영역: `alert_task_not_started_enabled` 의존 test 0건
+- prod DB SETTING_KEYS 영역 read-only (BE GET fallback)
+
+### 후속
+
+- push 보류 → 저녁 진행 예정 (운영 시간 영역 회피, 사용자 5-11 결정)
+- push 시 Railway 자동 재배포 + Netlify FE 배포 + V4.1 측정 baseline reset
+
+---
+
 ## [2.12.4] - 2026-05-10 — FIX-ELEC-IF-NAMING-DOCKING-CLARITY: IF_1/IF_2 task_name 도킹 전/후 명시 (BE + Migration, P3)
 
 > 사용자 측 운영 catch — 작업자들이 IF_1/IF_2 의 1/2 기준이 도킹 전/후 인지 혼동. 명시적 라벨 부여로 영구 해결. task_id 변경 X (식별자 보존), task_name display only.
