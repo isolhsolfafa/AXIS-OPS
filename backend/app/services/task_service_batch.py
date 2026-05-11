@@ -241,8 +241,15 @@ def get_tasks_by_order(
     sales_order: str,
     task_categories: List[str],
     task_id: str,
-) -> Tuple[Dict[str, Any], int]:
-    """FE Sprint 40 prefetch — 같은 O/N TANK_MODULE task 일괄 조회 (N+1 제거)."""
+) -> Tuple[List[Dict[str, Any]], int]:
+    """FE Sprint 40 prefetch — 같은 O/N TANK_MODULE task 일괄 조회 (N+1 제거).
+
+    v2.13.1 (HOTFIX-TASKS-BY-ORDER-SCHEMA): 응답 형식 정정
+      Before: {'tasks': [...], 'total': N}  ← Sprint 64-BE 영역 객체 wrap (일관성 위반)
+      After:  [...]                          ← 다른 list endpoint (/api/app/tasks/{sn}?all=true) 정합
+
+    VIEW v1.43.5 영역 양쪽 형식 호환 코드 도입 → 회귀 위험 0.
+    """
     conn = get_db_connection()
     try:
         cur = conn.cursor()
@@ -263,4 +270,4 @@ def get_tasks_by_order(
     from app.routes.work import _task_to_dict
     from app.models.task_detail import TaskDetail
     tasks = [_task_to_dict(TaskDetail.from_db_row(r)) for r in rows]
-    return ({'tasks': tasks, 'total': len(tasks)}, 200)
+    return (tasks, 200)

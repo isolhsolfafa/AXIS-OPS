@@ -1,7 +1,37 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-11 KST (✅ v2.13.0 release 완료 — Sprint 64-BE v3 Work Batch 엔드포인트 신규. 신규 파일 2개 분리 (CLAUDE.md L545 정합) + pytest 30 TC GREEN + Codex 5 라운드 검증 (M=6→M=0). AXIS-VIEW Sprint 40 v1.40.0 contract BE 측 구현 완료 — Twin파파 측 VIEW 직접 검증 예정)
+> 마지막 업데이트: 2026-05-11 KST (✅ v2.13.1 hotfix release — `/tasks/by-order/<sales_order>` 응답 형식 정정 (객체 wrap → 배열 직접). Sprint 64-BE v3 후속, Codex 5라운드 검증 catch 누락 영역 (다른 endpoint 응답 spec 대조 누락). AXIS-VIEW v1.43.5 호환 코드 동시 release — 회귀 위험 0)
+
+## ✅ 2026-05-11 KST — v2.13.1 hotfix release (HOTFIX-TASKS-BY-ORDER-SCHEMA)
+
+> **한 줄 요약**: Sprint 64-BE v3 후속 hotfix — `/tasks/by-order/<sales_order>` 응답 객체 wrap → 배열 직접 정정. VIEW v1.43.5 호환 코드 양쪽 형식 처리. 일괄 시작 토스트 미표시 catch 즉시 fix.
+
+### 변경 trail
+
+| 단계 | 결과 |
+|---|---|
+| Sprint 64-BE v3 v2.13.0 release 직후 사용자 catch (VIEW 분석) | ✅ |
+| Root cause 확정 — Codex 5라운드 catch 누락 (다른 endpoint spec 대조 X) | ✅ |
+| 옵션 B 결정 — VIEW v1.43.5 + OPS v2.13.1 동시 release | ✅ |
+| BE 정정 — `task_service_batch.py` `get_tasks_by_order()` return type | ✅ |
+| version bump v2.13.0 → v2.13.1 | ✅ |
+| md 5개 갱신 (CLAUDE.md / CHANGELOG.md / PROGRESS.md / handoff.md / BACKLOG.md) | ⏳ |
+| commit + push | ⏳ |
+
+### 핵심 결정 사항
+
+- VIEW v1.43.5 호환 코드 (양쪽 형식 처리) + OPS v2.13.1 응답 정합 = 양쪽 즉시 release
+- 회귀 위험 0 — VIEW 호환 코드 영역 BE 변경 후에도 자동 정상 작동
+- pytest TC 영역 추가는 별 sprint (즉시 release 우선)
+
+### 후속 BACKLOG
+
+- POST-REVIEW: Codex 검증 라운드 영역 응답 spec 일관성 항목 추가 (다른 endpoint 영역 대조 표준화)
+
+---
+
+## ⏸️ 이전 release: v2.13.0 (Sprint 64-BE v3 Work Batch)
 
 ## ✅ 2026-05-11 KST — v2.13.0 minor release (Sprint 64-BE v3 Work Batch)
 

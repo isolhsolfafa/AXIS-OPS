@@ -6,6 +6,48 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.13.1] - 2026-05-11 — HOTFIX-TASKS-BY-ORDER-SCHEMA (Sprint 64-BE v3 후속)
+
+> Sprint 64-BE v3 v2.13.0 release 직후 사용자 측 (AXIS-VIEW) catch — `/tasks/by-order/<sales_order>` 응답 schema 불일치. 다른 list endpoint 영역 배열 직접 반환인데 신규 endpoint만 `{tasks, total}` 객체 wrap → VIEW FE `Array.isArray(data) ? data : []` 영역 빈 배열 fallback → 일괄 시작 토스트 미표시 (TEST-1111 단일 처리만).
+
+### Root cause
+
+- AGENT_TEAM_LAUNCH.md v3 본문 L35628 영역 `{'tasks': tasks, 'total': len(tasks)}` 명시 영역 — Codex 5 라운드 검증 모두 통과 영역, 다른 endpoint 영역 응답 spec 영역 **대조 누락**
+- VIEW v1.43.5 영역 `getTasksByOrder()` 호환 코드 도입 + OPS v2.13.1 영역 응답 형식 정정 동시 release → 양쪽 정합
+
+### 변경 (~5 line)
+
+- **BE** `backend/app/services/task_service_batch.py` `get_tasks_by_order()`
+  - return type: `Tuple[Dict[str, Any], int]` → `Tuple[List[Dict[str, Any]], int]`
+  - return 영역: `({'tasks': tasks, 'total': len(tasks)}, 200)` → `(tasks, 200)` (배열 직접)
+- **BE** `backend/app/routes/work_batch.py` `tasks_by_order_route()` — `jsonify(response)` 그대로 (Flask 3.x list 자동 처리)
+- **version bump**: 2.13.0 → 2.13.1
+
+### Endpoint 응답 spec 비교 (정합 후)
+
+| Endpoint | 응답 | 패턴 |
+|----------|------|------|
+| `/api/app/tasks/{sn}?all=true` | `[...]` 배열 | ✅ list endpoint 정합 |
+| `/api/app/tasks/by-order/{ON}` ⭐ 정정 | `[...]` 배열 | ✅ list endpoint 정합 (v2.13.1) |
+| `/api/app/work/start-batch` | `{succeeded, skipped, total}` | ✅ batch 응답 분리 (정합) |
+| `/api/app/work/complete-batch` | `{succeeded, skipped, total}` | ✅ batch 응답 분리 (정합) |
+
+### 회귀 위험
+
+- 0 — VIEW v1.43.5 영역 양쪽 형식 모두 호환 코드 (Array.isArray ? data : data.tasks ?? []) 도입 → BE 변경해도 자동 정상 작동
+
+### 검증
+
+- VIEW 측 v1.43.5 release 후 일괄 시작 토스트 정상 표시 예상
+- BE 응답 시 `[task1, task2, ...]` 배열 직접 반환 검증 (Twin파파 측 Network 탭 확인)
+- AXIS-VIEW Sprint 40 일괄 처리 영역 정상 작동 확인
+
+### 후속 영역
+
+- pytest TC `TestTasksByOrder` 응답 영역 배열 형식 검증 — 별 sprint (현재 응답 형식 변경만 우선 release)
+
+---
+
 ## [2.13.0] - 2026-05-11 — Sprint 64-BE v3 (SPRINT-64-BE-WORK-BATCH-V2-20260511) Work Batch 엔드포인트 신규
 
 > TM Tank Module 일괄 처리 BE 엔드포인트 신규 (AXIS-VIEW Sprint 40 v1.40.0 contract BE 측 구현). 신규 파일 2개 분리 (CLAUDE.md L545 정합, 기존 work.py/task_service.py touch 0). Codex 5 라운드 검증 (M=6→4→1→1→0 GREEN). pytest 30 TC GREEN (Unit 13 + Integration 17, staging DB 22분 10초 실측). 회귀 위험 0.
