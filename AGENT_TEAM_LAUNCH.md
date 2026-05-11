@@ -40213,6 +40213,113 @@ def test_validate_source_keys_passes_valid_csv():
 
 ---
 
+# HOTFIX-SPRINT66BE-CREATE-MASTER-ITEM-TYPE-AND-CONFLICT-MSG-20260511 (cowork 실수 #19)
+
+> **Sprint ID**: `HOTFIX-SPRINT66BE-CREATE-MASTER-ITEM-TYPE-AND-CONFLICT-MSG-20260511`
+> **유형**: Sprint 52 POST 시점 회귀 hotfix (BE only)
+> **Severity**: 🟠 S2 (운영 차단 — admin 항목 추가 시 SELECT/INPUT 타입 묵음 회귀 + CONFLICT 디버깅 불가)
+> **사후 Codex 검토**: 7일 이내 (deadline 2026-05-18)
+> **POST-REVIEW**: BACKLOG `POST-REVIEW-HOTFIX-SPRINT66BE-CREATE-MASTER-ITEM-TYPE-20260511` 등록
+> **작성일**: 2026-05-11 KST
+> **트리거**: 사용자 catch — AXIS-VIEW 항목 추가 모달에서 toast "추가에 실패했습니다" + Network 응답 `{"error": "CONFLICT", "message": "이미 존재하는 항목입니다."}` (409)
+> **우선순위**: 🔴 P1 (운영 차단 — admin 항목 추가 시 디버깅 정보 부족 + 신규 SELECT/INPUT 생성 불가)
+> **추정 시간**: ~10분 (정정 완료, +50 LoC)
+> **선행 의존성**: HOTFIX-SPRINT66BE-MASTER-LIST-ITEM-TYPE-20260511 동시 배포 권장 (동일 엔드포인트 그룹)
+
+## 3 분리 원인 (cowork 실수 #19)
+
+**원인 ①** — UNIQUE 제약 위반 (정상 동작, 사용자 인지 필요)
+- `checklist.checklist_master` UNIQUE = `(product_code, category, item_group, item_name)` (migration 043a L23)
+- 사용자가 추가하려는 (그룹+항목명) 조합이 이미 DB 에 존재 (활성/비활성 무관)
+
+**원인 ②** — POST INSERT 의 `item_type` / `select_options` 컬럼 누락 (Sprint 52 시점 회귀)
+- BE `create_checklist_master()` L400-441 의 INSERT 가 두 컬럼 빠짐
+- FE (`ChecklistAddModal`) 가 `item_type: 'SELECT'|'INPUT'` 전송해도 BE 가 무시 → DB DEFAULT `'CHECK'` (migration 043a L31) 저장
+- 결과: AXIS-VIEW 에서 신규 SELECT/INPUT 항목 생성 불가 (모두 CHECK 저장됨)
+- 누적 회귀 영향: Sprint 52 POST 작성 시점 ~ Sprint 63-BE 'INPUT' enum 확장 시점까지 ~6개월
+
+**원인 ③** — CONFLICT 응답 메시지 비식별
+- 현재: `{"error": "CONFLICT", "message": "이미 존재하는 항목입니다."}` (어떤 항목과 충돌인지 불명)
+- GET 가 `is_active=TRUE` 만 반환 → 비활성 항목 충돌 시 FE 목록에 안 보임 → 사용자 디버깅 불가
+
+## 변경 사항 (+50 LoC)
+
+`backend/app/routes/checklist.py`:
+
+```python
+# (1) import json 추가 (admin_checklists.py L224 컨벤션 정합)
+import json
+
+# (2) item_type / select_options 추출 + 검증 (L416 이후)
+item_type = (data.get('item_type') or 'CHECK').strip().upper()
+if item_type not in ('CHECK', 'SELECT', 'INPUT'):
+    return jsonify({
+        'error': 'INVALID_REQUEST',
+        'message': f"item_type 은 CHECK/SELECT/INPUT 중 하나여야 합니다. (현재: {item_type})"
+    }), 400
+
+select_options = data.get('select_options')
+if select_options is not None and not isinstance(select_options, list):
+    return jsonify({
+        'error': 'INVALID_REQUEST',
+        'message': 'select_options 는 배열이어야 합니다.'
+    }), 400
+
+# (3) INSERT 컬럼 2개 추가
+INSERT INTO checklist.checklist_master
+    (product_code, category, item_group, item_name,
+     item_type, select_options,            -- ⭐ ADDED
+     item_order, description,
+     phase1_applicable, qi_check_required, remarks, updated_at)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+RETURNING id
+
+# (4) json.dumps() 직렬화 (NULL safe)
+(product_code, category, item_group, item_name, item_type,
+ json.dumps(select_options) if select_options is not None else None,
+ item_order, description, phase1_applicable, qi_check_required, remarks)
+
+# (5) CONFLICT 응답에 기존 충돌 항목 id + is_active 포함
+if 'unique' in err_str.lower() or 'duplicate' in err_str.lower():
+    # SELECT id, is_active FROM checklist_master WHERE 조건 매칭
+    # 응답: {error, message, existing_id, is_active}
+    # 비활성 항목 충돌 시 "토글로 활성화 후 사용하세요" 안내 추가
+```
+
+## 회귀 위험
+
+**0** — FE 가 `item_type` 미전송 시 `'CHECK'` fallback (기존 동작 보존). `select_options` 미전송 시 `None` (NULL 저장, 기존 동작 보존). INSERT 컬럼 추가는 신규 필드만 — 기존 데이터 무영향.
+
+## pytest TC (P2, BACKLOG 후속)
+
+1. `test_admin_checklist_master_post_with_item_type_select` — `{item_type: 'SELECT', select_options: []}` 전송 → DB `item_type='SELECT'`, `select_options=NULL` (빈 배열 직렬화 NULL fallback) 저장 확인
+2. `test_admin_checklist_master_post_with_item_type_input` — `{item_type: 'INPUT'}` 전송 → DB `item_type='INPUT'` 저장 확인
+3. `test_admin_checklist_master_post_conflict_with_inactive_existing` — 비활성 (is_active=FALSE) 동일 항목 존재 시 CONFLICT 응답에 `existing_id` + `is_active=FALSE` + 토글 안내 포함 확인
+
+## Rollback
+
+git revert 1 commit (회귀 0 — 신규 검증/필드만 제거되며 기존 동작 그대로).
+
+## 검증 방법 (사용자 측)
+
+1. AXIS-OPS BE 배포 (Railway auto-deploy)
+2. AXIS-VIEW admin → 체크리스트 관리 → MECH → "+ 항목 추가"
+3. 테스트 1 (정상): 그룹: GN2 / 항목명: "테스트 SELECT 1" (DB 미존재) / 타입: SELECT → "추가" → 성공 toast
+4. 검증: DB `SELECT id, item_type, select_options FROM checklist.checklist_master WHERE item_name='테스트 SELECT 1'` → `item_type='SELECT'` 확인
+5. 테스트 2 (CONFLICT 식별): 같은 그룹+항목명 재추가 → 응답 `existing_id` + `is_active` 포함 확인 → DevTools Network 패널에서 식별 가능
+
+## ADR-024 분리 신호 (cowork 실수 #19)
+
+본 HOTFIX 는 cowork 누적 실수 #19. ADR-023 분리 임계 (15+) 초과 (#18 이어서) — ADR-024 cowork 작업 분리 정책 결정 시급. cowork 자체 검증 라운드에서 POST INSERT 와 GET SELECT 정합성 모두 catch 실패. Sprint 52 → Sprint 63-BE → Sprint 66-BE 흐름에서 admin master CRUD 일관성 검증 누락이 누적되었음.
+
+## 연관
+
+- HOTFIX-SPRINT66BE-MASTER-LIST-ITEM-TYPE-20260511 (GET, 동시 release 권장)
+- Sprint 52 (POST 작성 시점, item_type 누락 시작)
+- Sprint 63-BE migration 051 (item_type 'INPUT' enum 확장 — POST 정정 누락)
+
+---
+
 # HOTFIX-SPRINT66BE-MASTER-LIST-ITEM-TYPE-20260511 (cowork 실수 #18)
 
 > **Sprint ID**: `HOTFIX-SPRINT66BE-MASTER-LIST-ITEM-TYPE-20260511`

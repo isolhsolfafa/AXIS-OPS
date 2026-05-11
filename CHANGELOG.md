@@ -6,6 +6,41 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.12.6] - 2026-05-11 — HOTFIX-SPRINT66BE-CREATE-MASTER-ITEM-TYPE-AND-CONFLICT-MSG (cowork 실수 #19, S2)
+
+> v2.12.5 release 직후 사용자 측 catch — AXIS-VIEW "+ 항목 추가" 모달에서 신규 SELECT/INPUT 항목 추가 시 묵음 회귀 (DB DEFAULT 'CHECK' 저장) + CONFLICT 응답 비식별 영역.
+
+### 변경
+
+- **BE** `backend/app/routes/checklist.py` (+~50 LoC)
+  - `import json` 추가
+  - **`create_checklist_master()` POST 정정 3건**:
+    1. `item_type` 추출 + enum 검증 (`CHECK/SELECT/INPUT`, migration 051 정합)
+    2. `select_options` 추출 + list 검증 + `json.dumps()` 직렬화 (admin_checklists.py L224 컨벤션)
+    3. CONFLICT 응답 보강 — 기존 충돌 항목 `id` + `is_active` 포함 + 비활성 시 토글 안내
+  - INSERT 컬럼 2개 추가 (`item_type`, `select_options`)
+
+### Root cause
+
+- Sprint 52 POST 작성 시점 ~ Sprint 63-BE 'INPUT' enum 확장 시점까지 누적 회귀
+- FE 가 `item_type='SELECT'|'INPUT'` 전송해도 BE 가 무시하고 DB DEFAULT `'CHECK'` 저장
+- 신규 SELECT/INPUT 항목 생성 불가 묵음 회귀 — 사용자 측 catch 까지 ~수 sprint 잠복
+
+### ADR-024 분리 정책 결정 시급
+
+cowork 누적 실수 #19 (5-09 #16 → 5-11 #18 → 5-11 #19, 약 2일 누적 3건). cowork 작업 분리 정책 (cowork ↔ Claude Code 영역 명확화) 결정 영역 임계 초과.
+
+### 영향
+
+- **회귀 위험 0** (FE 가 item_type 미전송 시 'CHECK' fallback — 기존 동작 보존)
+- 사용자 영향: AXIS-VIEW 신규 SELECT/INPUT 항목 추가 정상화
+
+### POST-REVIEW
+
+`POST-REVIEW-HOTFIX-SPRINT66BE-CREATE-MASTER-ITEM-TYPE-20260511` deadline 2026-05-18
+
+---
+
 ## [2.12.5] - 2026-05-11 — FIX-ADMIN-OPTIONS-LISTS-SCROLL-ALERT-DEFAULT + HOTFIX-SPRINT66BE-MASTER-LIST-ITEM-TYPE (4건 묶음, P2 + S2)
 
 > 사용자 측 5-11 운영 catch — Admin 옵션 화면 3건 + AXIS-VIEW v1.43.1 ChecklistEditModal 회귀 영역 hotfix 1건.

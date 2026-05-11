@@ -4,6 +4,7 @@
 checklist 스키마의 checklist_master + checklist_record CRUD
 """
 
+import json
 import logging
 from flask import Blueprint, request, jsonify, g
 from typing import Tuple, Dict, Any
@@ -418,6 +419,22 @@ def create_checklist_master() -> Tuple[Dict[str, Any], int]:
     qi_check_required = data.get('qi_check_required', False)
     remarks = (data.get('remarks') or '').strip() or None
 
+    # ⭐ HOTFIX 5-11: item_type / select_options 추출 누락 정정
+    #    FE (ChecklistAddModal) 가 item_type='CHECK'|'SELECT'|'INPUT' 전송 → BE 가 받지 못해 DB DEFAULT 'CHECK' 로 저장되던 회귀 정정
+    item_type = (data.get('item_type') or 'CHECK').strip().upper()
+    if item_type not in ('CHECK', 'SELECT', 'INPUT'):
+        return jsonify({
+            'error': 'INVALID_REQUEST',
+            'message': f"item_type 은 CHECK/SELECT/INPUT 중 하나여야 합니다. (현재: {item_type})"
+        }), 400
+    # select_options: SELECT 타입 신규 생성 시 빈 배열 ([]) 전송 권장. 그 외 None
+    select_options = data.get('select_options')
+    if select_options is not None and not isinstance(select_options, list):
+        return jsonify({
+            'error': 'INVALID_REQUEST',
+            'message': 'select_options 는 배열이어야 합니다.'
+        }), 400
+
     try:
         item_order = int(item_order)
     except (ValueError, TypeError):
@@ -431,19 +448,20 @@ def create_checklist_master() -> Tuple[Dict[str, Any], int]:
         cur.execute(
             """
             INSERT INTO checklist.checklist_master
-                (product_code, category, item_group, item_name, item_order, description,
-                 phase1_applicable, qi_check_required, remarks, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                (product_code, category, item_group, item_name, item_type, select_options,
+                 item_order, description, phase1_applicable, qi_check_required, remarks, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
             RETURNING id
             """,
-            (product_code, category, item_group, item_name, item_order, description,
-             phase1_applicable, qi_check_required, remarks)
+            (product_code, category, item_group, item_name, item_type,
+             json.dumps(select_options) if select_options is not None else None,
+             item_order, description, phase1_applicable, qi_check_required, remarks)
         )
         result = cur.fetchone()
         conn.commit()
 
         new_id = result['id']
-        logger.info(f"Checklist master created: id={new_id}, category={category}, product_code={product_code}")
+        logger.info(f"Checklist master created: id={new_id}, category={category}, product_code={product_code}, item_type={item_type}")
 
         return jsonify({'id': new_id, 'message': '항목이 추가되었습니다.'}), 201
 
@@ -451,8 +469,35 @@ def create_checklist_master() -> Tuple[Dict[str, Any], int]:
         if conn:
             conn.rollback()
         err_str = str(e)
-        # UNIQUE 제약 위반 (product_code + category + item_name)
+        # UNIQUE 제약 위반 (product_code + category + item_group + item_name) — migration 043a 변경
         if 'unique' in err_str.lower() or 'duplicate' in err_str.lower():
+            # ⭐ HOTFIX 5-11: CONFLICT 응답에 기존 충돌 항목 id + is_active 포함 (비활성 항목 충돌 식별)
+            try:
+                conn2 = get_db_connection()
+                cur2 = conn2.cursor()
+                cur2.execute(
+                    """
+                    SELECT id, is_active FROM checklist.checklist_master
+                    WHERE product_code = %s AND category = %s
+                      AND COALESCE(item_group, '') = COALESCE(%s, '')
+                      AND item_name = %s
+                    LIMIT 1
+                    """,
+                    (product_code, category, item_group, item_name)
+                )
+                existing = cur2.fetchone()
+                put_conn(conn2)
+                if existing:
+                    detail = f" (id={existing['id']}, is_active={existing['is_active']})"
+                    hint = " — 비활성 상태입니다. 토글로 활성화 후 사용하세요." if not existing['is_active'] else ""
+                    return jsonify({
+                        'error': 'CONFLICT',
+                        'message': f"이미 존재하는 항목입니다.{detail}{hint}",
+                        'existing_id': existing['id'],
+                        'is_active': existing['is_active'],
+                    }), 409
+            except Exception:
+                pass  # fallback to generic message
             return jsonify({'error': 'CONFLICT', 'message': '이미 존재하는 항목입니다.'}), 409
         logger.error(f"Checklist master create failed: {e}")
         return jsonify({'error': 'DB_ERROR', 'message': '체크리스트 항목 추가 실패'}), 500

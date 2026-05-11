@@ -3,12 +3,58 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: **v2.12.5 (FIX-ADMIN-OPTIONS-LISTS-SCROLL-ALERT-DEFAULT + HOTFIX-SPRINT66BE-MASTER-LIST-ITEM-TYPE — 4건 묶음 release, 2026-05-11)** — FE 5 + BE 1 (SETTING_KEYS default) + BE 1 (checklist.py +2 LoC HOTFIX) / Flutter analyze error 0 / 회귀 위험 0 / Railway + Netlify 배포 완료
+> **현재 버전**: **v2.12.6 (HOTFIX-SPRINT66BE-CREATE-MASTER-ITEM-TYPE-AND-CONFLICT-MSG — POST INSERT item_type + select_options 정정, 2026-05-11)** — BE only patch (~50 LoC) / cowork 실수 #19 / 회귀 위험 0 / ADR-024 분리 정책 결정 시급
+> **선행 release**: v2.12.5 (FIX-ADMIN-OPTIONS-LISTS-SCROLL-ALERT-DEFAULT + HOTFIX-SPRINT66BE-MASTER-LIST-ITEM-TYPE — 4건 묶음, 2026-05-11)
 > **선행 release**: v2.12.4 (FIX-ELEC-IF-NAMING-DOCKING-CLARITY — IF_1/IF_2 task_name 도킹 전/후 명시, 2026-05-10) — BE 2 line + Migration 054 (370 row UPDATE atomic) + pytest 28/28 PASS
 > **선행 release**: v2.12.2 (FEAT-MATERIAL Step 3 — checklist_master 동적 자재 조회, 2026-05-08) — BE checklist_service.py 4 신규 함수 + FE mech_checklist_screen.dart 재진입 hydrate + pytest 14 TC
 > **선행 인프라**: FIX-DB-POOL-MAX-SIZE-20260427 — Railway env DB_POOL_MAX 20→30 (2026-04-27, 코드 변경 0)
 > **D+1 운영 검증 (2026-04-28)**: 출근 peak 측정 PASS — Pool exhausted 0 / direct conn fallback 0 / OPS conn 6~7 안정 / Sentry 새 issue 0 → 옵션 X1 유지, OBSERV-WARMUP COMPLETED 확정, v2.10.11 HOTFIX-06b 불필요
 > **DB Pool V4.1 T+1주 검증 (2026-05-10)**: 🟢 시나리오 A 이상적 1차 통과 — Railway 36h 0/0 0건, Sentry 1주 신규 0건, Cluster A 9.5h 무중단. 5일 주기 가설 break 진행 중 (4-29 → 5-04 → 5-07 → 5-10 0건). 사용자 측 5-15까지 추가 점검 (5-12 ± 1d 예상 사고 시점 통과 확인)
+
+---
+
+## v2.12.6 (HOTFIX-SPRINT66BE-CREATE-MASTER-ITEM-TYPE-AND-CONFLICT-MSG — POST INSERT 정정, 2026-05-11)
+
+**Sprint**: `HOTFIX-SPRINT66BE-CREATE-MASTER-ITEM-TYPE-AND-CONFLICT-MSG-20260511` (S2, cowork 실수 #19)
+
+**상태**: ✅ COMPLETED (5-11 release, Railway 배포 완료, BE only — Netlify 빌드 X)
+
+**배경**: v2.12.5 release 직후 사용자 측 catch — AXIS-VIEW "+ 항목 추가" 모달에서 신규 SELECT/INPUT 항목 추가 시 묵음 회귀.
+
+### 변경 (~50 LoC)
+
+**BE** `backend/app/routes/checklist.py`:
+- `import json` 추가
+- `create_checklist_master()` POST 정정 3건:
+  1. `item_type` 추출 + enum 검증 (CHECK/SELECT/INPUT)
+  2. `select_options` 추출 + list 검증 + `json.dumps()` 직렬화
+  3. CONFLICT 응답 보강 — 기존 충돌 항목 `id` + `is_active` 포함 + 비활성 시 토글 안내
+- INSERT 컬럼 2개 추가 (`item_type`, `select_options`)
+
+### Root cause
+
+- Sprint 52 POST 작성 시점 ~ Sprint 63-BE 'INPUT' enum 확장 시점까지 **묵음 누적 회귀**
+- FE 가 `item_type='SELECT'|'INPUT'` 전송해도 BE 가 무시 → DB DEFAULT `'CHECK'` 저장
+- 신규 SELECT/INPUT 항목 생성 불가 → 사용자 측 catch 까지 ~수 sprint 잠복
+
+### ADR-024 분리 정책 결정 시급
+
+cowork 누적 실수 영역:
+- 5-09 #16 — HOTFIX-SPRINT66BE-ENRICH-SELECT-OPTIONS-ITEMCODE (Codex M1~M5 폐기)
+- 5-11 #18 — HOTFIX-SPRINT66BE-MASTER-LIST-ITEM-TYPE (GET 누락)
+- 5-11 #19 — 본 HOTFIX (POST 누락, 동일 그룹)
+
+→ 2일 누적 3건 (특히 #18+#19 동시 발견) = cowork ↔ Claude Code 작업 분리 정책 결정 영역 임계 초과.
+
+### 영향
+
+- 회귀 위험 0 (FE 가 item_type 미전송 시 'CHECK' fallback — 기존 동작 보존)
+- 사용자 영향: AXIS-VIEW 신규 SELECT/INPUT 항목 추가 정상화
+
+### 후속
+
+- POST-REVIEW deadline 2026-05-18
+- ADR-024 분리 정책 결정 영역 — 별 sprint
 
 ---
 

@@ -1,7 +1,51 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-11 KST (✅ v2.12.5 release 완료 — FIX-ADMIN-OPTIONS-LISTS-SCROLL-ALERT-DEFAULT 3건 + HOTFIX-SPRINT66BE-MASTER-LIST-ITEM-TYPE 1건 (4건 묶음). Railway + Netlify 배포 완료)
+> 마지막 업데이트: 2026-05-11 KST (✅ v2.12.6 release 완료 — HOTFIX-SPRINT66BE-CREATE-MASTER-ITEM-TYPE-AND-CONFLICT-MSG (cowork 실수 #19, S2). v2.12.5 4건 묶음 release 직후 patch — POST 누락 영역 정정 ~50 LoC. ADR-024 분리 정책 결정 시급)
+
+## ✅ 2026-05-11 KST — v2.12.6 patch release (HOTFIX-SPRINT66BE-CREATE-MASTER-ITEM-TYPE-AND-CONFLICT-MSG)
+
+> **한 줄 요약**: v2.12.5 release 직후 사용자 catch — AXIS-VIEW "+ 항목 추가" 모달에서 신규 SELECT/INPUT 항목 추가 시 묵음 회귀 (DB DEFAULT 'CHECK' 저장). `create_checklist_master()` POST 정정 ~50 LoC (item_type 검증 + select_options 직렬화 + CONFLICT 응답 보강). 회귀 위험 0 (additive). cowork 누적 실수 #19 — ADR-024 분리 정책 결정 시급 영역.
+
+### 변경 trail
+
+| 단계 | 결과 |
+|---|---|
+| BE `checklist.py` import json + POST 정정 (~50 LoC) | ✅ |
+| ① item_type 추출 + enum 검증 (CHECK/SELECT/INPUT) | ✅ |
+| ② select_options 추출 + list 검증 + json.dumps 직렬화 | ✅ |
+| ③ CONFLICT 응답 보강 (기존 id + is_active + 비활성 안내) | ✅ |
+| INSERT 컬럼 2개 추가 (item_type, select_options) | ✅ |
+| BACKLOG entry 신규 등록 | ✅ |
+| AGENT_TEAM_LAUNCH 설계서 신규 섹션 | ✅ |
+| version bump v2.12.5 → v2.12.6 | ✅ |
+| commit + push | ⏳ 진행 중 |
+| Railway 자동 재배포 검증 | ⏳ |
+
+### Root cause
+
+- Sprint 52 POST 작성 시점 ~ Sprint 63-BE 'INPUT' enum 확장 시점까지 **묵음 누적 회귀**
+- FE 측 item_type 전송에도 BE 가 무시 → DB DEFAULT 'CHECK' 저장
+- 신규 SELECT/INPUT 항목 생성 불가 묵음 회귀 → ~수 sprint 잠복
+
+### ADR-024 분리 정책 결정 시급
+
+cowork 누적 실수 영역 (5-09~5-11 2일 누적 3건):
+- #16 (5-09): HOTFIX-SPRINT66BE-ENRICH-SELECT-OPTIONS-ITEMCODE (Codex M1~M5 폐기)
+- #18 (5-11): HOTFIX-SPRINT66BE-MASTER-LIST-ITEM-TYPE (GET 누락)
+- #19 (5-11): 본 HOTFIX (POST 누락, #18 동일 그룹)
+
+→ cowork ↔ Claude Code 작업 분리 정책 결정 영역 임계 초과. 별 sprint 결정 필요.
+
+### 영향
+
+- 회귀 위험 0 (FE 가 item_type 미전송 시 'CHECK' fallback)
+- 사용자 영향: AXIS-VIEW 신규 SELECT/INPUT 항목 추가 정상화
+- FE Netlify 빌드 X (BE only) — v2.12.5 deploy 시 PWA storage 손실 영향과 별 영역
+
+---
+
+## ✅ 2026-05-11 KST — v2.12.5 release 완료 (4건 묶음: Admin 옵션 3건 + HOTFIX-SPRINT66BE-MASTER-LIST-ITEM-TYPE)
 
 ## ✅ 2026-05-11 KST — v2.12.5 release 완료 (4건 묶음: Admin 옵션 3건 + HOTFIX-SPRINT66BE-MASTER-LIST-ITEM-TYPE)
 
