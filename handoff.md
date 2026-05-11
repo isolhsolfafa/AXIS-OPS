@@ -28,6 +28,17 @@
 - Codex 사후 검토 — S1 HOTFIX 정합 (CLAUDE.md L237)
 - Codex 검증 라운드 표준화 권고 — 응답 spec 일관성 + 후처리 패턴 일관성 동시 검증 항목
 
+### ✅ 운영 검증 완료 (Twin파파 측, 2026-05-11 KST)
+
+- VIEW 대시보드 영역 **일괄 시작/종료 정상 작동 확인** — TEST-1111~1113 영역
+- S/N 상세뷰 영역 흰 화면 영역 정상 렌더 확인 (VIEW v1.43.6 + OPS v2.13.2 정합)
+- 토스트 영역 succeeded / skipped 양쪽 정상 표시
+- 회귀 영역 0 — 기존 단일 `/work/start` `/work/complete` 영역 영향 없음
+
+### 신규 제안 영역 — BACKLOG 등록 후 별 sprint 검토
+
+사용자 제안 (2026-05-11 KST): "일괄 시작 영역 입력 시 QR 태깅 없이도 작업 현황 영역 표시" — admin/manager 영역 사전 등록 영역 의도. 별 BACKLOG entry 등록 후 검토 영역 진행 영역 (FEAT-BATCH-START-WITHOUT-QR-TAG).
+
 ---
 
 ## ⏸️ 이전 release: v2.13.1 (HOTFIX-TASKS-BY-ORDER-SCHEMA)
