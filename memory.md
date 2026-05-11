@@ -2,11 +2,94 @@
 
 > 세션 간 누적되는 의사결정, 아키텍처 판단, 감사 결과를 기록합니다.
 > CLAUDE.md = 프로젝트 고정 정보 / memory.md = 누적 학습 / handoff.md = 세션 인계
-> 마지막 업데이트: 2026-05-11 (ADR-028 추가 — 운영 안정화 시기 storage 손실 모니터링 영역 + 6월 본격 운영 상태 재점검 결정)
+> 마지막 업데이트: 2026-05-11 (ADR-029 추가 — Cowork ↔ Claude Code 작업 분리 정책 정식 채택, 5-07 분리 검토 영역 도달 후 5-11 9건 누적 catch 임계 초과)
 
 ---
 
 ## 1. 아키텍처 의사결정 기록 (ADR)
+
+### ADR-029: Cowork ↔ Claude Code 작업 분리 정책 (2026-05-11)
+
+**맥락**: 2026-05-07 memory.md ADR-023 2차 보강 영역에서 "ADR-024 분리 검토 영역 도달" 명시 (6건 누적 시점). 그 후 추가 3건 catch 누적 = 9건 도달, 분리 정식 채택 영역 임계 초과.
+
+**Cowork 누적 실수 trail (9건, 2026-04~05)**:
+```
+1~6. ADR-023 2차 보강 시점 (5-07, 1차 누적):
+  ① GxColors.background/surface/mistLight (commit 21c581e)
+  ② check_result null 처리 (BE 400)
+  ③ ELEC `_get_checklist_by_category` SQL 차용 phase 단일 join 한계
+  ④ description 표시 영역 _buildInputField 만 적용
+  ⑤ completion_status.ee_completed (실제 elec_completed)
+  ⑥ @require_admin_or_gst (실제 @gst_or_admin_required, Sprint 27 표준 미확인)
+7. 5-08 #7 — MFC 카테고리 합의 위반 (Codex M4 추측 수용, Twin파파 catch)
+8. 5-09 #16 → HOTFIX-SPRINT66BE-ENRICH-SELECT-OPTIONS-ITEMCODE 폐기 (Codex M1~M5)
+   - Sprint 66-BE Step 3+4 schema (int material_id) 설계 drift catch
+9~10. 5-11 #18+#19 (2일 사이 동일 그룹 동시 발견):
+  ⑨ #18 — HOTFIX-SPRINT66BE-MASTER-LIST-ITEM-TYPE (GET 응답 schema 누락)
+  ⑩ #19 — HOTFIX-SPRINT66BE-CREATE-MASTER-ITEM-TYPE-AND-CONFLICT-MSG (POST INSERT 누락)
+```
+
+**결정 — Cowork 작업 영역 3단계 분류**:
+
+#### ✅ Cowork 직접 작업 가능 영역 (Tier 1)
+
+- **md 문서 작업** — CLAUDE / PROGRESS / CHANGELOG / handoff / BACKLOG / memory / AGENT_TEAM_LAUNCH
+- **SQL 검증 query (read-only)** — SELECT 측정 + 통계 + 분석
+- **데이터 분석** — pg_stat / Sentry trail / Railway logs 정리
+- **사용자 인터뷰 정리** — 운영 영역 catch 기록
+- **설계서 초안 작성** — design draft (검증 단계 필요)
+
+근거: 누적 실수 9건 중 0건 = md / 문서 영역. cowork 강점 영역.
+
+#### ⚠️ Cowork 작업 후 검증 필수 영역 (Tier 2 — Codex 라운드 + Claude Code cross-check 필수)
+
+- **HOTFIX 설계서** — 5-09 #16 폐기 사례 (M1~M5) 직접 사례. 설계 시 Codex 라운드 1 필수.
+- **API 응답 schema 변경** — 5-11 #18+#19 동일 그룹 동시 catch 실패 사례. endpoint 그룹 일관성 검증 필수 (GET + POST + PUT + DELETE 모두).
+- **신규 코드 변경 (BE/FE)** — cowork 작성 후 Claude Code cross-check + pytest 작성 + Codex 라운드 1 필수.
+- **Migration SQL 작성** — DB 영향 큰 영역. ROLLBACK 가이드 + 사전 검증 SQL 동봉 필수.
+- **CONFLICT/ERROR 응답 영역** — 5-11 #19 사례 (사용자 디버깅 영역). FE/사용자 영향 분석 필수.
+
+근거: 누적 실수 #1~#19 중 6건 = Tier 2 영역 (3,4,6,8,9,10). 검증 절차 강화로 사고 사전 차단.
+
+#### ❌ Cowork 단독 작업 금지 영역 (Tier 3 — Claude Code/사용자 결정 우선)
+
+- **prod DB 직접 변경** — DELETE / TRUNCATE / 운영 데이터 영향 큰 INSERT/UPDATE
+- **보안 영역** — JWT / encryption / auth flow / refresh_token / PIN 영역 (FIX-PIN-FLAG 사례 ↗)
+- **migration_history 직접 수정** — 자동 적용 영역 (HOTFIX-09 사례 ↗)
+- **데코레이터 / 권한 가드 신규 작성** — 5-07 #6 사례 직접 (DRY + 표준 준수)
+- **deploy 결정** — prod release 영역 (사용자 측 결정 영역, CLAUDE.md ⑦.5 사용자 배포 승인 게이트 정합)
+
+근거: 누적 실수 분석 + 운영 영역 보호. cowork 영역 명확화로 운영 안정성 확보.
+
+**검증 절차 표준 (Tier 2 영역)**:
+
+```
+① cowork 작업 완료
+② Claude Code cross-check (grep / 동일 그룹 endpoint 정합성):
+   - API 응답 schema 변경 시 → 동일 endpoint 그룹 GET/POST/PUT 일관성 grep
+   - 코드 변경 시 → 기존 표준 grep (데코레이터 / 함수 / 헬퍼)
+   - import 누락 검증 (HOTFIX-09 패턴)
+③ Codex 라운드 1 (M/A 라벨)
+④ pytest 작성 (검증 영역 명시)
+⑤ Pre-deploy Gate 통과 → push
+```
+
+**잠재 ADR-030 후보 (현재 trail 영역, 미래 결정)**:
+
+- cowork 측 사용 모델 영역 명시 (현재 정황 영역)
+- cowork ↔ Claude Code ↔ Codex 3자 역할 분리 정책 표준화
+- Sprint 설계서 작성자 영역 명시 (cowork / Claude Code 분리)
+
+**ADR-023 영역 정정**: "ADR-024 분리 검토 영역" → **"ADR-029 분리 완료 (2026-05-11)"** trail 정합.
+
+**연관 ADR**:
+- ADR-023 (cowork 추측 작성 차단 — Flutter + DB 영역, 5-06 + 5-07 2차 보강)
+- ADR-024 (phase=2 GET 시 phase=1 데이터 inherit, 5-06 v2.11.5)
+- ADR-028 (운영 안정화 storage 손실 모니터링, 5-11)
+
+**Why (긴급도 영역)**: 9건 누적 catch — 5-11 #18+#19 동일 endpoint 그룹 동시 catch 실패 = cowork 검증 절차 부재 입증. 운영 안정화 영역 (5월) 잦은 push 시기에 추가 사고 영역 차단 필요. Tier 2 영역 검증 절차 강화로 #20 (또는 그 이후) 사전 차단 목표.
+
+---
 
 ### ADR-028: 운영 안정화 시기 storage 손실 모니터링 + 6월 재점검 (2026-05-11)
 
