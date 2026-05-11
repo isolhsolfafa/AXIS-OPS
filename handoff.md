@@ -1,11 +1,23 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-11 KST (⏳ v2.12.5 코드 변경 완료 — FIX-ADMIN-OPTIONS-LISTS-SCROLL-ALERT-DEFAULT 3건. **push 보류 — 저녁 진행 예정** (운영 시간 영역 회피, 사용자 결정))
+> 마지막 업데이트: 2026-05-11 KST (✅ v2.12.5 release 완료 — FIX-ADMIN-OPTIONS-LISTS-SCROLL-ALERT-DEFAULT 3건 + HOTFIX-SPRINT66BE-MASTER-LIST-ITEM-TYPE 1건 (4건 묶음). Railway + Netlify 배포 완료)
 
-## ⏳ 2026-05-11 KST — v2.12.5 코드 변경 완료 (FIX-ADMIN-OPTIONS-LISTS-SCROLL-ALERT-DEFAULT — push 보류)
+## ✅ 2026-05-11 KST — v2.12.5 release 완료 (4건 묶음: Admin 옵션 3건 + HOTFIX-SPRINT66BE-MASTER-LIST-ITEM-TYPE)
 
-> **한 줄 요약**: 사용자 측 5-11 catch — Admin 옵션 화면 3건 정정 (① FE/BE 키 불일치 silent fail / ② 무제한 list 렌더 / ③ 미시작 알람 default 영역). 코드 변경 + flutter analyze 통과 + 회귀 위험 0 확인 완료. **push 보류 (저녁 진행 예정)** — 운영 시간 영역 회피.
+> **한 줄 요약**: 사용자 측 5-11 catch — Admin 옵션 화면 3건 정정 (① FE/BE 키 불일치 silent fail / ② 무제한 list 렌더 / ③ 미시작 알람 default 영역) + AXIS-VIEW v1.43.1 ChecklistEditModal SELECT 분기 회귀 HOTFIX (④ S2, cowork 실수 #18). Railway BE + Netlify FE 배포 완료, 회귀 위험 0 (additive).
+
+### ④ HOTFIX-SPRINT66BE-MASTER-LIST-ITEM-TYPE-20260511 (S2 영역)
+
+- **Root cause**: `/api/admin/checklist/master` GET 응답에 `item_type` + `select_options` 직렬화 누락 (cowork 실수 #18)
+- **Trigger**: 사용자 catch — AXIS-VIEW v1.43.1 prod 정상 배포 확인 BUT ChecklistEditModal `item.item_type === 'SELECT'` 분기 항상 false → SELECT 매핑 UI 미동작
+- **Fix**: `backend/app/routes/checklist.py` `list_checklist_master()` SELECT 절 + 응답 dict 정정 (+2 LoC, additive)
+  - SELECT 절: `cm.item_type, cm.select_options` 추가
+  - 응답 dict: `'item_type': row.get('item_type') or 'CHECK'` + `'select_options': row.get('select_options')` 추가
+- **Severity**: 🟠 S2 (부분 장애 — SELECT 매핑 UI 영역만)
+- **POST-REVIEW**: BACKLOG `POST-REVIEW-HOTFIX-SPRINT66BE-MASTER-LIST-ITEM-TYPE-20260511` deadline 2026-05-18
+- **ADR-024 cowork 작업 분리 정책 검토 임계 초과** (실수 #18 누적)
+- **회귀 위험 0** (additive 응답 — 기존 FE/Flutter 클라이언트 무영향)
 
 ### 변경 trail
 
@@ -20,9 +32,9 @@
 | pytest 회귀 영역 검증 | ✅ `alert_task_not_started_enabled` 의존 test 0건 |
 | version bump | ✅ v2.12.4 → v2.12.5 (BE + FE) |
 | md 갱신 (CLAUDE/CHANGELOG/PROGRESS/handoff/BACKLOG) | ✅ trail 기록 완료 |
-| **git commit + push** | ⏳ **저녁 진행 예정** (운영 시간 회피) |
-| Netlify FE build + deploy | ⏳ 저녁 |
-| Railway BE 자동 재배포 검증 | ⏳ 저녁 |
+| **git commit + push** | ✅ 5-11 commit 5118c04 (4건 묶음 release) |
+| Netlify FE build + deploy | ✅ gaxis-ops.netlify.app 배포 완료 |
+| Railway BE 자동 재배포 검증 | ⏳ 자동 재배포 진행 중 (v2.12.5 build_date 2026-05-11 검증 예정) |
 
 ### Root cause #3 사용자 시나리오 해석
 
