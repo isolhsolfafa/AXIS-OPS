@@ -6,6 +6,50 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.13.2] - 2026-05-11 — HOTFIX-TASKS-BY-ORDER-WORKERS (Sprint 64-BE v3 / v2.13.1 후속, S1 동반)
+
+> VIEW v1.43.6 S1 HOTFIX 영역 catch — `/tasks/by-order/<sales_order>` 응답에 `workers` 배열 누락 → FE `task.workers.find()` TypeError → React crash → S/N 상세뷰 흰 화면.
+
+### Root cause
+
+- `get_tasks_by_order()` 영역 `_task_to_dict()` 호출 후 후처리 영역 X
+- 기존 `get_tasks_by_serial` (work.py L562~728) 영역 약 170 line 후처리 (workers 배열 + worker_name + my_status 일괄 조회) 영역 동일 패턴 누락
+- Codex 5 라운드 검증 + v2.13.1 응답 형식 catch 모두 — 응답 spec 정합 검증 영역에서 **후처리 패턴 일관성** 항목 누락
+
+### 변경 (~110 LoC)
+
+- **BE** `backend/app/services/task_service_batch.py`
+  - 신규 helper `_enrich_tasks_with_workers(task_list)` (~100 LoC)
+    - worker_name 일괄 조회 (task.worker_id → workers.name)
+    - workers 배열 일괄 조회 (work_start_log JOIN workers JOIN work_completion_log JOIN app_task_details)
+    - legacy fallback (work_start_log 없을 시 단일 작업자 정보 영역)
+  - `get_tasks_by_order()` 영역 helper 호출 추가 (1 line)
+- **version bump**: 2.13.1 → 2.13.2
+
+### 응답 schema 변경
+
+각 task item 영역 추가 필드:
+- `workers: [{worker_id, worker_name, company, started_at, completed_at, duration_minutes, status, is_orphan, task_closed_at}, ...]`
+- `worker_name: string | null` (최초 시작자)
+
+### 회귀 위험
+
+- 0 — VIEW v1.43.6 정규화 코드 (`workers ?? []`) 영역 BE 응답 후에도 자동 정상 작동
+- `_enrich_tasks_with_workers()` 영역 private helper, work.py touch 0
+- `get_tasks_by_serial` 기존 패턴 영역 영향 0
+
+### 검증
+
+- VIEW 측 v1.43.6 release + OPS v2.13.2 동시 배포 후 S/N 상세뷰 흰 화면 영역 정상 렌더 확인
+- Twin파파 측 prod 검증 영역 (TEST-1112 상세뷰 진입 → 흰 화면 없이 task category 영역 렌더링 정상)
+
+### POST-REVIEW 영역
+
+- 24h 이내 Codex 사후 검토 (deadline 2026-05-12, CLAUDE.md L237 S1 정합)
+- Codex 검증 라운드 표준화 — 응답 spec 일관성 + 후처리 패턴 일관성 동시 검증 항목 추가 (재발 방지)
+
+---
+
 ## [2.13.1] - 2026-05-11 — HOTFIX-TASKS-BY-ORDER-SCHEMA (Sprint 64-BE v3 후속)
 
 > Sprint 64-BE v3 v2.13.0 release 직후 사용자 측 (AXIS-VIEW) catch — `/tasks/by-order/<sales_order>` 응답 schema 불일치. 다른 list endpoint 영역 배열 직접 반환인데 신규 endpoint만 `{tasks, total}` 객체 wrap → VIEW FE `Array.isArray(data) ? data : []` 영역 빈 배열 fallback → 일괄 시작 토스트 미표시 (TEST-1111 단일 처리만).

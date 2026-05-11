@@ -244,11 +244,10 @@ def get_tasks_by_order(
 ) -> Tuple[List[Dict[str, Any]], int]:
     """FE Sprint 40 prefetch — 같은 O/N TANK_MODULE task 일괄 조회 (N+1 제거).
 
-    v2.13.1 (HOTFIX-TASKS-BY-ORDER-SCHEMA): 응답 형식 정정
-      Before: {'tasks': [...], 'total': N}  ← Sprint 64-BE 영역 객체 wrap (일관성 위반)
-      After:  [...]                          ← 다른 list endpoint (/api/app/tasks/{sn}?all=true) 정합
-
-    VIEW v1.43.5 영역 양쪽 형식 호환 코드 도입 → 회귀 위험 0.
+    v2.13.1 (HOTFIX-TASKS-BY-ORDER-SCHEMA): 응답 형식 정정 (객체 wrap → 배열 직접)
+    v2.13.2 (HOTFIX-TASKS-BY-ORDER-WORKERS): workers 배열 + worker_name 후처리 추가
+      VIEW v1.43.6 catch: get_tasks_by_serial (work.py L562~728) 영역 후처리 동일 패턴.
+      workers 누락 시 FE `task.workers.find()` TypeError → React crash → 흰화면.
     """
     conn = get_db_connection()
     try:
@@ -270,4 +269,117 @@ def get_tasks_by_order(
     from app.routes.work import _task_to_dict
     from app.models.task_detail import TaskDetail
     tasks = [_task_to_dict(TaskDetail.from_db_row(r)) for r in rows]
+    _enrich_tasks_with_workers(tasks)
     return (tasks, 200)
+
+
+def _enrich_tasks_with_workers(task_list: List[Dict[str, Any]]) -> None:
+    """task_list 영역 in-place 영역 workers 배열 + worker_name 추가 (N+1 방지).
+
+    work.py L562~728 get_tasks_by_serial 영역 후처리 패턴 정합 — workers 배열은
+    work_start_log JOIN workers JOIN work_completion_log 영역 일괄 조회.
+
+    workers 영역 schema (FE 영역 정합):
+      [
+        {worker_id, worker_name, company, started_at, completed_at,
+         duration_minutes, status: 'completed'|'in_progress', is_orphan, task_closed_at}
+      ]
+    """
+    if not task_list:
+        return
+
+    task_db_ids = [item['id'] for item in task_list if item.get('id')]
+
+    # 1) worker_name 일괄 조회 (task.worker_id 영역 최초 시작자)
+    worker_ids = list({item.get('worker_id') for item in task_list
+                       if item.get('worker_id') and item.get('worker_id') != 0})
+    worker_name_map: Dict[int, str] = {}
+    if worker_ids:
+        conn = get_db_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT id, name FROM workers WHERE id = ANY(%s)",
+                (worker_ids,)
+            )
+            worker_name_map = {row['id']: row['name'] for row in cur.fetchall()}
+        except Exception as e:
+            logger.warning(f"[batch] worker_name lookup failed: {e}")
+        finally:
+            put_conn(conn)
+
+    for item in task_list:
+        wid = item.get('worker_id')
+        item['worker_name'] = worker_name_map.get(wid) if wid else None
+
+    # 2) workers 배열 일괄 조회 (N+1 방지)
+    workers_by_task: Dict[int, list] = {item['id']: [] for item in task_list if item.get('id')}
+    if task_db_ids:
+        conn = get_db_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT
+                    wsl.task_id,
+                    wsl.worker_id,
+                    w.name AS worker_name,
+                    w.company AS worker_company,
+                    wsl.started_at,
+                    COALESCE(wcl.completed_at, td.completed_at) AS completed_at,
+                    wcl.duration_minutes,
+                    CASE
+                        WHEN wcl.id IS NOT NULL           THEN 'completed'
+                        WHEN td.completed_at IS NOT NULL  THEN 'completed'
+                        ELSE                                   'in_progress'
+                    END AS status,
+                    (wcl.id IS NULL AND td.completed_at IS NOT NULL) AS is_orphan,
+                    td.completed_at AS task_closed_at
+                FROM work_start_log wsl
+                JOIN workers w ON wsl.worker_id = w.id
+                LEFT JOIN work_completion_log wcl
+                    ON wsl.task_id = wcl.task_id AND wsl.worker_id = wcl.worker_id
+                LEFT JOIN app_task_details td
+                    ON wsl.task_id = td.id
+                WHERE wsl.task_id = ANY(%s)
+                ORDER BY wsl.task_id, wsl.started_at ASC
+                """,
+                (task_db_ids,)
+            )
+            for row in cur.fetchall():
+                tid = row['task_id']
+                if tid in workers_by_task:
+                    workers_by_task[tid].append({
+                        'worker_id': row['worker_id'],
+                        'worker_name': row['worker_name'],
+                        'company': row['worker_company'],
+                        'started_at': row['started_at'].isoformat() if row['started_at'] else None,
+                        'completed_at': row['completed_at'].isoformat() if row['completed_at'] else None,
+                        'duration_minutes': row['duration_minutes'],
+                        'status': row['status'],
+                        'is_orphan': bool(row.get('is_orphan')),
+                        'task_closed_at': row['task_closed_at'].isoformat() if row.get('task_closed_at') else None,
+                    })
+        except Exception as e:
+            logger.warning(f"[batch] workers batch query failed: {e}")
+        finally:
+            put_conn(conn)
+
+    # 3) legacy fallback + assign (work.py L709~726 정합)
+    for item in task_list:
+        tid = item.get('id')
+        workers_list = workers_by_task.get(tid, []) if tid else []
+        if not workers_list and item.get('worker_id') and item.get('worker_id') != 0:
+            started = item.get('started_at')
+            completed = item.get('completed_at')
+            status_str = 'completed' if completed else ('in_progress' if started else 'not_started')
+            workers_list = [{
+                'worker_id': item['worker_id'],
+                'worker_name': item.get('worker_name'),
+                'company': None,
+                'started_at': started,
+                'completed_at': completed,
+                'duration_minutes': item.get('duration_minutes'),
+                'status': status_str,
+            }]
+        item['workers'] = workers_list

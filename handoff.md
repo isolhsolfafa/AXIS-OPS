@@ -1,7 +1,36 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-11 KST (✅ v2.13.1 hotfix release — `/tasks/by-order/<sales_order>` 응답 형식 정정 (객체 wrap → 배열 직접). Sprint 64-BE v3 후속, Codex 5라운드 검증 catch 누락 영역 (다른 endpoint 응답 spec 대조 누락). AXIS-VIEW v1.43.5 호환 코드 동시 release — 회귀 위험 0)
+> 마지막 업데이트: 2026-05-11 KST (✅ v2.13.2 hotfix release (S1 동반) — `/tasks/by-order/<sales_order>` 응답에 `workers` 배열 추가. VIEW v1.43.6 S1 HOTFIX catch 영역 — 흰 화면 발생 → 후처리 helper `_enrich_tasks_with_workers()` 신규 추가. POST-REVIEW deadline 2026-05-12)
+
+## ✅ 2026-05-11 KST — v2.13.2 hotfix release (HOTFIX-TASKS-BY-ORDER-WORKERS, S1 동반)
+
+> **한 줄 요약**: VIEW v1.43.6 S1 HOTFIX catch — `/tasks/by-order/<sales_order>` 응답에 `workers` 배열 누락 → FE TypeError → 흰 화면. 후처리 helper 영역 `_enrich_tasks_with_workers()` 신규 추가 (work.py L562~728 패턴 정합). VIEW v1.43.6 정규화 코드 동시 release → 회귀 위험 0.
+
+### Root cause
+
+- 내 `get_tasks_by_order()` 영역 `_task_to_dict()` 호출 후 후처리 영역 X
+- 기존 `get_tasks_by_serial` (work.py L562~728) 영역 약 170 line 후처리 (workers + worker_name + my_status 일괄 조회) 영역 동일 패턴 누락
+- Codex 5 라운드 + v2.13.1 검증 모두 — **후처리 패턴 일관성** 검증 누락 (응답 spec만 검증)
+
+### 변경 trail
+
+| 단계 | 결과 |
+|---|---|
+| VIEW v1.43.6 S1 HOTFIX catch — 흰 화면 root cause 정리 | ✅ |
+| 신규 helper `_enrich_tasks_with_workers()` (~100 LoC) 추가 | ✅ |
+| `get_tasks_by_order()` helper 호출 추가 (1 line) | ✅ |
+| version bump v2.13.1 → v2.13.2 + md 5개 갱신 | ✅ |
+| commit + push | ⏳ |
+
+### POST-REVIEW 영역 (24h 이내, deadline 2026-05-12)
+
+- Codex 사후 검토 — S1 HOTFIX 정합 (CLAUDE.md L237)
+- Codex 검증 라운드 표준화 권고 — 응답 spec 일관성 + 후처리 패턴 일관성 동시 검증 항목
+
+---
+
+## ⏸️ 이전 release: v2.13.1 (HOTFIX-TASKS-BY-ORDER-SCHEMA)
 
 ## ✅ 2026-05-11 KST — v2.13.1 hotfix release (HOTFIX-TASKS-BY-ORDER-SCHEMA)
 
