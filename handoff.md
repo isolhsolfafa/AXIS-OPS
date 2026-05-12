@@ -28,6 +28,39 @@
 
 - `BUG-WORK-INSERT-ROLLBACK-EXPLICIT-20260512` (P3) — L468-486 INSERT except rollback 명시 (Codex A-1)
 
+### 운영 모니터링 (Twin파파 측, v2.14.1 release 후)
+
+#### 🔴 1순위 — Pool exhausted 재발 여부
+
+| 영역 | 정상 기준 | 위험 기준 | 확인 방법 |
+|------|-----------|-----------|-----------|
+| `[db_pool] Pool exhausted` Sentry alert | 0건/24h | 1건+ | Sentry 대시보드 |
+| `[db_pool] Using direct connection` Railway log | 0~매우 적음 | 시간당 10+ | Railway logs 검색 |
+| `[pool_warmup] 0/0 conn warmed` | 0건 | 1건+ | Railway logs |
+| `[db_pool] 0/0 warmed for 3 consecutive cycles` (자가 회복 발화) | 0건 | 1건+ = leak 재발 가설 | Sentry alert |
+
+→ fix 효과 있으면 위 4개 모두 24h 동안 **0건 유지** 목표
+
+#### 🟠 2순위 — 응답 시간 정상화
+
+| endpoint | 정상 | 위험 |
+|----------|------|------|
+| `GET /api/app/tasks/{sn}` | 50-300ms | 500ms+ 지속 |
+| `POST /api/app/work/complete` | 200-800ms | 1.5초+ 지속 |
+| `GET /api/app/work/today-tags` | 50-150ms | 300ms+ |
+
+#### 🟡 3순위 — 다른 release 운영 안정성
+
+- v2.14.0 자재 업로드 endpoint — flow sensor 완료 후 운영 검증
+- AXIS-VIEW Sprint 40 일괄 처리 — 모바일/대시보드 정상 작동
+- 5-17 ± 1d — 5일 주기 Railway proxy idle 가설 재발 X 확인
+
+#### 검증 시점 권고
+
+- **T+1h** (배포 1시간 후): Sentry 신규 alert 0건 + Railway logs Pool exhausted 0건
+- **T+24h** (5-13): 같은 시간대 (16:00~17:00 KST peak) 정상 응답
+- **T+5d** (5-17): 5일 주기 가설 재발 X 확정
+
 ---
 
 ## ⏸️ 이전 release: v2.14.0 (Sprint 66-BE-FOLLOWUP v3 자재 마스터 Excel 일괄 업로드)
