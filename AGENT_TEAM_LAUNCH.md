@@ -36408,7 +36408,7 @@ def _match_manager_company(
 
 | Q | 결정 | 의미 |
 |---|---|---|
-| **Q1 — MFC 자재 동일 item_code 중복 row 처리** | **(A) 자동 합침** | csv 에 같은 item_code 두 row (LNG + O2) → BE 가 description 자동 합쳐서 단일 row UPSERT (`description='LNG,O2'`). 053a seed 패턴 일관성 |
+| **Q1 — MFC 자재 동일 item_code 중복 row 처리** | **(A) 자동 합침 — MFC scope only** | csv 에 같은 item_code 두 row (LNG + O2) → `category='MFC'` 영역만 description 자동 합쳐서 단일 row UPSERT (`description='LNG,O2'`). non-MFC 중복은 `dedup_material_master()` 패턴 (053a generator L160) 정합 — 첫 등장 row 사용. **자재 정보 충돌** (item_name/spec_1/spec_2/unit 불일치) 시 → `ATTRIBUTE_CONFLICT` reject |
 | **Q2 — customer/model 변경된 BOM row 처리** | **(A) 컬럼 UPDATE** | 같은 (product_code, item_code) 의 BOM row 에 customer/model 만 변경 시 → 기존 row 의 customer/model 컬럼 UPDATE (변경 추적 가능). UNIQUE 제약 `(product_code, material_id)` 정합 |
 | **Q3 — row-level reject 정책** | **(A) Best-effort** | 1000 행 중 일부 검증 실패 시 → 그 행만 skip + 나머지 정상 처리. 트랜잭션 패턴 = **"검증 트랜잭션 외부 + 정상 행만 트랜잭션 내부"** (Sprint 64-BE v2 동일 패턴) |
 
@@ -36420,20 +36420,23 @@ def _match_manager_company(
 2. CSV / xlsx 파싱 → DataFrame
 3. 한글 헤더 검증 (자재코드 필수 / 자재내역 필수)
 4. CSV_COLUMN_MAP 으로 한글 → 영문 컬럼 rename
-5. 각 row 검증 → 정상 / rejected 분류
-   ├─ MISSING_ITEM_CODE  — 자재코드 빈칸
-   ├─ MISSING_ITEM_NAME  — 자재내역 빈칸
-   ├─ INVALID_QUANTITY   — 수량이 정수 변환 불가
-   └─ INVALID_BOM_KEY    — product_code/customer/model 빈칸 (BOM 매핑 불가)
-6. MFC dual-use 합침 (Q1): 같은 item_code N row → description 합침 (`'LNG,O2'`)
+5. 각 row 검증 → 정상 / rejected 분류 (v3 — 7종 reason)
+   ├─ MISSING_ITEM_CODE      — 자재코드 빈칸
+   ├─ MISSING_ITEM_NAME      — 자재내역 빈칸
+   ├─ INVALID_QUANTITY       — 수량이 정수 변환 불가
+   ├─ INVALID_BOM_KEY        — **BOM row 영역만 적용** (product_code != '' 영역 영역 customer/model 빈칸 시). material-only MFC rows (`product_code = '' OR NULL`) 영역 허용 (053a generator 패턴 정합)
+   ├─ FIELD_TOO_LONG         — DB 컬럼 width 초과 (item_code 50 / item_name 200 / **category 50** / spec_1 200 / spec_2 200 / unit 20 / customer 100 / model 100) — **8 필드 검증** (description 영역 053b TEXT 영역 — 제한 없음 영역 검증 X)
+   ├─ ATTRIBUTE_CONFLICT     — 같은 item_code 영역 자재 정보 충돌 (item_name/spec_1/spec_2/unit 불일치). 053a `validate_source_keys()` 패턴 정합
+   └─ DUPLICATE_ITEM_CODE    — (사용 X — 단순 반복 item_code 영역 dedup 영역 첫 등장 사용)
+6. MFC dual-use 합침 (Q1 영역 MFC scope only): `category=='MFC'` 영역 영역 N row → description 합침 (`'LNG,O2'`). non-MFC 중복 영역 dedup (첫 등장 사용)
 7. category 자동 추출 (053a generator 패턴):
    ├─ item_name.startswith('MFC') → item_name='MFC', category='MFC' (가스명은 description)
-   └─ 그 외 → item_name = category = 자재내역 그대로
+   └─ 그 외 → item_name = category = 자재내역 그대로 (⚠️ category 영역 50자 초과 시 FIELD_TOO_LONG reject)
     ↓
 [Phase 2 — DB 대조 (DB 변경 없음)]
 8. material_master 조회 → new / changed / unchanged 분류
    ├─ new       : item_code 미존재
-   ├─ changed   : 존재 + 필드 차이 (item_name/spec_1/spec_2/unit/description)
+   ├─ changed   : 존재 + 필드 차이 (item_name/category/spec_1/spec_2/unit/description) — 6 필드 비교, NULL/'' 정규화 (둘 다 빈 값으로 처리)
    └─ unchanged : 존재 + 동일
 9. product_bom 조회 → bom_new / bom_changed 분류
    ├─ bom_new     : (product_code, material_id) 미존재
@@ -36464,7 +36467,7 @@ def upload_materials() -> Tuple[Dict[str, Any], int]:
 
     Content-Type: multipart/form-data
     Body:
-      file: File (CSV / xlsx / xls)
+      file: File (CSV / xlsx)  # v3: .xls drop (사용자 결정 2026-05-12, openpyxl .xlsx-only)
       mode: 'preview' | 'commit'
       strategy: 'all' | 'selected' | 'skip' (mode=commit 시 필수)
       selected_item_codes: JSON string of string[] (strategy=selected 시 필수)
@@ -36476,7 +36479,7 @@ def upload_materials() -> Tuple[Dict[str, Any], int]:
     Response 200 (mode=commit):
       UploadResult { inserted, updated, skipped, rejected, bom_inserted, bom_updated }
 
-    Response 400:
+    Response 400 (error envelope: {error, message} — project convention):
       ENCODING_DETECTION_FAILED | INVALID_HEADER | PARSE_ERROR | INVALID_REQUEST
     """
     # 1. mode / file 검증
@@ -36533,12 +36536,12 @@ def parse_upload_file(file) -> Tuple[List[Dict], List[Dict]]:
     Returns: (parsed_rows, rejected_rows)
     """
     filename = file.filename.lower()
-    if filename.endswith(('.xlsx', '.xls')):
+    if filename.endswith('.xlsx'):  # v3: .xls drop (openpyxl .xlsx-only)
         rows = _parse_xlsx(file.read())
     elif filename.endswith('.csv'):
         rows = _parse_csv(file.read())
     else:
-        raise ValueError('PARSE_ERROR')
+        raise ValueError('PARSE_ERROR')  # .xls / 다른 확장자 영역 reject
 
     # 헤더 검증
     if rows and '자재코드' not in rows[0]:
@@ -36573,34 +36576,88 @@ def parse_upload_file(file) -> Tuple[List[Dict], List[Dict]]:
         parsed_rows.append(mapped)
 
     # Q1: MFC 동일 item_code 중복 row 합침 (description 합쳐서 단일 row)
-    parsed_rows = _merge_duplicate_mfc(parsed_rows)
+    # v3 NEW-M-1 정정: _merge_duplicate_mfc 영역 (merged, conflicts) 영역 tuple 반환 영역 영역 영역 영역
+    merged_rows, conflict_rows = _merge_duplicate_mfc(parsed_rows)
+    rejected_rows.extend(conflict_rows)
 
-    return parsed_rows, rejected_rows
+    return merged_rows, rejected_rows
 
 
-def _merge_duplicate_mfc(rows: List[Dict]) -> List[Dict]:
-    """동일 item_code 의 description 합침 (Q1 — Twin파파 결정)."""
+def _merge_duplicate_mfc(rows: List[Dict]) -> Tuple[List[Dict], List[Dict]]:
+    """동일 item_code 영역 description 합침 (Q1 — MFC scope only, v3).
+
+    v3 정정 (Codex 라운드 2 M-2):
+      - MFC-only (`category == 'MFC'`) 영역 합침 — description 합쳐서 단일 row
+      - non-MFC 중복 — 첫 등장 row 사용 (053a `dedup_material_master()` 패턴 정합)
+      - 같은 item_code 영역 자재 정보 (item_name/spec_*/unit) 충돌 → ATTRIBUTE_CONFLICT reject
+
+    Returns: (merged_rows, attribute_conflict_rejects)
+    """
     seen: Dict[str, Dict] = {}
+    rejects: List[Dict] = []
     for row in rows:
         ic = row['item_code']
-        if ic in seen:
-            # description 합침 (중복 제거 + 정렬)
-            existing_desc = seen[ic].get('description', '') or ''
-            new_desc = row.get('description', '') or ''
-            merged = sorted(set(filter(None, existing_desc.split(',') + new_desc.split(','))))
-            seen[ic]['description'] = ','.join(merged)
-        else:
+        if ic not in seen:
             seen[ic] = row
-    return list(seen.values())
+            continue
+        existing = seen[ic]
+        # 자재 정보 충돌 검증 (053a validate_source_keys 패턴)
+        for field in ('item_name', 'spec_1', 'spec_2', 'unit'):
+            if (existing.get(field, '') or '') != (row.get(field, '') or ''):
+                rejects.append({'row_number': row.get('_row_number'), 'reason': 'ATTRIBUTE_CONFLICT',
+                                'detail': f'item_code={ic} field={field} conflict'})
+                break
+        else:
+            # 충돌 X — MFC 영역만 description 합침
+            if row.get('category') == 'MFC' and existing.get('category') == 'MFC':
+                existing_desc = existing.get('description', '') or ''
+                new_desc = row.get('description', '') or ''
+                merged = sorted(set(filter(None, existing_desc.split(',') + new_desc.split(','))))
+                existing['description'] = ','.join(merged)
+            # non-MFC 영역 첫 등장 row 사용 (skip 영역 reject 영역 X)
+    return list(seen.values()), rejects
 
 
 def diff_with_db(parsed_rows: List[Dict], conn) -> Dict:
-    """DB 와 대조 → new / changed / unchanged + bom_new / bom_changed 분류."""
-    # material_master 조회 (item_code IN 단일 쿼리)
-    # product_bom 조회 ((product_code, item_code) IN 단일 쿼리)
-    # 변경 필드 diff 계산
-    # Q2: customer/model 변경도 BOM changed 로 분류
-    # ... (구현 생략)
+    """DB 와 대조 → new / changed / unchanged + bom_new / bom_changed 분류.
+
+    v3 spec (Codex 라운드 3 M-2 정정 — 본문 단일 소스):
+
+    material_master 영역 6 필드 비교 (changed_materials.changes[].field enum):
+      'item_name' | 'category' | 'spec_1' | 'spec_2' | 'unit' | 'description'
+
+    NULL/'' 정규화:
+      - 비교 시 NULL → '' 변환 (`(v or '').strip() == (v2 or '').strip()` 패턴)
+      - 응답 schema 영역 `before/after`: NULL → null (JSON), '' → '' (보존)
+
+    응답 schema (UploadPreview):
+      changed_materials: [
+        {
+          'item_code': str,
+          'changes': [
+            {'field': '<6 enum>', 'before': str|null, 'after': str|null}, ...
+          ]
+        }, ...
+      ]
+
+    BOM Q2 정합 (bom_changed):
+      - quantity 변경
+      - customer 변경 (NULL/'' 정규화)
+      - model 변경 (NULL/'' 정규화)
+      - bom_mappings_changed = numeric count (detail 영역 X — A-2)
+
+    N+1 차단:
+      - material_master 단일 쿼리: WHERE item_code = ANY(%s)
+      - product_bom 단일 쿼리: WHERE (product_code, material_id) IN ((%s,%s), ...)
+        ⚠️ pair-wise IN tuple 영역 권장. `WHERE product_code = ANY(%s) AND material_id = ANY(%s)`
+        영역 영역 X (cartesian 영역 영역 영역 영역 false positive 영역). psycopg2 `tuple` adapter 영역
+        또는 mogrify 영역 영역 영역 영역 영역 IN ((p1,m1), (p2,m2), ...) 영역 영역
+    """
+    # 1) material_master 단일 IN 쿼리
+    # 2) product_bom 단일 IN 쿼리
+    # 3) 6 필드 비교 (NULL/'' 정규화)
+    # 4) BOM Q2 3 필드 (quantity/customer/model) 비교
+    # 5) new/changed/unchanged + bom_new/bom_changed 영역 분류 반환
     return {...}
 
 
@@ -36622,18 +36679,19 @@ def commit_upload(parsed_rows, diff, strategy, selected_item_codes, conn) -> Dic
         raise
 ```
 
-## 구현 범위
+## 구현 범위 (v3 — Codex A-4 services 분리)
 
 | # | 파일 | 변경 | 라인수 |
 |---|---|---|---|
-| 1 | `backend/app/utils/material_parser.py` | 신규 — 파싱 + 인코딩 감지 + Q1 합침 + category 추출 + diff + commit | +280 |
-| 2 | `backend/app/routes/admin_materials.py` | `/upload` route 추가 (preview / commit 분기) | +60 |
-| 3 | `backend/tests/test_admin_materials_upload.py` | pytest TC 15건 (#63 12 + Q1/Q2/Q3 trail TC 3) | +220 |
-| 4 | `backend/requirements.txt` | `chardet>=5.2.0` + `openpyxl>=3.1.0` 추가 | +2 |
+| 1 | `backend/app/utils/material_parser.py` ⭐ 신규 | parsing 영역 only — detect_encoding / parse_upload_file / _parse_xlsx / _parse_csv / _merge_duplicate_mfc (MFC scope) / _validate_row (7종 reject) | +180 |
+| 2 | `backend/app/services/material_upload_service.py` ⭐ 신규 | services 영역 — diff_with_db / commit_upload (트랜잭션) | +150 |
+| 3 | `backend/app/routes/admin_materials.py` | `/upload` route 추가 (preview / commit 분기) | +60 |
+| 4 | `tests/backend/test_admin_materials_upload.py` ⭐ 신규 | pytest TC **24건** (v3 — TC-MU-01~24, Codex 라운드 2 M-2/M-3 정정 영역 +3건) | +320 |
+| 5 | `backend/requirements.txt` | `chardet>=5.2.0` + `openpyxl>=3.1.0` 추가 | +2 |
 
-**순 증분: ~560 LOC** (production 340 + 테스트 220 + 의존성 2). `material_parser.py` 클래스 1개 + 함수 6개 → 각 100 LoC 미만 (CLAUDE.md 코드 크기 1단계 준수).
+**순 증분: ~712 LOC** (production 390 + 테스트 320 + 의존성 2). 각 신규 파일 200줄 미만 (CLAUDE.md L545 1단계 정합 — 🟡 500줄 경고 미해당).
 
-## pytest TC 매트릭스 (15건)
+## pytest TC 매트릭스 (v3 — **24건**)
 
 | # | 케이스 | 검증 |
 |---|---|---|
@@ -36649,9 +36707,20 @@ def commit_upload(parsed_rows, diff, strategy, selected_item_codes, conn) -> Dic
 | TC-MU-10 | commit — BOM 신규 매핑 INSERT 확인 | bom_inserted 카운트 정합 |
 | TC-MU-11 | commit — DB 에러 시 ROLLBACK | 트랜잭션 정합성 (정상 행도 무효, Q3 트랜잭션 패턴) |
 | TC-MU-12 | commit — 빈 selected_item_codes | updated=0, 신규 INSERT 만 |
-| **TC-MU-13** | **Q1 — MFC item_code dual-use** | 같은 item_code 2 row (LNG + O2) → description='LNG,O2' 합쳐서 1 row INSERT |
+| **TC-MU-13** | **Q1 — MFC item_code dual-use 합침** | 같은 item_code 2 row (LNG + O2) + 모두 category='MFC' → description='LNG,O2' 합쳐서 1 row INSERT |
 | **TC-MU-14** | **category 자동 추출** | MFC* → category='MFC' / 그 외 → category=자재내역 |
 | **TC-MU-15** | **Q2 — BOM customer/model 변경** | 수량 변경 없어도 customer/model 변경 시 bom_changed 분류 + commit 시 UPDATE 확인 |
+| **TC-MU-16** | **xlsx 정상 파싱** (v3 신규) | sample.xlsx 파일 영역 첫 번째 시트 정상 read + row count 정합 |
+| **TC-MU-17** | **empty file** (v3 신규) | 0 bytes 파일 → 400 PARSE_ERROR |
+| **TC-MU-18** | **header-only file** (v3 신규) | header row 1줄만 영역 → 200 + total_rows=0 |
+| **TC-MU-19** | **INVALID_BOM_KEY** (v3 신규) | BOM row 영역 (product_code != '') customer 또는 model 빈칸 → rejected_rows. ⚠️ material-only MFC rows (product_code='') 영역 허용 (053a 패턴 정합) |
+| **TC-MU-20** | **FIELD_TOO_LONG** (v3 신규) | item_code 51자 / item_name 201자 / **category 51자** / spec_1 201자 / spec_2 201자 / unit 21자 / customer 101자 / model 101자 — **8 필드** 영역 reject (description 영역 053b TEXT — 검증 X) |
+| **TC-MU-21** | **NULL vs '' 정규화** (v3 신규) | Q2 customer='' vs NULL + model='' vs NULL — 동등 처리 (unchanged_materials 영역 분류) |
+| **TC-MU-22** | **ATTRIBUTE_CONFLICT** (v3 신규) | 같은 item_code 영역 자재 정보 (item_name/spec_1/spec_2/unit) 불일치 영역 row → ATTRIBUTE_CONFLICT reject (Codex M-2 정정) |
+| **TC-MU-23** | **non-MFC 중복 item_code dedup** (v3 신규) | 같은 item_code N row 영역 모두 동일 자재 정보 + non-MFC → 첫 등장 row 사용 (053a `dedup_material_master()` 패턴 정합, reject X) |
+| **TC-MU-24** | **material-only MFC rows** (v3 신규) | product_code='' MFC rows N건 영역 material_master 만 INSERT, product_bom INSERT X (053a generator 패턴 정합) |
+
+**총 24 TC** (v2 21 TC + 신규 3 TC — TC-MU-22/23/24 영역 Codex 라운드 2 M-2/M-3 정정 영역 검증).
 
 ## 트랜잭션 패턴 (Q3 정합 + Sprint 64-BE v2 학습 적용)
 
@@ -36682,7 +36751,7 @@ def commit_upload(parsed_rows, diff, strategy, selected_item_codes, conn) -> Dic
 | diff_with_db (DB 대조 + 변경 필드 분류) | 0.5d |
 | commit_upload (단일 트랜잭션 + strategy 분기) | 0.5d |
 | `/upload` route + 입력 검증 | 0.3d |
-| pytest 15 TC | 1d |
+| pytest 24 TC (v3 — Codex 라운드 1+2 catch 정정 영역 추가) | 1.5d |
 | Codex 교차검증 + 정정 | 0.5d |
 | **합계** | **3.3d (~3-4일)** |
 
@@ -36725,7 +36794,7 @@ def commit_upload(parsed_rows, diff, strategy, selected_item_codes, conn) -> Dic
 
 ### 구현 단계
 
-- [ ] pytest 15 TC 모두 GREEN
+- [ ] pytest **24 TC** 모두 GREEN (v3 — TC-MU-01~24)
 - [ ] FE Sprint 42 v1.43.0 prod 환경에서 preview / commit 양쪽 토스트 정합 (Twin파파 수동 검증)
 - [ ] sample 파일 (`material_upload_sample_30rows.csv`) 로 preview 응답 + commit strategy=all 1회 검증
 - [ ] 1654행 원본 csv 로 부하 테스트 (응답 시간 < 5s 목표)
@@ -36734,6 +36803,151 @@ def commit_upload(parsed_rows, diff, strategy, selected_item_codes, conn) -> Dic
 
 - [ ] Sentry 새 ERROR 0건
 - [ ] 사용자 측 자재 마스터 변경 흐름 — SQL 직접 INSERT 의존 해소
+
+---
+
+## ⚠️ Codex 라운드 1+2 catch — v3 재정정 trail (2026-05-12, **본문 직접 정정 완료**)
+
+**라운드 1**: M=4/A=5/N=8 → v2 trail 영역 (영역 영역 분리 영역 본문 미정합) → 라운드 2 영역 catch
+**라운드 2**: M=4/A=5/N=7 → **v3 본문 직접 정정 완료** (단일 소스 영역, trail/본문 sync)
+
+### Codex 라운드 2 catch 4건 → v3 본문 정정 (반영 위치 명시)
+
+| # | Codex 라운드 2 catch | 정정 위치 (본문) | 상태 |
+|---|---|---|---|
+| **M-1 (v2 trail/본문 미정합)** | trail만 영역 본문 v1 그대로 → 구현자 영역 본문 따르면 catch 재발 | 본문 6 영역 직접 정정: L36411 (Q1 MFC scope) / L36423 (Phase 1 7종 reason) / L36467 (contract `.xls` drop) / L36480 (error envelope) / L36536 (_parse extension) / L36581 (_merge_duplicate_mfc MFC scope) + 구현 범위 표 + pytest TC | ✅ 완료 |
+| **M-2 (non-MFC DUPLICATE blanket reject)** | 053a `dedup_material_master()` 패턴 — 단순 반복 영역 첫 등장 사용 (영역 영역 X). v2 안 DUPLICATE_ITEM_CODE reject = 정상 BOM rows 대량 거부 | Phase 1 검증 영역 DUPLICATE_ITEM_CODE 영역 사용 X 명시 (L36428). `_merge_duplicate_mfc()` 영역 ATTRIBUTE_CONFLICT scope 좁힘 (자재 정보 충돌만) | ✅ 완료 |
+| **M-3 (MFC INVALID_BOM_KEY blanket reject)** | 053a generator 영역 `product_code=''` MFC rows 영역 product_bom skip + material_master만 적재. blanket reject = MFC rows 사라짐 | Phase 1 검증 영역 INVALID_BOM_KEY = "BOM row 영역만 적용 (product_code != '' 영역 영역)". material-only MFC rows 허용 (L36428) | ✅ 완료 |
+| **M-4 (category 50 검증 누락)** | non-MFC 영역 `category = item_name` 파생 → item_name 200 영역 영역 category 50 초과 → commit abort | FIELD_TOO_LONG 영역 영역 **8 필드** 명시 (item_code 50 / item_name 200 / **category 50** / spec_1 200 / spec_2 200 / unit 20 / customer 100 / model 100). description 영역 053b TEXT — 검증 X | ✅ 완료 |
+
+### Codex 라운드 2 A 영역 5건 → v3 정정 / BACKLOG
+
+- A-1 (FE BOM 4-key) → AXIS-VIEW repo 별 PR (영역 외)
+- A-2 (category 변경 추적 TC) → ✅ TC-MU-03 영역 영역 `field='item_name' | 'category' | ...` 영역 영역 영역 명시 / `diff_with_db()` 영역 6종 비교 영역 명시
+- A-3 (NULL vs '' model 영역 영역) → ✅ TC-MU-21 영역 customer + model 동시 영역 명시
+- A-4 (FE `.csv/.xlsx only` 영역 영역) → AXIS-VIEW repo 별 PR
+- A-5 (FE error envelope `detail` → `message`) → AXIS-VIEW repo 별 PR
+
+### v1 → v2 → v3 차이 매트릭스 (최종)
+
+| 항목 | v1 | v2 | v3 (최종) |
+|------|-----|-----|----------|
+| changes[].field enum | 5종 | 6종 | **6종** (`item_name/category/spec_1/spec_2/unit/description`) |
+| Q1 MFC 합침 scope | 모든 중복 | MFC-only | **MFC-only** (`category == 'MFC'` 영역 영역) |
+| non-MFC 중복 처리 | silent 합침 | DUPLICATE_ITEM_CODE reject | **dedup 첫 등장 사용** (053a 패턴 정합) |
+| 자재 정보 충돌 영역 처리 | (영역 영역) | (영역 영역) | **ATTRIBUTE_CONFLICT reject** (053a `validate_source_keys` 정합) |
+| INVALID_BOM_KEY scope | 모든 row | 모든 row | **BOM row 영역만** (product_code != '' 영역 영역). MFC material-only 허용 |
+| FIELD_TOO_LONG 영역 | (영역 영역) | 6 필드 | **8 필드** (item_code/item_name/category/spec_1/spec_2/unit/customer/model. description 영역 TEXT 영역 영역 X) |
+| Phase 1 검증 reason | 4종 | 6종 | **7종** (+ATTRIBUTE_CONFLICT, DUPLICATE_ITEM_CODE 영역 사용 X) |
+| 파일 형식 contract | csv+xlsx+xls | csv+xlsx | **csv+xlsx** (`.xls` drop) |
+| 파일 분리 | 1 file (~280) | 2 files (utils+services) | **2 files** (utils ~180 + services ~150) |
+| pytest TC | 15 | 21 | **24** (+ATTRIBUTE_CONFLICT + non-MFC dedup + MFC material-only) |
+| error envelope | `{error, detail}` | `{error, message}` | **`{error, message}`** (project convention) |
+
+### ATTRIBUTE_CONFLICT 처리 정책 (Codex 라운드 3 A-2 정정)
+
+**정책**: 같은 item_code 영역 N row 영역 영역 **첫 등장 row 영역 유지** + **후속 충돌 row 영역만 ATTRIBUTE_CONFLICT reject**.
+
+근거:
+- 053a generator `validate_source_keys()` 영역 패턴 정합 (첫 등장 영역 사용 + WARN 영역 영역 영역)
+- 운영 영역 일관성 — 첫 등장 row 영역 정합 영역 영역 영역 영역 가정 (사용자 csv 영역 순서 보존)
+- 전체 reject 영역 = 정상 row 영역 손실 영역 영역 영역 영역
+
+### 구현 Step 순서 (Codex 라운드 3 A-3 정정)
+
+1. **Step 1-A**: `backend/app/utils/material_parser.py` 신규 (~180 LOC)
+   - detect_encoding / parse_upload_file / _parse_xlsx / _parse_csv
+   - _merge_duplicate_mfc (MFC scope + ATTRIBUTE_CONFLICT 첫 등장 유지 + 후속 reject)
+   - _validate_row (7종 reject + 8 필드 FIELD_TOO_LONG)
+
+2. **Step 1-B**: `backend/app/services/material_upload_service.py` 신규 (~150 LOC)
+   - diff_with_db (6 필드 비교 + NULL/'' 정규화 + N+1 차단)
+   - commit_upload (단일 트랜잭션 + strategy 분기)
+
+3. **Step 1-C**: `backend/app/routes/admin_materials.py` (~60 LOC)
+   - POST /upload route (preview / commit 분기, multipart/form-data)
+
+4. **Step 1-D**: `tests/backend/test_admin_materials_upload.py` 신규 (~320 LOC)
+   - 24 TC (TC-MU-01~24)
+   - sample fixture: material_upload_sample_30rows.csv / sample.xlsx
+
+5. **Step 1-E**: staging 검증
+   - sample 30rows.csv preview → strategy=all commit
+   - 1654 rows 부하 (응답 < 5s)
+   - rejected_rows 7종 reason 영역 검증
+
+6. **Step 1-F**: prod 배포
+   - Railway 자동 재배포
+   - Twin파파 측 자재 마스터 페이지 영역 업로드 검증
+
+### 구현 진입 권고
+
+v3 본문 영역 단일 소스 정합 완료 — Codex 라운드 3 catch 영역 영역 정정 완료 → 라운드 4 영역 영역 영역 GREEN 시 구현 진입.
+
+---
+
+## ⚠️ ARCHIVED — v2 재정정 trail (참고용, v3 본문 정정 완료)
+
+**평가 결과**: M=4 / A=5 / N=8 — **HOLD** (구현 진입 전 보완 필수)
+
+| # | catch | v1 문제 | v2 정정 |
+|---|---|---|---|
+| **M-1** | `category` 필드 누락 in changes contract | UploadPreview `changed_materials.changes[].field` enum 영역 5종 (item_name/spec_1/spec_2/unit/description) — 실 schema material_master 6 컬럼 + PATCH endpoint 영역 category UPDATE 가능 | **`category` 추가** → 6종 enum: `'item_name' \| 'category' \| 'spec_1' \| 'spec_2' \| 'unit' \| 'description'`. diff_with_db() 영역 비교 필드 6종 명시 |
+| **M-2** | Q1 MFC 합침 영역 scope catch | `_merge_duplicate_mfc()` (L36581~L36594) 영역 모든 중복 item_code 영역 silent 합침 — non-MFC 영역 중복 영역 source 데이터 오류 영역 silent 영역 collapse | **MFC-only 영역 제한** — `category == 'MFC'` 영역 영역 합침. non-MFC 영역 중복 영역 영역 → `DUPLICATE_ITEM_CODE` reject 영역 (rejected_rows.reason 영역 신규) |
+| **M-3** | Phase 1 검증 영역 불완전 — Q3 best-effort 파괴 위험 | Phase 1 영역 item_code/item_name/quantity 영역 검증 — `INVALID_BOM_KEY` 영역 명시 영역 영역 검증 X + DB column width (item_code 50자 / item_name 200자 / spec_* 200자 / unit 20자 / customer/model 100자) overflow 영역 commit 영역 도달 → 트랜잭션 abort | **Phase 1 검증 영역 보강**: ① BOM key 검증 영역 (product_code/customer/model 영역 NULL 또는 '' 영역 → INVALID_BOM_KEY) ② column width overflow 검증 (예: len(item_code) > 50 → FIELD_TOO_LONG) ③ rejected_rows.reason enum 영역 확장: `MISSING_ITEM_CODE / MISSING_ITEM_NAME / INVALID_QUANTITY / INVALID_BOM_KEY / FIELD_TOO_LONG / DUPLICATE_ITEM_CODE` (6종) |
+| **M-4** | `.xls` contract vs openpyxl 영역 불일치 | OPS 설계서 L36467/36498/36536 영역 `.xls` 명시 — openpyxl 영역 `.xlsx`-only (xlrd 영역 별 의존성 영역) | **`.xls` drop** (사용자 결정 2026-05-12) — contract 영역 `.xlsx + .csv` 영역 정정. `parse_upload_file()` L36536 영역 `('.xlsx',)` 영역 정정 (`.xls` 영역 제거). 응답 영역 `.xls` 업로드 시 → 400 PARSE_ERROR (filename extension reject) |
+
+### A (Advisory) 5건 정정
+
+- **A-1**: FE #63 BOM 4-key 영역 정정 → 별 PR (AXIS-VIEW repo, 영역 외)
+- **A-2**: `bom_mappings_changed` docstring 영역 Q2 영역 customer/model 영역 포함 명시 (numeric count 영역 정합 — detail 영역 영역 영역, simple)
+- **A-3**: error envelope 영역 표준화 → `{"error", "message"}` (project convention 영역 정합). FE #63 영역 `detail` 영역 → `message` 영역 정정 권고 (별 PR)
+- **A-4**: `material_parser.py` 영역 분리 영역 — **parsing 영역만 utils, diff/commit 영역 services 분리**:
+  - `backend/app/utils/material_parser.py` (~180 LOC) — `detect_encoding()`, `parse_upload_file()`, `_parse_xlsx()`, `_parse_csv()`, `_merge_duplicate_mfc()` (MFC-only), `_validate_row()` (M-3 영역 검증 영역 포함)
+  - `backend/app/services/material_upload_service.py` (~150 LOC, 신규) — `diff_with_db()`, `commit_upload()` (트랜잭션 영역)
+- **A-5**: pytest TC 영역 critical coverage 추가 → **15 TC → 21 TC** (6건 추가):
+  - TC-MU-16: xlsx 정상 영역 parse (실 sample.xlsx 영역)
+  - TC-MU-17: empty file (0 bytes) → 400 PARSE_ERROR
+  - TC-MU-18: header-only file (no data rows) → 200 + total_rows=0
+  - TC-MU-19: INVALID_BOM_KEY (product_code 빈칸) → rejected_rows
+  - TC-MU-20: FIELD_TOO_LONG (item_code 51자) → rejected_rows
+  - TC-MU-21: NULL vs '' 정규화 (customer='' vs NULL 영역 동등 처리) — Q2 정합
+
+### v1 → v2 차이 매트릭스
+
+| 항목 | v1 | v2 (정정) |
+|------|-----|----------|
+| changes[].field enum | 5종 | **6종** (`category` 추가) |
+| Q1 MFC 합침 scope | 모든 중복 item_code | **MFC-only** (`category == 'MFC'` 영역 영역) |
+| non-MFC 중복 처리 | silent 합침 | **DUPLICATE_ITEM_CODE reject** |
+| Phase 1 검증 | 3종 (item_code/name/quantity) | **6종** (+INVALID_BOM_KEY +FIELD_TOO_LONG +DUPLICATE_ITEM_CODE) |
+| 파일 형식 contract | `.csv + .xlsx + .xls` | **`.csv + .xlsx`** (`.xls` drop) |
+| 파일 분리 | `material_parser.py` 단일 (~280 LOC) | **utils (parser ~180) + services (upload ~150)** |
+| pytest TC | 15 | **21** (+6 critical coverage) |
+| 의존성 | chardet + openpyxl | 동일 (변경 0) |
+| error envelope | `{error, detail}` (FE 영역) | **`{error, message}`** (project convention) |
+
+### v2 정정 구현 범위
+
+| # | 파일 | 변경 | 라인수 |
+|---|---|---|---|
+| 1 | `backend/app/utils/material_parser.py` ⭐ 신규 | parsing + 인코딩 + Q1 MFC 합침 + 6종 검증 | +180 |
+| 2 | `backend/app/services/material_upload_service.py` ⭐ 신규 (A-4) | diff_with_db + commit_upload (트랜잭션) | +150 |
+| 3 | `backend/app/routes/admin_materials.py` | `/upload` route 추가 (preview/commit 분기) | +60 |
+| 4 | `tests/backend/test_admin_materials_upload.py` ⭐ 신규 | 24 TC (TC-MU-01~24) | +320 |
+| 5 | `backend/requirements.txt` | chardet>=5.2.0 + openpyxl>=3.1.0 | +2 |
+
+**순 증분: ~712 LOC** (production 390 + 테스트 320 + 의존성 2). 각 신규 파일 200줄 미만 (CLAUDE.md L545 1단계 정합).
+
+### Codex 라운드 2 위임 영역
+
+- M-1~M-4 정정 완전성 검증
+- A-4 영역 services 분리 영역 정합 (utils vs services 영역 책임 영역)
+- A-5 영역 6건 신규 TC 영역 정합 + 기존 15건 영역 정합 영역 (회귀 X)
+- non-MFC 중복 영역 DUPLICATE_ITEM_CODE reject 영역 영역 — 사용자 측 운영 영역 실 데이터 영역 영역 영역 영역 영역 영역 (실 데이터 영역 영역 영역 영역 영역 영역 영역)
+- FIELD_TOO_LONG 영역 영역 영역 — 모든 6 컬럼 (item_code/item_name/spec_*/unit/customer/model) 영역 영역 영역 영역 영역 영역 명시 영역
+
+---
 
 ## 연계
 

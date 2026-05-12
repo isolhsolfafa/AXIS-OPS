@@ -1,7 +1,39 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-11 KST (✅ v2.13.2 hotfix release (S1 동반) — `/tasks/by-order/<sales_order>` 응답에 `workers` 배열 추가. VIEW v1.43.6 S1 HOTFIX catch 영역 — 흰 화면 발생 → 후처리 helper `_enrich_tasks_with_workers()` 신규 추가. POST-REVIEW deadline 2026-05-12)
+> 마지막 업데이트: 2026-05-12 KST (✅ v2.14.0 minor release — Sprint 66-BE-FOLLOWUP v3 자재 마스터 Excel 일괄 업로드 endpoint. Codex 5라운드 검증 (M=4→0 GREEN). pytest 23/23 GREEN. 신규 파일 2개 분리 (utils + services). VIEW Sprint 42 v1.43.0 BE 404 fix)
+
+## ✅ 2026-05-12 KST — v2.14.0 minor release (Sprint 66-BE-FOLLOWUP v3)
+
+> **한 줄 요약**: 자재 마스터 Excel/CSV 일괄 업로드 endpoint 신규 (POST /api/admin/materials/upload). VIEW Sprint 42 v1.43.0 `MaterialUploadModal.tsx` 4단계 워크플로우 BE 404 fix. Codex 5라운드 검증 + pytest 23/23 GREEN. 회귀 위험 0.
+
+### 변경 trail
+
+| 단계 | 결과 |
+|---|---|
+| #63 사용자 결정 Q1/Q2/Q3 확정 (2026-05-11) | ✅ |
+| Codex 라운드 1~5 (M=4→0 GREEN, 053a generator 패턴 정합) | ✅ |
+| Step 1-A: utils/material_parser.py (+228 LOC) | ✅ |
+| Step 1-B: services/material_upload_service.py (+228 LOC) | ✅ |
+| Step 1-C: routes/admin_materials.py /upload route (+88 LOC) | ✅ |
+| Step 1-D: pytest 24 TC (Unit 12 + Integration 11 + 1 skip) | ✅ 23/23 GREEN |
+| requirements.txt 의존성 추가 (chardet + openpyxl) | ✅ |
+| version bump v2.13.2 → v2.14.0 + md 5개 갱신 | ✅ |
+| commit + push | ⏳ |
+
+### 핵심 결정
+
+- Q1 MFC scope only / non-MFC dedup / ATTRIBUTE_CONFLICT 첫 등장 유지 / INVALID_BOM_KEY BOM row 영역만 / FIELD_TOO_LONG 8 필드 / .xls drop / utils + services 분리 / `{error, message}`
+
+### 후속 영역
+
+- AXIS-VIEW repo 별 PR: FE #63 BOM 4-key → 2-key + `detail` → `message` + `.csv/.xlsx only`
+- TC-MU-11 ROLLBACK injection TC 별 sprint
+- Twin파파 측 자재 마스터 페이지 영역 업로드 운영 검증 (sample 30rows / 1654 rows 부하)
+
+---
+
+## ⏸️ 이전 release: v2.13.2 (HOTFIX-TASKS-BY-ORDER-WORKERS, S1 동반) (S1 동반) — `/tasks/by-order/<sales_order>` 응답에 `workers` 배열 추가. VIEW v1.43.6 S1 HOTFIX catch 영역 — 흰 화면 발생 → 후처리 helper `_enrich_tasks_with_workers()` 신규 추가. POST-REVIEW deadline 2026-05-12)
 
 ## ✅ 2026-05-11 KST — v2.13.2 hotfix release (HOTFIX-TASKS-BY-ORDER-WORKERS, S1 동반)
 

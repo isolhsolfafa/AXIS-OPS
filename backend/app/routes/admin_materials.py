@@ -412,3 +412,91 @@ def reactivate_material(material_id: int):
     finally:
         if conn:
             put_conn(conn)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# POST /api/admin/materials/upload — Excel/CSV 일괄 업로드 (Sprint 66-BE-FOLLOWUP v3)
+# ═════════════════════════════════════════════════════════════════════════════
+
+@admin_materials_bp.route('/upload', methods=['POST'])
+@jwt_required
+@gst_or_admin_required
+def upload_materials():
+    """자재 마스터 + product_bom Excel/CSV 일괄 업로드 (Sprint 66-BE-FOLLOWUP v3).
+
+    Content-Type: multipart/form-data
+    Body:
+      file: File (CSV / xlsx)  # .xls drop (v3)
+      mode: 'preview' | 'commit'
+      strategy: 'all' | 'selected' | 'skip' (mode=commit 시 필수)
+      selected_item_codes: JSON string of string[] (strategy=selected 시 필수)
+
+    Response 200 (mode=preview): UploadPreview
+    Response 200 (mode=commit):  UploadResult
+    Response 400: ENCODING_DETECTION_FAILED | INVALID_HEADER | PARSE_ERROR | INVALID_REQUEST
+    """
+    import json as _json
+    from app.utils.material_parser import parse_upload_file
+    from app.services.material_upload_service import diff_with_db, commit_upload
+
+    # 1) 입력 검증
+    if 'file' not in request.files:
+        return jsonify({'error': 'INVALID_REQUEST', 'message': 'file 영역 필수입니다.'}), 400
+
+    file = request.files['file']
+    if not file or not file.filename:
+        return jsonify({'error': 'INVALID_REQUEST', 'message': 'file 영역 비어있습니다.'}), 400
+
+    mode = (request.form.get('mode') or '').strip().lower()
+    if mode not in ('preview', 'commit'):
+        return jsonify({'error': 'INVALID_REQUEST',
+                        'message': "mode 영역 'preview' 또는 'commit' 영역 영역 영역."}), 400
+
+    # 2) Phase 1+2: 파싱 + 검증 (DB 변경 0)
+    try:
+        parsed_rows, rejected_rows = parse_upload_file(file)
+    except ValueError as e:
+        error_code = str(e)
+        return jsonify({'error': error_code,
+                        'message': f'파일 파싱 실패: {error_code}'}), 400
+
+    try:
+        diff = diff_with_db(parsed_rows)
+    except Exception as e:
+        logger.error(f'diff_with_db failed: {e}')
+        return jsonify({'error': 'INTERNAL_ERROR',
+                        'message': 'DB 대조 실패'}), 500
+
+    diff['rejected_rows'] = rejected_rows
+
+    # 3) Phase 3: mode 분기
+    if mode == 'preview':
+        return jsonify(diff), 200
+
+    # commit mode — strategy 검증
+    strategy = (request.form.get('strategy') or '').strip().lower()
+    if strategy not in ('all', 'selected', 'skip'):
+        return jsonify({'error': 'INVALID_REQUEST',
+                        'message': "strategy 영역 'all'/'selected'/'skip' 영역 영역 영역."}), 400
+
+    selected_item_codes: Optional[List[str]] = None
+    if strategy == 'selected':
+        raw_selected = request.form.get('selected_item_codes', '[]')
+        try:
+            selected_item_codes = _json.loads(raw_selected)
+            if not isinstance(selected_item_codes, list):
+                raise ValueError('not a list')
+        except (ValueError, TypeError) as e:
+            return jsonify({'error': 'INVALID_REQUEST',
+                            'message': f'selected_item_codes JSON 파싱 실패: {e}'}), 400
+
+    # Phase 3: commit 트랜잭션
+    try:
+        result = commit_upload(parsed_rows, strategy, selected_item_codes)
+    except Exception as e:
+        logger.error(f'commit_upload failed: {e}')
+        return jsonify({'error': 'INTERNAL_ERROR',
+                        'message': 'commit 실패 (트랜잭션 ROLLBACK)'}), 500
+
+    result['rejected'] = len(rejected_rows)
+    return jsonify(result), 200

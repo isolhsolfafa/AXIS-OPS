@@ -9,3 +9,5 @@ email-validator
 bcrypt
 APScheduler>=3.10
 sentry-sdk[flask]>=2.0
+chardet>=5.2.0
+openpyxl>=3.1.0

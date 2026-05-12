@@ -6,6 +6,77 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.14.0] - 2026-05-12 — Sprint 66-BE-FOLLOWUP v3 (자재 마스터 Excel 일괄 업로드 endpoint)
+
+> AXIS-VIEW Sprint 42 v1.43.0 `MaterialUploadModal.tsx` 4단계 워크플로우 prod 배포 완료 영역 BE 404 fix. 신규 파일 2개 분리 (CLAUDE.md L545 정합). Codex 5라운드 검증 (M=4→0 GREEN). pytest 23/23 GREEN.
+
+### 변경
+
+- **BE 신규 파일 2개** (CLAUDE.md L545 분리 정책 정합)
+  - `backend/app/utils/material_parser.py` (+228 LOC)
+    - detect_encoding (chardet → UTF-8 → CP949 → EUC-KR fallback)
+    - parse_upload_file (csv + xlsx)
+    - _parse_xlsx (openpyxl 첫 시트, .xls 영역 reject)
+    - _parse_csv (인코딩 자동)
+    - _map_korean_to_english (CSV_COLUMN_MAP 11 한글)
+    - _validate_row (7종 reject reason: MISSING_ITEM_CODE / MISSING_ITEM_NAME / INVALID_QUANTITY / INVALID_BOM_KEY / FIELD_TOO_LONG / ATTRIBUTE_CONFLICT 영역, DUPLICATE_ITEM_CODE 영역 사용 X)
+    - _merge_duplicate_mfc (Q1 MFC scope only + ATTRIBUTE_CONFLICT 첫 등장 유지)
+  - `backend/app/services/material_upload_service.py` (+228 LOC)
+    - diff_with_db (6 필드 비교 + NULL/'' 정규화 + pair-wise IN tuple)
+    - commit_upload (strategy 분기 + 단일 트랜잭션 + ON CONFLICT)
+- **BE 기존 파일**
+  - `backend/app/routes/admin_materials.py` (+88 LOC) — POST /upload route
+- **테스트**
+  - `tests/backend/test_admin_materials_upload.py` (+~440 LOC, 24 TC)
+    - Unit 12 (TC-MU-04/05/06/13/14/17/18/19/20/22/23/24)
+    - Integration 11 + 1 skip (TC-MU-01/02/03/07/08/09/10/12/15/16/21, TC-MU-11 ROLLBACK 의도 skip)
+- **의존성** `backend/requirements.txt`
+  - chardet>=5.2.0
+  - openpyxl>=3.1.0
+- **version bump**: 2.13.2 → 2.14.0
+
+### v3 핵심 결정
+
+| 항목 | v3 결정 |
+|------|--------|
+| Q1 MFC 합침 scope | MFC-only (`category == 'MFC'` 영역만) |
+| non-MFC 중복 처리 | dedup 첫 등장 사용 (053a `dedup_material_master()` 패턴) |
+| ATTRIBUTE_CONFLICT | 자재 정보 (item_name/spec_*/unit) 충돌만 + 첫 등장 유지 + 후속 reject |
+| INVALID_BOM_KEY | BOM row 영역만 (product_code != '') — material-only MFC rows 허용 |
+| FIELD_TOO_LONG | 8 필드 (item_code 50 / item_name 200 / category 50 / spec_1 200 / spec_2 200 / unit 20 / customer 100 / model 100). description 영역 TEXT — 검증 X |
+| 파일 형식 | csv + xlsx (`.xls` drop, openpyxl .xlsx-only) |
+| 파일 분리 | utils (parser) + services (upload) |
+| error envelope | `{error, message}` (project convention) |
+
+### Codex 검증 5 라운드 trail
+
+| 라운드 | 결과 | 정정 |
+|--------|------|------|
+| 1 | M=4 / A=5 / N=8 | v2 trail 영역 + non-MFC scope catch + MFC INVALID_BOM_KEY catch + category 50 누락 + 본문 단일소스화 |
+| 2 | M=4 / A=5 / N=7 | non-MFC DUPLICATE → dedup / MFC product_code='' 허용 / FIELD_TOO_LONG category 추가 / 본문 직접 정정 |
+| 3 | M=2 / A=3 / GREEN=5 | diff_with_db spec 본문 고정 / ATTRIBUTE_CONFLICT 정책 명시 / Step 1-A~1-F 명시 |
+| 4 | M=1 / A=3 + 5건 PASS | tuple unpacking + TC 카운트 24 통일 + pair-wise IN tuple |
+| **5** | **M=0 / A=3 GREEN** ✅ | TC-MU-20/M-4 trail/체크리스트 stale 영역 정정 → 구현 진입 권고 |
+
+### pytest 결과
+
+- Unit 12/12 PASS (0.30초)
+- Integration 11/11 PASS + 1 skip (TC-MU-11 ROLLBACK 의도) (2분 52초, staging DB)
+- 총 23/23 GREEN (TC-MU-11 의도 skip 제외)
+
+### 회귀 위험
+
+- 0 — 기존 admin_materials.py 5 endpoint 영향 0
+- DB schema 변경 0, migration 불필요
+- FE Sprint 42 v1.43.0 contract 정합 (UploadPreview / UploadResult schema)
+
+### 후속 영역
+
+- FE #63 측 정정 권고 (별 PR): BOM 4-key → 2-key + error envelope `detail` → `message` + `.csv/.xlsx only` 명시
+- TC-MU-11 ROLLBACK injection TC 영역 별 sprint (DB error mock 영역)
+
+---
+
 ## [2.13.2] - 2026-05-11 — HOTFIX-TASKS-BY-ORDER-WORKERS (Sprint 64-BE v3 / v2.13.1 후속, S1 동반)
 
 > VIEW v1.43.6 S1 HOTFIX 영역 catch — `/tasks/by-order/<sales_order>` 응답에 `workers` 배열 누락 → FE `task.workers.find()` TypeError → React crash → S/N 상세뷰 흰 화면.
