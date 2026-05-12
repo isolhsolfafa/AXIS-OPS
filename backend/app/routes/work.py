@@ -465,6 +465,7 @@ def complete_single_action_route() -> Tuple[Dict[str, Any], int]:
         return jsonify({'error': 'COMPLETE_FAILED', 'message': '완료 처리에 실패했습니다.'}), 500
 
     # work_completion_log 기록
+    conn = None
     try:
         from app.models.worker import get_db_connection
         conn = get_db_connection()
@@ -481,9 +482,11 @@ def complete_single_action_route() -> Tuple[Dict[str, Any], int]:
              task.task_category, task.task_id, task.task_name, completed_at)
         )
         conn.commit()
-        put_conn(conn)
     except Exception as e:
         logger.error(f"Failed to log single action completion: {e}")
+    finally:
+        if conn is not None:
+            put_conn(conn)
 
     # completion_status 업데이트
     incomplete = get_incomplete_tasks(task.serial_number, task.task_category)
@@ -564,6 +567,8 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
     # worker_name 일괄 조회 (작업자명 표시용)
     worker_ids = list(set(t.worker_id for t in tasks if t.worker_id))
     if worker_ids:
+        conn = None
+        worker_map = {}
         try:
             from app.models.worker import get_db_connection as get_conn
             conn = get_conn()
@@ -573,14 +578,14 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
                 (worker_ids,)
             )
             worker_map = {row['id']: row['name'] for row in cur.fetchall()}
-            put_conn(conn)
-            for item in task_list:
-                wid = item.get('worker_id')
-                item['worker_name'] = worker_map.get(wid) if wid else None
         except Exception as e:
             logger.warning(f"Worker name lookup failed: {e}")
-            for item in task_list:
-                item['worker_name'] = None
+        finally:
+            if conn is not None:
+                put_conn(conn)
+        for item in task_list:
+            wid = item.get('worker_id')
+            item['worker_name'] = worker_map.get(wid) if wid else None
     else:
         for item in task_list:
             item['worker_name'] = None
@@ -591,6 +596,7 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
     task_db_ids = [item['id'] for item in task_list if item.get('id')]
     workers_by_task: Dict[int, list] = {item['id']: [] for item in task_list if item.get('id')}
     if task_db_ids:
+        conn = None
         try:
             from app.models.worker import get_db_connection as get_conn
             conn = get_conn()
@@ -665,14 +671,17 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
                 if len(wlist) >= 2:
                     names = [w['worker_name'] for w in wlist]
                     logger.info(f"[BUG-14] task_id={tid} has {len(wlist)} workers: {names}")
-            put_conn(conn)
         except Exception as e:
             logger.warning(f"Workers batch query failed: {e}")
+        finally:
+            if conn is not None:
+                put_conn(conn)
 
     # my_status + my_pause_status 일괄 조회 (Sprint 55-B: 화면 재진입 시 pause 상태 유지)
     my_status_map: Dict[int, str] = {}
     my_pause_map: Dict[int, str] = {}
     if task_db_ids:
+        conn2 = None
         try:
             worker_id = get_current_worker_id()
             from app.models.worker import get_db_connection as get_conn
@@ -702,9 +711,11 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
             for row in cur2.fetchall():
                 my_status_map[row['task_id']] = row['my_status']
                 my_pause_map[row['task_id']] = row['my_pause_status']
-            conn2.close()
         except Exception as e:
             logger.warning(f"my_status batch query failed: {e}")
+        finally:
+            if conn2 is not None:
+                put_conn(conn2)
 
     for item in task_list:
         tid = item.get('id')

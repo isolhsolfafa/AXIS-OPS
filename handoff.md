@@ -1,7 +1,38 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-12 KST (✅ v2.14.0 minor release — Sprint 66-BE-FOLLOWUP v3 자재 마스터 Excel 일괄 업로드 endpoint. Codex 5라운드 검증 (M=4→0 GREEN). pytest 23/23 GREEN. 신규 파일 2개 분리 (utils + services). VIEW Sprint 42 v1.43.0 BE 404 fix)
+> 마지막 업데이트: 2026-05-12 KST (✅ v2.14.1 patch release — work.py conn leak 5 위치 fix. 16:48 Railway pool exhausted 사고 root cause 영역 fix. Codex GREEN + pytest 45/45 PASS)
+
+## ✅ 2026-05-12 KST — v2.14.1 patch release (FIX-DB-POOL-CONN-LEAK-WORK-PY)
+
+> **한 줄 요약**: 16:48 Railway pool exhausted 사고 root cause 영역 `routes/work.py` L705 `conn2.close()` 영역 → ThreadedConnectionPool 영역 conn 반환 X → 영구 leak. 5 위치 fix (L705 + try/finally 4건). Codex GREEN + pytest 45/45 PASS. 회귀 위험 0.
+
+### 사고 분석 trail
+
+- 16:48:12 (KST) — Railway pool exhausted 첫 catch
+- 자가 회복 영역 정상 작동 (5-04 도입 영역, 3 cycles=15분 후 close+init)
+- 사용자 측 restart 영역 정상화
+- 분석: 모바일 작업자 `GET /api/app/tasks/{sn}` 영역 매 호출 1 conn 영구 leak (work.py L705 `conn2.close()`)
+
+### Fix 5 위치 (work.py만)
+
+| 위치 | fix | 영향 |
+|------|-----|------|
+| L705 | `conn2.close()` → `put_conn(conn2)` + try/finally | 🔴 영구 leak 차단 |
+| L676-707 | `conn2 = None` + finally | exception 시 leak 차단 |
+| L594-670 | try/finally 패턴 | exception 시 leak 차단 |
+| L568-583 | try/finally + worker_map 외부 초기화 | exception 시 leak 차단 |
+| L468-486 | try/finally 패턴 | exception 시 leak 차단 |
+
+### 후속 BACKLOG
+
+- `BUG-WORK-INSERT-ROLLBACK-EXPLICIT-20260512` (P3) — L468-486 INSERT except rollback 명시 (Codex A-1)
+
+---
+
+## ⏸️ 이전 release: v2.14.0 (Sprint 66-BE-FOLLOWUP v3 자재 마스터 Excel 일괄 업로드)
+
+> **한 줄 요약**: 자재 마스터 Excel 일괄 업로드 endpoint 신규 — Sprint 66-BE-FOLLOWUP v3 자재 마스터 Excel 일괄 업로드 endpoint. Codex 5라운드 검증 (M=4→0 GREEN). pytest 23/23 GREEN. 신규 파일 2개 분리 (utils + services). VIEW Sprint 42 v1.43.0 BE 404 fix)
 
 ## ✅ 2026-05-12 KST — v2.14.0 minor release (Sprint 66-BE-FOLLOWUP v3)
 

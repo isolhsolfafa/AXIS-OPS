@@ -6,6 +6,54 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.14.1] - 2026-05-12 — FIX-DB-POOL-CONN-LEAK-WORK-PY (work.py conn leak 5 위치 fix)
+
+> 2026-05-12 KST 16:48 Railway pool exhausted 사고 root cause 영역 fix. work.py L705 `conn2.close()` 직접 호출이 ThreadedConnectionPool 영역 conn 반환 영역 X → 영구 leak. Codex GREEN + pytest 45/45 PASS.
+
+### Root cause
+
+- `routes/work.py` L705: `conn2.close()` (psycopg2 메서드) — pool 영역 반환 X
+- ThreadedConnectionPool 영역 `put_conn()` 호출 영역 = conn 영역 "사용 중" 영역 영역 추적
+- 모바일 작업자 S/N 상세뷰 진입 (`GET /api/app/tasks/{sn}`) 마다 1 conn 영구 누수
+- 8분간 10건 호출 → MAX=30 도달 (Railway pool exhausted)
+- 자가 회복 (5-04 도입) 영역 15분 후 close_pool+init_pool 영역 정상 작동 영역, 사용자 측 restart 영역 정상화
+
+### 변경 (5 위치, work.py만)
+
+| 위치 | fix |
+|------|-----|
+| L705 (my_status) | `conn2.close()` → `put_conn(conn2)` + try/finally |
+| L676-707 (my_status) | `conn2 = None` 초기화 + finally 추가 |
+| L594-670 (workers 배열) | try/finally 패턴, put_conn finally로 이동 |
+| L568-583 (worker_name) | try/finally + worker_map 외부 초기화 |
+| L468-486 (complete_single_action) | try/finally 패턴 |
+
+### 검증
+
+- pytest 45/45 PASS (test_work_api + test_work_batch + test_task_workers_api, 18분 11초)
+- Flask app boot 정상
+- `conn.close()` 호출 work.py 전체 0건
+- put_conn 7 → 8 / finally 2 → 6
+
+### Codex 라운드 1 GREEN
+
+| Q | 결과 |
+|---|------|
+| Q1 L705 fix 정합 | N ✅ |
+| Q2 try/finally 5 위치 일관성 | N ✅ |
+| Q3 INSERT except rollback | A (Advisory — BACKLOG) |
+| Q4-7 (worker_map / task_service_batch 비교 / 신규 leak / 다른 conn.close) | N ✅ |
+
+### 회귀 위험
+
+- 0 — pytest 45/45 + Flask boot 정상 + Sprint 64-BE v3 호환 (task_service_batch 동일 패턴 정합)
+
+### 후속 BACKLOG
+
+- `BUG-WORK-INSERT-ROLLBACK-EXPLICIT-20260512` — L468-486 complete_single_action_route INSERT except 시 `conn.rollback()` 명시 추가 (A-1, 보수적 보강)
+
+---
+
 ## [2.14.0] - 2026-05-12 — Sprint 66-BE-FOLLOWUP v3 (자재 마스터 Excel 일괄 업로드 endpoint)
 
 > AXIS-VIEW Sprint 42 v1.43.0 `MaterialUploadModal.tsx` 4단계 워크플로우 prod 배포 완료 영역 BE 404 fix. 신규 파일 2개 분리 (CLAUDE.md L545 정합). Codex 5라운드 검증 (M=4→0 GREEN). pytest 23/23 GREEN.
