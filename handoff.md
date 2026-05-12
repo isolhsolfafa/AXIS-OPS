@@ -57,8 +57,8 @@
 
 #### 검증 시점 권고
 
-- **T+1h** (배포 1시간 후): Sentry 신규 alert 0건 + Railway logs Pool exhausted 0건
-- **T+24h** (5-13): 같은 시간대 (16:00~17:00 KST peak) 정상 응답
+- **T+1h** (배포 1시간 후): ✅ **GREEN 확인** (2026-05-13, Sentry/Railway db_pool 키워드 0건)
+- **T+24h** (5-13 17:00 KST): 같은 시간대 (16:00~17:00 KST peak) 정상 응답
 - **T+5d** (5-17): 5일 주기 가설 재발 X 확정
 
 ---

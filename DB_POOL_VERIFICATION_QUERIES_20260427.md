@@ -1225,10 +1225,10 @@ T+1주 (2026-05-13 또는 5-09 ± 1d 측정):
 # - chardet + openpyxl import 정상 (v2.14.0 의존성)
 ```
 
-기록:
-- Boot 시각: __________ (예: 22:31 KST)
-- Boot 정상: ☐ Y ☐ N
-- 신규 에러 0건: ☐ Y ☐ N
+기록 (2026-05-13 측정):
+- Boot 시각: 2026-05-12 22:30+ KST (commit 8a422f2 release)
+- Boot 정상: ☑ Y
+- 신규 에러 0건: ☑ Y
 
 ### W1.2 — Pool exhausted 0건 확인 (Railway logs)
 
@@ -1238,10 +1238,10 @@ T+1주 (2026-05-13 또는 5-09 ± 1d 측정):
 # - "[db_pool] Using direct connection" 0건 (T+1h)
 ```
 
-기록:
-- Pool exhausted 카운트: ___ (목표 0)
-- Direct connection 카운트: ___ (목표 0)
-- 평가: ☐ GREEN ☐ YELLOW (1-5건) ☐ RED (6+건)
+기록 (2026-05-13 측정):
+- Pool exhausted 카운트: **0** (목표 0)
+- Direct connection 카운트: **0** (목표 0)
+- 평가: ☑ GREEN
 
 ### W1.3 — Sentry 신규 issue 0 확인
 
@@ -1251,9 +1251,18 @@ Sentry 대시보드 → Issues → Last hour
 - 기존 [db_pool] alert resolved 영역 X (새 alert 발생 X)
 ```
 
-기록:
-- 신규 Sentry issue: ___ 건
-- 평가: ☐ GREEN (0건) ☐ YELLOW (1건) ☐ RED (2+건)
+기록 (2026-05-13 측정, 사용자 측 확인):
+- 신규 Sentry issue: **0** 건
+- db_pool 관련 키워드 검색: **0건** (사용자 측 Sentry/Railway 모니터링 검증)
+- 평가: ☑ GREEN
+
+### ✅ T+1h 종합 판정 — GREEN 확인 (2026-05-13)
+
+- W1.1 Railway boot 정상 ✅
+- W1.2 Pool exhausted 0건 ✅
+- W1.3 Sentry db_pool 키워드 0건 ✅
+- **fix 효과 1차 입증**: L705 영역 영역 영구 누수 차단 작동 중
+- 다음 검증: T+24h (peak 시간대 16:00-17:00 KST 측정), T+5d (5-17 ± 1d 5일 주기 가설)
 
 ---
 
