@@ -1,8 +1,60 @@
 # AXIS-OPS 알람(Alert) 로직 정리
 
-> 마지막 업데이트: 2026-04-08
+> 마지막 업데이트: 2026-05-12 (4-08 ~ 5-12 변경 trail 반영)
 > 알람 시스템 전체 현황 — 20종 트리거, 수신자, 메시지, 전달 방식
 > DB enum: `alert_type_enum` (migration 004 → 006 → 008 → 041 → 042 → 043 → 044)
+
+---
+
+## 📋 4-08 → 5-12 변경 trail (33일간 누적)
+
+본 doc 영역 4-08 기준 작성 후, 다음 변경 사항 반영:
+
+### v2.9.4 (2026-04-17) — 알람 O/N 통일 + 에스컬레이션 3종
+
+- 알람 메시지 영역 O/N (sales_order) 통일 — 모든 알람 영역 `[S/N | O/N: xxx]` 표준 포맷
+- **에스컬레이션 알람 3종 추가**:
+  - TASK_REMINDER (작업자 본인, 1h 단위)
+  - SHIFT_END_REMINDER (작업자 본인, 17:00 + 20:00 KST)
+  - TASK_ESCALATION (관리자, 익일 09:00 미종료 작업)
+- pending API 확장 — admin 옵션 영역 미종료 작업 카드 영역 표시
+- admin_settings SETTING_KEYS 5개 추가 — 알림 영역 admin 설정 (default 값 포함)
+
+### v2.9.11 (2026-04-22) — HOTFIX-ALERT-SCHEDULER-DELIVERY (S1)
+
+- **트리거**: alert silent fail 발견 (4-22 사고)
+- scheduler 3곳 target_worker_id 표준 패턴 정정 + 배치 dedupe
+- alert_service.py: `_match_manager_for_partner()` 표준 패턴 사용
+- POST-REVIEW: alert silent fail ERROR 로깅 추가 (HOTFIX-SCHEDULER-PHASE1.5)
+
+### v2.10.8 (2026-04-27) — Sentry 정식 연동 (OBSERV-ALERT-SILENT-FAIL)
+
+- LoggingIntegration(event_level=ERROR) 도입 — `logger.error()` 영역 자동 Sentry capture
+- sentry-sdk[flask]>=2.0 의존성 추가
+- alert 영역 silent fail 영역 자동 영역 알림 도달 (1분 안)
+
+### v2.10.11 (2026-04-28) — FIX-PROCESS-VALIDATOR-TMS-MAPPING
+
+- 4-22 HOTFIX 표준 패턴이 duration_validator 3곳 + task_service.py 1곳 미적용 → TMS 매니저 silent failure
+- `process_validator.resolve_managers_for_category()` public 함수 신설 + 5 파일 atomic 정정
+- Sentry 도입 8h 자동 감지 (31 events)
+- pytest 신규 TC 7개 (옵션 D 격리 fixture `seed_test_managers_for_partner`)
+
+### v2.10.13 (2026-04-28) — Sentry 잡음 정리
+
+- `db_pool.py` `[db_pool] Pool exhausted` → logger.error → warning 강등 (의미론 정합)
+- flask-sock wsgi StopIteration Sentry 자동 capture 322 events 동결 (`_sentry_before_send` hook)
+
+### v2.10.16 (2026-04-30) — FIX-DB-POOL-WARMUP-WATCHDOG
+
+- `db_pool.warmup_pool()` L266 `logger.debug` → `logger.error` 격상 + pid context
+- LoggingIntegration ERROR 자동 Sentry capture 활성화
+
+### v2.12.5 (2026-05-11) — alert_task_not_started 기본값 변경
+
+- `alert_task_not_started_enabled` SETTING_KEYS default `True` → `False`
+- 작업 미시작 알림 영역 기본 OFF로 변경 (사용자 측 운영 catch)
+- BE admin.py L71 + FE state L35 + fallback L324 동기 변경
 
 ---
 

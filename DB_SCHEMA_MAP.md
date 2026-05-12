@@ -1,9 +1,14 @@
 # AXIS-OPS Database Schema Map
 
-> 운영 DB (Railway PostgreSQL 15) 기준 — 최종 업데이트: 2026-05-07 (운영 DB 직접 조회 검증 완료)
-> 8개 스키마, 34개 테이블, 3개 ENUM (alert_type_enum 24값)
-> v2.11.7 (2026-05-06) 시점 정합 — Sprint 40-C/41-B/61-BE/63-BE/65-BE 반영
-> ※ `public.bom_csv_import` (10컬럼, 0 row) = 테스트 임시 테이블 — drop 예정, 본 doc 제외
+> 운영 DB (Railway PostgreSQL 15) 기준 — 최종 업데이트: 2026-05-12 (운영 DB 직접 조회 검증 완료)
+> 8개 스키마, **35개 테이블**, 3개 ENUM (alert_type_enum 24값)
+> v2.14.1 (2026-05-12) 시점 정합 — Migration 053 (5-07) checklist 스키마 확장 반영
+>
+> **5-07 → 5-12 변경 사항**:
+> - Migration 053 (v2.12.0, 5-07): `public.product_bom` + `public.bom_checklist_log` + `public.bom_csv_import` → `checklist` 스키마 이전/삭제 + `checklist.material_master` 신설 (10 cols + RESTRICT FK)
+> - Migration 053a (v2.12.1, 5-08): 185 자재 + 1626 BOM 매핑 seed (schema 변경 X)
+> - Migration 053b (v2.12.1, 5-08): `checklist.material_master.description TEXT` 컬럼 추가 (atomic ALTER + 13 MFC backfill)
+> - Migration 054 (v2.12.4, 5-10): ELEC IF_1/IF_2 task_name UPDATE 370 row (schema 변경 X, 데이터만)
 
 ---
 
@@ -11,14 +16,24 @@
 
 | 스키마 | 테이블 수 | 용도 |
 |--------|----------|------|
-| **public** | 19 | APP 운영 (workers, tasks, alerts, QR, 설정, migration_history) |
+| **public** | 17 | APP 운영 (workers, tasks, alerts, QR, 설정, migration_history) — 5-07 이전 19 → 17 (bom 3 테이블 이전/삭제) |
 | **plan** | 2 | 생산관리 (product_info, production_confirm) |
 | **hr** | 3 | 인사/근태 (출퇴근, PIN 인증) |
-| **checklist** | 2 | 체크리스트 (마스터 + 기록) |
+| **checklist** | 5 | 체크리스트 (마스터 + 기록) + 자재 마스터 + BOM 매핑 + BOM 검사 log — 5-07 이전 2 → 5 (material_master + product_bom + bom_checklist_log 추가) |
 | **auth** | 1 | 인증 (refresh_tokens) |
 | **analytics** | 4 | 분석 (불량 통계, ML 예측) |
 | **defect** | 2 | 불량 관리 (defect_record, inspection_record) |
 | **etl** | 1 | ETL 변경이력 (change_log) |
+
+### checklist 스키마 5 테이블 (v2.14.1 정합)
+
+| 테이블 | 용도 | 컬럼 수 |
+|--------|------|---------|
+| `material_master` | 자재 마스터 (item_code UNIQUE + category + description) | 11 (id/item_code/item_name/category/spec_1/spec_2/unit/is_active/created_at/updated_at/description) |
+| `product_bom` | 제품 BOM 매핑 ((product_code, material_id) UNIQUE) | 9 (id/product_code/customer/model/material_id/quantity/is_active/created_at/updated_at) |
+| `bom_checklist_log` | BOM 검사 결과 (SI hook-up + AI 검증 영역 보존) | 17 (id/serial_number/qr_doc_id/product_code/bom_item_id/is_checked/...) |
+| `checklist_master` | 체크리스트 마스터 (MECH/ELEC checklist 항목) | 기존 |
+| `checklist_record` | 체크리스트 기록 (selected_material_id FK 추가) | 기존 + 1 (selected_material_id) |
 
 ---
 
