@@ -1152,3 +1152,241 @@ T+1주 (2026-05-13 또는 5-09 ± 1d 측정):
   - `FIX-DB-POOL-DIRECT-FALLBACK-LOG-LEVEL-20260428` ✅ (logger.warning 강등)
   - `FIX-DB-POOL-WARMUP-WATCHDOG-20260430` ✅ (WATCHDOG 도입)
 - pytest: `tests/backend/test_db_pool.py` 8/8 PASS (commit `9997bca`)
+
+
+---
+
+# 🆕 v2.14.1 — FIX-DB-POOL-CONN-LEAK-WORK-PY 검증 (2026-05-12 release)
+
+> **목적**: work.py 5 위치 conn leak fix 후 pool exhausted 영구 차단 검증
+>
+> **사고 trail**: 2026-05-12 KST 16:48 Railway pool exhausted 발생 → 사용자 측 restart로 정상화 → log 분석으로 root cause 확정 (work.py L705 `conn2.close()`) → fix 진행
+>
+> **release**: v2.14.1, commit `8a422f2`, push `81e143c..8a422f2 main → main`
+
+---
+
+## 🔬 사고 분석 (Root cause 확정)
+
+### Timeline (UTC → KST 변환, 2026-05-12)
+
+| UTC | KST | 이벤트 |
+|-----|-----|--------|
+| 07:40:34 | 16:40:34 | Pool exhausted 첫 catch (Railway logs) |
+| 07:43:21 | 16:43:21 | warmup 5/5 (정상 일시 회복) |
+| 07:47 | 16:47 | Pool exhausted burst (118건/분) |
+| 07:48:12 | 16:48:12 | 사용자 측 catch 시점 |
+| 07:48:21 | 16:48:21 | warmup 0/0 (1차 cycle) |
+| 07:53:21 | 16:53:21 | warmup 0/0 (2차) |
+| 07:58:21 | 16:58:21 | **자가 회복 발화** (3 cycles 후 close_pool+init_pool, Sentry capture) |
+| 08:03:21 | 17:03:21 | warmup 5/5 (회복 완료) |
+
+### Root cause 확정
+
+**`routes/work.py` L705 `conn2.close()` 직접 호출**:
+- psycopg2 connection close 메서드 (pool의 `put_conn()` 영역 X)
+- ThreadedConnectionPool 영역 conn 영역 "사용 중" 영역 추적 → 영구 leak
+- 모바일 작업자 `GET /api/app/tasks/{sn}` 영역 매 호출 1 conn 누수
+- 8분간 10건 호출 (다른 S/N: 7109/7110/7112/7113/7115/7131/7155/7177/7178/7179) → MAX=30 도달
+
+### Fix 5 위치 (work.py만)
+
+| 위치 | fix | 영향 |
+|------|-----|------|
+| L705 | `conn2.close()` → `put_conn(conn2)` + try/finally | 🔴 영구 leak 차단 |
+| L676-707 | `conn2 = None` 초기화 + finally | exception 시 leak 차단 |
+| L594-670 | try/finally 패턴, put_conn finally로 이동 | exception 시 leak 차단 |
+| L568-583 | try/finally + worker_map 외부 초기화 | exception 시 leak 차단 |
+| L468-486 | try/finally (complete_single_action_route) | exception 시 leak 차단 |
+
+### Codex 라운드 1 GREEN (M=0 / A=1)
+
+- Q1~Q7 모두 N (정합)
+- A-1: INSERT except `conn.rollback()` 명시 권고 → `BUG-WORK-INSERT-ROLLBACK-EXPLICIT-20260512` BACKLOG
+
+### pytest 회귀 45/45 PASS
+
+- `test_work_api.py` + `test_work_batch.py` (30 TC) + `test_task_workers_api.py` (7 TC)
+- staging DB 18분 11초 실행
+- 기능 회귀 0
+
+---
+
+## 🟢 T+1h — 배포 직후 검증 (2026-05-12 22:30+ KST)
+
+### W1.1 — Railway logs boot 정상 확인
+
+```bash
+# Railway 대시보드 → Deployments → Latest deploy logs
+# 검증:
+# - Flask app created successfully
+# - Blueprints registered (admin_materials 포함)
+# - Migration applied 정상
+# - chardet + openpyxl import 정상 (v2.14.0 의존성)
+```
+
+기록:
+- Boot 시각: __________ (예: 22:31 KST)
+- Boot 정상: ☐ Y ☐ N
+- 신규 에러 0건: ☐ Y ☐ N
+
+### W1.2 — Pool exhausted 0건 확인 (Railway logs)
+
+```bash
+# Railway logs 검색:
+# - "[db_pool] Pool exhausted" 0건 (T+1h)
+# - "[db_pool] Using direct connection" 0건 (T+1h)
+```
+
+기록:
+- Pool exhausted 카운트: ___ (목표 0)
+- Direct connection 카운트: ___ (목표 0)
+- 평가: ☐ GREEN ☐ YELLOW (1-5건) ☐ RED (6+건)
+
+### W1.3 — Sentry 신규 issue 0 확인
+
+```
+Sentry 대시보드 → Issues → Last hour
+- 새 issue 0건 (목표)
+- 기존 [db_pool] alert resolved 영역 X (새 alert 발생 X)
+```
+
+기록:
+- 신규 Sentry issue: ___ 건
+- 평가: ☐ GREEN (0건) ☐ YELLOW (1건) ☐ RED (2+건)
+
+---
+
+## 🟡 T+24h — 같은 시간대 (16:00-17:00 KST peak) 검증 (2026-05-13)
+
+### W2.1 — peak 시간대 응답 시간 정상화
+
+```
+DevTools Network 탭 또는 Railway access logs:
+- GET /api/app/tasks/{sn}: 정상 50-300ms (위험 500ms+)
+- POST /api/app/work/complete: 정상 200-800ms (위험 1.5초+)
+- GET /api/app/work/today-tags: 정상 50-150ms (위험 300ms+)
+```
+
+기록 (2026-05-13 16:00-17:00 KST 영역):
+- `/tasks/{sn}` 평균 응답: ___ ms
+- `/work/complete` 평균 응답: ___ ms
+- `/today-tags` 평균 응답: ___ ms
+- 평가: ☐ GREEN ☐ YELLOW ☐ RED
+
+### W2.2 — Pool exhausted 24h 누적 0건 확인
+
+```bash
+# Railway logs 24h 범위:
+# - "[db_pool] Pool exhausted" 카운트
+# - "[db_pool] Using direct connection" 카운트
+# - "[pool_warmup] 0/0 conn warmed" 카운트
+# - "[db_pool] 0/0 warmed for 3 consecutive cycles" 카운트 (자가 회복 발화)
+```
+
+기록:
+- Pool exhausted 24h 누적: ___ (목표 0)
+- Direct connection 24h 누적: ___ (목표 0)
+- warmup 0/0 cycles: ___ (목표 0)
+- 자가 회복 발화: ___ (목표 0)
+- 평가: ☐ GREEN ☐ YELLOW ☐ RED
+
+### W2.3 — warmup 5/5 정상 cycle (288 cycles 예상)
+
+```bash
+# Railway logs:
+# - "[pool_warmup] 5/5 conn warmed" 288회 (24h × 5분 cron = 288)
+# - 모두 5/5 정상 (0/0 영역 X)
+```
+
+기록:
+- warmup 5/5 cycles: ___ (예상 288)
+- warmup 0/0 cycles: ___ (목표 0)
+- 평가: ☐ GREEN ☐ YELLOW ☐ RED
+
+---
+
+## 🔵 T+5d — 5일 주기 가설 재발 X 확인 (5-17 ± 1d)
+
+배경: 4-29 → 5-04 → 5-09 → (다음 5-12 영역) 5일 주기 Railway proxy idle 가설 영역 검증. v2.14.1 fix 후 5일 주기 영역 영역 영역 발생해도 사용자 영향 0 (자가 회복 + leak 차단).
+
+### W3.1 — 5-17 ± 1d 영역 Pool exhausted 발생 여부
+
+기록:
+- 5-15 ~ 5-17 영역 Pool exhausted: ___ 건
+- 5-15 ~ 5-17 영역 자가 회복 발화: ___ 건
+- 평가:
+  - ☐ A 시나리오 (이상적): 모든 지표 0건 → 5일 주기 가설 break 확정 + leak 영구 차단 입증
+  - ☐ B 시나리오: 자가 회복 발화 1-2건 (사용자 영향 ≤15분, 자동 회복) → 영역 영역 trigger 별도 추적
+  - ☐ C 시나리오: 사용자 측 restart 필요 → fix 효과 영역 부족 → 후속 sprint
+
+### W3.2 — Sentry 5d 누적 alert
+
+```
+Sentry 대시보드 → Last 5 days:
+- [db_pool] 0/0 warmed for 3 consecutive cycles: 0건 (목표)
+- [db_pool] warmup called but _pool=None: 0건 (목표)
+- 기타 db_pool 관련 신규 alert: 0건 (목표)
+```
+
+기록:
+- 신규 alert 5d 누적: ___ 건
+- 평가: ☐ GREEN (0건) ☐ YELLOW (1건) ☐ RED (2+건)
+
+---
+
+## 📋 v2.14.1 종합 검증 결과 (T+5d 이후 작성)
+
+```
+관찰 기간: 2026-05-12 ~ 2026-05-17 (T+5d)
+
+T+1h (2026-05-12 22:30+ KST):
+  ├─ Railway boot: ___ (정상 / 이상)
+  ├─ Pool exhausted 1h: ___ 건 (목표 0)
+  ├─ Sentry 신규 issue: ___ 건 (목표 0)
+  └─ 평가: ___
+
+T+24h (2026-05-13 17:00 KST):
+  ├─ peak 시간대 (16:00-17:00) 응답 시간: ___ (정상 / 지연)
+  ├─ Pool exhausted 24h 누적: ___ 건 (목표 0)
+  ├─ warmup 5/5 cycles: ___ 회 (예상 288)
+  ├─ warmup 0/0 cycles: ___ 회 (목표 0)
+  └─ 평가: ___
+
+T+5d (2026-05-17 ± 1d):
+  ├─ 시나리오: ___ (A / B / C)
+  ├─ Pool exhausted 발생: ___ 건
+  ├─ 자가 회복 발화: ___ 회
+  ├─ Sentry 5d 누적 alert: ___ 건
+  └─ 사용자 영향 시간: ___ 분 (max)
+
+종합 판정:
+  ├─ COMPLETED: ___ (Y/N)
+  ├─ 추가 조치 필요: ___ (있으면 후속 sprint)
+  └─ 5일 주기 가설: ___ (break / 재발 / 미확정)
+
+후속 Sprint 트리거:
+  ├─ BUG-WORK-INSERT-ROLLBACK-EXPLICIT-20260512 (P3 Advisory): ___ (진행 / 보류)
+  ├─ INFRA-RAILWAY-PROXY-IDLE-INVESTIGATION-20260504 (P3): ___ (필요 / 불필요)
+  └─ 신규 sprint: ___ (예상 X)
+```
+
+---
+
+## 🔗 v2.14.1 관련 문서
+
+- Sprint 설계서: 본 파일 + `AXIS-OPS/CHANGELOG.md` § [2.14.1] (2026-05-12)
+- BACKLOG: `AXIS-OPS/BACKLOG.md` § FIX-DB-POOL-CONN-LEAK-WORK-PY-20260512
+- 후속 BACKLOG: `BUG-WORK-INSERT-ROLLBACK-EXPLICIT-20260512` (P3 Advisory)
+- 사고 분석 trail: 본 파일 § 🔬 사고 분석 (Root cause 확정)
+- 선행 sprint:
+  - `FIX-DB-POOL-MAX` ✅ (v2.11.0, 4-27, MAX 10→30)
+  - `OBSERV-DB-POOL-IDLE-DISCONNECT-WARMUP-20260427` ✅ (warmup cron)
+  - `HOTFIX-06` v2.10.7 ✅ (warmup_pool 시계 리셋)
+  - `HOTFIX-08` v2.10.10 ✅ (db_pool transaction 정리)
+  - `FIX-DB-POOL-DIRECT-FALLBACK-LOG-LEVEL` v2.10.13 ✅
+  - `FIX-DB-POOL-WARMUP-WATCHDOG-20260430` ✅
+  - `FIX-DB-POOL-SELF-RECOVERY-20260504` v2.11.6 ✅ (5-04, 자가 회복)
+  - **v2.14.1 영역 본 fix** = 누수 자체 차단 (선행 sprint 영역 모두 fallback/회복, 본 fix 영역 root cause 영역 영구 해결)
+- pytest: `tests/backend/test_work_api.py` + `test_work_batch.py` + `test_task_workers_api.py` 45/45 PASS (commit `8a422f2`)
+- Codex 라운드 1 GREEN trail (M=0 / A=1 BACKLOG)
