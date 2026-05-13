@@ -1,7 +1,41 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-12 KST (✅ v2.14.1 patch release — work.py conn leak 5 위치 fix. 16:48 Railway pool exhausted 사고 root cause 영역 fix. Codex GREEN + pytest 45/45 PASS)
+> 마지막 업데이트: 2026-05-13 KST (✅ v2.14.2 patch release — HOTFIX-MATERIALS-CATEGORY-ILIKE / `/api/admin/materials?category=` 정확 매칭 → ILIKE 부분 매칭. pytest 15/15 PASS, commit `86fc8a1` push 완료)
+
+## ✅ 2026-05-13 KST — v2.14.2 patch release (HOTFIX-MATERIALS-CATEGORY-ILIKE)
+
+> **한 줄 요약**: AXIS-VIEW `OPS_API_REQUESTS.md` #64 catch — `/api/admin/materials?category=` 가 `=` 정확 매칭이라 'm' / 'mfc' 입력 시 0건. keyword/description 은 이미 ILIKE 적용되어 일관성 보강. 3 line + pytest TC 2건 신규 + commit `86fc8a1` push 완료.
+
+### 변경 (1 파일 / 3 line)
+
+| 파일 | 변경 |
+|------|-----|
+| `backend/app/routes/admin_materials.py` L82-84 | `category = %s` → `category ILIKE %s` + `f'%{category}%'` |
+
+### pytest TC
+
+- 신규 2건: `test_list_materials_filter_by_category_case_insensitive` (mfc → 13건) / `test_list_materials_filter_by_category_partial_match` (m → 13건 이상)
+- 회귀: 기존 정확 매칭 MFC 13건 TC + step4_admin 15/15 PASS (218초)
+
+### 검증
+
+| 입력 | Before | After |
+|------|--------|-------|
+| `MFC` | ✅ 13건 | ✅ 13건 |
+| `mfc` | ❌ 0건 | ✅ 13건 |
+| `m` | ❌ 0건 | ✅ 13건 이상 |
+
+### 후속 (사용자 측 검증)
+
+- Railway 자동 배포 후 (2~3분) AXIS-VIEW `ChecklistOptionMapModal` 영역에서 'm' / 'mfc' / 'M' 검색 정상화 확인
+
+### 연관
+
+- AXIS-VIEW v1.43.8 `ChecklistEditModal` 자재코드 input case-insensitive (FE client filter)
+- AXIS-VIEW BACKLOG `OPS-MATERIALS-KEYWORD-ILIKE`
+
+---
 
 ## ✅ 2026-05-12 KST — v2.14.1 patch release (FIX-DB-POOL-CONN-LEAK-WORK-PY)
 
