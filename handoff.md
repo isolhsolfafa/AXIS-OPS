@@ -1,7 +1,71 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-13 KST (✅ v2.14.2 + v2.14.3 + v2.14.4 patch release 3건. 오늘 세션 모든 작업 완료)
+> 마지막 업데이트: 2026-05-14 KST (✅ v2.14.2/3/4 patch release 3건 + Sprint 41-D 설계서 Codex 라운드 1+2 검증 GREEN. 다음 세션 첫 액션: Sprint 41-D 구현 12h block)
+
+---
+
+## 🎯 다음 세션 첫 액션 — Sprint 41-D 구현 (Relay First Final Logic)
+
+### 사전 준비 완료 (2026-05-14)
+
+- **설계서 위치**: `AGENT_TEAM_LAUNCH.md` L36396~L37100 (~700 line, Codex 검증 정정 12건 반영)
+- **Codex 검증 trail**:
+  - 라운드 1: M=2 / A=4 / N=2 → 정정 7건 반영
+  - 라운드 2: M=2 / A=2 / GREEN=2 → 잔존 정정 5건 반영
+  - 라운드 3 미진행 (CLAUDE.md 핵심 규칙 6 "라운드 상한 1회" 정합)
+- **잔존 catch**: 모두 단순 wire-through + 일관성 정정 → 구현 시 자연 흡수
+
+### 구현 범위 (~650 LOC)
+
+| # | 파일 | 변경 | 라인수 |
+|---|------|------|------|
+| 1 | `backend/app/services/task_service.py` | (a) FIRST/SECOND/SINGLE FINAL TASK_IDS 분리 (b) `_trigger_first_close()` 신규 (c) `_trigger_second_close()` 신규 (d) `_get_previous_phase_task_ids()` helper (e) `start_work()` First Close 호출 (f) `complete_work()` First Final 차단 + Second Close 호출 (g) `check_elec_final_tasks_completed()` 신규 (M-1 정정) (h) `FIRST_FINAL_PREVIOUS_PHASE_MAP` module-level constant (i) `DURATION_SOURCE_ENUM` set | +200 |
+| 2 | `backend/app/services/duration_calculator.py` | 신규 — `_calculate_close_at(orphan_last_completion_at=None)` + `_to_kst()` + `_calculate_auto_close_duration()` | +110 |
+| 3 | `backend/app/models/task_detail.py` | `auto_close_relay_task()` 확장 (4 인자 default + `RETURNING id` + race no-op 분기) | +40 |
+| 4 | `backend/migrations/0XX_add_duration_source.sql` | `duration_source VARCHAR(40)` 컬럼 + 4 enum CHECK constraint (additive NULLABLE) | +30 |
+| 5 | `backend/tests/test_relay_first_final.py` | 신규 — pytest 19 TC (TC-FF-01~19) | +320 |
+
+### pytest 19 TC 매트릭스 요약
+
+- **TC-FF-01~05**: MECH/ELEC First Final auto_finalize 차단 + First Close 트리거
+- **TC-FF-06~08**: ELEC IF_2 + INSPECTION AND 조건
+- **TC-FF-09**: TMS Single Final 그대로 작동
+- **TC-FF-10/10b/10c/10d**: 모델 분기 (GAIA/DRAGON/MITHAS-SDS) 매트릭스
+- **TC-FF-11~13**: close_at 계산 (attendance / 17:00 fallback / pause 차감)
+- **TC-FF-14**: idempotent (중복 트리거 no-op)
+- **TC-FF-15**: duration_validator 비정상 검출
+- **TC-FF-16**: Sprint 41-B legacy 호환 (3 인자 호출 + default 값)
+- **TC-FF-17**: Sprint 57 checklist path 보존 검증 (M-1 분리 효과)
+- **TC-FF-18**: concurrent start_work race (RETURNING id 1건 + 두 번째 False)
+- **TC-FF-19**: KST day-rollover (fallback FALLBACK_TRIGGER_DATE_17)
+
+### 구현 흐름 (12h 예상)
+
+1. **Phase 1 (2h)**: task_service.py TASK_IDS 분리 + PHASE_MAP + ENUM + helper 함수
+2. **Phase 2 (3h)**: `_trigger_first_close()` + `_trigger_second_close()` + `check_elec_final_tasks_completed()` 구현
+3. **Phase 3 (2h)**: duration_calculator.py `_calculate_close_at()` + `_to_kst()` + `_calculate_auto_close_duration()`
+4. **Phase 4 (1h)**: `auto_close_relay_task()` 확장 (RETURNING id + race no-op)
+5. **Phase 5 (1h)**: migration SQL + DO block 검증
+6. **Phase 6 (3h)**: pytest 19 TC 구현 + GREEN 확인
+7. **배포**: 사용자 합의 → Railway 자동 재배포 + baseline 측정 SQL 실행
+
+### 운영 영향 + 회귀 위험
+
+- FE 변경 0 (Flutter 기존 다이얼로그 + 3 선택지 유지)
+- DB schema additive (duration_source NULLABLE, forward-only)
+- Sprint 41-B 호환성 보존 (default 값 + LEGACY trigger_type)
+- Sprint 57 checklist 의미 보존 (별 함수명 분리)
+- 진단 SQL 결과 0건 (M-3 GREEN) — 기존 ELEC record 영향 0
+- 회귀 위험: **낮음** (라운드 2 GREEN + 정정 완료)
+
+### Pre-deploy Gate
+
+- [ ] pytest 19 TC 전체 GREEN
+- [ ] flutter build web (FE 영향 0 확인)
+- [ ] baseline 측정 SQL 실행 + 기록
+- [ ] post-deploy 4주 후 동일 SQL → Manager Rollback 비율 50%+ 감소 확인
+- [ ] Sentry 새 ERROR 0건 (배포 후 1주 관찰)
 
 ---
 
