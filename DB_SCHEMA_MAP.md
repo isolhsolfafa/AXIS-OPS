@@ -59,7 +59,7 @@ deactivated_at      TIMESTAMPTZ                     -- Sprint 40-C: 비활성화
 last_login_at       TIMESTAMPTZ                     -- Sprint 40-C: 마지막 로그인 시각
 ```
 
-### app_task_details (22컬럼) — 작업 상세
+### app_task_details (23컬럼, Sprint 41-D 영역 duration_source 추가 — 2026-05-14) — 작업 상세
 ```
 id                  SERIAL PK
 worker_id           INTEGER FK→workers(id)
@@ -83,8 +83,10 @@ close_reason        TEXT
 is_paused           BOOLEAN DEFAULT false
 total_pause_minutes INTEGER DEFAULT 0
 task_type           VARCHAR(20) NOT NULL DEFAULT 'NORMAL'
+duration_source     VARCHAR(40) DEFAULT NULL  -- Sprint 41-D (migration 056): NORMAL_COMPLETION/ATTENDANCE_OUT/FALLBACK_TRIGGER_DATE_17/INVALID_WARNING
 ```
 UNIQUE: (serial_number, qr_doc_id, task_category, task_id)
+CHECK: duration_source IS NULL OR duration_source IN ('NORMAL_COMPLETION', 'ATTENDANCE_OUT', 'FALLBACK_TRIGGER_DATE_17', 'INVALID_WARNING')
 
 ### qr_registry (10컬럼) — QR ↔ 제품 매핑
 ```

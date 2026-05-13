@@ -37020,11 +37020,12 @@ COMMIT;
 - [ ] flutter build web (FE 영향 0 확인)
 - [ ] **baseline 측정 SQL 실행 + 기록** (memory.md 또는 별 CROSS_VERIFY_LOG):
   ```sql
-  SELECT DATE_TRUNC('week', accessed_at) AS week,
+  -- Sprint 32 app_access_log 실제 컬럼명 = `created_at` (정정 2026-05-14)
+  SELECT DATE_TRUNC('week', created_at) AS week,
          COUNT(*) AS rollback_count
     FROM app_access_log
    WHERE endpoint LIKE '%work/reactivate-task%'
-     AND accessed_at >= '2026-04-22'  -- 직전 4주
+     AND created_at >= '2026-04-22'  -- 직전 4주
    GROUP BY week ORDER BY week;
   ```
 - [ ] post-deploy 4주 후 동일 SQL 재실행 → 비율 비교 (목표: 50%+ 감소)

@@ -20,12 +20,12 @@
 ### 다음 세션 후속 액션
 
 1. **Railway 자동 재배포 확인** — migration 056 자동 적용 (DO block GREEN 확인)
-2. **baseline 측정 SQL 실행 + 기록**:
+2. **baseline 측정 SQL 실행 + 기록** (Sprint 32 app_access_log 실제 컬럼: `created_at`):
    ```sql
-   SELECT DATE_TRUNC('week', accessed_at) AS week, COUNT(*) AS rollback_count
+   SELECT DATE_TRUNC('week', created_at) AS week, COUNT(*) AS rollback_count
      FROM app_access_log
     WHERE endpoint LIKE '%work/reactivate-task%'
-      AND accessed_at >= '2026-04-22'
+      AND created_at >= '2026-04-22'
     GROUP BY week ORDER BY week;
    ```
 3. **post-deploy 1주 관찰** — Sentry 새 ERROR 0건
