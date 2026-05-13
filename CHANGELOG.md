@@ -6,6 +6,39 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.14.4] - 2026-05-13 — HOTFIX-ELEC-CHECKLIST-SELECT-IMMEDIATE-PUT (dropdown 단독 변경 시 저장)
+
+> 사용자 catch — ELEC `master_id=67` (TUBE 종류/색상) 운영 record 18건 중 11건 `selected_value=NULL`. 진단: dropdown `onChanged` 가 setState 만 호출하고 PUT API 호출 없음 → "PASS 먼저 → 드랍다운" 순서 입력 시 selected_value 영원히 NULL. MECH 는 v2.11.4 (4-22) Q6-C fix 적용된 패턴이지만 ELEC 는 동일 fix 누락.
+
+### 변경 (FE only, 1 파일)
+
+| 파일 | 변경 |
+|------|-----|
+| `frontend/lib/screens/checklist/elec_checklist_screen.dart` | `dart:async` import 추가 / `_selectDebounceTimers` Map 추가 + dispose / `_saveSelectedValue()` helper 신규 (500ms debounce 즉시 PUT) / dropdown onChanged 에 helper 호출 추가 / PASS/NA 미선택 경고 위젯 추가 (MECH L860-872 패턴) |
+| `backend/version.py` / `frontend/lib/utils/app_version.dart` | 2.14.3 → 2.14.4 |
+
+### 동작 변경
+
+| 시나리오 | Before | After |
+|---------|-------|-------|
+| 드랍다운 → PASS | ✅ 저장 | ✅ 저장 (드랍다운 PUT + PASS PUT, debounce) |
+| **PASS → 드랍다운** | ❌ selected_value NULL | ✅ 저장 |
+| **드랍다운만 (PASS 안 누름)** | ❌ 저장 0 | ✅ selected_value 저장 (check_result=NULL) + 노란 경고 표시 |
+| 드랍다운 → 옵션 변경 → 옵션 변경 | ❌ 저장 0 | ✅ 마지막 선택만 PUT (500ms debounce) |
+
+### 회귀 위험: 0
+
+- BE `upsert_elec_check` 무변경 (이미 selected_value 정상 처리)
+- MECH 패턴 (v2.11.4 이후 운영 안정 입증) 그대로 이식
+- `flutter analyze` 0 issues / `flutter build web --release` GREEN
+
+### 기존 운영 record 영향
+
+- 4-24 ~ 5-13 NULL 11건 record 는 자동 fix 안 됨 (단순 미입력 상태) — 운영자가 재진입 시 드랍다운 재선택 후 자동 정상 저장
+- placeholder fix (v2.14.3) 와 무관 (master_id=67 정식 영역)
+
+---
+
 ## [2.14.3] - 2026-05-13 — HOTFIX-ELEC-CHECKLIST-PLACEHOLDER-DEACTIVATE (046a 사고 정정)
 
 > 사용자 catch — 운영 DB `checklist_master` 에 'Jig 검사 항목 1~7' placeholder 31항목 (id 94-124, created_at 2026-04-27 21:36:04) 이 정식 31항목 (id 62-92, 2026-04-10) 과 별도로 신규 INSERT 되어 있음. Root cause: HOTFIX-08 (v2.10.10, 4-27) 의 db_pool transaction 정리 부수 효과로 migration 046a (Sprint 57 초기 placeholder seed) 가 자동 재적용 → 047 의 DELETE 이후 placeholder 31건이 신규 INSERT 됨. UNIQUE 제약 (product_code, category, item_group, item_name) 충돌 회피 (item_name 이 047 와 달랐음).

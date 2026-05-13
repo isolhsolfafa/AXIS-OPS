@@ -1,7 +1,48 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-13 KST (✅ v2.14.3 patch release — HOTFIX-ELEC-CHECKLIST-PLACEHOLDER-DEACTIVATE / migration 055 신규 + 046a 본문 교체. 사용자 catch — 4-27 HOTFIX-08 부수 효과로 placeholder 31건 신규 INSERT 사고 정정)
+> 마지막 업데이트: 2026-05-13 KST (✅ v2.14.2 + v2.14.3 + v2.14.4 patch release 3건. 오늘 세션 모든 작업 완료)
+
+---
+
+## ✅ 2026-05-13 KST — v2.14.4 patch release (HOTFIX-ELEC-CHECKLIST-SELECT-IMMEDIATE-PUT)
+
+> **한 줄 요약**: 사용자 catch — ELEC `master_id=67` (TUBE 종류/색상) 운영 record 18건 중 11건 selected_value=NULL. Root cause: dropdown `onChanged` 가 setState 만 호출, PUT API 호출 없음. MECH 패턴 (v2.11.4 Q6-C) 그대로 이식 — debounce 500ms 즉시 PUT + PASS/NA 미선택 경고. flutter analyze clean, flutter build web GREEN.
+
+### 진단 결과 (운영 record 18건 패턴)
+
+| 시점 | 정상 selected_value | NULL selected_value | 판정 |
+|------|:-:|:-:|------|
+| 4-13 ~ 4-24 | 일부 | 일부 (phase 2 부터 NULL 시작) | 부분 회귀 |
+| 5-07 ~ 5-12 11:47 | 2 | 1 (NA OK) | 정상 |
+| **5-12 15:22 ~ 5-13** | **0** | **7 전체 ⚠️** | 회귀 확정 |
+
+### 변경 (FE only, 1 파일)
+
+- `frontend/lib/screens/checklist/elec_checklist_screen.dart`
+  - `dart:async` import + `_selectDebounceTimers` Map + dispose
+  - `_saveSelectedValue()` helper 신규 (500ms debounce 즉시 PUT)
+  - dropdown onChanged → helper 호출 추가
+  - PASS/NA 미선택 경고 위젯 (MECH L860-872 패턴)
+
+### 동작 변경
+
+| 시나리오 | Before | After |
+|---------|-------|-------|
+| 드랍다운 → PASS | ✅ | ✅ (2회 PUT, debounce) |
+| **PASS → 드랍다운** | ❌ NULL | ✅ 저장 |
+| **드랍다운만 (PASS 안 누름)** | ❌ | ✅ 저장 + 노란 경고 |
+
+### 운영 검증
+
+- 사용자가 신규 ELEC SELECT 항목 입력 시 자동 정상화
+- 기존 4-24 ~ 5-13 NULL 11건 record 는 운영자가 재진입 + 드랍다운 재선택 시 자동 보정 (수동)
+
+---
+
+---
+
+## ✅ 2026-05-13 KST — v2.14.3 patch release (HOTFIX-ELEC-CHECKLIST-PLACEHOLDER-DEACTIVATE)
 
 ## ✅ 2026-05-13 KST — v2.14.3 patch release (HOTFIX-ELEC-CHECKLIST-PLACEHOLDER-DEACTIVATE)
 

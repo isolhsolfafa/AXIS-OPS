@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/auth_provider.dart';
@@ -41,6 +43,11 @@ class _ElecChecklistScreenState extends ConsumerState<ElecChecklistScreen> {
   // 그룹 접기/펼치기 상태 (기본: 모두 펼침)
   final Map<String, bool> _expanded = {};
 
+  // v2.14.4 HOTFIX-ELEC-CHECKLIST-SELECT-IMMEDIATE-PUT
+  // master_id 별 debounce Timer — dropdown onChanged 시 500ms 지연 후 PUT
+  // MECH 패턴 (mech_checklist_screen.dart L759) 정합
+  final Map<int, Timer> _selectDebounceTimers = {};
+
   @override
   void initState() {
     super.initState();
@@ -48,6 +55,15 @@ class _ElecChecklistScreenState extends ConsumerState<ElecChecklistScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _fetchChecklist();
     });
+  }
+
+  @override
+  void dispose() {
+    for (final t in _selectDebounceTimers.values) {
+      t.cancel();
+    }
+    _selectDebounceTimers.clear();
+    super.dispose();
   }
 
   Future<void> _fetchChecklist() async {
@@ -230,6 +246,57 @@ class _ElecChecklistScreenState extends ConsumerState<ElecChecklistScreen> {
         _updatingIds.remove(masterId);
       });
     }
+  }
+
+  /// v2.14.4 HOTFIX-ELEC-CHECKLIST-SELECT-IMMEDIATE-PUT
+  /// dropdown onChanged 시 즉시 PUT (500ms debounce, MECH 패턴 정합).
+  /// check_result 가 NULL 이어도 selected_value 만 단독 저장 가능 (BE upsert_elec_check 정상 처리).
+  /// 시나리오 ②/③ (PASS 먼저 → 드랍다운 / 드랍다운만 선택) 정상화.
+  Future<void> _saveSelectedValue(
+    Map<String, dynamic> item,
+    String selectedValue,
+  ) async {
+    final masterId = item['master_id'] as int?;
+    if (masterId == null) return;
+    // QI 전용 또는 Phase1 NA 항목은 변경 불가 (UI 단에서 이미 disabled 처리됨)
+    if (_isQiBlocked(item) || _isPhase1Na(item)) return;
+
+    _selectDebounceTimers[masterId]?.cancel();
+    _selectDebounceTimers[masterId] = Timer(
+      const Duration(milliseconds: 500),
+      () async {
+        if (!mounted) return;
+        try {
+          final apiService = ref.read(apiServiceProvider);
+          final putData = <String, dynamic>{
+            'serial_number': widget.serialNumber,
+            'master_id': masterId,
+            'check_result': item['check_result'],
+            'note': item['note'],
+            'judgment_phase': _currentPhase,
+            'selected_value': selectedValue,
+          };
+          await apiService.put(
+            '/app/checklist/elec/check',
+            data: putData,
+          );
+        } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('선택 저장 실패: $e'),
+                backgroundColor: GxColors.danger,
+                duration: const Duration(seconds: 2),
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(GxRadius.sm),
+                ),
+              ),
+            );
+          }
+        }
+      },
+    );
   }
 
   /// 코멘트(note) 입력 다이얼로그
@@ -958,8 +1025,38 @@ class _ElecChecklistScreenState extends ConsumerState<ElecChecklistScreen> {
                                         {'selected_value': value},
                                       );
                                     });
+                                    // v2.14.4 HOTFIX: 즉시 PUT (debounce 500ms, MECH 패턴)
+                                    _saveSelectedValue(
+                                      <String, dynamic>{
+                                        'master_id': masterId,
+                                        'check_result': checkResult,
+                                        'note': note,
+                                        'selected_value': value,
+                                      },
+                                      value,
+                                    );
                                   },
                           ),
+                        ),
+                      ],
+                      // v2.14.4 HOTFIX: PASS/NA 미선택 + selected_value 있음 시 경고 (MECH L860-872 패턴)
+                      if (selectOptions != null &&
+                          selectOptions.isNotEmpty &&
+                          selectedValue != null &&
+                          selectedValue.isNotEmpty &&
+                          (checkResult == null || checkResult.isEmpty) &&
+                          !isNa &&
+                          !isQi) ...[
+                        const SizedBox(height: 4),
+                        const Row(
+                          children: [
+                            Icon(Icons.warning_amber_rounded, size: 12, color: GxColors.warning),
+                            SizedBox(width: 4),
+                            Text(
+                              'PASS 또는 NA 선택 후 저장됩니다',
+                              style: TextStyle(fontSize: 10, color: GxColors.warning),
+                            ),
+                          ],
                         ),
                       ],
                       if (note != null && note.isNotEmpty) ...[
