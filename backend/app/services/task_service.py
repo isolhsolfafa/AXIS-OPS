@@ -12,7 +12,7 @@ Sprint 9: 일시정지 중인 작업 완료 시 자동 재개 + duration에서 p
 """
 
 import logging
-from typing import Dict, Any, Optional, Tuple, List
+from typing import Dict, Any, Optional, Tuple, List, Set
 from datetime import datetime, timedelta
 
 from app.config import Config
@@ -45,6 +45,7 @@ logger = logging.getLogger(__name__)
 VALID_PROCESS_TYPES = {'MECH', 'ELEC', 'TM', 'PI', 'QI', 'SI'}
 
 # Sprint 41-B: FINAL phase task ID 목록 — 완료 시 릴레이 미완료 task 자동 마감 트리거
+# Sprint 41-D (2026-05-14): 3 카테고리 분리 (First/Second/Single Final). 본 set 은 legacy 호환만 유지.
 FINAL_TASK_IDS = {
     'SELF_INSPECTION',  # MECH 자주검사
     'IF_2',             # ELEC I.F 2 (Sprint 57: INSPECTION→IF_2)
@@ -53,6 +54,90 @@ FINAL_TASK_IDS = {
     'QI_INSPECTION',    # QI 공정검사
     'SI_SHIPMENT',      # SI 출하완료
 }
+
+# Sprint 41-D: FIRST/SECOND/SINGLE FINAL 3 카테고리 분리
+# (category, task_id) tuple 매칭 — Sprint 41-B legacy set 과 별개로 동작
+FIRST_FINAL_TASK_IDS: Set[Tuple[str, str]] = {
+    ('MECH', 'TANK_DOCKING'),  # GAIA has_docking=TRUE 모델만 작동 (DRAGON 등 자동 흡수)
+    ('ELEC', 'IF_2'),           # 전 모델 공통 (start/complete 분리)
+}
+
+SECOND_FINAL_TASK_IDS: Set[Tuple[str, str]] = {
+    ('MECH', 'SELF_INSPECTION'),  # MECH 진짜 종료
+    ('ELEC', 'IF_2'),             # ELEC AND 조건 (IF_2 + INSPECTION 둘 다)
+    ('ELEC', 'INSPECTION'),       # ELEC AND 조건
+}
+# 의도된 설계: IF_2 가 FIRST + SECOND 양쪽 포함 (IF_2 start → First Close,
+# IF_2 + INSPECTION 둘 다 complete → Second Close 트리거).
+# 'Second Final' 은 close-trigger 분류이지 task_seed.py phase 와 1:1 mirror 아님.
+
+SINGLE_FINAL_TASK_IDS: Set[Tuple[str, str]] = {
+    ('TMS', 'PRESSURE_TEST'),
+    ('PI',  'PI_CHAMBER'),
+    ('QI',  'QI_INSPECTION'),
+    ('SI',  'SI_SHIPMENT'),
+}
+
+# Sprint 41-D M-1: PHASE_MAP module-level constant 추출
+# task_seed.py phase 정의와 sync — phase 변경 시 양쪽 동기화 필수 (DOC drift 방지)
+FIRST_FINAL_PREVIOUS_PHASE_MAP: Dict[Tuple[str, str], Set[str]] = {
+    ('MECH', 'TANK_DOCKING'): {'WASTE_GAS_LINE_1', 'UTIL_LINE_1', 'HEATING_JACKET'},
+    ('ELEC', 'IF_2'):           {'PANEL_WORK', 'CABINET_PREP', 'WIRING', 'IF_1'},
+}
+
+# Sprint 41-D M-4: duration_source enum 4종
+DURATION_SOURCE_ENUM: Set[str] = {
+    'NORMAL_COMPLETION',         # 기본값 — worker 정상 complete_work() 호출
+    'ATTENDANCE_OUT',            # hr.partner_attendance check_out 기준 (auto close)
+    'FALLBACK_TRIGGER_DATE_17',  # attendance 미체크 시 17:00 KST fallback (auto close)
+    'INVALID_WARNING',           # duration_validator 비정상 검출 (운영 이상치)
+}
+
+
+def _get_previous_phase_task_ids(category: str, task_id: str) -> Set[str]:
+    """First Final task 이전 phase 의 task_id 집합 반환.
+
+    task_seed.py phase 정의와 sync 필수 — DOC drift 방지 위해 단일 출처 (FIRST_FINAL_PREVIOUS_PHASE_MAP).
+    매핑 없는 (category, task_id) → 빈 set (DRAGON/SWS/GALLANT TANK_DOCKING 비활성 안전망).
+    """
+    return FIRST_FINAL_PREVIOUS_PHASE_MAP.get((category, task_id), set())
+
+
+def check_elec_final_tasks_completed(serial_number: str) -> bool:
+    """Sprint 41-D — ELEC IF_2 + INSPECTION 두 task 모두 complete 여부 판정.
+
+    Second Close 트리거 가드 영역에서만 사용 — checklist 완료 판정과 분리.
+    Sprint 57 의 checklist_service.check_elec_completion() 은 그대로 보존 (M-1 정정).
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    BOOL_OR(task_id='IF_2'      AND completed_at IS NOT NULL) AS if2_done,
+                    BOOL_OR(task_id='INSPECTION' AND completed_at IS NOT NULL) AS insp_done
+                  FROM app_task_details
+                 WHERE serial_number = %s
+                   AND task_category = 'ELEC'
+                   AND is_applicable = TRUE
+                """,
+                (serial_number,)
+            )
+            row = cur.fetchone()
+            if row is None:
+                return False
+            # RealDictCursor 와 일반 cursor 양쪽 호환
+            if isinstance(row, dict):
+                return bool(row.get('if2_done')) and bool(row.get('insp_done'))
+            return bool(row[0]) and bool(row[1])
+    except Exception as e:
+        logger.error(f"check_elec_final_tasks_completed failed: serial={serial_number}, error={e}")
+        return False
+    finally:
+        if conn is not None:
+            put_conn(conn)
 
 
 class TaskService:
@@ -171,6 +256,13 @@ class TaskService:
             # Sprint 63-BE: MECH 체크리스트 1차 입력 토스트 (UTIL_LINE_1/UTIL_LINE_2/WASTE_GAS_LINE_2)
             self._trigger_mech_checklist_alert(task, worker_id)
 
+        # Sprint 41-D: First Final task start 시 → 전 phase 미완료 + pause task 자동 close
+        # is_first_worker 무관 — 멀티 worker 환경에서도 First Close 는 매 start 마다 idempotent 호출
+        # 가드: is_applicable=FALSE 영역 (DRAGON/SWS TANK_DOCKING 등) → start_work() 자체 거부 (L85-89)
+        # 즉 이 시점 도달 = is_applicable=TRUE 확정 영역
+        if (task.task_category, task.task_id) in FIRST_FINAL_TASK_IDS:
+            self._trigger_first_close(task, worker_id, started_at)
+
         logger.info(
             f"Work started: task_id={task_detail_id}, worker_id={worker_id}, "
             f"is_first_worker={is_first_worker}"
@@ -258,8 +350,27 @@ class TaskService:
         # 완료 시간 (KST 기준)
         completed_at = datetime.now(Config.KST)
 
-        # Sprint 55 (3-C): FINAL task는 finalize=true 강제 (릴레이 불가)
-        if task.task_id in FINAL_TASK_IDS and not finalize:
+        # Sprint 41-D: First Final task (auto_finalize 차단)
+        # 한 명만 참여여도 task close 안 함 — finalize=True 강제하지 않음
+        # 예: MECH TANK_DOCKING, ELEC IF_2 (각각 IF_2 는 SECOND_FINAL 양쪽 멤버이므로 별 분기)
+        is_first_final = (task.task_category, task.task_id) in FIRST_FINAL_TASK_IDS
+        is_second_final = (task.task_category, task.task_id) in SECOND_FINAL_TASK_IDS
+        is_single_final = (task.task_category, task.task_id) in SINGLE_FINAL_TASK_IDS
+
+        # ELEC IF_2 는 양쪽 멤버 — Second Final 트리거는 IF_2 + INSPECTION AND 조건 충족 시만 작동
+        # First Final auto_finalize 차단: ELEC IF_2 는 항상 차단 (Second Close 가 AND 조건 검증 후 처리)
+        # MECH TANK_DOCKING 은 SECOND_FINAL 멤버 아님 → 항상 First Final 만
+        if is_first_final and not is_single_final and not finalize:
+            # First Final 영역 = auto_finalize 차단 (한 명 참여여도 task open 유지)
+            logger.info(
+                f"Sprint 41-D First Final auto-finalize blocked: task_id={task_detail_id}, "
+                f"task_id_ref={task.task_id}"
+            )
+            # finalize 그대로 False 유지 → 아래 L298 auto_finalize 로직 진입 안 함
+
+        # Sprint 55 (3-C): SECOND/SINGLE FINAL task 만 finalize=true 강제 (릴레이 불가)
+        # First Final 은 위에서 명시적 차단됨
+        elif (is_second_final or is_single_final) and not finalize:
             logger.info(
                 f"FINAL task forced finalize: task_id={task_detail_id}, "
                 f"task_name={task.task_id}"
@@ -368,7 +479,26 @@ class TaskService:
             logger.warning(f"Duration validation warnings: task_id={task_detail_id}, warnings={duration_warnings}")
 
         # Sprint 41-B: FINAL phase task 완료 시 → 릴레이 미완료 task 자동 마감
-        if task.task_id in FINAL_TASK_IDS:
+        # Sprint 41-D 정정: SECOND/SINGLE FINAL 영역만 본 분기 진입 (FIRST_FINAL 은 start_work 의 _trigger_first_close 영역 처리)
+        # ELEC IF_2 (SECOND_FINAL 멤버) 는 IF_2 + INSPECTION AND 조건 충족 시만 본 분기 진입
+        sprint41d_should_auto_close = False
+        if is_single_final:
+            sprint41d_should_auto_close = True
+        elif is_second_final:
+            # ELEC IF_2 / INSPECTION 영역: AND 조건 검증
+            if task.task_category == 'ELEC':
+                if check_elec_final_tasks_completed(task.serial_number):
+                    sprint41d_should_auto_close = True
+                else:
+                    logger.info(
+                        f"Sprint 41-D Second Close AND 조건 미충족: task_id={task_detail_id}, "
+                        f"category=ELEC, task_id_ref={task.task_id}"
+                    )
+            else:
+                # MECH SELF_INSPECTION → 항상 작동
+                sprint41d_should_auto_close = True
+
+        if sprint41d_should_auto_close:
             from app.models.task_detail import get_orphan_relay_tasks, auto_close_relay_task
             orphans = get_orphan_relay_tasks(task.serial_number, task.task_category)
             auto_closed_count = 0
@@ -390,6 +520,11 @@ class TaskService:
                     f"Sprint 41-B auto-close: serial_number={task.serial_number}, "
                     f"category={task.task_category}, closed={auto_closed_count}/{len(orphans)}"
                 )
+
+            # Sprint 41-D Second Close 트리거 (Sprint 41-B 후처리)
+            # SECOND_FINAL/SINGLE_FINAL 영역 — 카테고리 전체 잔여 미완료 + pause task 자동 close
+            # (Sprint 41-B get_orphan_relay_tasks 는 work_completion_log 기준 — pause task 제외 가능)
+            self._trigger_second_close(task, worker_id, completed_at)
 
             # Sprint 61-BE: ORPHAN_ON_FINAL — 미시작 task 잔존 알림
             # v2.10.3 FIX-ORPHAN-ON-FINAL-DELIVERY (HOTFIX-ALERT-SCHEDULER-DELIVERY 누락 4번째 경로):
@@ -789,6 +924,188 @@ class TaskService:
 
         except Exception as e:
             logger.error(f"_trigger_mech_checklist_alert failed (non-blocking): {e}")
+
+    def _trigger_first_close(
+        self,
+        trigger_task,
+        trigger_worker_id: int,
+        trigger_time: datetime,
+    ) -> None:
+        """Sprint 41-D — First Final task start 시 → 전 phase 미완료 + pause task 자동 close.
+
+        Idempotent: 이미 close 된 task 는 write-time WHERE 가드로 자동 skip.
+        안전망 (DRAGON/SWS/GALLANT):
+          - trigger_task 가 is_applicable=FALSE → start_work() 가드로 호출 미발동
+          - 그래도 진입했다면 previous_phase_task_ids 빈 set → 즉시 return
+        """
+        previous_phase_task_ids = _get_previous_phase_task_ids(
+            trigger_task.task_category, trigger_task.task_id
+        )
+        if not previous_phase_task_ids:
+            return  # DRAGON/SWS/GALLANT 안전망
+
+        from app.models.task_detail import auto_close_relay_task
+        from app.services.duration_calculator import calculate_close_at
+
+        conn = None
+        try:
+            conn = get_db_connection()
+            with conn.cursor() as cur:
+                # M-2 wire-through: orphan 의 work_completion_log MAX(completed_at) JOIN
+                cur.execute(
+                    """
+                    SELECT td.id, td.worker_id, td.last_started_at, td.total_pause_minutes,
+                           (SELECT MAX(wcl.completed_at)
+                              FROM work_completion_log wcl
+                             WHERE wcl.task_id = td.id) AS orphan_last_completion_at
+                      FROM app_task_details td
+                     WHERE td.serial_number = %s
+                       AND td.task_category = %s
+                       AND td.task_id = ANY(%s)
+                       AND td.completed_at IS NULL
+                       AND td.force_closed = FALSE
+                       AND td.is_applicable = TRUE
+                    """,
+                    (trigger_task.serial_number, trigger_task.task_category, list(previous_phase_task_ids))
+                )
+                orphans = cur.fetchall()
+        except Exception as e:
+            logger.error(f"_trigger_first_close orphan SELECT failed: {e}")
+            return
+        finally:
+            if conn is not None:
+                put_conn(conn)
+
+        for orphan in orphans:
+            # row 형식 호환 (dict / tuple)
+            if isinstance(orphan, dict):
+                o_id = orphan['id']
+                o_worker_id = orphan['worker_id']
+                o_last_started_at = orphan['last_started_at']
+                o_pause_minutes = orphan['total_pause_minutes'] or 0
+                o_last_completion = orphan.get('orphan_last_completion_at')
+            else:
+                o_id, o_worker_id, o_last_started_at, o_pause_minutes, o_last_completion = orphan
+                o_pause_minutes = o_pause_minutes or 0
+
+            close_at, duration_source = calculate_close_at(
+                worker_id=o_worker_id,
+                trigger_time=trigger_time,
+                orphan_last_completion_at=o_last_completion,
+            )
+            # duration 계산 (close_at - last_started_at - pause_minutes, 음수 차단)
+            duration_min = 0
+            if o_last_started_at:
+                # tz-aware 정규화 (KST)
+                last_started_kst = o_last_started_at
+                if last_started_kst.tzinfo is None:
+                    last_started_kst = last_started_kst.replace(tzinfo=Config.KST)
+                raw_min = int((close_at - last_started_kst).total_seconds() / 60)
+                duration_min = max(0, raw_min - o_pause_minutes)
+
+            success = auto_close_relay_task(
+                task_detail_id=o_id,
+                last_completion_at=close_at,
+                worker_count=1,  # First Close 영역: 단일 orphan 자동 close
+                closed_by_worker_id=o_worker_id,
+                trigger_task_id=trigger_task.task_id,
+                trigger_type='FIRST_FINAL',
+                duration_source=duration_source,
+                duration_minutes=duration_min,
+            )
+            if success:
+                logger.info(
+                    f"First Close trigger: task_id={o_id} closed by "
+                    f"{trigger_task.task_id} start (worker_id={trigger_worker_id}, "
+                    f"duration_source={duration_source})"
+                )
+
+    def _trigger_second_close(
+        self,
+        trigger_task,
+        trigger_worker_id: int,
+        trigger_time: datetime,
+    ) -> None:
+        """Sprint 41-D — Second Final task complete 시 → 카테고리 전체 미완료 + pause task 자동 close.
+
+        DRAGON/SWS/GALLANT (tank_in_mech=TRUE): SELF_INSPECTION complete 시 gas1/util1/gas2/util2 4 task 자동 close.
+        GAIA/IVAS (has_docking=TRUE): SELF_INSPECTION complete 시 잔여 task close.
+        ELEC: IF_2 + INSPECTION AND 조건 충족 후 호출 (잔여 task 0건이면 no-op).
+
+        Idempotent: write-time WHERE 가드로 자동 skip.
+        """
+        from app.models.task_detail import auto_close_relay_task
+        from app.services.duration_calculator import calculate_close_at
+
+        conn = None
+        try:
+            conn = get_db_connection()
+            with conn.cursor() as cur:
+                # M-2 wire-through: orphan 의 work_completion_log MAX(completed_at) JOIN
+                cur.execute(
+                    """
+                    SELECT td.id, td.worker_id, td.last_started_at, td.total_pause_minutes,
+                           (SELECT MAX(wcl.completed_at)
+                              FROM work_completion_log wcl
+                             WHERE wcl.task_id = td.id) AS orphan_last_completion_at
+                      FROM app_task_details td
+                     WHERE td.serial_number = %s
+                       AND td.task_category = %s
+                       AND td.id <> %s
+                       AND td.completed_at IS NULL
+                       AND td.force_closed = FALSE
+                       AND td.is_applicable = TRUE
+                    """,
+                    (trigger_task.serial_number, trigger_task.task_category, trigger_task.id)
+                )
+                orphans = cur.fetchall()
+        except Exception as e:
+            logger.error(f"_trigger_second_close orphan SELECT failed: {e}")
+            return
+        finally:
+            if conn is not None:
+                put_conn(conn)
+
+        for orphan in orphans:
+            if isinstance(orphan, dict):
+                o_id = orphan['id']
+                o_worker_id = orphan['worker_id']
+                o_last_started_at = orphan['last_started_at']
+                o_pause_minutes = orphan['total_pause_minutes'] or 0
+                o_last_completion = orphan.get('orphan_last_completion_at')
+            else:
+                o_id, o_worker_id, o_last_started_at, o_pause_minutes, o_last_completion = orphan
+                o_pause_minutes = o_pause_minutes or 0
+
+            close_at, duration_source = calculate_close_at(
+                worker_id=o_worker_id,
+                trigger_time=trigger_time,
+                orphan_last_completion_at=o_last_completion,
+            )
+            duration_min = 0
+            if o_last_started_at:
+                last_started_kst = o_last_started_at
+                if last_started_kst.tzinfo is None:
+                    last_started_kst = last_started_kst.replace(tzinfo=Config.KST)
+                raw_min = int((close_at - last_started_kst).total_seconds() / 60)
+                duration_min = max(0, raw_min - o_pause_minutes)
+
+            success = auto_close_relay_task(
+                task_detail_id=o_id,
+                last_completion_at=close_at,
+                worker_count=1,
+                closed_by_worker_id=o_worker_id,
+                trigger_task_id=trigger_task.task_id,
+                trigger_type='SECOND_FINAL',
+                duration_source=duration_source,
+                duration_minutes=duration_min,
+            )
+            if success:
+                logger.info(
+                    f"Second Close trigger: task_id={o_id} closed by "
+                    f"{trigger_task.task_id} complete (worker_id={trigger_worker_id}, "
+                    f"duration_source={duration_source})"
+                )
 
     def get_tasks_by_product(
         self,

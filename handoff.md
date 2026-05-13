@@ -1,11 +1,40 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-14 KST (✅ v2.14.2/3/4 patch release 3건 + Sprint 41-D 설계서 Codex 라운드 1+2 검증 GREEN. 다음 세션 첫 액션: Sprint 41-D 구현 12h block)
+> 마지막 업데이트: 2026-05-14 KST (✅ v2.15.0 minor release — Sprint 41-D Relay First Final Logic 구현 완료 / pytest 38/38 GREEN / Codex 라운드 1+2 정정 12건 반영 / 회귀 위험 0)
 
 ---
 
-## 🎯 다음 세션 첫 액션 — Sprint 41-D 구현 (Relay First Final Logic)
+## ✅ 2026-05-14 KST — v2.15.0 minor release (Sprint 41-D Relay First Final Logic)
+
+> **한 줄 요약**: Sprint 41/41-A/41-B/55 trail 마무리 — "내 작업만 종료" 의도 + 시스템 강제 보호 통합. FIRST/SECOND/SINGLE Final 3 카테고리 분리 + auto-close 트리거 + close_at 계산 + duration_source 컬럼 추가. FE 변경 0, BE only 5 파일 +650 LOC, pytest 38/38 GREEN.
+
+### 변경 (5 파일)
+
+- `backend/app/services/task_service.py` — 3 카테고리 분리 + PHASE_MAP + ENUM + 트리거 함수 2종 + check_elec_final_tasks_completed()
+- `backend/app/services/duration_calculator.py` 신규 — _to_kst() + calculate_close_at() + calculate_auto_close_duration()
+- `backend/app/models/task_detail.py` — auto_close_relay_task() 확장 (default 값 + RETURNING id + race no-op + close_reason null-safe)
+- `backend/migrations/056_add_duration_source.sql` 신규 — duration_source NULLABLE + CHECK constraint 4 enum
+- `tests/backend/test_relay_first_final.py` 신규 — pytest 23 TC
+
+### 다음 세션 후속 액션
+
+1. **Railway 자동 재배포 확인** — migration 056 자동 적용 (DO block GREEN 확인)
+2. **baseline 측정 SQL 실행 + 기록**:
+   ```sql
+   SELECT DATE_TRUNC('week', accessed_at) AS week, COUNT(*) AS rollback_count
+     FROM app_access_log
+    WHERE endpoint LIKE '%work/reactivate-task%'
+      AND accessed_at >= '2026-04-22'
+    GROUP BY week ORDER BY week;
+   ```
+3. **post-deploy 1주 관찰** — Sentry 새 ERROR 0건
+4. **post-deploy 4주 후** — 동일 SQL 재실행 → Manager Rollback 비율 50%+ 감소 검증
+5. **별 sprint** `FEAT-RELAY-FIRST-FINAL-ANALYTICS-DASHBOARD-20260513` 진행 가능 (4주 baseline 축적 후)
+
+---
+
+## 🎯 (이전) 다음 세션 첫 액션 — Sprint 41-D 구현 (Relay First Final Logic) — ✅ 완료
 
 ### 사전 준비 완료 (2026-05-14)
 

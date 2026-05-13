@@ -6,6 +6,77 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.15.0] - 2026-05-14 — Sprint 41-D Relay First Final Logic + 자동 정리 트리거
+
+> Sprint 41 (v2.3.0) finalize 분리 + Sprint 55 (v2.7.0) auto-finalize 부작용 정정 — "내 작업만 종료" 의도 보존 + 시스템 강제 보호. 2026-04-22 O/N 6588 GBWS-6978/6979/6980 UTIL_LINE_2 사례 영역 root cause fix. Codex 라운드 1+2 정정 12건 GREEN 후 구현.
+
+### 변경 (5 파일 / +650 LOC)
+
+| 파일 | 변경 |
+|------|-----|
+| `backend/app/services/task_service.py` | FIRST/SECOND/SINGLE_FINAL_TASK_IDS 3 set 분리 / FIRST_FINAL_PREVIOUS_PHASE_MAP / DURATION_SOURCE_ENUM / `_get_previous_phase_task_ids()` helper / `check_elec_final_tasks_completed()` 신규 (M-1) / `_trigger_first_close()` + `_trigger_second_close()` 신규 / `start_work()` First Close 호출 / `complete_work()` First Final 차단 + Second Close 분기 |
+| `backend/app/services/duration_calculator.py` | 신규 — `_to_kst()` tz-aware 정규화 + `calculate_close_at()` (priority 1/2/3) + `calculate_auto_close_duration()` (pause 차감) |
+| `backend/app/models/task_detail.py` | `auto_close_relay_task()` 확장 (default 값 4 인자 + RETURNING id + race no-op 분기 + close_reason null-safe) |
+| `backend/migrations/056_add_duration_source.sql` | 신규 — duration_source VARCHAR(40) NULLABLE + CHECK constraint 4 enum + DO block 검증 |
+| `tests/backend/test_relay_first_final.py` | 신규 — pytest 23 TC (TC-FF-01~19 + bonus 4건) |
+
+### pytest 결과
+
+- **Sprint 41-D 신규 23/23 PASS** (0.21s, unit + mock)
+- **회귀 15/15 PASS** (test_work_api + test_task_workers_api, 5분 16초)
+- 총 38/38 GREEN
+
+### Codex 검증 trail
+
+- 라운드 1: M=2 / A=4 / N=2 → 정정 7건 (M-1 함수 분리 + M-2 priority 1 + A-1/A-3/A-5/A-8 + N-2)
+- 라운드 2: M=2 / A=2 / GREEN=2 → 정정 5건 (M-2 wire-through + 일관성 표 + A-3/A-5/A-8 보강)
+- 라운드 3 미진행 (CLAUDE.md 핵심 규칙 6 "라운드 상한 1회" 정합) — 잔존 catch 모두 사전 정정
+
+### 동작 변경
+
+| 시나리오 | Before | After |
+|---------|--------|-------|
+| MECH 한 명 참여 + 내 작업 완료 + TANK_DOCKING 미start | task close (auto-finalize) | **task open 유지** (First Final 차단) |
+| MECH TANK_DOCKING start | gas1/util1 그대로 (수동 처리) | **PRE_DOCKING phase 자동 close** (First Close 트리거) |
+| ELEC IF_2 start | 동일 | **판넬/케비넷/배선/IF_1 자동 close** |
+| ELEC IF_2 complete + INSPECTION 미완료 | task close | **task open 유지** (AND 조건 미충족) |
+| ELEC IF_2 + INSPECTION 둘 다 complete | task close | task close + **Second Close 트리거** (잔여 task 정리) |
+| DRAGON SELF_INSPECTION complete | task close | **gas1/util1/gas2/util2 4 task 자동 close** (Second Close) |
+
+### 운영 영향 + 회귀 위험
+
+- **FE 변경 0** (Flutter 기존 다이얼로그 + 3 선택지 유지)
+- **DB schema additive** (duration_source NULLABLE, forward-only — 기존 record 무영향)
+- **Sprint 41-B 호환성 보존** (default 값 4 인자 + LEGACY trigger_type)
+- **Sprint 57 checklist 의미 보존** (`checklist_service.check_elec_completion()` 그대로 / `task_service.check_elec_final_tasks_completed()` 별도)
+- **회귀 위험 0** (M-3 진단 SQL 결과 0건, pytest 38/38 PASS)
+
+### 사용자 결정 trail (2026-05-13)
+
+- Q1 close_at: (a) attendance check_out 우선
+- Q2 fallback: trigger 발생일 17:00 KST
+- Q3 야근 손실 통계: IQR 통계 보강 (별 sprint)
+- Q4 pause: Sprint 9 로직 활용
+- Q5 MIN: (c) MIN(check_out, trigger_time)
+
+### Pre-deploy Gate
+
+- ✅ pytest 38 TC GREEN (신규 23 + 회귀 15)
+- ✅ flutter build web 영향 0 (FE 변경 0)
+- ⚠️ baseline 측정 SQL 실행 + 기록 (배포 후 4주 Manager Rollback 비율 50%+ 감소 검증)
+- ⚠️ post-deploy 1주 Sentry 새 ERROR 0건 관찰
+
+### 후속 별 sprint
+
+- `FEAT-RELAY-FIRST-FINAL-ANALYTICS-DASHBOARD-20260513` (4주 baseline 축적 후 VIEW 진행)
+
+### 사고 trail
+
+- 2026-04-22 O/N 6588 GBWS-6978/6979/6980 UTIL_LINE_2 — 이영식/서명환 사례 (작업자 호소: "내 작업만 종료 눌렀는데 task 가 닫혀서 재참여 불가")
+- 폐기: `UX-SPRINT55-FINALIZE-DIALOG-WARNING-20260422` (다이얼로그 3 선택지 모두 같은 영역 갇힘 — 본 Sprint 로 대체)
+
+---
+
 ## [2.14.4] - 2026-05-13 — HOTFIX-ELEC-CHECKLIST-SELECT-IMMEDIATE-PUT (dropdown 단독 변경 시 저장)
 
 > 사용자 catch — ELEC `master_id=67` (TUBE 종류/색상) 운영 record 18건 중 11건 `selected_value=NULL`. 진단: dropdown `onChanged` 가 setState 만 호출하고 PUT API 호출 없음 → "PASS 먼저 → 드랍다운" 순서 입력 시 selected_value 영원히 NULL. MECH 는 v2.11.4 (4-22) Q6-C fix 적용된 패턴이지만 ELEC 는 동일 fix 누락.

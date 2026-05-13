@@ -711,42 +711,113 @@ def get_orphan_relay_tasks(serial_number: str, task_category: str) -> List[Dict]
         put_conn(conn)
 
 
-def auto_close_relay_task(task_detail_id: int, last_completion_at, worker_count: int) -> bool:
+def auto_close_relay_task(
+    task_detail_id: int,
+    last_completion_at,
+    worker_count: int,
+    # Sprint 41-D 신규 인자 — Sprint 41-B 기존 호출처 시그니처 호환 (default 값 부여)
+    closed_by_worker_id: Optional[int] = None,
+    trigger_task_id: Optional[str] = None,
+    trigger_type: str = 'LEGACY',
+    duration_source: str = 'NORMAL_COMPLETION',
+    duration_minutes: Optional[int] = None,
+) -> bool:
     """
     릴레이 미완료 task 자동 마감.
     마지막 work_completion_log 기준으로 completed_at 설정.
 
-    Sprint 41-B: FINAL task 완료 시 열린 릴레이 task를 자동 마감.
-    work_start_log / work_completion_log는 절대 삭제하지 않음 (이력 보존).
+    Sprint 41-B: FINAL task 완료 시 열린 릴레이 task 를 자동 마감.
+    Sprint 41-D (2026-05-14): First/Second Close 트리거 지원 — 신규 인자 4개 default 값 호환.
+    work_start_log / work_completion_log 는 절대 삭제하지 않음 (이력 보존).
 
     Args:
         task_detail_id: app_task_details.id
-        last_completion_at: 마지막 completion_log의 completed_at
-        worker_count: 참여 작업자 수
+        last_completion_at: close_at (계산된 close 시각)
+        worker_count: 참여 작업자 수 (Sprint 41-D 단일 orphan close 시 1)
+        closed_by_worker_id: Sprint 41-D — close 처리 worker_id (legacy NULL)
+        trigger_task_id: Sprint 41-D — close 를 트리거한 task_id (예: 'TANK_DOCKING', 'IF_2', legacy NULL)
+        trigger_type: Sprint 41-D — 'FIRST_FINAL' | 'SECOND_FINAL' | 'LEGACY'
+        duration_source: Sprint 41-D — DURATION_SOURCE_ENUM (NORMAL_COMPLETION/ATTENDANCE_OUT/FALLBACK_TRIGGER_DATE_17/INVALID_WARNING)
+        duration_minutes: Sprint 41-D — 사전 계산된 duration (None 이면 EXTRACT(EPOCH) 자동 계산)
 
     Returns:
-        True if 업데이트 성공
+        True if 업데이트 성공 / False if race no-op (이미 closed) 또는 에러
+
+    Sprint 41-D A-3 정정 (close_reason null-safe 규칙):
+      - trigger_type='LEGACY' + trigger_task_id is None → close_reason = 'AUTO_CLOSED_LEGACY'
+      - trigger_type='FIRST_FINAL'   → close_reason = f'AUTO_CLOSED_BY_FIRST_FINAL_TRIGGER:{trigger_task_id}'
+      - trigger_type='SECOND_FINAL'  → close_reason = f'AUTO_CLOSED_BY_SECOND_FINAL_TRIGGER:{trigger_task_id}'
+
+    Sprint 41-D A-5 정정 (write-time race 가드):
+      - WHERE 절에 force_closed=FALSE 추가 → 동시 트리거 시 두 번째 UPDATE no-op
+      - RETURNING id → no-op 분기 식별 + 로그 구분
     """
+    # close_reason 결정 (A-3 null-safe 규칙)
+    if trigger_type == 'FIRST_FINAL' and trigger_task_id:
+        close_reason = f'AUTO_CLOSED_BY_FIRST_FINAL_TRIGGER:{trigger_task_id}'
+    elif trigger_type == 'SECOND_FINAL' and trigger_task_id:
+        close_reason = f'AUTO_CLOSED_BY_SECOND_FINAL_TRIGGER:{trigger_task_id}'
+    else:
+        # LEGACY 또는 trigger_task_id 없음 → 고정 literal
+        close_reason = 'AUTO_CLOSED_LEGACY'
+
     conn = get_db_connection()
     try:
         cur = conn.cursor()
-        cur.execute("""
-            UPDATE app_task_details
-            SET completed_at = %s,
-                duration_minutes = EXTRACT(EPOCH FROM (%s - started_at)) / 60,
-                elapsed_minutes = EXTRACT(EPOCH FROM (%s - started_at)) / 60,
-                worker_count = %s,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = %s
-              AND completed_at IS NULL
-            RETURNING id
-        """, (last_completion_at, last_completion_at, last_completion_at,
-              worker_count, task_detail_id))
+        # duration_minutes 결정 — 명시 전달 시 그대로 사용, 미전달 시 EXTRACT(EPOCH) 자동 계산
+        if duration_minutes is not None:
+            cur.execute("""
+                UPDATE app_task_details
+                SET completed_at = %s,
+                    duration_minutes = %s,
+                    elapsed_minutes = EXTRACT(EPOCH FROM (%s - started_at)) / 60,
+                    worker_count = %s,
+                    force_closed = TRUE,
+                    closed_by = %s,
+                    close_reason = %s,
+                    duration_source = %s,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+                  AND completed_at IS NULL
+                  AND force_closed = FALSE
+                RETURNING id
+            """, (last_completion_at, duration_minutes, last_completion_at,
+                  worker_count, closed_by_worker_id, close_reason, duration_source,
+                  task_detail_id))
+        else:
+            # Sprint 41-B legacy 호환 — duration_minutes EXTRACT(EPOCH) 자동 계산
+            cur.execute("""
+                UPDATE app_task_details
+                SET completed_at = %s,
+                    duration_minutes = EXTRACT(EPOCH FROM (%s - started_at)) / 60,
+                    elapsed_minutes = EXTRACT(EPOCH FROM (%s - started_at)) / 60,
+                    worker_count = %s,
+                    force_closed = TRUE,
+                    closed_by = %s,
+                    close_reason = %s,
+                    duration_source = %s,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+                  AND completed_at IS NULL
+                  AND force_closed = FALSE
+                RETURNING id
+            """, (last_completion_at, last_completion_at, last_completion_at,
+                  worker_count, closed_by_worker_id, close_reason, duration_source,
+                  task_detail_id))
         result = cur.fetchone()
         conn.commit()
-        if result:
-            logger.info(f"auto_close_relay_task: task_detail_id={task_detail_id} closed")
-        return result is not None
+        if result is None:
+            # race no-op (이미 다른 trigger 가 close 처리) — 정상 경로
+            logger.info(
+                f"auto_close_relay_task: task_id={task_detail_id} race no-op "
+                f"(already closed, trigger_type={trigger_type})"
+            )
+            return False
+        logger.info(
+            f"auto_close_relay_task: task_id={task_detail_id} closed "
+            f"(trigger_type={trigger_type}, duration_source={duration_source})"
+        )
+        return True
     except Exception as e:
         conn.rollback()
         logger.error(f"auto_close_relay_task failed: task_id={task_detail_id}, error={e}")

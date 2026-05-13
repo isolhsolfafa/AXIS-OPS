@@ -3,7 +3,8 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: **v2.14.4 (HOTFIX-ELEC-CHECKLIST-SELECT-IMMEDIATE-PUT — dropdown 단독 변경 시 저장, 2026-05-13)** — FE only patch / dropdown onChanged 500ms debounce 즉시 PUT + PASS/NA 미선택 경고 / BE 무변경 / flutter analyze clean / 회귀 위험 0
+> **현재 버전**: **v2.15.0 (Sprint 41-D Relay First Final Logic — 2026-05-14)** — BE only minor / 5 파일 +650 LOC / FIRST/SECOND/SINGLE Final 3 카테고리 분리 + auto-close 트리거 + close_at 계산 + duration_source 컬럼 / Codex 라운드 1+2 정정 12건 반영 / pytest 38/38 GREEN / 회귀 위험 0
+> **선행 release**: v2.14.4 (HOTFIX-ELEC-CHECKLIST-SELECT-IMMEDIATE-PUT — dropdown 단독 변경 시 저장, 2026-05-13)
 > **선행 release**: v2.14.3 (HOTFIX-ELEC-CHECKLIST-PLACEHOLDER-DEACTIVATE — 046a 사고 정정, 2026-05-13)
 > **선행 release**: v2.14.2 (HOTFIX-MATERIALS-CATEGORY-ILIKE — 자재 마스터 검색 case-insensitive, 2026-05-13)
 > **선행 release**: v2.14.1 (FIX-DB-POOL-CONN-LEAK-WORK-PY — work.py conn leak 5 위치 fix, 2026-05-12)
