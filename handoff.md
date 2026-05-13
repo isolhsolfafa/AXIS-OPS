@@ -20,14 +20,13 @@
 ### 다음 세션 후속 액션
 
 1. **Railway 자동 재배포 확인** — migration 056 자동 적용 (DO block GREEN 확인)
-2. **baseline 측정 SQL 실행 + 기록** (Sprint 32 app_access_log 실제 컬럼: `created_at`):
-   ```sql
-   SELECT DATE_TRUNC('week', created_at) AS week, COUNT(*) AS rollback_count
-     FROM app_access_log
-    WHERE endpoint LIKE '%work/reactivate-task%'
-      AND created_at >= '2026-04-22'
-    GROUP BY week ORDER BY week;
-   ```
+2. **baseline 측정 SQL — 완료 (2026-05-14 운영 측정)**:
+   - endpoint 형식: `work.reactivate_task_route` (Flask endpoint name)
+   - request_path: `/api/app/work/reactivate-task?`
+   - 정정 SQL: `WHERE (endpoint LIKE '%reactivate_task%' OR request_path LIKE '%reactivate-task%')`
+   - **baseline (4-22 ~ 5-14 4주 누적): 44건**
+     - 4-20 ~ 4-26: 6건 / 4-27 ~ 5-03: 1건 / 5-04 ~ 5-10: 14건 / 5-11 ~ 5-17: 23건 (트렌드 ↑)
+   - 4주 후 (2026-06-11 부근) 동일 SQL 재실행 → **목표 22건 이하 (50%+ 감소)**
 3. **post-deploy 1주 관찰** — Sentry 새 ERROR 0건
 4. **post-deploy 4주 후** — 동일 SQL 재실행 → Manager Rollback 비율 50%+ 감소 검증
 5. **별 sprint** `FEAT-RELAY-FIRST-FINAL-ANALYTICS-DASHBOARD-20260513` 진행 가능 (4주 baseline 축적 후)
