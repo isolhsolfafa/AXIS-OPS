@@ -6,6 +6,35 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.14.2] - 2026-05-13 — HOTFIX-MATERIALS-CATEGORY-ILIKE (자재 마스터 검색 case-insensitive + 부분 매칭)
+
+> AXIS-VIEW `OPS_API_REQUESTS.md` #64 catch — `/api/admin/materials?category=` 가 `=` 정확 매칭이라 사용자가 'm' / 'mfc' 등 입력 시 0건. keyword/description 은 이미 ILIKE 적용되어 있어 일관성 보강. v1.43.8 FE 정정의 후속 BE.
+
+### 변경 (1 파일 / 3 line)
+
+| 파일 | 변경 |
+|------|-----|
+| `backend/app/routes/admin_materials.py` L82-84 | `category = %s` → `category ILIKE %s` + `f'%{category}%'` |
+
+### pytest TC 신규 2건
+
+- `test_list_materials_filter_by_category_case_insensitive` — `category=mfc` (소문자) → MFC 13건
+- `test_list_materials_filter_by_category_partial_match` — `category=m` (한 글자) → MFC 13건 이상 (부분 매칭)
+- 기존 `test_list_materials_filter_by_category` (`MFC` 정확 매칭) → 회귀 0 (13건 동일)
+
+### 검증
+
+- pytest 3/3 GREEN (category 관련 TC, 70초)
+- 회귀 위험 0: `=` 케이스는 `ILIKE` 부분 매칭에 흡수, 운영 row 185개 기준 index scan 동일 (seq scan)
+- NULL row 영향 0: `ILIKE` 도 `=` 와 동일하게 NULL 매칭 X
+
+### 연관
+
+- AXIS-VIEW v1.43.8 (`ChecklistEditModal` 자재코드 input case-insensitive 정정 — FE client filter)
+- AXIS-VIEW BACKLOG `OPS-MATERIALS-KEYWORD-ILIKE`
+
+---
+
 ## [2.14.1] - 2026-05-12 — FIX-DB-POOL-CONN-LEAK-WORK-PY (work.py conn leak 5 위치 fix)
 
 > 2026-05-12 KST 16:48 Railway pool exhausted 사고 root cause 영역 fix. work.py L705 `conn2.close()` 직접 호출이 ThreadedConnectionPool 영역 conn 반환 영역 X → 영구 leak. Codex GREEN + pytest 45/45 PASS.

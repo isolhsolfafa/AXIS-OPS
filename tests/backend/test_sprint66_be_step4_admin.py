@@ -110,7 +110,7 @@ def test_list_materials_filter_by_description(client, admin_headers, db_conn):
 
 
 def test_list_materials_filter_by_category(client, admin_headers, db_conn):
-    """[1-B] category 정확 일치 — MFC 13 자재 정합."""
+    """[1-B] category 정확 일치 — MFC 13 자재 정합 (ILIKE 부분 매칭 후에도 유지)."""
     if db_conn is None:
         pytest.skip("DB 연결 없음")
 
@@ -122,6 +122,36 @@ def test_list_materials_filter_by_category(client, admin_headers, db_conn):
 
     for item in data['items']:
         assert item['category'] == 'MFC'
+
+
+def test_list_materials_filter_by_category_case_insensitive(client, admin_headers, db_conn):
+    """[1-B-CI] HOTFIX-MATERIALS-CATEGORY-ILIKE-20260513 — 소문자 'mfc' → ILIKE 매칭."""
+    if db_conn is None:
+        pytest.skip("DB 연결 없음")
+
+    response = client.get('/api/admin/materials?category=mfc', headers=admin_headers)
+    assert response.status_code == 200
+
+    data = response.get_json()
+    assert data['total'] == 13, f"case-insensitive 매칭 실패: {data['total']}"
+
+    for item in data['items']:
+        assert item['category'] == 'MFC'
+
+
+def test_list_materials_filter_by_category_partial_match(client, admin_headers, db_conn):
+    """[1-B-PM] HOTFIX-MATERIALS-CATEGORY-ILIKE-20260513 — 'm' 한 글자 → ILIKE 부분 매칭 (MFC 13건 포함)."""
+    if db_conn is None:
+        pytest.skip("DB 연결 없음")
+
+    response = client.get('/api/admin/materials?category=m', headers=admin_headers)
+    assert response.status_code == 200
+
+    data = response.get_json()
+    assert data['total'] >= 13, f"부분 매칭 실패: {data['total']} (MFC 13건 이상이어야 함)"
+
+    categories = {item['category'] for item in data['items']}
+    assert any('m' in cat.lower() for cat in categories), f"매칭된 카테고리에 'm' 미포함: {categories}"
 
 
 def test_create_material_idempotent(client, admin_headers, db_conn):

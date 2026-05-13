@@ -80,8 +80,8 @@ def list_materials():
     # 'all' → 필터 없음
 
     if category:
-        where_clauses.append("category = %s")
-        params.append(category)
+        where_clauses.append("category ILIKE %s")
+        params.append(f'%{category}%')
 
     if keyword:
         where_clauses.append("(item_name ILIKE %s OR item_code ILIKE %s)")
