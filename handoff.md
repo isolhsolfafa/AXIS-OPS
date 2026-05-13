@@ -1,7 +1,55 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-13 KST (✅ v2.14.2 patch release — HOTFIX-MATERIALS-CATEGORY-ILIKE / `/api/admin/materials?category=` 정확 매칭 → ILIKE 부분 매칭. pytest 15/15 PASS, commit `86fc8a1` push 완료)
+> 마지막 업데이트: 2026-05-13 KST (✅ v2.14.3 patch release — HOTFIX-ELEC-CHECKLIST-PLACEHOLDER-DEACTIVATE / migration 055 신규 + 046a 본문 교체. 사용자 catch — 4-27 HOTFIX-08 부수 효과로 placeholder 31건 신규 INSERT 사고 정정)
+
+## ✅ 2026-05-13 KST — v2.14.3 patch release (HOTFIX-ELEC-CHECKLIST-PLACEHOLDER-DEACTIVATE)
+
+> **한 줄 요약**: 사용자 catch — 운영 DB ELEC `checklist_master` 영역 placeholder 31건 (id 94-124, 'Jig 검사 항목 1~7' 포함) 이 정식 31건 (id 62-92) 과 별도로 존재. Root cause: HOTFIX-08 (v2.10.10, 4-27) 부수 효과로 046a 자동 재적용. Migration 055 신규 (placeholder `is_active=FALSE`) + 046a 본문 교체 (047 정상 31항목 + ON CONFLICT). Logic 변경 0.
+
+### Root cause trail
+
+- 4-10 11:26: migration 047 적용 → 정식 31항목 INSERT (id 62-92)
+- 4-15 23:06: migration 048 적용 → phase1_applicable + qi_check_required 정규화
+- **4-27 21:36: HOTFIX-08 v2.10.10 부수 효과 → 046a 자동 재적용 → placeholder 31건 신규 INSERT (id 94-124)**
+- 5-13: 사용자 catch + migration 055 작성
+
+### 변경 (3 파일)
+
+| 파일 | 변경 |
+|------|-----|
+| `backend/migrations/055_elec_checklist_placeholder_deactivate.sql` | 신규 — placeholder 31건 deactivate + DO block 검증 |
+| `backend/migrations/046a_elec_checklist_seed.sql` | 본문 교체 — placeholder → 047 정상 31항목 + ON CONFLICT DO NOTHING (재발 방지) |
+| `backend/version.py` / `frontend/lib/utils/app_version.dart` | 2.14.2 → 2.14.3 |
+
+### pytest TC 신규 5건
+
+- placeholder 31건 deactivate / 정식 31건 active 유지 / record 50건 FK 보존 / ELEC COMMON active 총 31
+
+### Logic 변경: 0
+
+모든 ELEC 체크리스트 logic 이 `cm.is_active = TRUE` 필터 사용 — placeholder deactivate 후 정식 31건만 노출. 작업자/QI 화면 + Phase 1·2 판정 + 성적서 모두 정상화.
+
+### 사용자 측 검증 (Railway 재배포 후)
+
+```sql
+-- ① placeholder 31건 모두 deactivate 확인
+SELECT COUNT(*) FROM checklist.checklist_master
+WHERE category='ELEC' AND product_code='COMMON' AND id BETWEEN 94 AND 124 AND is_active=FALSE;
+-- 기대: 31
+
+-- ② 정식 31건 active 유지 확인
+SELECT COUNT(*) FROM checklist.checklist_master
+WHERE category='ELEC' AND product_code='COMMON' AND id BETWEEN 62 AND 92 AND is_active=TRUE;
+-- 기대: 31
+
+-- ③ ELEC COMMON 영역 active 총 31 (정식만) 확인
+SELECT COUNT(*) FROM checklist.checklist_master
+WHERE category='ELEC' AND product_code='COMMON' AND is_active=TRUE;
+-- 기대: 31
+```
+
+---
 
 ## ✅ 2026-05-13 KST — v2.14.2 patch release (HOTFIX-MATERIALS-CATEGORY-ILIKE)
 

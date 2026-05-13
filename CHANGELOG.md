@@ -6,6 +6,56 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.14.3] - 2026-05-13 — HOTFIX-ELEC-CHECKLIST-PLACEHOLDER-DEACTIVATE (046a 사고 정정)
+
+> 사용자 catch — 운영 DB `checklist_master` 에 'Jig 검사 항목 1~7' placeholder 31항목 (id 94-124, created_at 2026-04-27 21:36:04) 이 정식 31항목 (id 62-92, 2026-04-10) 과 별도로 신규 INSERT 되어 있음. Root cause: HOTFIX-08 (v2.10.10, 4-27) 의 db_pool transaction 정리 부수 효과로 migration 046a (Sprint 57 초기 placeholder seed) 가 자동 재적용 → 047 의 DELETE 이후 placeholder 31건이 신규 INSERT 됨. UNIQUE 제약 (product_code, category, item_group, item_name) 충돌 회피 (item_name 이 047 와 달랐음).
+
+### 변경 (3 파일)
+
+| 파일 | 변경 |
+|------|-----|
+| `backend/migrations/055_elec_checklist_placeholder_deactivate.sql` | 신규 — placeholder 31건 `is_active=FALSE` + DO block 검증 (placeholder active 0 / 정식 active 31) |
+| `backend/migrations/046a_elec_checklist_seed.sql` | 본문 교체 — 기존 placeholder 31항목 → 047 의 정식 31항목 + `ON CONFLICT DO NOTHING` (향후 fresh boot 환경 대비 재발 방지) |
+| `backend/version.py` / `frontend/lib/utils/app_version.dart` | 2.14.2 → 2.14.3 |
+
+### pytest TC 신규 4건 (`test_migration_055_elec_placeholder.py`)
+
+- `test_migration_055_deactivates_placeholder_31_rows` — id 94-124 모두 is_active=FALSE
+- `test_migration_055_no_active_placeholder` — placeholder 영역 active row 0
+- `test_migration_055_keeps_legacy_31_active` — 정식 id 62-92 모두 is_active=TRUE 유지
+- `test_migration_055_total_active_is_31` — ELEC COMMON active 총 31 (정식만)
+- + `test_migration_055_preserves_record_fk` — placeholder master 참조 record 보존 (DELETE 안 됨)
+
+### Logic 변경: 0
+
+모든 ELEC 체크리스트 logic 이 `cm.is_active = TRUE` 필터 사용 — placeholder deactivate 후 정식 31건만 노출.
+
+| Logic | 위치 | placeholder deactivate 후 |
+|-------|------|------|
+| Phase 1 NULL count | `checklist_service.py:1170` | 정식 31건만 count |
+| Phase 2 NULL count | `checklist_service.py:1192` | 정식 31건만 count |
+| Phase 1+2 total | `checklist_service.py:1209` | 정식 31건만 count |
+| `get_elec_checklist()` | `checklist_service.py:230` | 작업자/QI 화면 정식 31건만 노출 |
+| `get_checklist_report()` | `checklist_service.py:553` | 성적서 정식 31건만 |
+
+### 운영 DB 적용
+
+- Railway 재배포 시 migration_runner 가 055 자동 적용 (신규 파일, `migration_history` 미등록)
+- 046a 본문 수정은 향후 fresh boot 환경 대비 (현재 운영 DB 영역 `migration_history` 영역 046a 이미 적용 trail 존재 → 재실행 X)
+- placeholder record 50건 (id 111-117 PASS/NA) 보존 (FK 보존, 작업자 입력 trail 감사용)
+
+### 사고 trail
+
+| 시점 | 사건 | 결과 |
+|------|------|-----|
+| 2026-04-09 22:55 | migration 046 적용 | 스키마 생성 |
+| 2026-04-10 11:26 | migration 047 적용 (Sprint 57-C) | DELETE + 정상 31항목 INSERT (id 62-92) |
+| 2026-04-15 23:06 | migration 048 적용 | phase1_applicable + qi_check_required 정규화 |
+| **2026-04-27 21:36** | **HOTFIX-08 v2.10.10 부수 효과** | **046a 자동 재적용 → placeholder 31건 신규 INSERT (id 94-124)** |
+| 2026-05-13 | 사용자 catch + migration 055 적용 | placeholder 31건 deactivate, 정식 31건만 active |
+
+---
+
 ## [2.14.2] - 2026-05-13 — HOTFIX-MATERIALS-CATEGORY-ILIKE (자재 마스터 검색 case-insensitive + 부분 매칭)
 
 > AXIS-VIEW `OPS_API_REQUESTS.md` #64 catch — `/api/admin/materials?category=` 가 `=` 정확 매칭이라 사용자가 'm' / 'mfc' 등 입력 시 0건. keyword/description 은 이미 ILIKE 적용되어 있어 일관성 보강. v1.43.8 FE 정정의 후속 BE.
