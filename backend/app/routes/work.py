@@ -284,6 +284,13 @@ def complete_work() -> Tuple[Dict[str, Any], int]:
             # Sprint 57: ELEC IF_2 완료 시 체크리스트 상태
             if 'elec_close_blocked' in response:
                 result['elec_close_blocked'] = response['elec_close_blocked']
+            # Sprint 41-D HOTFIX v2.15.3 (Codex M-1 catch 정정):
+            # service 응답 영역 first_final_blocked + auto_finalize_blocked 플래그를 HTTP 응답에 forward
+            # 영향 0 (FE/VIEW 측 미사용 검증 완료) + spec 충족
+            if 'first_final_blocked' in response:
+                result['first_final_blocked'] = response['first_final_blocked']
+            if 'auto_finalize_blocked' in response:
+                result['auto_finalize_blocked'] = response['auto_finalize_blocked']
             return jsonify(result), 200
 
     return jsonify(response), status_code

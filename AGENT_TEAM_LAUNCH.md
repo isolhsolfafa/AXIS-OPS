@@ -36393,6 +36393,713 @@ def _match_manager_company(
 
 ---
 
+## HOTFIX-SPRINT41D-AUTO-FINALIZE-RANGE-EXTENSION-20260514 (v2.15.3 — Issue A 차단 범위 확장)
+
+> 등록일: 2026-05-14 KST | 상태: 설계 완료 → Codex 라운드 1 검증 대기 → 구현 착수
+> 트랙: OPS BE only (FE 변경 0)
+> Severity: 🟠 S2 (운영 영역 사용자 의도 누락 — Manager Rollback 요청 잔존)
+> 우선순위: 🔴 P0 (Sprint 41-D 의 본질적 의도 영역 누락 fix)
+> 작업량: ~40분 (set 정정 ~10 LoC + pytest TC 6건 신규 + 설계서/CHANGELOG/BACKLOG 정정)
+> 사후 Codex 검토: 7일 이내 (deadline 2026-05-21)
+> 선행 의존성: v2.15.0 + v2.15.1 + v2.15.2 prod 배포 완료 ✅
+> POST-REVIEW: BACKLOG `POST-REVIEW-HOTFIX-SPRINT41D-AUTO-FINALIZE-RANGE-EXTENSION-20260514` 등록
+
+## 배경 — cowork 측 의도 누락 2단계 catch
+
+### Step 1 — v2.15.0 결함 (auto_finalize 차단 분기 미작동)
+- L363-369 `logger.info` 만 출력 + `finalize` 변수 그대로 False 유지 → L408 auto_finalize 분기 진입 → task close
+- v2.15.2 (즉시 return) 영역 fix 완료
+
+### Step 2 — v2.15.2 잔존 catch (차단 범위 누락) ⭐ 본 HOTFIX
+- v2.15.2 fix 후에도 **First Final (TANK_DOCKING, IF_2) 만 차단** 영역
+- 사용자 원래 의도: **gas1, util1, gas2, util2, panel, cabinet, wiring, IF_1 영역도 한 명 참여 시 close 방지**
+- 즉 일반 phase task 9개 영역 차단 누락 → 사용자 운영 영역 사고 잔존
+
+### 사용자 catch 영역 (5-14)
+```
+원래 의도 (5-13 발화):
+   "relay 한 명 참여 시 내 작업종료로 인해 task close로 재참여가 안되는게 주요 타켓"
+   → 모든 relay-able task 가 대상 (First Final 만이 아님)
+
+명확화 (5-14 step-by-step 점검 후):
+   MECH: gas1, util1 내작업완료 → task open → TANK_DOCKING → task close (gas1/util1)
+       → gas2, util2 내작업완료 → task open → SELF_INSPECTION → task close (gas2/util2)
+   ELEC: panel/cabinet/wiring/if1 내작업완료 → task open → IF_2 → task close
+       → IF_2(com) + INSPECTION → task close (남은 task)
+```
+
+## 옵션 B vs C 차이 — Second Final 영역 catch
+
+### 옵션 C (cowork 1차 권장 — 폐기) — Denylist 반전 로직
+
+```python
+if not is_single_final and not finalize:
+    # Single Final 외 모두 차단 (SECOND_FINAL 포함)
+    ...
+```
+
+**치명적 문제**: SECOND_FINAL (SELF_INSPECTION, INSPECTION) 영역도 차단 → finalize=false 호출 시 영원히 close 못 함 → Sprint 55 (3-C) 강제 finalize=true 분기 도달 못 함 → AND 조건 영원히 미작동 → Manager 부담 가중.
+
+### 옵션 B (사용자 채택, cowork 정합) — Allowlist 명시적 set
+
+```python
+AUTO_FINALIZE_BLOCKED_TASK_IDS = {
+    # FIRST_FINAL
+    ('MECH', 'TANK_DOCKING'),
+    ('ELEC', 'IF_2'),
+    # MECH 일반 phase
+    ('MECH', 'WASTE_GAS_LINE_1'),
+    ('MECH', 'UTIL_LINE_1'),
+    ('MECH', 'WASTE_GAS_LINE_2'),
+    ('MECH', 'UTIL_LINE_2'),
+    ('MECH', 'HEATING_JACKET'),
+    # ELEC 일반 phase
+    ('ELEC', 'PANEL_WORK'),
+    ('ELEC', 'CABINET_PREP'),
+    ('ELEC', 'WIRING'),
+    ('ELEC', 'IF_1'),
+    # ⚠️ SECOND_FINAL (SELF_INSPECTION, INSPECTION) 포함 안 함
+    #    → Sprint 55 (3-C) 강제 finalize=true 분기로 정상 close 진행
+    # ⚠️ SINGLE_FINAL (TMS/PI/QI/SI) 포함 안 함
+    #    → Sprint 55 (3-C) 강제 finalize=true 분기로 정상 close 진행
+}
+```
+
+**정합성**: Second Close 트리거 영역 (사용자 검증 5-14 — 자주검사 / IF_2+INSPECTION AND 조건) 정상 작동 유지.
+
+## 사용자 흐름 매트릭스 (v2.15.3 적용 후)
+
+### MECH GAIA 흐름
+
+| # | task | 동작 | 코드 분기 |
+|---|---|---|---|
+| 1 | gas1 / util1 + finalize=false | 🟢 task open 유지 | AUTO_FINALIZE_BLOCKED_TASK_IDS 차단 (즉시 return) |
+| 2 | TANK_DOCKING start | 🟢 First Close 트리거 → gas1/util1 미완료 + pause 자동 close | `_trigger_first_close()` |
+| 3 | gas2 / util2 + finalize=false | 🟢 task open 유지 | AUTO_FINALIZE_BLOCKED_TASK_IDS 차단 |
+| 4 | SELF_INSPECTION complete | ✅ task close + Second Close 트리거 → gas2/util2 미완료 자동 close | Sprint 55 (3-C) 강제 finalize=true → `_trigger_second_close()` |
+
+### MECH DRAGON / GALLANT / SWS (tank_in_mech=TRUE)
+
+| # | task | 동작 |
+|---|---|---|
+| 1 | gas1 / util1 / gas2 / util2 + finalize=false | 🟢 task open 유지 (옵션 B 차단) |
+| 2 | TANK_DOCKING | ❌ is_applicable=FALSE → First Close 트리거 미발동 |
+| 3 | SELF_INSPECTION complete | ✅ Second Close 트리거 → gas1/util1/gas2/util2 4 task 일괄 close |
+
+### ELEC 흐름
+
+| # | task | 동작 |
+|---|---|---|
+| 1 | panel / cabinet / wiring / if1 + finalize=false | 🟢 task open 유지 (옵션 B 차단) |
+| 2 | IF_2 start | 🟢 First Close 트리거 → panel/cabinet/wiring/if1 미완료 + pause 자동 close |
+| 3 | IF_2 complete + finalize=false | 🟢 task open 유지 (옵션 B 차단, FIRST_FINAL 영역) |
+| 4 | INSPECTION complete + IF_2 complete (AND 조건) | ✅ task close + Second Close 트리거 → 남은 task 자동 close |
+
+### Single Final (TMS / PI / QI / SI) — 회귀 영역
+
+| task | 동작 |
+|---|---|
+| TMS PRESSURE_TEST + finalize=false | ✅ Sprint 55 (3-C) 강제 finalize=true → 정상 close |
+| PI / QI / SI + finalize=false | ✅ 동일 |
+
+## 핵심 코드 변경 (task_service.py)
+
+### Before (v2.15.2 — Issue A 미해결)
+
+```python
+# L60-105 영역 (기존)
+FIRST_FINAL_TASK_IDS = {('MECH', 'TANK_DOCKING'), ('ELEC', 'IF_2')}
+SECOND_FINAL_TASK_IDS = {...}
+SINGLE_FINAL_TASK_IDS = {...}
+
+# L353-378 영역 (v2.15.2 fix)
+is_first_final = (task.task_category, task.task_id) in FIRST_FINAL_TASK_IDS
+
+if is_first_final and not is_single_final and not finalize:
+    # ⚠️ First Final 만 차단 — gas1/util1 등 일반 phase 영역 누락
+    ...
+    return {..., 'first_final_blocked': True}, 200
+```
+
+### After (v2.15.3 — 옵션 B + Codex M-1 정정)
+
+```python
+# task_service.py L47-94 상단 — 기존 FIRST/SECOND/SINGLE_FINAL_TASK_IDS 영역 직후 추가
+# (Codex M-1 catch 정정: 상수 위치 명시 — 기존 set 들과 동일 위치)
+
+# Sprint 41-D HOTFIX v2.15.3 (Issue A 영역 — 차단 범위 확장)
+# 옵션 B 채택: FIRST_FINAL + 일반 phase task (9개) 명시
+# 의미: relay-able task 의 한 명 참여 + finalize=false 시 task close 차단
+# 사용자 의도 정합 (5-14 step-by-step 점검 영역 확정):
+#   MECH gas1/util1 → TANK_DOCKING → gas2/util2 → SELF_INSPECTION
+#   ELEC panel/cabinet/wiring/if1 → IF_2 → IF_2+INSPECTION AND
+AUTO_FINALIZE_BLOCKED_TASK_IDS: Set[Tuple[str, str]] = {
+    # FIRST_FINAL (start 시점에 First Close 트리거도 별 호출)
+    ('MECH', 'TANK_DOCKING'),
+    ('ELEC', 'IF_2'),
+    # MECH 일반 phase (PRE_DOCKING + POST_DOCKING + admin 영역)
+    ('MECH', 'WASTE_GAS_LINE_1'),
+    ('MECH', 'UTIL_LINE_1'),
+    ('MECH', 'WASTE_GAS_LINE_2'),
+    ('MECH', 'UTIL_LINE_2'),
+    ('MECH', 'HEATING_JACKET'),
+    # ELEC 일반 phase (PRE_DOCKING)
+    ('ELEC', 'PANEL_WORK'),
+    ('ELEC', 'CABINET_PREP'),
+    ('ELEC', 'WIRING'),
+    ('ELEC', 'IF_1'),
+    # ⚠️ SECOND_FINAL (SELF_INSPECTION, INSPECTION) 포함 안 함
+    #    → Sprint 55 (3-C) 강제 finalize=true 분기로 정상 close 진행
+    #    → MECH SELF_INSPECTION → Second Close 트리거 작동 (사용자 검증 ✅)
+    #    → ELEC INSPECTION + IF_2 AND 조건 → Second Close 트리거 작동 (사용자 검증 ✅)
+    # ⚠️ SINGLE_FINAL (TMS/PI/QI/SI) 포함 안 함 — 정상 close
+}
+
+
+# L353-378 영역 정정
+# Sprint 41-D: First Final task (auto_finalize 차단)
+is_first_final = (task.task_category, task.task_id) in FIRST_FINAL_TASK_IDS
+is_second_final = (task.task_category, task.task_id) in SECOND_FINAL_TASK_IDS
+is_single_final = (task.task_category, task.task_id) in SINGLE_FINAL_TASK_IDS
+
+# ⭐ HOTFIX v2.15.3 — 차단 범위 확장 (옵션 B)
+is_auto_finalize_blocked = (task.task_category, task.task_id) in AUTO_FINALIZE_BLOCKED_TASK_IDS
+
+if is_auto_finalize_blocked and not finalize:
+    # 1. pause 자동 resume (Sprint 55 3-D 패턴 흡수)
+    from app.models.work_pause_log import get_active_pause_by_worker, resume_pause
+    from app.models.task_detail import set_paused
+    my_pause = get_active_pause_by_worker(task_detail_id, worker_id)
+    if my_pause:
+        updated_pause = resume_pause(my_pause.id, completed_at)
+        if updated_pause:
+            pause_duration = updated_pause.pause_duration_minutes or 0
+            new_total_pause_minutes = task.total_pause_minutes + pause_duration
+            set_paused(task_detail_id, is_paused=False, total_pause_minutes=new_total_pause_minutes)
+            task = get_task_by_id(task_detail_id)
+        else:
+            set_paused(task_detail_id, is_paused=False)
+            task = get_task_by_id(task_detail_id)
+
+    # 2. work_completion_log 본인 row 기록
+    this_worker_duration = _record_completion_log(
+        task=task,
+        worker_id=worker_id,
+        completed_at=completed_at,
+    )
+
+    # 3. 즉시 return — auto_finalize 분기 진입 차단
+    logger.info(
+        f"Sprint 41-D auto-finalize blocked (v2.15.3 옵션 B): task_id={task_detail_id}, "
+        f"task_id_ref={task.task_id}, worker_id={worker_id}, "
+        f"duration={this_worker_duration}m, is_first_final={is_first_final}"
+    )
+    return {
+        'message': '내 작업이 종료되었습니다. 다음 단계 진입 가능합니다.',
+        'task_id': task_detail_id,
+        'completed_at': completed_at.isoformat(),
+        'duration_minutes': this_worker_duration,
+        'category_completed': False,
+        'task_finished': False,
+        'relay_mode': True,
+        'auto_finalize_blocked': True,    # ⭐ 신규 (v2.15.3, 범용 플래그)
+        'first_final_blocked': is_first_final,    # 호환성 보존 (FIRST_FINAL 영역만 True)
+    }, 200
+
+# Sprint 55 (3-C): SECOND/SINGLE FINAL task 만 finalize=true 강제 (릴레이 불가)
+# 본 분기 도달 = AUTO_FINALIZE_BLOCKED_TASK_IDS 영역 외 (Second Final / Single Final)
+if (is_second_final or is_single_final) and not finalize:
+    logger.info(
+        f"FINAL task forced finalize: task_id={task_detail_id}, "
+        f"task_name={task.task_id}"
+    )
+    finalize = True
+```
+
+## 구현 범위
+
+| # | 파일 | 변경 | 라인수 |
+|---|---|---|---|
+| 1 | `backend/app/services/task_service.py` | (a) `AUTO_FINALIZE_BLOCKED_TASK_IDS` 신규 set (11개 task) (b) L353-378 분기 정정 (`is_first_final` → `is_auto_finalize_blocked`) (c) 응답 플래그 `auto_finalize_blocked` 신규 + `first_final_blocked` 호환성 보존 | +25 |
+| 2 | `backend/version.py` | VERSION 2.15.2 → 2.15.3 | +1 |
+| 3 | `tests/backend/test_relay_first_final.py` | (a) TC-FF-01b/01c/01d 영역 응답 플래그 검증 보강 (b) TC-FF-01e/01f/01g/01h/01i/01j 신규 6 TC | +180 |
+| 4 | `AXIS-OPS/CHANGELOG.md` | [2.15.3] entry — Issue A 차단 범위 확장 + 매트릭스 + 옵션 B vs C 차이 catch | +60 |
+| 5 | `AXIS-OPS/BACKLOG.md` | HOTFIX entry 신규 + v2.15.2 entry 갱신 (Issue A 후속 명시) | +5 |
+| 6 | `AXIS-OPS/handoff.md` | v2.15.3 trail 추가 + 후속 액션 4건 명시 | +30 |
+| 7 | `AXIS-OPS/memory.md` | ADR-029 후속 사례 보강 (옵션 B vs C catch trail + step-by-step 점검 영역 효과 입증) | +25 |
+| 8 | `AXIS-OPS/AGENT_TEAM_LAUNCH.md` Sprint 41-D 본문 | 차단 범위 매트릭스 명시 (Step 3 매트릭스) | +30 |
+
+**순 증분: ~350 LOC** (production 25 + 테스트 180 + 문서 trail 145).
+
+## pytest TC 매트릭스 (v2.15.3)
+
+| TC | 검증 영역 | 신규/수정 |
+|---|---|:-:|
+| TC-FF-01b | ELEC IF_2 + 한 명 참여 + finalize=false → 차단 (`auto_finalize_blocked=True`) | 수정 (플래그) |
+| TC-FF-01c | MECH TANK_DOCKING 동일 검증 | 수정 (플래그) |
+| TC-FF-01d | TMS PRESSURE_TEST + finalize=false → 정상 close (Single Final 회귀 방지) | 수정 (정합) |
+| **TC-FF-01e (신규)** | **MECH gas1 + 한 명 참여 + finalize=false → 차단 (Issue A 정합)** | 🆕 |
+| **TC-FF-01f (신규)** | **MECH util1 + 한 명 참여 + finalize=false → 차단** | 🆕 |
+| **TC-FF-01g (신규)** | **MECH gas2 + 한 명 참여 + finalize=false → 차단 (POST_DOCKING 영역)** | 🆕 |
+| **TC-FF-01h (신규)** | **ELEC PANEL_WORK / WIRING + 한 명 참여 + finalize=false → 차단** | 🆕 |
+| **TC-FF-01i (신규)** | **MECH SELF_INSPECTION + 한 명 참여 + finalize=false → Sprint 55 (3-C) 강제 finalize=true → 정상 close + Second Close 트리거** | 🆕 |
+| **TC-FF-01j (신규)** | **ELEC INSPECTION + 한 명 참여 + finalize=false → AND 조건 미충족 시 task open 유지 / 충족 시 close** | 🆕 |
+
+**신규 TC 핵심 가드** (회귀 차단):
+```python
+# TC-FF-01e gas1 영역
+assert response.get('auto_finalize_blocked') is True
+assert response.get('task_finished') is False
+mock_all_done.assert_not_called()    # auto_finalize 분기 진입 X
+
+# TC-FF-01i SELF_INSPECTION 영역 (Second Final 회귀 방지)
+assert response.get('task_finished') is True    # 정상 close
+assert response.get('auto_finalize_blocked') is None
+mock_trigger_second_close.assert_called_once()    # Second Close 트리거 호출
+```
+
+## 시나리오 매트릭스 (v2.15.0/15.1/15.2 → v2.15.3)
+
+| 시나리오 | v2.15.0 | v2.15.1 | v2.15.2 | v2.15.3 |
+|---|:-:|:-:|:-:|:-:|
+| TANK_DOCKING / IF_2 + 한 명 참여 + finalize=false | ❌ close | ❌ close | ✅ open | ✅ open |
+| **gas1 / util1 / gas2 / util2 + 한 명 참여 + finalize=false** | ❌ close | ❌ close | ❌ close | ✅ open |
+| **panel / cabinet / wiring / IF_1 + 한 명 참여 + finalize=false** | ❌ close | ❌ close | ❌ close | ✅ open |
+| **HEATING_JACKET + 한 명 참여 + finalize=false** | ❌ close | ❌ close | ❌ close | ✅ open |
+| SELF_INSPECTION + 한 명 참여 + finalize=false | ✅ 강제 close | ✅ 강제 close | ✅ 강제 close | ✅ 동일 (Sprint 55 3-C) |
+| INSPECTION + finalize=false + IF_2 미완료 | ✅ 강제 close 시도 → AND 미충족 open | 동일 | 동일 | 동일 |
+| INSPECTION + finalize=false + IF_2 complete | ✅ AND 충족 → close + Second Close | 동일 | 동일 | 동일 |
+| TMS PRESSURE_TEST / PI / QI / SI + finalize=false | ✅ 강제 close | 동일 | 동일 | 동일 |
+
+→ **v2.15.3 의 영향 영역 = 일반 phase task 9개 + HEATING_JACKET = 10개**. 나머지 영역 변경 0 (회귀 위험 0).
+
+## 안전 degrade / 호환성
+
+- FE 변경 0 (Flutter 다이얼로그 + 3 선택지 + v2.15.1 정합 `_kFinalTaskIds` 그대로 유지)
+- Second Close 트리거 영역 변경 0 (사용자 검증 영역 정상 작동 확인 — MECH SELF_INSPECTION + ELEC AND 조건)
+- Sprint 41-B `auto_close_relay_task()` 영역 변경 0
+- Sprint 55 (3-C) 강제 finalize=true 분기 영역 정합 보존 (Second Final / Single Final 영역만 진입)
+- DB schema 변경 0 (migration 불필요)
+- 응답 schema additive (신규 `auto_finalize_blocked` 플래그, 기존 `first_final_blocked` 호환성 유지)
+
+## 회귀 위험
+
+**0** — 다음 영역 그대로 보존:
+- TANK_DOCKING / IF_2 차단 영역 (v2.15.2 fix 영역 그대로)
+- SELF_INSPECTION / INSPECTION 정상 close (Sprint 55 3-C 분기)
+- Single Final (TMS/PI/QI/SI) 정상 close
+- Second Close 트리거 (사용자 검증 ✅)
+- FE 다이얼로그 영역
+- DB schema
+
+영향 영역 = AUTO_FINALIZE_BLOCKED_TASK_IDS 추가된 9개 일반 phase task + HEATING_JACKET 만. 기존 close 트리거 영역 모두 정상 유지.
+
+## 교차검증 필수 항목 (Codex 라운드 1 이관 체크리스트)
+
+- ✅ 비즈니스 로직 변경 (auto_finalize 차단 범위 확장)
+- ✅ Sprint 55 (3-C) 분기 영역 호환성 (SECOND_FINAL / SINGLE_FINAL 영역 정상 진입 검증)
+- ✅ 응답 schema 추가 (auto_finalize_blocked 플래그)
+- ✅ 사용자 흐름 매트릭스 정합 (MECH + ELEC + DRAGON/SWS)
+- ✅ 회귀 위험 검증 (Second Close 트리거 영역 작동 확인 — 사용자 검증 ✅)
+
+→ **Codex 라운드 1 검증 핵심 영역**:
+1. `AUTO_FINALIZE_BLOCKED_TASK_IDS` 의 11개 task ID 정합 (task_seed.py 와 cross-check)
+2. `is_auto_finalize_blocked` 분기 후 Sprint 55 (3-C) 분기 도달 정합 — 차단 분기 즉시 return 후 다음 분기 진입 X
+3. 응답 플래그 `auto_finalize_blocked` (신규) vs `first_final_blocked` (호환성 보존) 영역 일관성
+4. SECOND_FINAL 영역 (SELF_INSPECTION, INSPECTION) 차단 set 미포함 → Sprint 55 (3-C) 강제 finalize=true 분기 도달 정합 검증
+5. DRAGON/SWS 모델 영역 (TANK_DOCKING is_applicable=FALSE) → AUTO_FINALIZE_BLOCKED_TASK_IDS 영역 매칭되지만 호출 자체 미발동 영역 정합
+6. pytest TC-FF-01e~01j 영역 mock 검증 (auto_finalize 분기 진입 X 가드)
+
+## 검증 기준
+
+### 설계 단계 (Codex 라운드 1)
+
+- [ ] AUTO_FINALIZE_BLOCKED_TASK_IDS 11개 task ID — task_seed.py 매칭 정합
+- [ ] `is_auto_finalize_blocked` 분기 후 즉시 return — Sprint 55 (3-C) 분기 도달 안 함 확인
+- [ ] SECOND_FINAL 영역 (SELF_INSPECTION, INSPECTION) — set 영역 외 + Sprint 55 (3-C) 분기 진입 정합
+- [ ] 응답 플래그 `auto_finalize_blocked` vs `first_final_blocked` 영역 일관성 + FE 영향 0 검증
+- [ ] DRAGON/SWS 모델 — TANK_DOCKING is_applicable=FALSE 시 분기 진입 영역 (start_work 가드)
+
+### 구현 단계
+
+- [ ] pytest 신규 6 TC + 수정 3 TC = 9 TC 영역 GREEN
+- [ ] 회귀 검증 — v2.15.0 시점 23 TC 영역 + v2.15.2 시점 3 TC 영역 모두 GREEN
+- [ ] flutter build web 영향 0 (FE 변경 0)
+
+### 배포 후
+
+- [ ] Railway 자동 재배포 후 운영 영역 사용자 측 재현 검증 (gas1/util1 영역 "내 작업만 종료" → task open 유지)
+- [ ] Sentry 새 ERROR 0건 (1주 관찰)
+- [ ] Manager Rollback 비율 추가 감소 검증 (4주 baseline 비교, v2.15.2 시점 baseline 대비)
+
+## 연관
+
+- 직전 sprint: Sprint 41-D / v2.15.0 / v2.15.1 / v2.15.2
+- v2.15.2 fix 영역 (즉시 return) 그대로 보존 + 차단 범위 확장 만 적용
+- ADR-029 후속 사례 보강 — step-by-step 점검 영역 효과 입증 (cowork 측 의도 변형 catch trail)
+- 별 sprint (BACKLOG): FEAT-RELAY-FIRST-FINAL-ANALYTICS-DASHBOARD-20260513 (4주 baseline 후 VIEW 진행)
+
+## ADR-029 후속 사례 보강 (memory.md 별 영역)
+
+본 HOTFIX 가 입증한 영역:
+
+```
+[Tier 2 검증 절차 후속 사례 trail (2026-05-14)]
+
+사례 1: Sprint 41-D v2.15.0 결함 (auto_finalize 차단 분기 미작동)
+   ├ Codex 라운드 1+2 catch 누락
+   ├ pytest 23/23 GREEN (constants 검증만, 실제 동작 검증 누락)
+   └ 사용자 운영 catch 발견 (TEST-1111)
+
+사례 2: v2.15.3 차단 범위 확장 (Issue A — 사용자 의도 영역 좁힘)
+   ├ cowork v2.15.0/15.2 시점 First Final 만 차단 영역으로 좁힘
+   ├ 사용자 발화 "relay 한 명 참여 시" = ALL relay-able task 영역
+   └ step-by-step 점검 영역 (5-14) catch — 7 Step 매트릭스 영역 확정 후 fix
+
+학습 영역:
+   1. pytest TC 작성 시 constants 검증 vs 실제 동작 검증 분리 필수
+   2. 사용자 의도 영역 좁히지 말고 step-by-step 매트릭스 영역 확정 후 진행
+   3. 옵션 분석 시 단순 분기 (반전 로직) vs 명시적 set 영역 catch — 부수 영역 검증 (예: Second Final AND 조건 작동) 필수
+   4. cowork 가 catch 못한 영역 = 사용자 step-by-step 점검 영역 활용 (정신줄 보호자 역할 분담)
+```
+
+## 다음 응용 포인트
+
+- 신규 phase task 도입 시 AUTO_FINALIZE_BLOCKED_TASK_IDS 영역 갱신 (set 명시 영역 유지 보수)
+- 다른 카테고리 (예: PI/QI 다단계) 영역 동일 패턴 적용 가능 (set 확장)
+- Manager Rollback 비율 베이스라인 비교 (v2.15.0/15.2 vs v2.15.3) → 효과 측정
+
+---
+
+## Catch 2 — ELEC IF_2 데드락 해소 (옵션 X3-단순, 2026-05-14 추가)
+
+### 데드락 시나리오 영역
+
+```
+1. INSPECTION 작업자 → "완전 작업 종료" (finalize=true)
+   ↓ SECOND_FINAL 영역 → AND 검증 → IF_2 미완료 → task open 유지 (정상)
+
+2. IF_2 작업자 → "내 작업 종료" (finalize=false)
+   ↓ 옵션 B 차단 영역 (AUTO_FINALIZE_BLOCKED_TASK_IDS) → task open 유지
+
+3. ⚠️ AND 충족 영역 (INSPECTION 이미 close) but IF_2 영역 영원히 open
+   → Manager 가 결국 finalize=true 영역 명시 또는 Rollback 영역 필요
+```
+
+### 옵션 X3-단순 — ELEC 만 체크리스트 영역 연계 (사용자 결정, 2026-05-14)
+
+사용자 발화 (5-14):
+> "if2(내작업완료) + 자주검사com + (체크리스트 100%) → task close"
+
+→ AND 조건 영역 확장 — 체크리스트 영역 100% 도달 시점 트리거 추가.
+
+### 새 AND 조건 영역 (ELEC 만)
+
+```python
+def check_elec_close_eligible(serial_number: str) -> bool:
+    """
+    ELEC task close 영역 — 3 영역 AND 조건 검증 (Sprint 41-D HOTFIX v2.15.3 옵션 X3-단순)
+    
+    영역:
+    1. IF_2 complete
+    2. INSPECTION complete
+    3. ELEC 체크리스트 100% (활성 항목 check_result IS NOT NULL)
+    """
+    if not check_elec_final_tasks_completed(serial_number):
+        return False    # IF_2 / INSPECTION 미완료
+    from app.services.checklist_service import check_elec_completion
+    if not check_elec_completion(serial_number):
+        return False    # 체크리스트 영역 100% 미달
+    return True
+```
+
+### task_service.py 영역 변경 (옵션 X3-단순 추가)
+
+```python
+# complete_work() 영역 — 옵션 B 차단 분기 안에 ELEC IF_2 sub-분기 추가
+
+if is_auto_finalize_blocked and not finalize:
+    # ⭐ NEW (v2.15.3 옵션 X3-단순): ELEC IF_2 영역 AND 조건 + 체크리스트 영역 사전 검증
+    if task.task_category == 'ELEC' and task.task_id == 'IF_2':
+        if check_elec_close_eligible(task.serial_number):
+            # 3 영역 AND 충족 (IF_2 complete + INSPECTION complete + 체크리스트 100%)
+            # → 옵션 B 차단 우회 + finalize=True 강제 → 정상 close 진행
+            finalize = True
+            logger.info(
+                f"Sprint 41-D v2.15.3 옵션 X3 — ELEC IF_2 데드락 해소: "
+                f"AND + 체크리스트 100% 충족 → auto finalize"
+            )
+            # 차단 분기 skip → 아래 Sprint 55 (3-C) 분기 진입 → Second Close 트리거
+        else:
+            # AND 미충족 또는 체크리스트 영역 미달 → 옵션 B 차단 (즉시 return)
+            ...    # 기존 차단 영역 (work_completion_log + return)
+    else:
+        # 다른 task 영역 (gas1 등) → 정상 차단
+        ...    # 기존 차단 영역
+```
+
+### 데드락 해소 검증 시나리오
+
+```
+[옵션 X3-단순 적용 후 — 데드락 해소 영역]
+
+1. INSPECTION 작업자 → "완전 작업 종료" → task close ✅
+
+2. 작업자 → ELEC 체크리스트 마지막 항목 입력 → 100% 도달 ✅
+
+3. IF_2 작업자 → "내 작업 종료" (finalize=false)
+   ↓ 옵션 B 차단 분기 진입
+   ↓ ⭐ ELEC IF_2 sub-분기 — check_elec_close_eligible() 사전 검증
+   ↓ 3 영역 AND 충족 (INSPECTION + 체크리스트 100% + 본인 IF_2 complete 시점)
+   ↓ finalize=True 강제 → Sprint 55 (3-C) 분기 진입 → Second Close 트리거 → task close ✅
+```
+
+→ 운영자 별도 명시 영역 없이 자동 close 진행. 데드락 해소 ✅.
+
+### MECH / TM 영역 — 본 sprint 영역 외 (별 sprint 영역)
+
+사용자 결정 영역 (5-14):
+- MECH 영역 → SELF_INSPECTION = Single-like 영역 → 데드락 없음 (Sprint 55 3-C 강제 finalize=true 정합)
+- TM 영역 → PRESSURE_TEST = Single Final → 동일
+- MECH/TM 영역 체크리스트 영역 연계 → **별 sprint 영역** (REF-CATEGORY-COMPLETION-CONSOLIDATION-20260514) 영역에서 진행
+
+### 잔존 catch 영역 — 사용자 명시 잔존
+
+⚠️ **옵션 X3-단순 영역 잔존 catch**:
+- ELEC 체크리스트 영역 100% 미입력 시점 → IF_2 영원히 open (체크리스트 영역 미완료 = 사용자 의도 영역)
+- → 운영자 책임 영역 (체크리스트 영역 100% = 진짜 종료 의도 지표 영역 정합)
+
+### pytest TC 매트릭스 보강 (옵션 X3-단순)
+
+| TC | 검증 영역 | 신규/수정 |
+|---|---|:-:|
+| **TC-FF-01k (신규)** | ELEC IF_2 + INSPECTION complete + 체크리스트 100% + finalize=false → 자동 finalize=true → task close (데드락 해소) | 🆕 |
+| **TC-FF-01l (신규)** | ELEC IF_2 + INSPECTION complete + 체크리스트 50% + finalize=false → 옵션 B 차단 (task open) | 🆕 |
+| **TC-FF-01m (신규)** | ELEC IF_2 + INSPECTION 미완료 + 체크리스트 100% + finalize=false → 옵션 B 차단 (AND 미충족) | 🆕 |
+
+→ 신규 3 TC 추가. 총 v2.15.3 pytest 영역 = TC-FF-01b~01m (12 TC) + 기존 23 TC = **35 TC**.
+
+### 옵션 Y2 영역 정합 (사용자 결정, 2026-05-14)
+
+본 sprint (v2.15.3) 영역 = **ELEC 만 체크리스트 영역 연계 (옵션 X3-단순)** ✅
+별 sprint 영역 = REF-CATEGORY-COMPLETION-CONSOLIDATION-20260514 (P2, ~4~6h)
+- 공용 모듈 영역 `completion_checker.py` 신규
+- MECH / ELEC / TM 영역 통합 영역
+- task_service / production / progress_service / checklist_service 영역 4개 영역 공용 영역 호출
+
+### Codex 라운드 1 위임 전 — 사전 catch 5건 정리 (2026-05-14)
+
+cowork 사전 검토 진행 + 5건 catch 정리. Codex 라운드 1 위임 전 마무리.
+
+#### Catch 1 — TMS TANK_MODULE 의도된 제외 ✅ 확정
+
+**사용자 발화 (5-14)**:
+> "tank module은 상관없음 mech, elec task에만 적용하면되"
+
+→ TMS TANK_MODULE 은 AUTO_FINALIZE_BLOCKED_TASK_IDS 의도된 제외. Sprint 55 일반 auto-finalize 작동 → 한 명 참여 시 task close (정상 동작).
+
+**SINGLE_FINAL_TASK_IDS 영역 변경 0**:
+```python
+SINGLE_FINAL_TASK_IDS = {
+    ('TMS', 'PRESSURE_TEST'),
+    ('PI', 'PI_CHAMBER'),
+    ('QI', 'QI_INSPECTION'),
+    ('SI', 'SI_SHIPMENT'),
+}
+# ('TMS', 'TANK_MODULE') 미포함 = 사용자 의도 정합
+```
+
+#### Catch 2 — ELEC IF_2 AND 조건 작업자 선택 의존 동작 명시
+
+**시나리오 분석**:
+- "내 작업만 종료" (finalize=false) → 옵션 B 차단 → task open 유지
+- "아니오, 작업 완료" (finalize=true) → 옵션 B 미진입 → Sprint 55 (3-C) 강제 close
+
+→ 데드락 아님. 작업자 다이얼로그 선택 의존 동작.
+
+**옵션 X3-단순 적용 후 추가 해소**:
+- IF_2 + INSPECTION complete + 체크리스트 100% → finalize=false 호출해도 자동 finalize=true 강제 → close
+
+**Manager force-close 시나리오 명시**:
+잔존 edge case (체크리스트 100% 미도달 + 작업자 "내 작업만 종료" 만 누름) → Manager 가 `/api/app/work/reactivate-task` 또는 `/api/admin/tasks/<id>/force-close` 영역 호출 가능. 운영 표준.
+
+#### Catch 3 — 응답 플래그 호환성 ❌ 무효 (보존 결정)
+
+**검증**: `first_final_blocked` 플래그 FE Flutter + AXIS-VIEW 양쪽 grep 결과 0건 사용 → 호환성 영향 0.
+
+**보존 결정**: v2.15.2 release 후 1일 짧은 기간 + 향후 추가 사용 가능성 대비 → 보존. 단, 미래 1개월 후 미사용 확인 시 정리 가능.
+
+#### Catch 4 — complete_work() is_applicable 가드 추가 (본 hotfix 흡수, +5 LoC)
+
+**현 상태**: `start_work()` L86-89 만 가드. `complete_work()` 가드 없음 → edge case (DB 직접 시작 후 is_applicable=FALSE 변경) 영역 catch.
+
+**정정 (본 hotfix 흡수)**: `complete_work()` 초입에 가드 추가:
+
+```python
+def complete_work(self, worker_id: int, task_detail_id: int, finalize: bool = True):
+    task = get_task_by_id(task_detail_id)
+    if not task:
+        return {'error': 'TASK_NOT_FOUND', ...}, 404
+    
+    # ⭐ NEW (v2.15.3 Catch 4 — Advisory 흡수): is_applicable 가드
+    if not task.is_applicable:
+        return {
+            'error': 'TASK_NOT_APPLICABLE',
+            'message': '비활성화된 작업입니다.'
+        }, 400
+    # ...
+```
+
+→ 작업량 5 LoC. 회귀 위험 0 (start_work 동일 패턴).
+
+#### Catch 5 — pytest TC 추가 권고 (본 hotfix 흡수, +2 TC)
+
+| TC | 검증 |
+|---|---|
+| **TC-FF-01n (신규)** | 옵션 B 차단 분기 진입 후 Sprint 55 (3-C) 분기 미진입 assertion (mock + flag) |
+| **TC-FF-01o (신규)** | MECH gas1 케이스 응답 schema 동시 검증 (`auto_finalize_blocked=True` + `first_final_blocked=False`) |
+
+→ 본 hotfix pytest 매트릭스 12 TC → **14 TC**. 안전성 ↑.
+
+### Codex 라운드 1 catch 영역 정정 (2026-05-14)
+
+라운드 1 결과: M=1 / A=2 / N=4 (정합 매우 양호). M-1 사전 정정 + A-1 보강 + A-2 본 hotfix 흡수.
+
+#### M-1 정정 — work.py route 응답 forward 누락 + 상수 위치 명시 (필수)
+
+**catch**:
+- `routes/work.py` L269-287 forward 매핑 영역에 신규 플래그 2건 누락:
+  - `first_final_blocked` (v2.15.2 도입)
+  - `auto_finalize_blocked` (v2.15.3 신규)
+- AUTO_FINALIZE_BLOCKED_TASK_IDS 상수 위치 미명시
+
+**정정**:
+
+```python
+# routes/work.py complete_work_route() L269-287 영역 forward 매핑 정정
+# 기존:
+forward_keys = [
+    'category_completed', 'task_finished', 'relay_mode',
+    'duration_warnings', 'checklist_ready', 'elec_close_blocked',
+    # ❌ 누락: 'first_final_blocked', 'auto_finalize_blocked'
+]
+
+# 정정 (Sprint 41-D v2.15.3 Codex M-1 정정):
+forward_keys = [
+    'category_completed', 'task_finished', 'relay_mode',
+    'duration_warnings', 'checklist_ready', 'elec_close_blocked',
+    'first_final_blocked',      # ⭐ v2.15.2 신규 (호환 보존)
+    'auto_finalize_blocked',     # ⭐ v2.15.3 신규 (Issue A 정합)
+]
+```
+
+**상수 위치 명시**: `task_service.py L47-94` 영역 — 기존 `FIRST_FINAL_TASK_IDS` / `SECOND_FINAL_TASK_IDS` / `SINGLE_FINAL_TASK_IDS` 영역 직후 (모듈 상단 집약 패턴 정합).
+
+→ 영향 0 (FE/VIEW 측 미사용 검증 완료) + spec 충족 위해 구현 시 필수 반영.
+
+#### A-1 보강 — pytest TC 매트릭스 추가 (구현 시 작성)
+
+**catch**:
+- TC-FF-01e~01j (Issue A 6 TC) 아직 미생성 — 구현 시 신규 작성 필요
+- HEATING_JACKET 전용 TC 누락
+- UTIL_LINE_2 전용 TC 누락
+- TC-FF-01h `CABINET_PREP` / `IF_1` 커버 불명확
+- `mock_all_done.assert_not_called()` TC-FF-01b 만 보유, 01c 누락
+
+**정정 — parametrize 패턴 권장**:
+
+```python
+@pytest.mark.parametrize('task_category,task_id', [
+    ('MECH', 'TANK_DOCKING'),
+    ('MECH', 'WASTE_GAS_LINE_1'),
+    ('MECH', 'UTIL_LINE_1'),
+    ('MECH', 'WASTE_GAS_LINE_2'),
+    ('MECH', 'UTIL_LINE_2'),
+    ('MECH', 'HEATING_JACKET'),    # 향후 admin 토글 true 대비
+    ('ELEC', 'IF_2'),
+    ('ELEC', 'PANEL_WORK'),
+    ('ELEC', 'CABINET_PREP'),
+    ('ELEC', 'WIRING'),
+    ('ELEC', 'IF_1'),
+])
+def test_ff_01e_to_01o_auto_finalize_blocked_set_coverage(task_category, task_id):
+    """11 task 전수 검증 — auto_finalize_blocked + assert_not_called() 매트릭스"""
+    # 1. response.get('auto_finalize_blocked') is True
+    # 2. response.get('first_final_blocked') == (task_category, task_id) in FIRST_FINAL_TASK_IDS
+    # 3. mock_all_done.assert_not_called() — auto_finalize 분기 미진입 검증
+    ...
+```
+
+→ 11 task × 3 assertion = 33 검증. 단일 parametrize TC 로 효율적 커버. TC-FF-01e~01o 영역 통합.
+
+#### A-2 정합 — 본 hotfix 흡수 + Manager force-close trail
+
+- complete_work() `is_applicable` 가드 — Catch 4 흡수 영역 (위 섹션) 정합 ✅
+- ELEC IF_2 AND 충족 후 finalize=false 영구 open — Manager force-close 시나리오 명시 영역 (Catch 2 trail) 정합 ✅
+
+#### N=4 정합 GREEN
+
+| # | 정합 영역 |
+|---|---|
+| N-1 | AUTO_FINALIZE_BLOCKED_TASK_IDS 11 task 정합 (task_seed.py cross-check 0건 불일치) |
+| N-2 | 분기 정합성 — 옵션 C 치명 결함 catch 정합 |
+| N-3 | 회귀 위험 0 — TANK_DOCKING/IF_2/SELF_INSPECTION/INSPECTION/SINGLE_FINAL 변경 0 |
+| N-4 | DRAGON/SWS/MITHAS/SDS 모델 분기 정합 |
+
+### HEATING_JACKET 영역 trail (사용자 catch 2026-05-14)
+
+**사용자 catch**:
+> "heatingjacket task는 내가 옵션 false로 활성화 되있는 않은 task인데 무슨 얘기 인지 다시 설명해줘"
+
+**현 상태**:
+- `admin_settings.heating_jacket_enabled = False` (운영 영역 현재)
+- task_seed.py L430-431: `is_applicable=False` 반환 → 작업자 시작 불가
+
+**옵션 A 채택 (cowork 권장, 2026-05-14)**:
+- 향후 admin 토글 true 변경 대비 사전 등록
+- 현 시점 무영향 (매칭 시점 자체 없음)
+- 코드 수정 없이 admin 토글만으로 자동 동작
+- 다른 모델 분기 비활성 task (예: DRAGON TANK_DOCKING) 영역과 동일 패턴
+
+→ AUTO_FINALIZE_BLOCKED_TASK_IDS 11 task 유지 (HEATING_JACKET 포함).
+
+### Codex 라운드 2 미진행 결정
+
+CLAUDE.md 핵심 규칙 6 "라운드 상한 1회" 정합 — M-1 단순 forward 추가 + 상수 위치 명시 = 핑퐁 비효율. 라운드 1 catch 직접 반영 후 구현 직진.
+
+### 최종 변경 영역 (v2.15.3 + Catch 4/5 + Codex M-1/A-1 흡수)
+
+| 파일 | 변경 |
+|---|---|
+| `task_service.py` | ~30 LoC (AUTO_FINALIZE_BLOCKED_TASK_IDS L47-94 상단 + 분기 정정 + complete_work is_applicable 가드) |
+| `routes/work.py` | ~2 LoC (forward 매핑 2 키 추가) |
+| `tests/backend/test_relay_first_final.py` | +14 TC (parametrize 패턴 + 응답 schema + assert_not_called 매트릭스) |
+| 기타 trail | CHANGELOG / BACKLOG / handoff / memory / Sprint 41-D 본문 |
+
+### 사용자 측 진행 영역
+
+설계서 정정 완료. 사용자 측 결정:
+- (1) cowork 측 모두 진행 (설계서 정정 + 코드 구현 + pytest 작성, ~2시간)
+- (2) cowork 측 설계서만 + 사용자 측 코드 구현 + pytest
+- (3) 단계별 step 분리
+
+---
+
+### ⭐ HOTFIX-SPRINT41D 완료 후 재논의 영역 (사용자 부탁, 2026-05-14)
+
+사용자 부탁 영역 (cowork 측 영역 기억 필수):
+- HOTFIX-SPRINT41D 시리즈 (v2.15.0/15.1/15.2/15.3) 완료 시점 → REF-CATEGORY-COMPLETION-CONSOLIDATION 영역 + 실적 카운트 영역 연계 + 카테고리별 close 조건 영역 통합 영역 재논의 영역
+
+재논의 영역 후보 (사용자 발화 5-14 정합):
+1. 실적 카운트 조건 영역 — TM: tank_module com + 체크리스트 100% / ELEC: task progress 100% + 자주검사 + 체크리스트 100% / MECH: task progress 100% + 자주검사 + 체크리스트 100% (최근 추가)
+2. 공용 모듈 영역 (`completion_checker.py`) 도입
+3. task_service / production / progress_service / checklist_service 영역 통합 영역
+4. refactor 부담 영역 점진적 해소 영역
+
+→ handoff.md 영역 + memory.md 영역 trail 보존 영역.
+
+---
+
 ## Sprint 41-D — Relay First Final Logic + 자동 정리 트리거 (2026-05-11 등록)
 
 > 등록일: 2026-05-11 | 상태: 설계 완료 → Codex 라운드 1 검증 대기 → 구현 착수

@@ -6,6 +6,105 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.15.3] - 2026-05-14 — HOTFIX-SPRINT41D-AUTO-FINALIZE-RANGE-EXTENSION (Issue A 차단 범위 확장)
+
+> v2.15.2 잔존 catch — FIRST_FINAL (TANK_DOCKING, IF_2) 만 차단되고 gas1/util1/PRE_DOCKING phase task 영역 여전히 Sprint 55 auto-finalize 작동 → 사용자 의도 ("relay 한 명 참여 시 close 방지 = 모든 relay-able task") 미충족. 옵션 B Allowlist (`AUTO_FINALIZE_BLOCKED_TASK_IDS` 11 task) 채택으로 확장 + Codex 라운드 1 M-1 catch (work.py forward 누락) 정정.
+
+### 변경 (3 파일)
+
+| 파일 | 변경 |
+|------|-----|
+| `backend/app/services/task_service.py` | `AUTO_FINALIZE_BLOCKED_TASK_IDS` set (11 task) 신규 + 분기 정정 (`is_first_final` → `is_auto_finalize_blocked`) + 응답 `auto_finalize_blocked` 신규 + `first_final_blocked` 호환성 보존 |
+| `backend/app/routes/work.py` | forward 매핑 영역 `first_final_blocked` + `auto_finalize_blocked` 2 키 추가 (Codex M-1 정정) |
+| `tests/backend/test_relay_first_final.py` | parametrize TC 11 task 매트릭스 + SELF_INSPECTION 회귀 방지 TC (TC-FF-01b/c/d 보강 + 신규 12) |
+
+### 동작 변경
+
+| 시나리오 | v2.15.2 | v2.15.3 |
+|---------|:-:|:-:|
+| **gas1 / util1 / gas2 / util2 + 한 명 참여 + finalize=false** | ❌ close | ✅ open |
+| **panel / cabinet / wiring / IF_1 + 한 명 참여 + finalize=false** | ❌ close | ✅ open |
+| **HEATING_JACKET + finalize=false** | ❌ close | ✅ open (admin 토글 false 대비) |
+| TANK_DOCKING / IF_2 + finalize=false | ✅ open | ✅ open |
+| SELF_INSPECTION / INSPECTION + finalize=false | ✅ 강제 close | ✅ 동일 (Sprint 55 3-C) |
+| TMS PRESSURE_TEST / PI / QI / SI + finalize=false | ✅ 강제 close | ✅ 동일 |
+
+### 옵션 B vs C 차이 catch
+
+- 옵션 C (Denylist 반전): SECOND_FINAL 영역도 차단 → Sprint 55 (3-C) 영원히 미작동 → AND 조건 미작동 (치명적 결함)
+- 옵션 B (명시적 Allowlist): SECOND_FINAL / SINGLE_FINAL 제외 → Sprint 55 (3-C) 정상 진입
+
+### Codex 검증 trail
+
+- 라운드 1: M=1 / A=2 / N=4 → M-1 (work.py forward) + A-1 (parametrize TC) 정정 반영
+- 라운드 2 미진행 (CLAUDE.md 핵심 규칙 6 "라운드 상한 1회" 정합)
+
+### pytest 결과
+
+- **신규 v2.15.3 12 TC** + 기존 26 TC = **38 TC GREEN** (20초)
+- 회귀 (test_work_api.py): 8/8 PASS (3분 56초)
+- 총 46/46 GREEN
+
+### 회귀 위험 0
+
+- TANK_DOCKING / IF_2 차단 (v2.15.2 fix) 그대로 보존
+- SELF_INSPECTION / INSPECTION 정상 close (Sprint 55 3-C 분기 도달) 정합
+- Second Close 트리거 (사용자 검증 ✅) 변경 0
+- FE 다이얼로그 (`_kFinalTaskIds` v2.15.1 정합) 변경 0
+- DB schema 변경 0
+
+### 사용자 결정 (5-13~14)
+
+- TMS TANK_MODULE: 제외 (사용자 결정)
+- HEATING_JACKET: 포함 — admin 토글 false 대비 사전 등록
+
+---
+
+## [2.15.2] - 2026-05-14 — Sprint 41-D BE 후속 hotfix (auto-finalize 차단 결함 fix)
+
+> **사용자 catch**: v2.15.0 + v2.15.1 배포 후에도 운영 영역 "내 작업만 종료 → task close 발생" 사고 재현. **Root cause**: `task_service.py` L363-369 의 First Final 차단 분기가 `logger.info` 만 출력하고 `finalize` 변수 그대로 False 유지 → L408 auto_finalize 분기 진입 → `_all_workers_completed=True` (한 명 참여) 시 `auto_finalized=True` 트리거 → **task close 발생 (의도와 반대)**. 즉 의도된 즉시 return 누락 결함. 설계서 (AGENT_TEAM_LAUNCH.md Sprint 41-D L478-499) 는 즉시 return 명시했으나 구현 단계에서 logger.info 만으로 단순화. pytest 23/23 GREEN 이었으나 TC-FF-01~05 명시 영역이 실제로는 constants/phase map 검증만 작성되어 본 결함 catch 누락.
+
+### 변경 (BE only, 2 파일)
+
+| 파일 | 변경 |
+|------|-----|
+| `backend/app/services/task_service.py` L353-378 | First Final 차단 분기 정정 — logger.info only → 즉시 return (work_completion_log 기록 + pause 자동 resume 흡수 + `first_final_blocked=True` 응답 플래그 추가) |
+| `tests/backend/test_relay_first_final.py` | 신규 3 TC (TC-FF-01b/01c/01d) — First Final 차단 실제 동작 검증 (mock `_all_workers_completed=True` 시 즉시 return 확인 + Single Final 정상 종료 회귀 방지) |
+
+### Sprint 41-D 결함 회귀 매트릭스
+
+| 시나리오 | v2.15.0/15.1 (결함) | v2.15.2 (fix) |
+|---------|:-:|:-:|
+| ELEC IF_2 + 한 명 참여 + finalize=false | ❌ task close (auto_finalize 트리거) | ✅ task open 유지 (즉시 return) |
+| MECH TANK_DOCKING + 한 명 참여 + finalize=false | ❌ task close | ✅ task open 유지 |
+| TMS PRESSURE_TEST + finalize=false (Single Final) | ✅ 정상 close (강제 finalize=true) | ✅ 동일 (회귀 0) |
+| First Final + 멀티 worker 진행 중 + finalize=false | ✅ task open (의도 정합) | ✅ 동일 |
+| First Final + finalize=true 명시 호출 | ✅ 정상 close | ✅ 동일 |
+
+### 응답 schema 추가
+
+- `first_final_blocked: bool` — First Final 차단 분기 실행 여부 (FE 인지용 신규 플래그)
+
+### Codex 검증 trail catch (사후)
+
+- v2.15.0 Codex 라운드 1+2 정정 12건 GREEN 후 구현 진입
+- 그러나 **본 결함은 두 라운드 모두 catch 누락** — 설계서 즉시 return 영역 vs 구현 logger.info 단순화 불일치
+- pytest 23 TC 가 GREEN 이지만 TC-FF-01~05 명시 영역이 실제로는 constants 검증만 → 동작 검증 누락
+- 사용자 운영 catch 가 결국 발견 영역
+
+### 운영 검증
+
+- pytest 신규 3 TC + 기존 23 TC = 26/26 PASS 예상
+- 회귀 위험 0 (FE 변경 0, BE 단일 분기 정정, Single Final 영역 보존)
+- Railway 자동 재배포 후 운영 영역 사용자 측 검증 권장 (TEST-1111 사례 재현)
+
+### POST-REVIEW
+
+- 7일 이내 Codex 검토 (deadline 2026-05-21) — `POST-REVIEW-HOTFIX-SPRINT41D-AUTO-FINALIZE-NOT-BLOCKED-20260514`
+- ADR 후보: "pytest TC 작성 시 mock 영역 검증 vs 실제 동작 검증 분리 표준" — Sprint 41-D 영역 학습 trail
+
+---
+
 ## [2.15.1] - 2026-05-14 — Sprint 41-D FE 후속 hotfix (FE _kFinalTaskIds 정합)
 
 > 사용자 catch (TEST-1111) — "내 작업만 종료" 눌러도 task 가 닫혀서 진입 불가. Root cause: FE 측 `_kFinalTaskIds` set 에 `IF_2` 포함 → 다이얼로그 미표시 + 항상 `finalize=true` 강제 전송 → BE 측 Sprint 41-D First Final 차단 로직 우회. v2.15.0 BE only 가정 오류 — FE 측 동일 set 정합 필수.

@@ -78,6 +78,35 @@ SINGLE_FINAL_TASK_IDS: Set[Tuple[str, str]] = {
     ('SI',  'SI_SHIPMENT'),
 }
 
+# Sprint 41-D HOTFIX v2.15.3 (2026-05-14): Issue A 차단 범위 확장 — 옵션 B Allowlist
+# 의미: relay-able task 의 한 명 참여 + finalize=false 시 task close 차단
+# 사용자 의도 정합 (5-14 step-by-step 점검 확정):
+#   MECH gas1/util1 → TANK_DOCKING → gas2/util2 → SELF_INSPECTION
+#   ELEC panel/cabinet/wiring/if1 → IF_2 → IF_2+INSPECTION AND
+# Codex 라운드 1 N-1 정합 (task_seed.py cross-check 0건 불일치)
+AUTO_FINALIZE_BLOCKED_TASK_IDS: Set[Tuple[str, str]] = {
+    # FIRST_FINAL (start 시점에 First Close 트리거도 별 호출)
+    ('MECH', 'TANK_DOCKING'),
+    ('ELEC', 'IF_2'),
+    # MECH 일반 phase (PRE_DOCKING + POST_DOCKING + HEATING_JACKET admin 토글 영역)
+    ('MECH', 'WASTE_GAS_LINE_1'),
+    ('MECH', 'UTIL_LINE_1'),
+    ('MECH', 'WASTE_GAS_LINE_2'),
+    ('MECH', 'UTIL_LINE_2'),
+    ('MECH', 'HEATING_JACKET'),
+    # ELEC 일반 phase (PRE_DOCKING)
+    ('ELEC', 'PANEL_WORK'),
+    ('ELEC', 'CABINET_PREP'),
+    ('ELEC', 'WIRING'),
+    ('ELEC', 'IF_1'),
+    # ⚠️ SECOND_FINAL (SELF_INSPECTION, INSPECTION) 포함 안 함
+    #    → Sprint 55 (3-C) 강제 finalize=true 분기로 정상 close 진행
+    #    → MECH SELF_INSPECTION → Second Close 트리거 작동 (사용자 검증 ✅)
+    #    → ELEC INSPECTION + IF_2 AND 조건 → Second Close 트리거 작동 (사용자 검증 ✅)
+    # ⚠️ SINGLE_FINAL (TMS/PI/QI/SI) 포함 안 함 — Sprint 55 (3-C) 정상 close
+    # ⚠️ TMS TANK_MODULE 포함 안 함 — 사용자 결정 (5-14)
+}
+
 # Sprint 41-D M-1: PHASE_MAP module-level constant 추출
 # task_seed.py phase 정의와 sync — phase 변경 시 양쪽 동기화 필수 (DOC drift 방지)
 FIRST_FINAL_PREVIOUS_PHASE_MAP: Dict[Tuple[str, str], Set[str]] = {
@@ -356,21 +385,62 @@ class TaskService:
         is_first_final = (task.task_category, task.task_id) in FIRST_FINAL_TASK_IDS
         is_second_final = (task.task_category, task.task_id) in SECOND_FINAL_TASK_IDS
         is_single_final = (task.task_category, task.task_id) in SINGLE_FINAL_TASK_IDS
+        # ⭐ HOTFIX v2.15.3 (Issue A): 차단 범위 확장 — FIRST_FINAL + 일반 phase task 9개
+        is_auto_finalize_blocked = (task.task_category, task.task_id) in AUTO_FINALIZE_BLOCKED_TASK_IDS
 
-        # ELEC IF_2 는 양쪽 멤버 — Second Final 트리거는 IF_2 + INSPECTION AND 조건 충족 시만 작동
-        # First Final auto_finalize 차단: ELEC IF_2 는 항상 차단 (Second Close 가 AND 조건 검증 후 처리)
-        # MECH TANK_DOCKING 은 SECOND_FINAL 멤버 아님 → 항상 First Final 만
-        if is_first_final and not is_single_final and not finalize:
-            # First Final 영역 = auto_finalize 차단 (한 명 참여여도 task open 유지)
-            logger.info(
-                f"Sprint 41-D First Final auto-finalize blocked: task_id={task_detail_id}, "
-                f"task_id_ref={task.task_id}"
+        # ⭐ HOTFIX-SPRINT41D-AUTO-FINALIZE-NOT-BLOCKED (v2.15.2, 2026-05-14)
+        # v2.15.0 결함: logger.info 만 출력 + finalize 그대로 False 유지 → L408 auto_finalize 분기에서
+        #   _all_workers_completed=True (한 명 참여) 시 auto_finalized=True → task close 발생 (의도와 반대)
+        # 정정 (v2.15.2): First Final 영역 즉시 return (relay_mode) + work_completion_log 기록 + pause 자동 resume
+        # ⭐ HOTFIX v2.15.3 (Issue A 차단 범위 확장):
+        #   - 사용자 의도 정합: gas1/util1/gas2/util2/panel/cabinet/wiring/IF_1 도 차단
+        #   - AUTO_FINALIZE_BLOCKED_TASK_IDS 영역 11 task 매칭 시 모두 차단
+        #   - SECOND_FINAL (SELF_INSPECTION, INSPECTION) 영역은 미포함 → Sprint 55 (3-C) 정상 close
+        #   - SINGLE_FINAL (TMS/PI/QI/SI) 영역도 미포함 → Sprint 55 (3-C) 정상 close
+        if is_auto_finalize_blocked and not finalize:
+            # 1. 본인 개인 pause 자동 resume (Sprint 55 3-D 패턴 흡수)
+            from app.models.work_pause_log import get_active_pause_by_worker, resume_pause
+            from app.models.task_detail import set_paused
+            my_pause = get_active_pause_by_worker(task_detail_id, worker_id)
+            if my_pause:
+                updated_pause = resume_pause(my_pause.id, completed_at)
+                if updated_pause:
+                    pause_duration = updated_pause.pause_duration_minutes or 0
+                    new_total_pause_minutes = task.total_pause_minutes + pause_duration
+                    set_paused(task_detail_id, is_paused=False, total_pause_minutes=new_total_pause_minutes)
+                    task = get_task_by_id(task_detail_id)
+                else:
+                    set_paused(task_detail_id, is_paused=False)
+                    task = get_task_by_id(task_detail_id)
+
+            # 2. work_completion_log 본인 row 기록 (relay 모드 정합 — duration 측정 보장)
+            this_worker_duration = _record_completion_log(
+                task=task,
+                worker_id=worker_id,
+                completed_at=completed_at,
             )
-            # finalize 그대로 False 유지 → 아래 L298 auto_finalize 로직 진입 안 함
+
+            # 3. 즉시 return — auto_finalize 분기 진입 차단
+            logger.info(
+                f"Sprint 41-D auto-finalize blocked (v2.15.3 옵션 B): task_id={task_detail_id}, "
+                f"task_id_ref={task.task_id}, worker_id={worker_id}, "
+                f"duration={this_worker_duration}m, is_first_final={is_first_final}"
+            )
+            return {
+                'message': '내 작업이 종료되었습니다. 다음 단계 진입 가능합니다.',
+                'task_id': task_detail_id,
+                'completed_at': completed_at.isoformat(),
+                'duration_minutes': this_worker_duration,
+                'category_completed': False,
+                'task_finished': False,
+                'relay_mode': True,
+                'auto_finalize_blocked': True,        # ⭐ HOTFIX v2.15.3 신규 (범용 플래그)
+                'first_final_blocked': is_first_final, # v2.15.2 호환성 보존 (FIRST_FINAL 영역만 True)
+            }, 200
 
         # Sprint 55 (3-C): SECOND/SINGLE FINAL task 만 finalize=true 강제 (릴레이 불가)
-        # First Final 은 위에서 명시적 차단됨
-        elif (is_second_final or is_single_final) and not finalize:
+        # First Final 은 위에서 명시적 차단됨 (즉시 return)
+        if (is_second_final or is_single_final) and not finalize:
             logger.info(
                 f"FINAL task forced finalize: task_id={task_detail_id}, "
                 f"task_name={task.task_id}"

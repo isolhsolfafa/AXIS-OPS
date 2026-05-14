@@ -1,7 +1,61 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-14 KST (✅ v2.15.0 minor release — Sprint 41-D Relay First Final Logic 구현 완료 / pytest 38/38 GREEN / Codex 라운드 1+2 정정 12건 반영 / 회귀 위험 0)
+> 마지막 업데이트: 2026-05-14 KST (📋 v2.15.3 설계서 영역 — Issue A 차단 범위 확장 + Catch 2 ELEC IF_2 데드락 해소 (옵션 X3-단순) + REF sprint 별 영역 분리 — Codex 라운드 1 검증 대기)
+
+---
+
+## ⭐ HOTFIX-SPRINT41D 시리즈 완료 후 재논의 영역 (사용자 부탁 2026-05-14)
+
+> **cowork 측 기억 필수 영역** — 사용자 부탁 "꼭 기억 하고 있어야되" (2026-05-14)
+
+### 재논의 영역 시점
+HOTFIX-SPRINT41D 시리즈 (v2.15.0/15.1/15.2/15.3) prod 배포 완료 + 운영 영역 안정성 검증 (1주) 후.
+
+### 재논의 영역 내용 (사용자 발화 5-14 정합)
+
+1. **실적 카운트 조건 영역 통합** — 카테고리별 close 조건 영역 명시:
+   - TM: tank_module com + 체크리스트 100%
+   - ELEC: task progress 100% + 자주검사 (INSPECTION) + 체크리스트 100%
+   - MECH: task progress 100% + 자주검사 (SELF_INSPECTION) + 체크리스트 100% (최근 추가)
+2. **공용 모듈 영역 도입** — `completion_checker.py` 신규
+3. **분산 영역 통합** — task_service / production / progress_service / checklist_service 영역 4건 공용 호출
+4. **refactor 부담 영역 점진적 해소** — Sprint 41-D 영역 분산 영역 안정화 후 단계적 영역 정리
+
+### 별 sprint 영역
+`REF-CATEGORY-COMPLETION-CONSOLIDATION-20260514` — BACKLOG.md 등록 완료 (P2, ~4~6h).
+
+### 진행 영역 트리거
+- HOTFIX-SPRINT41D v2.15.3 영역 prod 배포 완료 + 운영 영역 1주 관찰 + Sentry 새 ERROR 0건 → 재논의 영역 진입 가능
+
+---
+
+---
+
+## ✅ 2026-05-14 KST — v2.15.2 hotfix (HOTFIX-SPRINT41D-AUTO-FINALIZE-NOT-BLOCKED)
+
+> **한 줄 요약**: v2.15.0 + v2.15.1 배포 후에도 사용자 운영 영역 "내 작업만 종료 → task close 발생" 사고 재현. Root cause: `task_service.py` L363-369 First Final 차단 분기가 `logger.info` 만 출력 + `finalize` 변수 그대로 False 유지 → L408 auto_finalize 분기 진입 → `_all_workers_completed=True` (한 명 참여) 시 task close. 설계서는 즉시 return 명시했으나 구현 단계 단순화 영역 결함. pytest 23/23 GREEN 이었으나 TC-FF-01~05 가 constants 검증만 — 실제 동작 검증 누락.
+
+### 변경 (BE only, 2 파일)
+
+- `backend/app/services/task_service.py` L353-378 — 즉시 return + work_completion_log 기록 + pause 자동 resume 흡수 + `first_final_blocked=True` 응답 플래그 신규
+- `tests/backend/test_relay_first_final.py` — 신규 3 TC (TC-FF-01b/01c/01d) — `mock_all_done.assert_not_called()` 회귀 차단
+
+### Sprint 41-D 결함 매트릭스 (v2.15.0/15.1 → v2.15.2)
+
+| 시나리오 | Before (결함) | After (fix) |
+|---------|:-:|:-:|
+| ELEC IF_2 + 한 명 참여 + finalize=false | ❌ task close | ✅ task open 유지 |
+| MECH TANK_DOCKING + 한 명 참여 + finalize=false | ❌ task close | ✅ task open 유지 |
+| TMS PRESSURE_TEST (Single Final) | ✅ 정상 close | ✅ 동일 (회귀 0) |
+
+### 후속 액션
+
+1. Railway 자동 재배포 확인 (v2.15.2)
+2. **운영 영역 사용자 측 재현 검증** — TEST-1111 사례 (O/N 6588 GBWS UTIL_LINE_2) ELEC IF_2 영역 "내 작업만 종료" → task open 유지 확인
+3. pytest 신규 3 TC + 기존 23 TC = 26/26 PASS 검증 (CI 또는 수동)
+4. POST-REVIEW: 7일 이내 Codex 검토 (deadline 2026-05-21)
+5. ADR 후보 — "pytest TC 작성 시 constants 검증 vs 실제 동작 검증 분리 표준" 보강
 
 ---
 

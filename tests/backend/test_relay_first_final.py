@@ -452,3 +452,308 @@ def test_ff17_checklist_service_check_elec_completion_preserved():
     assert hasattr(checklist_service, 'check_elec_completion')
     assert hasattr(task_service, 'check_elec_final_tasks_completed')
     assert checklist_service.check_elec_completion is not task_service.check_elec_final_tasks_completed
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# HOTFIX-SPRINT41D-AUTO-FINALIZE-NOT-BLOCKED (v2.15.2, 2026-05-14)
+# v2.15.0 결함 catch: complete_work() L363-369 logger.info only + finalize 그대로 유지
+#                     → L408 auto_finalize 분기에서 _all_workers_completed=True 시 task close 발생
+# 정정 검증: First Final + finalize=False + 한 명 참여 → 즉시 return (relay_mode) 작동
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def test_ff01b_first_final_solo_worker_auto_finalize_blocked():
+    """
+    TC-FF-01b (HOTFIX v2.15.2): First Final + 한 명 참여 + finalize=False
+      → auto_finalize 분기 진입 X
+      → 응답: first_final_blocked=True + relay_mode=True + task_finished=False
+      → app_task_details.completed_at = NULL 유지 (재참여 가능)
+
+    v2.15.0 결함 회귀 차단용 TC. L363-378 의 즉시 return 분기 실제 작동 검증.
+    """
+    from unittest.mock import patch, MagicMock
+    from datetime import datetime
+    from app.config import Config
+    from app.services.task_service import TaskService
+
+    # Mock task — ELEC IF_2 (First Final + Second Final 양쪽 멤버)
+    mock_task = MagicMock()
+    mock_task.id = 12345
+    mock_task.task_category = 'ELEC'
+    mock_task.task_id = 'IF_2'
+    mock_task.task_name = 'I.F 2 (도킹 후)'
+    mock_task.serial_number = 'TEST-SN-001'
+    mock_task.qr_doc_id = 'DOC_TEST-SN-001'
+    mock_task.worker_id = 100
+    mock_task.started_at = datetime(2026, 5, 14, 9, 0, tzinfo=Config.KST)
+    mock_task.completed_at = None
+    mock_task.is_paused = False
+    mock_task.total_pause_minutes = 0
+
+    service = TaskService()
+
+    with patch('app.services.task_service.get_task_by_id', return_value=mock_task), \
+         patch('app.services.task_service._worker_has_started_task', return_value=True), \
+         patch('app.services.task_service._worker_already_completed_task', return_value=False), \
+         patch('app.services.task_service._record_completion_log', return_value=45) as mock_record, \
+         patch('app.models.work_pause_log.get_active_pause_by_worker', return_value=None), \
+         patch('app.services.task_service._all_workers_completed', return_value=True) as mock_all_done:
+        # 핵심: _all_workers_completed=True (한 명 참여 시뮬레이션)
+        # v2.15.0 결함이면 → auto_finalize 트리거 → task close
+        # v2.15.2 정정 → 즉시 return → task open 유지
+
+        response, status_code = service.complete_work(
+            worker_id=100,
+            task_detail_id=12345,
+            finalize=False,   # ⭐ 핵심 입력
+        )
+
+    # 검증 1: status 200
+    assert status_code == 200
+
+    # 검증 2: HOTFIX v2.15.3 신규 플래그 (auto_finalize_blocked 범용)
+    assert response.get('auto_finalize_blocked') is True, \
+        "❌ v2.15.3 옵션 B 회귀 — AUTO_FINALIZE_BLOCKED_TASK_IDS 분기 미작동"
+    # v2.15.2 호환 — ELEC IF_2 는 FIRST_FINAL 멤버
+    assert response.get('first_final_blocked') is True, \
+        "❌ v2.15.2 호환 회귀 — IF_2 는 FIRST_FINAL 멤버"
+
+    # 검증 3: relay_mode 응답
+    assert response.get('relay_mode') is True
+    assert response.get('task_finished') is False
+    assert response.get('category_completed') is False
+
+    # 검증 4: work_completion_log 본인 row 기록 (duration 측정 보장)
+    mock_record.assert_called_once()
+
+    # 검증 5: _all_workers_completed 호출 안 됨 (auto_finalize 분기 진입 X)
+    mock_all_done.assert_not_called(), \
+        "❌ v2.15.0 결함 회귀 — auto_finalize 분기 진입함 (즉시 return 누락)"
+
+
+def test_ff01c_mech_tank_docking_solo_worker_blocked():
+    """TC-FF-01c (HOTFIX v2.15.2): MECH TANK_DOCKING 도 동일 분기 — First Final 만 (SECOND 멤버 아님)"""
+    from unittest.mock import patch, MagicMock
+    from datetime import datetime
+    from app.config import Config
+    from app.services.task_service import TaskService
+
+    mock_task = MagicMock()
+    mock_task.id = 22222
+    mock_task.task_category = 'MECH'
+    mock_task.task_id = 'TANK_DOCKING'
+    mock_task.task_name = 'Tank Docking'
+    mock_task.serial_number = 'GAIA-TEST-001'
+    mock_task.qr_doc_id = 'DOC_GAIA-TEST-001'
+    mock_task.worker_id = 200
+    mock_task.started_at = datetime(2026, 5, 14, 10, 0, tzinfo=Config.KST)
+    mock_task.completed_at = None
+    mock_task.is_paused = False
+    mock_task.total_pause_minutes = 0
+
+    service = TaskService()
+
+    with patch('app.services.task_service.get_task_by_id', return_value=mock_task), \
+         patch('app.services.task_service._worker_has_started_task', return_value=True), \
+         patch('app.services.task_service._worker_already_completed_task', return_value=False), \
+         patch('app.services.task_service._record_completion_log', return_value=15), \
+         patch('app.models.work_pause_log.get_active_pause_by_worker', return_value=None), \
+         patch('app.services.task_service._all_workers_completed', return_value=True) as mock_all_done:
+        response, status_code = service.complete_work(
+            worker_id=200,
+            task_detail_id=22222,
+            finalize=False,
+        )
+
+    assert status_code == 200
+    # v2.15.3 옵션 B — auto_finalize_blocked 범용 플래그
+    assert response.get('auto_finalize_blocked') is True
+    # v2.15.2 호환 — TANK_DOCKING 은 FIRST_FINAL 멤버
+    assert response.get('first_final_blocked') is True
+    assert response.get('relay_mode') is True
+    assert response.get('task_finished') is False
+    # v2.15.0 결함 회귀 차단 — auto_finalize 분기 미진입
+    mock_all_done.assert_not_called()
+
+
+def test_ff01d_single_final_not_blocked_normal_close():
+    """TC-FF-01d (HOTFIX v2.15.2): SINGLE_FINAL (TMS PRESSURE_TEST) 은 차단 X — 정상 종료
+       (회귀 방지 — Single Final 영역까지 차단되면 안 됨)"""
+    from unittest.mock import patch, MagicMock
+    from datetime import datetime
+    from app.config import Config
+    from app.services.task_service import TaskService
+
+    mock_task = MagicMock()
+    mock_task.id = 33333
+    mock_task.task_category = 'TMS'
+    mock_task.task_id = 'PRESSURE_TEST'
+    mock_task.serial_number = 'TEST-SN-003'
+    mock_task.qr_doc_id = 'DOC_TEST-SN-003'
+    mock_task.worker_id = 300
+    mock_task.started_at = datetime(2026, 5, 14, 11, 0, tzinfo=Config.KST)
+    mock_task.completed_at = None
+    mock_task.is_paused = False
+    mock_task.total_pause_minutes = 0
+
+    service = TaskService()
+
+    # Single Final 영역은 finalize=False 호출 시 강제 True 변환 → 정상 close
+    with patch('app.services.task_service.get_task_by_id', return_value=mock_task), \
+         patch('app.services.task_service._worker_has_started_task', return_value=True), \
+         patch('app.services.task_service._worker_already_completed_task', return_value=False), \
+         patch('app.services.task_service._record_completion_log', return_value=120), \
+         patch('app.models.work_pause_log.get_active_pause_by_worker', return_value=None), \
+         patch('app.services.task_service._all_workers_completed', return_value=True), \
+         patch('app.services.task_service._finalize_task_multi_worker',
+               return_value={'duration_minutes': 120, 'elapsed_minutes': 120, 'worker_count': 1}), \
+         patch('app.services.task_service.complete_task', return_value=True), \
+         patch('app.services.duration_validator.validate_duration', return_value={'warnings': []}), \
+         patch.object(service, '_trigger_second_close'):
+        response, status_code = service.complete_work(
+            worker_id=300,
+            task_detail_id=33333,
+            finalize=False,
+        )
+
+    assert status_code == 200
+    # Single Final 은 차단 플래그 없음 + 정상 종료
+    assert response.get('first_final_blocked') is None
+    # v2.15.3 옵션 B — Single Final 영역은 auto_finalize_blocked 미발동
+    assert response.get('auto_finalize_blocked') is None
+    assert response.get('task_finished') is True
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# HOTFIX-SPRINT41D-AUTO-FINALIZE-RANGE-EXTENSION (v2.15.3, 2026-05-14)
+# 옵션 B Allowlist — AUTO_FINALIZE_BLOCKED_TASK_IDS 11 task 전수 검증
+# Codex 라운드 1 A-1 정합 — parametrize 패턴으로 효율적 커버
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.parametrize('task_category,task_id,is_first_final_expected', [
+    # FIRST_FINAL (2)
+    ('MECH', 'TANK_DOCKING', True),
+    ('ELEC', 'IF_2', True),
+    # MECH 일반 phase (5)
+    ('MECH', 'WASTE_GAS_LINE_1', False),
+    ('MECH', 'UTIL_LINE_1', False),
+    ('MECH', 'WASTE_GAS_LINE_2', False),
+    ('MECH', 'UTIL_LINE_2', False),
+    ('MECH', 'HEATING_JACKET', False),
+    # ELEC 일반 phase (4)
+    ('ELEC', 'PANEL_WORK', False),
+    ('ELEC', 'CABINET_PREP', False),
+    ('ELEC', 'WIRING', False),
+    ('ELEC', 'IF_1', False),
+])
+def test_ff_v2153_auto_finalize_blocked_set_coverage(task_category, task_id, is_first_final_expected):
+    """TC-FF-01e~01o (HOTFIX v2.15.3 Issue A): AUTO_FINALIZE_BLOCKED_TASK_IDS 11 task 전수 검증.
+
+    각 task 에 대해:
+    1. response.get('auto_finalize_blocked') is True — 범용 플래그
+    2. response.get('first_final_blocked') == is_first_final_expected — 호환성 보존
+    3. response.get('task_finished') is False — task open 유지
+    4. response.get('relay_mode') is True
+    5. mock_all_done.assert_not_called() — auto_finalize 분기 미진입 (v2.15.0 결함 회귀 차단)
+    """
+    from unittest.mock import patch, MagicMock
+    from datetime import datetime
+    from app.config import Config
+    from app.services.task_service import TaskService
+
+    mock_task = MagicMock()
+    mock_task.id = 99999
+    mock_task.task_category = task_category
+    mock_task.task_id = task_id
+    mock_task.task_name = f'Test {task_id}'
+    mock_task.serial_number = 'TEST-V2153'
+    mock_task.qr_doc_id = 'DOC_TEST-V2153'
+    mock_task.worker_id = 100
+    mock_task.started_at = datetime(2026, 5, 14, 9, 0, tzinfo=Config.KST)
+    mock_task.completed_at = None
+    mock_task.is_paused = False
+    mock_task.total_pause_minutes = 0
+
+    service = TaskService()
+
+    with patch('app.services.task_service.get_task_by_id', return_value=mock_task), \
+         patch('app.services.task_service._worker_has_started_task', return_value=True), \
+         patch('app.services.task_service._worker_already_completed_task', return_value=False), \
+         patch('app.services.task_service._record_completion_log', return_value=45), \
+         patch('app.models.work_pause_log.get_active_pause_by_worker', return_value=None), \
+         patch('app.services.task_service._all_workers_completed', return_value=True) as mock_all_done:
+
+        response, status_code = service.complete_work(
+            worker_id=100,
+            task_detail_id=99999,
+            finalize=False,
+        )
+
+    # 검증 1: status 200
+    assert status_code == 200, f"❌ {task_category}/{task_id} status 200 실패"
+
+    # 검증 2: 범용 플래그 (v2.15.3 신규)
+    assert response.get('auto_finalize_blocked') is True, \
+        f"❌ {task_category}/{task_id} — auto_finalize_blocked 미발동 (옵션 B 회귀)"
+
+    # 검증 3: 호환성 플래그 (v2.15.2 — FIRST_FINAL 영역만 True)
+    assert response.get('first_final_blocked') is is_first_final_expected, \
+        f"❌ {task_category}/{task_id} — first_final_blocked 호환성 회귀 (기대 {is_first_final_expected})"
+
+    # 검증 4: relay_mode 응답
+    assert response.get('relay_mode') is True
+    assert response.get('task_finished') is False
+    assert response.get('category_completed') is False
+
+    # 검증 5: auto_finalize 분기 미진입 (v2.15.0 결함 회귀 차단)
+    mock_all_done.assert_not_called(), \
+        f"❌ {task_category}/{task_id} — v2.15.0 결함 회귀 (auto_finalize 분기 진입)"
+
+
+def test_ff_v2153_second_final_self_inspection_normal_close():
+    """TC-FF-01i (HOTFIX v2.15.3): MECH SELF_INSPECTION (SECOND_FINAL) 은 차단 X
+    → Sprint 55 (3-C) 강제 finalize=true → 정상 close (Second Close 트리거 호출)
+    회귀 방지 — Second Final 영역까지 차단되면 안 됨"""
+    from unittest.mock import patch, MagicMock
+    from datetime import datetime
+    from app.config import Config
+    from app.services.task_service import TaskService
+
+    mock_task = MagicMock()
+    mock_task.id = 44444
+    mock_task.task_category = 'MECH'
+    mock_task.task_id = 'SELF_INSPECTION'
+    mock_task.serial_number = 'TEST-SECOND'
+    mock_task.qr_doc_id = 'DOC_TEST-SECOND'
+    mock_task.worker_id = 400
+    mock_task.started_at = datetime(2026, 5, 14, 14, 0, tzinfo=Config.KST)
+    mock_task.completed_at = None
+    mock_task.is_paused = False
+    mock_task.total_pause_minutes = 0
+
+    service = TaskService()
+
+    with patch('app.services.task_service.get_task_by_id', return_value=mock_task), \
+         patch('app.services.task_service._worker_has_started_task', return_value=True), \
+         patch('app.services.task_service._worker_already_completed_task', return_value=False), \
+         patch('app.services.task_service._record_completion_log', return_value=60), \
+         patch('app.models.work_pause_log.get_active_pause_by_worker', return_value=None), \
+         patch('app.services.task_service._all_workers_completed', return_value=True), \
+         patch('app.services.task_service._finalize_task_multi_worker',
+               return_value={'duration_minutes': 60, 'elapsed_minutes': 60, 'worker_count': 1}), \
+         patch('app.services.task_service.complete_task', return_value=True), \
+         patch('app.services.duration_validator.validate_duration', return_value={'warnings': []}), \
+         patch.object(service, '_trigger_second_close'):
+        response, status_code = service.complete_work(
+            worker_id=400,
+            task_detail_id=44444,
+            finalize=False,
+        )
+
+    assert status_code == 200
+    # SECOND_FINAL — 차단 플래그 없음 + 정상 close
+    assert response.get('auto_finalize_blocked') is None, \
+        "❌ SELF_INSPECTION 영역 차단됨 — Sprint 55 (3-C) 분기 도달 실패 회귀"
+    assert response.get('first_final_blocked') is None
+    assert response.get('task_finished') is True
