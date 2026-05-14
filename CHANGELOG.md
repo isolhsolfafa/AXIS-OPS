@@ -6,6 +6,40 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.15.1] - 2026-05-14 — Sprint 41-D FE 후속 hotfix (FE _kFinalTaskIds 정합)
+
+> 사용자 catch (TEST-1111) — "내 작업만 종료" 눌러도 task 가 닫혀서 진입 불가. Root cause: FE 측 `_kFinalTaskIds` set 에 `IF_2` 포함 → 다이얼로그 미표시 + 항상 `finalize=true` 강제 전송 → BE 측 Sprint 41-D First Final 차단 로직 우회. v2.15.0 BE only 가정 오류 — FE 측 동일 set 정합 필수.
+
+### 변경 (FE only, 2 파일)
+
+| 파일 | 변경 |
+|------|-----|
+| `frontend/lib/screens/task/task_detail_screen.dart` L843-857 | `_kFinalTaskIds` 에서 `IF_2` 제거 + `INSPECTION` 추가 (Sprint 41-D 정합) |
+| `frontend/lib/screens/task/task_management_screen.dart` L763-772 | 동일 set 정합 (catch 누락 1건) |
+
+### Sprint 41-D 정합 매트릭스
+
+| task | 멤버십 | FE _kFinalTaskIds | 동작 |
+|------|--------|:-:|------|
+| TANK_DOCKING | FIRST_FINAL | X | 다이얼로그 표시 (이미 정합) |
+| **IF_2** | FIRST + SECOND | **X (제거)** | 다이얼로그 표시 → BE AND 조건 검증 |
+| SELF_INSPECTION | SECOND_FINAL | O | 강제 finalize=true |
+| **INSPECTION** | SECOND_FINAL | **O (추가)** | 강제 finalize=true |
+| TMS/PI/QI/SI | SINGLE_FINAL | O | 강제 finalize=true |
+
+### 검증
+
+- flutter build web GREEN (12.1s)
+- Netlify prod 배포 완료 (gaxis-ops.netlify.app)
+- BE 무변경 (v2.15.0 그대로 작동 — FE 가 finalize=false 보내면 First Final 차단)
+
+### 운영 효과
+
+- IF_2 작업 시 "내 작업만 종료" 다이얼로그 정상 표시
+- 사용자가 "내 작업만 종료" 선택 시 finalize=false 전송 → BE First Final 차단 → task open 유지 → 재참여 가능
+
+---
+
 ## [2.15.0] - 2026-05-14 — Sprint 41-D Relay First Final Logic + 자동 정리 트리거
 
 > Sprint 41 (v2.3.0) finalize 분리 + Sprint 55 (v2.7.0) auto-finalize 부작용 정정 — "내 작업만 종료" 의도 보존 + 시스템 강제 보호. 2026-04-22 O/N 6588 GBWS-6978/6979/6980 UTIL_LINE_2 사례 영역 root cause fix. Codex 라운드 1+2 정정 12건 GREEN 후 구현.

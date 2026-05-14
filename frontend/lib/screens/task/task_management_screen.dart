@@ -761,13 +761,14 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
   }
 
   // FINAL task ID 목록 — 릴레이 불가, 항상 finalize=true
+  // Sprint 41-D (v2.15.1, 2026-05-14): IF_2 제거 (FIRST_FINAL — BE 측 차단 작동) + INSPECTION 추가 (SECOND_FINAL)
   static const _kFinalTaskIds = {
-    'SELF_INSPECTION',
-    'IF_2',
-    'PRESSURE_TEST',
-    'PI_CHAMBER',
-    'QI_INSPECTION',
-    'SI_SHIPMENT',
+    'SELF_INSPECTION',  // SECOND_FINAL MECH
+    'INSPECTION',       // SECOND_FINAL ELEC (Sprint 41-D 추가)
+    'PRESSURE_TEST',    // SINGLE_FINAL TMS
+    'PI_CHAMBER',       // SINGLE_FINAL PI
+    'QI_INSPECTION',    // SINGLE_FINAL QI
+    'SI_SHIPMENT',      // SINGLE_FINAL SI
   };
 
   Future<void> _handleCompleteTask(int taskId, int workerId, {String? taskIdStr}) async {

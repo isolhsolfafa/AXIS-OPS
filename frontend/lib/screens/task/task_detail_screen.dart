@@ -841,13 +841,18 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   }
 
   // FINAL task ID 목록 — 릴레이 불가, 항상 finalize=true
+  // Sprint 41-D (v2.15.1, 2026-05-14): IF_2 제거 (FIRST_FINAL 멤버 — BE 측 차단 작동) + INSPECTION 추가 (SECOND_FINAL)
+  // 정합:
+  //   - SECOND_FINAL (SELF_INSPECTION, INSPECTION): 강제 finalize=true → auto-close 트리거
+  //   - SINGLE_FINAL (TMS/PI/QI/SI): 강제 finalize=true
+  //   - FIRST_FINAL (TANK_DOCKING, IF_2): 다이얼로그 표시 → finalize=false 허용 → BE 측 First Close 트리거
   static const _kFinalTaskIds = {
-    'SELF_INSPECTION',
-    'IF_2',
-    'PRESSURE_TEST',
-    'PI_CHAMBER',
-    'QI_INSPECTION',
-    'SI_SHIPMENT',
+    'SELF_INSPECTION',  // SECOND_FINAL MECH
+    'INSPECTION',       // SECOND_FINAL ELEC (Sprint 41-D 추가)
+    'PRESSURE_TEST',    // SINGLE_FINAL TMS
+    'PI_CHAMBER',       // SINGLE_FINAL PI
+    'QI_INSPECTION',    // SINGLE_FINAL QI
+    'SI_SHIPMENT',      // SINGLE_FINAL SI
   };
 
   /// Sprint 41: 작업 종료 팝업 — 릴레이(내 작업만 종료) vs 완료(task 닫힘) 선택
