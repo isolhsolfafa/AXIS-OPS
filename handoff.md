@@ -16,6 +16,7 @@
 - `task_service.py` — `check_category_progress_100()` deprecation 마킹 (호출 0건 dead code)
 - `task_service.py` — `check_elec_final_tasks_completed()` deprecation 해제 (재호출)
 - `task_management_screen.dart` L888 + `task_detail_screen.dart` L904 — "아니오, 작업 완료" → "아니오, 공정 마감"
+- `backend/app/models/worker.py` `get_admin_by_email_prefix()` — SQL `(is_admin=TRUE OR email LIKE 'test%')` 영역 확장 (사용자 편의 — test* 계정 prefix 로그인 가능, 비밀번호 검증 유지) + docstring 갱신
 - `version.py` + `app_version.dart` 2.15.8 → **2.15.9** (사용자 v2.15.7 + v2.15.8 release 후 별 hotfix)
 
 ### 카테고리별 close 조건 매트릭스 (v2.15.6 → v2.15.9)

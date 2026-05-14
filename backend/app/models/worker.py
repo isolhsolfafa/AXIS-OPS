@@ -310,13 +310,19 @@ def get_worker_by_name(name: str) -> Optional[Worker]:
 
 def get_admin_by_email_prefix(prefix: str) -> Optional[Worker]:
     """
-    이메일 prefix로 관리자 조회 (Admin 간편 로그인용)
+    이메일 prefix 로 간편 로그인 가능 계정 조회 (Admin + test* 영역).
 
-    'admin' 입력 시 'admin1234@gst-in.com' 또는 'admin@gst-in.com' 매칭.
+    v2.15.9 정정 (2026-05-14) — test 로 시작하는 일반 계정 매칭 추가 (사용자 편의용):
+    - 'admin' 입력 → admin@gst-in.com 매칭 (is_admin=TRUE)
+    - 'dkkim1' 입력 → dkkim1@gst-in.com 매칭 (is_admin=TRUE)
+    - 'test' 입력 → test@gst-in.com 매칭 (테스트 편의용, is_admin=FALSE 허용)
+    - 'testuser' 입력 → testuser@... 매칭
+
     매칭 결과가 정확히 1명일 때만 반환, 0명/2명+ → None.
+    비밀번호는 별도 검증 단계 (auth_service.login) 필수.
 
     Args:
-        prefix: 이메일 @ 앞부분 또는 시작 문자열 (예: 'dkkim1', 'admin')
+        prefix: 이메일 @ 앞부분 또는 시작 문자열 (예: 'dkkim1', 'admin', 'test')
 
     Returns:
         Worker 객체 (매칭 1명), 없거나 2명+ 시 None
@@ -326,17 +332,17 @@ def get_admin_by_email_prefix(prefix: str) -> Optional[Worker]:
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # 1차: 정확한 prefix@% 매칭 시도
+        # 1차: 정확한 prefix@% 매칭 시도 (admin OR test* 계정)
         cur.execute(
-            "SELECT * FROM workers WHERE email LIKE %s AND is_admin = TRUE",
+            "SELECT * FROM workers WHERE email LIKE %s AND (is_admin = TRUE OR email LIKE 'test%%')",
             (prefix + '@%',)
         )
         rows = cur.fetchall()
 
-        # 2차: 0건이면 prefix% 로 확장 매칭 (admin → admin1234@...)
+        # 2차: 0건이면 prefix% 로 확장 매칭 (admin → admin1234@..., test → testuser@...)
         if len(rows) == 0:
             cur.execute(
-                "SELECT * FROM workers WHERE email LIKE %s AND is_admin = TRUE",
+                "SELECT * FROM workers WHERE email LIKE %s AND (is_admin = TRUE OR email LIKE 'test%%')",
                 (prefix + '%',)
             )
             rows = cur.fetchall()

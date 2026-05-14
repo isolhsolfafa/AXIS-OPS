@@ -76,6 +76,7 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 | `backend/app/services/task_service.py` | (1) `check_category_close_eligible()` MECH/ELEC 분기 task progress 100% AND 제거 — MECH=체크리스트 100% 만 / ELEC=IF_2+INSPECTION+체크리스트 100% (v2.15.5 영역 회귀) (2) `check_elec_close_eligible_at_if2()` INSPECTION + 체크리스트 100% 만 (task progress 100% 제거) (3) `check_category_progress_100()` deprecation 마킹 — 호출 0건 (4) `check_elec_final_tasks_completed()` deprecation 해제 — `check_category_close_eligible('ELEC')` 영역 재호출 |
 | `frontend/lib/screens/task/task_management_screen.dart` | L888 다이얼로그 "아니오, 작업 완료" → "아니오, 공정 마감" |
 | `frontend/lib/screens/task/task_detail_screen.dart` | L904 다이얼로그 "아니오, 작업 완료" → "아니오, 공정 마감" |
+| `backend/app/models/worker.py` | `get_admin_by_email_prefix()` SQL 정정 — `is_admin=TRUE` 영역에 `OR email LIKE 'test%'` 추가 (사용자 편의 catch — test* 계정도 이메일 prefix 만 입력해서 로그인 가능, 비밀번호 검증은 유지) + docstring 갱신 |
 | `backend/version.py` + `frontend/lib/utils/app_version.dart` | 2.15.8 → **2.15.9** (사용자 v2.15.7 + v2.15.8 release 별 hotfix) |
 
 ### 카테고리별 close 조건 매트릭스 (v2.15.6 → v2.15.9)
@@ -114,6 +115,14 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 - v2.15.6 TM/TMS 정정 보존
 - `check_category_progress_100()` 호출 0건 (dead code) — test_relay_first_final.py import 호환 보존
 - `check_elec_final_tasks_completed()` 호출 복귀 — Sprint 41-D 영역 정합
+
+### 추가 변경 — test* 계정 prefix 매칭 (사용자 편의)
+
+- `get_admin_by_email_prefix()` SQL 영역 = `is_admin=TRUE` 단독 필터 → `(is_admin=TRUE OR email LIKE 'test%')` 영역 확장
+- 동작: "test" / "testuser" / "test1" 등 prefix 입력 → 매칭된 test* 계정 1명일 때 반환 → 비밀번호 검증 단계 진행
+- 보안 영향: 0 (비밀번호 입력 단계 필수 유지)
+- prod 영향: 0 (test* 계정 = 운영 영역 거의 없음, 본인 편의용)
+- 함수명 유지 (호환성 우선) — docstring 만 갱신
 
 ---
 
