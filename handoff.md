@@ -1,7 +1,56 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-14 KST (✅ v2.15.9 hotfix 코드 적용 — v2.15.6 (나) 옵션 catch 정정 + 다이얼로그 라벨 "공정 마감" 변경. 사용자 v2.15.7/v2.15.8 release 후 별 hotfix. prod 배포 대기.)
+> 마지막 업데이트: 2026-05-14 KST (✅ v2.15.10 hotfix 코드 적용 + pytest 38/38 실 검증 GREEN — ELEC IF_2 close 조건 = INSPECTION + 체크리스트 100% 만 (IF_2 강제 제거) + Dual-Trigger 양방향 완성. v2.15.9 후속 hotfix. prod 배포 진행.)
+
+---
+
+## ✅ 2026-05-14 KST — v2.15.10 hotfix (HOTFIX-SPRINT41D-ELEC-CLOSE-CONDITION-DUAL-TRIGGER)
+
+> **사용자 catch (5-14 운영 검증)**: TEST-1111 IF_2 본인 종료 (relay 모드 completed_at NULL) + INSPECTION 완료 + ELEC 체크리스트 100% (Phase 1 16/16 + Phase 2 24/24) 상태인데 IF_2 close 안 됨. 진단 SQL 4건 확인 (silent fail 0 + 미입력 0 + alert 0) → 코드 로직 자체 결함 확정. v2.15.5 catch #25 양방향 트리거 의도 절반만 구현됨.
+
+### 사용자 의도 정의 (5-14 확정)
+
+```
+조건: INSPECTION.completed_at NOT NULL  AND  ELEC 체크리스트 100%
+액션: IF_2 task close (auto_close_relay_task)
+순서: 무관 (양방향 트리거)
+잔여 task: IF_2 start 시점 First Close 이미 처리 (panel/cabinet/wiring/IF_1)
+```
+
+### 변경 (BE only, 2 파일 + version)
+
+- `task_service.py` — `check_category_close_eligible('ELEC')` → `_check_inspection_completed()` 호출로 교체 (IF_2 강제 제거)
+- `task_service.py` — `_check_inspection_completed()` 신규 (INSPECTION completed_at 단순 검증)
+- `task_service.py` — `check_elec_final_tasks_completed()` deprecation 마킹 (호출 0건, import 호환 보존)
+- `checklist_service.py` — `_try_elec_close()` 확장: IF_2 work_completion_log 검증 → INSPECTION complete 검증 + `auto_close_relay_task(IF_2)` 호출 추가
+- `version.py` + `app_version.dart` 2.15.9 → **2.15.10**
+
+### 양방향 트리거 매트릭스 (v2.15.10 정합)
+
+| 시나리오 | 발동 시점 | 액션 | 결과 |
+|---------|---------|------|:-:|
+| A. INSPECTION 종료 → 체크리스트 100% | 체크리스트 PUT (경로 2 `_try_elec_close`) | `auto_close_relay_task(IF_2)` | IF_2 close ✅ |
+| B. 체크리스트 100% → INSPECTION 종료 | INSPECTION complete (경로 1 `check_category_close_eligible`) | Sprint 41-D Second Close | IF_2 close ✅ |
+
+### pytest 검증 (실 환경 GREEN)
+
+- `test_relay_first_final.py` 38/38 PASS (14.76s)
+- ⚠️ 이번 turn 영역에서 pytest 자체 첫 설치 (psycopg2-binary + bcrypt + Flask 등 deps 동시 설치)
+- 이전 release "pytest GREEN" 보고 = cowork 측 별 환경/추정 보고 catch — AXIS-OPS `.github/workflows/` CI 없음 + 로컬 venv 부재 → 옵션 2 별 turn 진행 예정 (INFRA-CI-PYTEST-AUTO + 이전 release 전수 재검증 + ADR-029 사례 #28)
+
+### 회귀 위험 0
+
+- DB schema 변경 0
+- `check_elec_final_tasks_completed()` 호출 0건 (dead code)
+- `_try_elec_close()` 기존 동작 보존 + auto_close 추가만
+- MECH/TM/TMS 분기 영향 0
+
+### 후속
+
+- POST-REVIEW deadline 2026-05-21 (7일) — Codex 사후 검토 필수
+- MECH catch (gas2/util2 close 안 됨, scope_rule + tank_in_mech 영역) = 별 hotfix 진단 필요
+- 옵션 2 별 turn (사용자 측 진행 예정): CI 워크플로우 + 이전 release pytest 재검증 + ADR-029 사례 #28
 
 ---
 

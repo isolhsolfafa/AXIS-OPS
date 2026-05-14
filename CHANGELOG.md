@@ -65,6 +65,59 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.15.10] - 2026-05-14 — HOTFIX-SPRINT41D-ELEC-CLOSE-CONDITION-DUAL-TRIGGER (IF_2 강제 제거 + Dual-Trigger 완성)
+
+> 사용자 5-14 운영 catch + 진단 SQL 4건 확인 결과: TEST-1111 IF_2 본인 종료 (relay 모드, completed_at NULL) + INSPECTION 완료 + 체크리스트 100% (Phase 1 16/16 + Phase 2 24/24) 상태인데 IF_2 close 안 됨. Root cause: `check_category_close_eligible('ELEC')` 가 `check_elec_final_tasks_completed()` 호출 → IF_2 + INSPECTION 둘 다 completed_at NOT NULL 강제 → relay 모드 IF_2 (completed_at NULL) = False = trigger skip. + `_try_elec_close()` 는 completion_status flag 만 set, IF_2 task 자체 close X. v2.15.5 catch #25 의 양방향 트리거 의도가 절반만 구현됨. v2.15.10 = ELEC close 조건 = **INSPECTION complete + 체크리스트 100% 만** (IF_2 무관) + Dual-Trigger 양쪽 경로에서 IF_2 auto_close_relay_task 호출 보장.
+
+### 사용자 의도 정의 (5-14 확정)
+
+```
+조건: INSPECTION(자주검사).completed_at NOT NULL  AND  ELEC 체크리스트 100%
+액션: IF_2 task close (auto_close_relay_task 호출)
+순서: 무관 (양방향 트리거)
+잔여 task: 이미 IF_2 start 시점 First Close trigger 가 처리 (panel/cabinet/wiring/IF_1)
+```
+
+### 변경 (BE 2 파일 + version)
+
+| 파일 | 변경 |
+|------|-----|
+| `backend/app/services/task_service.py` | (1) `check_category_close_eligible('ELEC')` 분기 — `check_elec_final_tasks_completed()` → `_check_inspection_completed()` 로 교체 (IF_2 강제 제거) (2) `_check_inspection_completed()` 신규 — INSPECTION completed_at NOT NULL 단순 검증 (3) `check_elec_final_tasks_completed()` deprecation 마킹 (호출 0건, import 호환 보존) |
+| `backend/app/services/checklist_service.py` | `_try_elec_close()` 확장 — IF_2 work_completion_log 검증 → INSPECTION complete 검증으로 교체 + `auto_close_relay_task()` 호출 추가 (IF_2 task 실제 close) |
+| `backend/version.py` + `frontend/lib/utils/app_version.dart` | 2.15.9 → **2.15.10** |
+
+### 양방향 트리거 매트릭스 (v2.15.10 정합)
+
+| 시나리오 | 순서 | 발동 시점 | 액션 | 결과 |
+|---------|------|----------|------|:-:|
+| **A** | IF_2 본인종료 → INSPECTION 종료 → 체크리스트 100% | 체크리스트 100% PUT 시점 (경로 2 `_try_elec_close`) | INSPECTION done 검증 → `auto_close_relay_task(IF_2)` 호출 | IF_2 close ✅ |
+| **B** | IF_2 본인종료 → 체크리스트 100% → INSPECTION 종료 | INSPECTION complete 시점 (경로 1 `check_category_close_eligible`) | INSPECTION + 체크리스트 100% → Sprint 41-D Second Close 트리거 | IF_2 close ✅ |
+
+### Root cause trail
+
+- v2.15.5 catch #25 명시 의도 = "양방향 트리거 (INSPECTION 시점 + 체크리스트 100% 시점)"
+- 그러나 구현은 `check_elec_final_tasks_completed()` 영역에서 IF_2 강제 → relay 모드 IF_2 = False = 트리거 영원히 미발동
+- `_try_elec_close()` 영역 = completion_status flag 만 set (분석/리포트 페이지만 영향) — task 자체 close 누락
+- 사용자 운영 catch (5-14): "IF_2 내 작업 완료 + INSPECTION 완료 + 체크리스트 100% 상태인데 IF_2 close 안 됨"
+- 진단 SQL 4건 확인: ① IF_2.completed_at NULL + INSPECTION.completed_at NOT NULL ② 체크리스트 미입력 0건 ③ Phase 1 16/16 + Phase 2 24/24 ④ Sentry/alert 0건 — silent fail 영역 X, 코드 로직 자체 결함 확정
+
+### 회귀 위험 0
+
+- DB schema 변경 0
+- `check_elec_final_tasks_completed()` 호출 0건 (dead code, import 호환 보존)
+- `_try_elec_close()` 기존 동작 (completion_status flag set) 보존 + auto_close_relay_task 호출 추가만
+- MECH/TM/TMS 분기 영향 0 (ELEC 만 변경)
+- pytest 영역: 사용자 측 또는 CI 영역 위임 (S2 핫픽스 패턴)
+
+### 후속
+
+- POST-REVIEW deadline 2026-05-21 (7일) — Codex 사후 검토 필수
+- BACKLOG `POST-REVIEW-HOTFIX-SPRINT41D-ELEC-CLOSE-CONDITION-DUAL-TRIGGER-20260514` 등록
+- MECH 동일 패턴 catch (사용자 catch 2 영역 — gas2/util2 close 안 됨, scope_rule 영역 진단 필요) = 별 hotfix
+- pytest TC 신규 작성 (TC-DT-01~04) — 별 sprint P2
+
+---
+
 ## [2.15.9] - 2026-05-14 — HOTFIX-SPRINT41D-PROGRESS-100-REVERT-AND-LABEL-CHANGE ((나) → (가) 회귀 + 다이얼로그 라벨 변경)
 
 > 사용자 release v2.15.7 (FIX-27 FE TASK_CARD UX) + v2.15.8 (statusText "재참여 가능" 정정) 와 별 hotfix. v2.15.6 (나) 옵션 채택이 v2.15.3 `auto_finalize_blocked` 영역과 충돌 catch — 사용자 5-14 운영 검증 시 SELF_INSPECTION + 체크리스트 100% 진행했는데 gas2/util2 close 안 됨. Root cause: task progress 100% AND 검증 시 `app_task_details.completed_at IS NULL` 기준 카운트 → "내 작업 완료" 누른 task = completed_at NULL = pending 잡힘 = `check_category_close_eligible = False` → Sprint 41-D Second Close trigger 발동 X → gas2/util2 영원히 open. cowork 이 사용자 발화 "mech, elec 실적 조건 변동 없음" 을 (나) 로 잘못 해석. 실제 의도 = (가) "실적 정의 불변, close 조건도 그대로". v2.15.9 = (가) 회귀 + 다이얼로그 라벨 "공정 마감" 변경 묶음.

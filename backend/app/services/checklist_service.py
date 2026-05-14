@@ -1277,33 +1277,76 @@ def check_elec_completion(serial_number: str) -> bool:
 
 
 def _try_elec_close(serial_number: str) -> bool:
-    """Dual-Trigger 경로 2: 체크리스트 완료 시 IF_2 확인 → 양쪽 완료면 ELEC 닫기."""
+    """Dual-Trigger 경로 2: 체크리스트 100% 도달 시 INSPECTION 완료 확인 → 둘 다 충족 시 IF_2 close.
+
+    v2.15.10 정정 (사용자 5-14 운영 catch):
+    - 조건: INSPECTION.completed_at NOT NULL + 체크리스트 100%
+    - 액션: completion_status.elec_completed=TRUE + IF_2 task auto_close_relay_task 호출
+    - IF_2 relay 모드 (completed_at NULL) 허용 — v2.15.5 catch #25 양방향 트리거 의도 정합
+    - 잔여 task (panel/cabinet/wiring/IF_1) = IF_2 start 시점 First Close 이미 처리됨
+    """
     conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor()
 
+        # v2.15.10: INSPECTION complete 검증 (IF_2 relay 허용)
         cur.execute(
             """
-            SELECT td.id
-            FROM app_task_details td
-            JOIN work_completion_log wcl ON wcl.task_id = td.id
-            WHERE td.serial_number = %s
-              AND td.task_id = 'IF_2'
-              AND td.task_category = 'ELEC'
+            SELECT id, started_at
+            FROM app_task_details
+            WHERE serial_number = %s
+              AND task_category = 'ELEC'
+              AND task_id = 'INSPECTION'
+              AND completed_at IS NOT NULL
+              AND is_applicable = TRUE
             LIMIT 1
             """,
             (serial_number,)
         )
-        if_2_completed = cur.fetchone() is not None
+        inspection_done = cur.fetchone() is not None
 
-        if not if_2_completed:
+        if not inspection_done:
             logger.info(
-                f"ELEC checklist complete but IF_2 not yet done (waiting path 1): "
+                f"ELEC checklist complete but INSPECTION not yet done (waiting path 1): "
                 f"serial={serial_number}"
             )
             return False
 
+        # IF_2 task 정보 조회 (auto_close_relay_task 호출용)
+        cur.execute(
+            """
+            SELECT td.id AS task_detail_id, td.started_at,
+                   (SELECT MAX(wcl.completed_at) FROM work_completion_log wcl WHERE wcl.task_id = td.id) AS last_completion_at,
+                   (SELECT COUNT(DISTINCT wcl.worker_id) FROM work_completion_log wcl WHERE wcl.task_id = td.id) AS worker_count
+            FROM app_task_details td
+            WHERE td.serial_number = %s
+              AND td.task_category = 'ELEC'
+              AND td.task_id = 'IF_2'
+              AND td.completed_at IS NULL
+              AND td.is_applicable = TRUE
+            LIMIT 1
+            """,
+            (serial_number,)
+        )
+        if2_row = cur.fetchone()
+        conn.commit()  # SELECT 후 transaction 정리 (HOTFIX-08 패턴)
+
+        # IF_2 still open → auto_close_relay_task 호출 (v2.15.10 신규)
+        if if2_row:
+            from app.models.task_detail import auto_close_relay_task
+            success = auto_close_relay_task(
+                task_detail_id=if2_row['task_detail_id'],
+                last_completion_at=if2_row['last_completion_at'],
+                worker_count=if2_row['worker_count'] or 1,
+            )
+            if success:
+                logger.info(
+                    f"ELEC IF_2 auto-closed (path 2: checklist last + INSPECTION done): "
+                    f"serial={serial_number}, if2_task_id={if2_row['task_detail_id']}"
+                )
+
+        # completion_status flag set (기존 동작 유지)
         cur.execute(
             """
             UPDATE completion_status

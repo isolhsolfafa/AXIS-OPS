@@ -200,6 +200,40 @@ def check_category_progress_100(
             put_conn(conn)
 
 
+def _check_inspection_completed(serial_number: str) -> bool:
+    """v2.15.10 — ELEC INSPECTION (자주검사) task complete 여부 단순 검증.
+
+    Sprint 41-D 후속 hotfix v2.15.10 — IF_2 close 조건 catch:
+    - INSPECTION 자체는 SECOND_FINAL + auto_finalize_blocked 미포함 → relay 모드 없음
+    - 즉 INSPECTION 완료 = 항상 completed_at NOT NULL = finalize=True 강제 close
+    - check_elec_final_tasks_completed() 는 IF_2 강제로 막아서 사용자 의도 충돌 → 본 함수로 분리
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*) AS done
+                  FROM app_task_details
+                 WHERE serial_number = %s
+                   AND task_category = 'ELEC'
+                   AND task_id = 'INSPECTION'
+                   AND completed_at IS NOT NULL
+                   AND is_applicable = TRUE
+                """,
+                (serial_number,),
+            )
+            row = cur.fetchone()
+            return (row['done'] if isinstance(row, dict) else row[0]) > 0
+    except Exception as e:
+        logger.error(f"_check_inspection_completed failed: serial={serial_number}, error={e}")
+        return False
+    finally:
+        if conn is not None:
+            put_conn(conn)
+
+
 def check_elec_close_eligible_at_if2(serial_number: str) -> bool:
     """v2.15.7 — ELEC IF_2 본인 complete 직전 시점 사전 검증.
 
@@ -274,8 +308,10 @@ def check_category_close_eligible(category: str, serial_number: str) -> bool:
     - Manager force-close 우회 가능 (Q3)
     """
     if category == 'ELEC':
-        # v2.15.7 — IF_2 + INSPECTION + 체크리스트 100% (task progress 100% 제거)
-        if not check_elec_final_tasks_completed(serial_number):
+        # v2.15.10 — INSPECTION complete + 체크리스트 100% 만 (IF_2 강제 제거)
+        # 사용자 5-14 운영 catch: IF_2 relay 모드 (completed_at NULL) 허용 + INSPECTION 종료 시점 close
+        # 양방향 트리거: INSPECTION complete 시점 (이 함수) + 체크리스트 100% PUT 시점 (_try_elec_close)
+        if not _check_inspection_completed(serial_number):
             return False
         from app.services.checklist_service import check_elec_completion
         return check_elec_completion(serial_number)
@@ -292,8 +328,10 @@ def check_category_close_eligible(category: str, serial_number: str) -> bool:
 def check_elec_final_tasks_completed(serial_number: str) -> bool:
     """Sprint 41-D — ELEC IF_2 + INSPECTION 두 task 모두 complete 여부 판정.
 
-    v2.15.7 회복 — v2.15.6 deprecation 해제. check_category_close_eligible('ELEC') 영역
-    재호출 (task progress 100% 제거 후 IF_2+INSPECTION 검증 다시 활용).
+    ⚠️ v2.15.10 DEPRECATED — 호출 0건 (사용자 5-14 운영 catch 후 정정).
+    문제: IF_2 relay 모드 (completed_at NULL) = 항상 False → close 트리거 영원히 미발동.
+    대체: `_check_inspection_completed()` (INSPECTION 단순 검증, IF_2 무관) + check_elec_completion().
+    호환성 보존 — test_relay_first_final.py import 호환만 유지.
     """
     conn = None
     try:
