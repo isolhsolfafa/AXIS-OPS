@@ -1,7 +1,30 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-14 KST (✅ v2.15.10 hotfix 코드 적용 + pytest 38/38 실 검증 GREEN — ELEC IF_2 close 조건 = INSPECTION + 체크리스트 100% 만 (IF_2 강제 제거) + Dual-Trigger 양방향 완성. v2.15.9 후속 hotfix. prod 배포 진행.)
+> 마지막 업데이트: 2026-05-15 KST (✅ v2.15.11 FE only release — MECH 체크리스트 상단 진행률 헤더 추가 (ELEC 패턴 정합). 사용자 5-14 Catch 2 진단 중 catch. Catch 2 (MECH gas2/util2 close) hotfix 는 진단 SQL 결과 대기.)
+
+---
+
+## ✅ 2026-05-15 KST — v2.15.11 FE only (FIX-MECH-CHECKLIST-PROGRESS-HEADER)
+
+> **사용자 catch (5-14 Catch 2 진단 중)**: "MECH 체크리스트 진행률 카운트 현재 elec처럼 없으며". ELEC 체크리스트 영역 상단 진행률 헤더 동일 패턴 적용 요청.
+
+### 변경 (FE only, 1 파일)
+
+- `mech_checklist_screen.dart` — `_totalCount` / `_checkedCount` / `_progress` / `_isAllDone` getter 신규 (scope 매칭 + PASS/NA 카운트) + `_buildProgressHeader()` 위젯 신규 (ELEC 동일 디자인) + ListView itemCount +1
+- `version.py` + `app_version.dart` 2.15.10 → **2.15.11**
+
+### 검증
+
+- flutter analyze mech_checklist_screen.dart = 0 error (info 4 = 기존 영역)
+- flutter build web GREEN (12.9s)
+- Netlify prod 배포 완료
+- 회귀 위험 0 (BE 변경 0, additive UI)
+
+### 다음
+
+- Catch 2 (MECH gas2/util2 close 안 됨) = 사용자 진단 SQL 4건 결과 대기 후 별 hotfix
+- 옵션 2 (CI + pytest 재검증) = 사용자 자면서 진행 예정
 
 ---
 

@@ -65,6 +65,47 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.15.11] - 2026-05-15 — FIX-MECH-CHECKLIST-PROGRESS-HEADER (ELEC 패턴 정합 진행률 표시)
+
+> 사용자 5-14 운영 catch (Catch 2 영역 진단 중) — "MECH 체크리스트 진행률 카운트 현재 elec 처럼 없으며". ELEC 체크리스트 화면 상단 영역 진행률 헤더 동일 디자인 적용. FE only 단일 파일.
+
+### 변경 (FE only, 1 파일 + version)
+
+| 파일 | 변경 |
+|------|-----|
+| `frontend/lib/screens/checklist/mech_checklist_screen.dart` | (1) `_totalCount` / `_checkedCount` / `_progress` / `_isAllDone` getter 신규 (scope 매칭 active 항목 + PASS/NA 카운트 — BE `_resolve_active_master_ids` 로직 정합) (2) `_buildProgressHeader()` 위젯 신규 (ELEC `_buildProgressHeader()` 동일 디자인) (3) ListView itemCount `_groups.length + 1` → `+2` (제품정보 header + 진행률 header) |
+| `backend/version.py` + `frontend/lib/utils/app_version.dart` | 2.15.10 → **2.15.11** |
+
+### 진행률 정의 (ELEC 패턴 정합)
+
+```
+total  = scope_rule 매칭 + BE phase1_applicable 필터 통과 항목 수
+done   = total 항목 중 check_result IN ('PASS', 'NA')
+%      = done / total
+```
+
+### scope_rule 매칭 (BE 정합)
+
+| scope_rule | 매칭 조건 |
+|------------|----------|
+| `null` / `'all'` | 모든 모델 활성 |
+| `'tank_in_mech'` | `_tankInMech` (BE 응답 R2-1 patch) |
+| 직접 모델명 (예: `'DRAGON'`) | `_productModel.startsWith(scope)` |
+
+### 검증
+
+- `flutter analyze mech_checklist_screen.dart` = 0 error (info 4 = 기존 영역)
+- `flutter build web --release` GREEN (12.9s)
+- Netlify prod 배포 완료
+- 회귀 위험 0: BE 변경 0 / DB schema 변경 0 / additive UI 위젯 + ListView item 1개 추가
+
+### 후속
+
+- Catch 2 (MECH gas2/util2 close 안 됨) = 사용자 측 진단 SQL 4건 결과 대기 후 별 hotfix 진행
+- 옵션 2 (CI 워크플로우 + 이전 release pytest 재검증) = 사용자 측 자면서 진행 예정
+
+---
+
 ## [2.15.10] - 2026-05-14 — HOTFIX-SPRINT41D-ELEC-CLOSE-CONDITION-DUAL-TRIGGER (IF_2 강제 제거 + Dual-Trigger 완성)
 
 > 사용자 5-14 운영 catch + 진단 SQL 4건 확인 결과: TEST-1111 IF_2 본인 종료 (relay 모드, completed_at NULL) + INSPECTION 완료 + 체크리스트 100% (Phase 1 16/16 + Phase 2 24/24) 상태인데 IF_2 close 안 됨. Root cause: `check_category_close_eligible('ELEC')` 가 `check_elec_final_tasks_completed()` 호출 → IF_2 + INSPECTION 둘 다 completed_at NOT NULL 강제 → relay 모드 IF_2 (completed_at NULL) = False = trigger skip. + `_try_elec_close()` 는 completion_status flag 만 set, IF_2 task 자체 close X. v2.15.5 catch #25 의 양방향 트리거 의도가 절반만 구현됨. v2.15.10 = ELEC close 조건 = **INSPECTION complete + 체크리스트 100% 만** (IF_2 무관) + Dual-Trigger 양쪽 경로에서 IF_2 auto_close_relay_task 호출 보장.

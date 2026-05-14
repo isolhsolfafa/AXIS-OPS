@@ -224,6 +224,36 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
         false;
   }
 
+  /// v2.15.11 — 진행률 카운트 (scope 매칭 active 항목만, ELEC 패턴 정합)
+  /// BE 가 phase1_applicable 이미 필터링 → FE 는 scope 매칭만 추가 적용
+  int get _totalCount {
+    int total = 0;
+    for (final g in _groups) {
+      final items = (g['items'] as List? ?? []).cast<Map<String, dynamic>>();
+      for (final item in items) {
+        if (_isScopeMatched(item['scope_rule'] as String?)) total++;
+      }
+    }
+    return total;
+  }
+
+  /// 완료(PASS + NA) 항목 수 — scope 매칭 active 항목 중
+  int get _checkedCount {
+    int count = 0;
+    for (final g in _groups) {
+      final items = (g['items'] as List? ?? []).cast<Map<String, dynamic>>();
+      for (final item in items) {
+        if (!_isScopeMatched(item['scope_rule'] as String?)) continue;
+        final result = item['check_result'] as String?;
+        if (result == 'PASS' || result == 'NA') count++;
+      }
+    }
+    return count;
+  }
+
+  double get _progress => _totalCount > 0 ? _checkedCount / _totalCount : 0;
+  bool get _isAllDone => _totalCount > 0 && _checkedCount == _totalCount;
+
   /// R2-2: qr_doc_id 정규화 (BE _normalize_qr_doc_id Dart 변환)
   String _normalizeQrDocId(String sn, {String? hint}) {
     if (sn.isEmpty) return '';
@@ -456,15 +486,60 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
       onRefresh: _fetchChecklist,
       child: ListView.builder(
         padding: const EdgeInsets.symmetric(vertical: 8),
-        itemCount: _groups.length + 1, // +1: header
+        itemCount: _groups.length + 2, // +2: header + progress (v2.15.11)
         itemBuilder: (context, index) {
           if (index == 0) return _buildHeader();
-          final group = _groups[index - 1];
+          if (index == 1) return _buildProgressHeader();
+          final group = _groups[index - 2];
           final groupName = group['group_name'] as String? ?? '';
           // R2-5: INLET 만 Left/Right subgroup 분리, 나머지는 일반
           if (groupName == 'INLET') return _buildInletGroup(group);
           return _buildStandardGroup(group);
         },
+      ),
+    );
+  }
+
+  /// v2.15.11 — ELEC 패턴 정합 진행률 헤더 (상단 표시)
+  Widget _buildProgressHeader() {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: GxColors.white,
+        borderRadius: BorderRadius.circular(GxRadius.md),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                '진행률',
+                style: TextStyle(fontSize: 12, color: GxColors.steel),
+              ),
+              Text(
+                '$_checkedCount / $_totalCount',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: GxColors.charcoal,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: _progress,
+              backgroundColor: GxColors.mist,
+              color: _isAllDone ? GxColors.success : GxColors.accent,
+              minHeight: 6,
+            ),
+          ),
+        ],
       ),
     );
   }
