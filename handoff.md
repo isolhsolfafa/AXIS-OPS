@@ -1,7 +1,52 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-15 KST (✅ v2.15.14 BE only release — BUG-SECOND-CLOSE-FORCE-CLOSED-FALSE-POSITIVE + AUDIT TRAIL 통일 (Codex 옵션 b 채택). 사용자 결정 "장기 운영 영역 디테일 중요". pytest 38/38 GREEN.)
+> 마지막 업데이트: 2026-05-15 KST (✅ v2.15.14 BE only release + ✅ AUDIT_TRAIL_GUIDE.md 신규 + 📊 pytest 전수 결과 1201 PASS / 80 FAILED / 20 ERROR (PASS 92.3%) — 운영 검증 우선 + pytest 분석 1주 후 (deadline 2026-05-22, POST-REVIEW-PYTEST-FAILED-ANALYSIS-20260515 BACKLOG 등록 옵션 c 채택).
+
+---
+
+## 📋 2026-05-15 KST — pytest 전수 결과 + 후속 분석 보류 (옵션 c)
+
+### 결과 요약 (54분 36초)
+
+| 항목 | 결과 |
+|------|------|
+| PASSED | **1201** |
+| FAILED | 80 |
+| ERRORS | 20 |
+| SKIPPED | 35 |
+| xfailed | 1 |
+| **PASS 비율** | **92.3%** (1201/1301) |
+
+### 핵심 검증
+
+- `test_relay_first_final.py` (Sprint 41-D + v2.15.14 회귀 검증) = 38/38 GREEN ✅
+- 운영 핵심 코드 path 회귀 0 확정
+
+### 실패 분포 추정 (상세 분석 1주 후)
+
+| 파일 | 건수 | 추정 원인 |
+|------|-----|---------|
+| test_admin_materials_upload.py TestParserUnit | 8 ERROR | Excel/CSV fixture 의존 |
+| test_sprint61_alert_escalation.py | 3 ERROR | scheduler 시각/알람 trigger 시점 의존 |
+| test_work_batch.py | 3 ERROR | TMS_M manager fixture 의존 |
+| 기타 80 FAILED | ~10 카테고리 | 운영 데이터 / 시점 / Sprint 41-D 시리즈 잠재 |
+
+### 사용자 결정 (옵션 c)
+
+- 운영 검증 우선 → pytest 분석 1주 보류
+- BACKLOG `POST-REVIEW-PYTEST-FAILED-ANALYSIS-20260515` 등록 (deadline 2026-05-22)
+- 결과 trail = temp 파일 영역 보존 불가, 5-22 시점 재실행 또는 CI Actions artifact 영역 별 확보
+
+### 5-22 시점 진행 plan
+
+- 80+20=100건 영역 카테고리 분류 (timeout / fixture / 운영 데이터 / 실 결함)
+- 카테고리별 처리 결정 (fixture 정정 / skip mark / 실 결함 fix)
+- pytest CI 안정성 (3276초 영역 단축 검토)
+
+---
+
+## ✅ 2026-05-15 KST — v2.15.14 BE only (BUG-SECOND-CLOSE-FORCE-CLOSED-FALSE-POSITIVE + AUDIT TRAIL 통일)
 
 ---
 
