@@ -291,6 +291,11 @@ def complete_work() -> Tuple[Dict[str, Any], int]:
                 result['first_final_blocked'] = response['first_final_blocked']
             if 'auto_finalize_blocked' in response:
                 result['auto_finalize_blocked'] = response['auto_finalize_blocked']
+            # HOTFIX v2.15.6 (Codex M-1 v2.15.5 catch 정정):
+            # 체크리스트 100% 미달 시 service 응답 checklist_pending=True 를 HTTP 응답에 forward.
+            # FE 화면에서 "체크리스트 완료 후 재시도" 안내 분기 정상화.
+            if 'checklist_pending' in response:
+                result['checklist_pending'] = response['checklist_pending']
             return jsonify(result), 200
 
     return jsonify(response), status_code
@@ -510,6 +515,17 @@ def complete_single_action_route() -> Tuple[Dict[str, Any], int]:
         task_service._trigger_completion_alerts(task)
     except Exception as e:
         logger.error(f"Failed to trigger completion alerts for single action: {e}")
+
+    # ⭐ HOTFIX v2.15.5 (catch #24): SINGLE_ACTION task First Close 트리거
+    # TANK_DOCKING (task_type='SINGLE_ACTION') 영역 = /work/complete-single endpoint 사용
+    # start_work_route 영역 _trigger_first_close 호출 우회 → 본 endpoint 영역 별 호출 필요
+    # FIRST_FINAL_TASK_IDS 매칭 시 이전 phase 미완료 task 자동 close (gas1/util1/HEATING_JACKET)
+    try:
+        from app.services.task_service import FIRST_FINAL_TASK_IDS, TaskService
+        if (task.task_category, task.task_id) in FIRST_FINAL_TASK_IDS:
+            TaskService()._trigger_first_close(task, worker_id, completed_at)
+    except Exception as e:
+        logger.error(f"Failed to trigger First Close for SINGLE_ACTION: {e}")
 
     updated_task = get_task_by_id(task_detail_id)
     result = _task_to_dict(updated_task) if updated_task else {}

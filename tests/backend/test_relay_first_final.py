@@ -744,7 +744,10 @@ def test_ff_v2153_second_final_self_inspection_normal_close():
                return_value={'duration_minutes': 60, 'elapsed_minutes': 60, 'worker_count': 1}), \
          patch('app.services.task_service.complete_task', return_value=True), \
          patch('app.services.duration_validator.validate_duration', return_value={'warnings': []}), \
+         patch('app.services.task_service.check_category_close_eligible', return_value=True), \
          patch.object(service, '_trigger_second_close'):
+        # v2.15.6: check_category_close_eligible=True mock (체크리스트 100% 충족 시나리오)
+        # → Sprint 55 (3-C) 강제 finalize=true → 정상 close 검증
         response, status_code = service.complete_work(
             worker_id=400,
             task_detail_id=44444,

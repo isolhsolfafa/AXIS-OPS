@@ -132,11 +132,130 @@ def _get_previous_phase_task_ids(category: str, task_id: str) -> Set[str]:
     return FIRST_FINAL_PREVIOUS_PHASE_MAP.get((category, task_id), set())
 
 
+def check_category_progress_100(
+    serial_number: str,
+    category: str,
+    exclude_task_id: Optional[str] = None,
+) -> bool:
+    """v2.15.6 — 카테고리별 active task 100% complete 검증 (DRY 공용 헬퍼).
+
+    is_applicable=TRUE 인 모든 task 의 completed_at IS NOT NULL 검증.
+    HEATING_JACKET 옵션 비활성 케이스는 is_applicable=FALSE 라서 자동 제외.
+
+    Args:
+        serial_number: 제품 S/N
+        category: 'MECH' / 'ELEC' / 'TM' 등
+        exclude_task_id: 검증 대상에서 제외할 task_id
+            (예: IF_2 본인 종료 직전 사전 검증 시 'IF_2' 전달)
+
+    Returns:
+        True  — pending task 0건 (100% complete)
+        False — pending 1건 이상 또는 SQL 에러 (safe-default)
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            if exclude_task_id:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS pending
+                      FROM app_task_details
+                     WHERE serial_number = %s
+                       AND task_category = %s
+                       AND task_id <> %s
+                       AND is_applicable = TRUE
+                       AND completed_at IS NULL
+                    """,
+                    (serial_number, category, exclude_task_id),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS pending
+                      FROM app_task_details
+                     WHERE serial_number = %s
+                       AND task_category = %s
+                       AND is_applicable = TRUE
+                       AND completed_at IS NULL
+                    """,
+                    (serial_number, category),
+                )
+            row = cur.fetchone()
+            pending = row['pending'] if isinstance(row, dict) else row[0]
+        return pending == 0
+    except Exception as e:
+        logger.error(
+            f"check_category_progress_100 failed: serial={serial_number}, "
+            f"category={category}, exclude={exclude_task_id}, error={e}"
+        )
+        return False
+    finally:
+        if conn is not None:
+            put_conn(conn)
+
+
+def check_elec_close_eligible_at_if2(serial_number: str) -> bool:
+    """v2.15.6 — ELEC IF_2 본인 complete 직전 시점 사전 검증.
+
+    조건 (사용자 5-14 (나) 결정 — task progress 100% 포함):
+    - ELEC 모든 active task complete (IF_2 본인 제외)
+    - ELEC 체크리스트 100%
+
+    충족 시 옵션 B 차단 우회 + finalize=True 강제 → Sprint 55 (3-C) → close 진행.
+
+    Q4 트리거 양방향 (시점 A — IF_2 마지막) 정합. INSPECTION 단독 검증은
+    progress_100 안에 자연 포함됨 (INSPECTION 도 active ELEC task).
+    """
+    if not check_category_progress_100(serial_number, 'ELEC', exclude_task_id='IF_2'):
+        return False
+    from app.services.checklist_service import check_elec_completion
+    return check_elec_completion(serial_number)
+
+
+def check_category_close_eligible(category: str, serial_number: str) -> bool:
+    """v2.15.6 옵션 X3-전영역 + task progress 100% (사용자 5-14 (나) 결정).
+
+    AND 조건:
+    - MECH: task progress 100% + MECH 체크리스트 100%
+    - ELEC: task progress 100% + ELEC 체크리스트 100%
+    - TM/TMS: PRESSURE_TEST complete 만으로 close (체크리스트 무관)
+              · v2.15.5 잘못 매핑 정정 (사용자 5-14 catch)
+              · 가압검사는 무조건 이행됨 → complete = close
+              · TM 실적 카운트는 VIEW (tank module com + 체크리스트 100%) 별도
+              · TANK_MODULE 미시작/미완료 = VIEW 일괄 시작/종료 (이미 구현) 로 해결
+    - PI/QI/SI: 체크리스트 없음 → 항상 True (정상 close)
+
+    트리거 시점 (Q4 양방향):
+    - ELEC: IF_2 (옵션 B sub-분기) + INSPECTION (Sprint 55 3-C)
+    - MECH: SELF_INSPECTION (FINAL phase 단일)
+    - TM:   PRESSURE_TEST (단일)
+
+    체크리스트 미달 (Q5=가, MECH/ELEC 만 해당):
+    - close 안 함 → task open 유지 + checklist_pending=True 응답
+    - Manager force-close 우회 가능 (Q3)
+    """
+    if category == 'ELEC':
+        if not check_category_progress_100(serial_number, 'ELEC'):
+            return False
+        from app.services.checklist_service import check_elec_completion
+        return check_elec_completion(serial_number)
+    elif category == 'MECH':
+        if not check_category_progress_100(serial_number, 'MECH'):
+            return False
+        from app.services.checklist_service import check_mech_completion
+        return check_mech_completion(serial_number)
+    elif category in ('TM', 'TMS'):
+        # v2.15.6 — PRESSURE_TEST complete 만으로 close (체크리스트 무관)
+        return True
+    return True  # PI/QI/SI
+
+
 def check_elec_final_tasks_completed(serial_number: str) -> bool:
     """Sprint 41-D — ELEC IF_2 + INSPECTION 두 task 모두 complete 여부 판정.
 
-    Second Close 트리거 가드 영역에서만 사용 — checklist 완료 판정과 분리.
-    Sprint 57 의 checklist_service.check_elec_completion() 은 그대로 보존 (M-1 정정).
+    ⚠️ v2.15.6 DEPRECATED — check_category_progress_100(serial, 'ELEC') 로 대체됨.
+    호출 0건 (test_relay_first_final.py 만 import 보존). 차기 REF sprint 에서 제거 예정.
     """
     conn = None
     try:
@@ -397,6 +516,23 @@ class TaskService:
         #   - AUTO_FINALIZE_BLOCKED_TASK_IDS 영역 11 task 매칭 시 모두 차단
         #   - SECOND_FINAL (SELF_INSPECTION, INSPECTION) 영역은 미포함 → Sprint 55 (3-C) 정상 close
         #   - SINGLE_FINAL (TMS/PI/QI/SI) 영역도 미포함 → Sprint 55 (3-C) 정상 close
+        # ⭐ HOTFIX v2.15.5 (옵션 X3-전영역 catch #25): ELEC IF_2 양방향 트리거 sub-분기
+        # IF_2 본인 종료 시점에 INSPECTION + 체크리스트 100% 충족 → 옵션 B 차단 우회 + 자동 finalize
+        elec_if2_close_eligible = (
+            task.task_category == 'ELEC'
+            and task.task_id == 'IF_2'
+            and not finalize
+            and is_auto_finalize_blocked
+            and check_elec_close_eligible_at_if2(task.serial_number)
+        )
+        if elec_if2_close_eligible:
+            finalize = True
+            is_auto_finalize_blocked = False  # 아래 차단 분기 skip
+            logger.info(
+                f"v2.15.5 옵션 X3-전영역 — ELEC IF_2 데드락 해소: "
+                f"task_id={task_detail_id}, INSPECTION + 체크리스트 100% 충족 → auto finalize"
+            )
+
         if is_auto_finalize_blocked and not finalize:
             # 1. 본인 개인 pause 자동 resume (Sprint 55 3-D 패턴 흡수)
             from app.models.work_pause_log import get_active_pause_by_worker, resume_pause
@@ -440,12 +576,52 @@ class TaskService:
 
         # Sprint 55 (3-C): SECOND/SINGLE FINAL task 만 finalize=true 강제 (릴레이 불가)
         # First Final 은 위에서 명시적 차단됨 (즉시 return)
+        # ⭐ HOTFIX v2.15.5 (catch #25 옵션 X3-전영역): 체크리스트 100% AND 검증
+        #   미달 시 finalize=False 유지 → 본인 work_completion_log 만 기록 후 relay_mode 응답
         if (is_second_final or is_single_final) and not finalize:
-            logger.info(
-                f"FINAL task forced finalize: task_id={task_detail_id}, "
-                f"task_name={task.task_id}"
-            )
-            finalize = True
+            if check_category_close_eligible(task.task_category, task.serial_number):
+                logger.info(
+                    f"FINAL task forced finalize: task_id={task_detail_id}, "
+                    f"task_name={task.task_id}"
+                )
+                finalize = True
+            else:
+                # 체크리스트 100% 미달 → 본인만 종료 (task open 유지)
+                # work_completion_log 본인 row 기록 후 relay_mode 응답
+                logger.info(
+                    f"v2.15.5 옵션 X3-전영역 — 체크리스트 100% 미달 → task open: "
+                    f"task_id={task_detail_id}, category={task.task_category}, "
+                    f"task_id_ref={task.task_id}"
+                )
+                # pause auto resume (Sprint 55 3-D 패턴)
+                from app.models.work_pause_log import get_active_pause_by_worker, resume_pause
+                from app.models.task_detail import set_paused
+                my_pause = get_active_pause_by_worker(task_detail_id, worker_id)
+                if my_pause:
+                    updated_pause = resume_pause(my_pause.id, completed_at)
+                    if updated_pause:
+                        pause_duration = updated_pause.pause_duration_minutes or 0
+                        new_total_pause_minutes = task.total_pause_minutes + pause_duration
+                        set_paused(task_detail_id, is_paused=False, total_pause_minutes=new_total_pause_minutes)
+                        task = get_task_by_id(task_detail_id)
+                    else:
+                        set_paused(task_detail_id, is_paused=False)
+                        task = get_task_by_id(task_detail_id)
+                this_worker_duration = _record_completion_log(
+                    task=task,
+                    worker_id=worker_id,
+                    completed_at=completed_at,
+                )
+                return {
+                    'message': '체크리스트 100% 미완료 — 체크리스트 완료 후 재시도 필요.',
+                    'task_id': task_detail_id,
+                    'completed_at': completed_at.isoformat(),
+                    'duration_minutes': this_worker_duration,
+                    'category_completed': False,
+                    'task_finished': False,
+                    'relay_mode': True,
+                    'checklist_pending': True,  # ⭐ HOTFIX v2.15.5 신규 (Q5 가)
+                }, 200
 
         # Sprint 55 (3-D): 본인의 개인 pause 자동 resume
         # 기존: task.is_paused 기준 (task 전체 pause 여부)
@@ -551,22 +727,20 @@ class TaskService:
         # Sprint 41-B: FINAL phase task 완료 시 → 릴레이 미완료 task 자동 마감
         # Sprint 41-D 정정: SECOND/SINGLE FINAL 영역만 본 분기 진입 (FIRST_FINAL 은 start_work 의 _trigger_first_close 영역 처리)
         # ELEC IF_2 (SECOND_FINAL 멤버) 는 IF_2 + INSPECTION AND 조건 충족 시만 본 분기 진입
+        # ⭐ HOTFIX v2.15.5 (옵션 X3-전영역 catch #25): 체크리스트 100% AND 통합 검증
+        # MECH/ELEC/TM 모두 — 체크리스트 100% 미달 시 Second Close 트리거 미발동 + 본인 close 도 보류
+        # Q4 양방향 트리거 정합 (ELEC INSPECTION 시점 + MECH SELF_INSPECTION + TM PRESSURE_TEST)
         sprint41d_should_auto_close = False
-        if is_single_final:
-            sprint41d_should_auto_close = True
-        elif is_second_final:
-            # ELEC IF_2 / INSPECTION 영역: AND 조건 검증
-            if task.task_category == 'ELEC':
-                if check_elec_final_tasks_completed(task.serial_number):
-                    sprint41d_should_auto_close = True
-                else:
-                    logger.info(
-                        f"Sprint 41-D Second Close AND 조건 미충족: task_id={task_detail_id}, "
-                        f"category=ELEC, task_id_ref={task.task_id}"
-                    )
-            else:
-                # MECH SELF_INSPECTION → 항상 작동
+        if is_single_final or is_second_final:
+            # 체크리스트 100% AND 통합 검증
+            if check_category_close_eligible(task.task_category, task.serial_number):
                 sprint41d_should_auto_close = True
+            else:
+                logger.info(
+                    f"v2.15.5 옵션 X3-전영역 — 체크리스트 100% 미달 → close 보류: "
+                    f"task_id={task_detail_id}, category={task.task_category}, "
+                    f"task_id_ref={task.task_id}"
+                )
 
         if sprint41d_should_auto_close:
             from app.models.task_detail import get_orphan_relay_tasks, auto_close_relay_task

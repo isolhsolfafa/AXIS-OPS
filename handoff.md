@@ -1,7 +1,118 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-14 KST (✅ v2.15.4 hotfix 코드 적용 완료 — task_service.py `last_started_at` SQL 컬럼명 오류 정정 + Catch B/C/D 통합. Sentry silent fail 4 트리거 케이스 해소. Railway 자동 재배포 대기.)
+> 마지막 업데이트: 2026-05-14 KST (✅ v2.15.6 hotfix 코드 적용 — TMS PRESSURE_TEST 잘못 매핑 정정 + MECH/ELEC task progress 100% AND ((나) 옵션) + Codex M-1 v2.15.5 work.py forward 누락 묶음. Codex 교차 검증 사용자 측 진행 대기.)
+
+---
+
+## ✅ 2026-05-14 KST — v2.15.6 hotfix (HOTFIX-SPRINT41D-TMS-CLOSE-FIX-MECH-ELEC-PROGRESS-100)
+
+> **사용자 catch (5-14 운영 검증)**: v2.15.5 prod 배포 후 cowork 이 VIEW 의 TM 실적 카운트 조건 (tank module com + 체크리스트 100%) 을 OPS close 조건에 잘못 매핑. 사용자 명시: "가압검사는 무조건 이행하기 떄문에 가압검사가 끝나면 close조건으로 하고", "TANK_MODULE 미시작/미완료 = VIEW 일괄 시작/종료 (이미 구현) 으로 해결", "mech, elec 실적 조건 변동 없음 → (나) 옵션 task progress 100% AND 채택".
+
+### 변경 (BE only, 2 파일 + version)
+
+- `task_service.py` L135 — `check_category_progress_100()` 신규 헬퍼 (exclude_task_id 옵션, DRY 공용)
+- `task_service.py` L195 — `check_elec_close_eligible_at_if2()` 재구현 (IF_2 본인 제외 + 나머지 active task 100% + 체크리스트 100%)
+- `task_service.py` L213 — `check_category_close_eligible()` 재구현 — TM/TMS 분기 단순화 (return True, 체크리스트 AND 제거) + MECH/ELEC task progress 100% AND 추가
+- `task_service.py` L254 — `check_elec_final_tasks_completed()` deprecation 마킹 (호출 0건, 테스트 import 보존)
+- `work.py` L294 — forward_keys 에 `checklist_pending` 추가 (Codex M-1 v2.15.5 catch 정정)
+- `version.py` 2.15.5 → 2.15.6
+
+### 카테고리별 task close 조건 매트릭스 (v2.15.5 → v2.15.6)
+
+| 카테고리 | v2.15.5 close 조건 | v2.15.6 close 조건 | 사용자 실적 조건 정합 |
+|---|---|---|:-:|
+| MECH | SELF_INSPECTION com + 체크리스트 100% | **task progress 100%** + 체크리스트 100% | ✅ |
+| ELEC | IF_2 + INSPECTION + 체크리스트 100% | **task progress 100%** + 체크리스트 100% | ✅ |
+| TMS | PRESSURE_TEST + 체크리스트 100% (❌ 잘못) | **PRESSURE_TEST complete 만** | ✅ |
+| PI/QI/SI | 항상 True | 항상 True (변경 없음) | — |
+
+### 영향 매트릭스 (v2.15.5 → v2.15.6)
+
+| 시나리오 | v2.15.5 | v2.15.6 |
+|---|:-:|:-:|
+| TMS PRESSURE_TEST complete + 체크리스트 < 100% | ❌ open (잘못) | ✅ close |
+| MECH SELF_INSPECTION + 다른 task 미완료 + 체크리스트 100% | ❌ close (catch 못함) | ✅ open |
+| ELEC IF_2/INSPECTION + 다른 task 미완료 + 체크리스트 100% | ❌ close (catch 못함) | ✅ open |
+| MECH/ELEC 모든 active task 100% + 체크리스트 100% | ✅ close | ✅ close (동일) |
+| FE `checklist_pending` 응답 수신 | ❌ drop (forward 누락) | ✅ 정상 forward |
+
+### 사용자 결정 trail
+
+- TMS PRESSURE_TEST = 가압검사 무조건 이행 → complete 만으로 close (체크리스트 무관)
+- TM 실적 카운트 = VIEW (tank module com + 체크리스트 100%) 별도 — OPS close 와 분리
+- TANK_MODULE 미시작/미완료 = VIEW 일괄 시작/종료 (이미 구현) 으로 해결
+- MECH/ELEC = (나) 옵션 — task progress 100% + 자주검사 + 체크리스트 100% 모두 AND
+
+### Codex 교차 검증 (대기)
+
+- v2.15.5 라운드 1 M-1 (`checklist_pending` forward 누락) 정정 묶음
+- 사용자 측 codex 검증 진행 예정
+
+### 다음 단계
+
+1. **사용자 측 Codex 교차 검증** — v2.15.6 변경 영역 검토 (라운드 1)
+2. **Codex M/A 라벨 수신 후 정정** — M 항목 우선 처리
+3. **prod 배포** — Railway 자동 재배포 확인
+4. **운영 영역 검증** — TMS PRESSURE_TEST close 정상 동작 + MECH/ELEC task progress 100% 차단 동작
+5. **POST-REVIEW (7일, deadline 2026-05-21)** — Codex 사후 검토 + pytest TC 신규 작성 별 sprint P2
+
+### 후속 BACKLOG (참조)
+
+- `REF-CATEGORY-COMPLETION-CONSOLIDATION` P1 — HOTFIX-SPRINT41D 시리즈 안정화 1주 후 진행
+- `POST-REVIEW-HOTFIX-SPRINT41D-TMS-CLOSE-FIX-MECH-ELEC-PROGRESS-100-20260514` — 신규 등록 예정
+
+---
+
+## ✅ 2026-05-14 KST — v2.15.5 통합 hotfix (HOTFIX-SPRINT41D-CHECKLIST-AND-SINGLE-ACTION)
+
+> **사용자 catch (5-14 운영 검증)**: v2.15.4 배포 후에도 ① MECH TANK_DOCKING start 시 gas1/util1 자동 close 미발동 (catch #24) ② ELEC IF_2 + INSPECTION + 체크리스트 100% AND 조건 미적용 — 데드락 잔존 (catch #25). **사용자 5-14 결정**: Q1=B 옵션 X3-전영역 / Q2=A 체크리스트 100% 단순 / Q3=Manager 책임 / Q4=AND 통일 + 트리거 양방향 / Q5=가 task open + checklist_pending.
+
+### 변경 (BE only, 2 파일 + version)
+
+- `task_service.py` L135 영역 — `check_category_close_eligible()` + `check_elec_close_eligible_at_if2()` 신규 함수 2개
+- `task_service.py` L400 영역 — ELEC IF_2 sub-분기 (옵션 B 차단 우회)
+- `task_service.py` L527 영역 — Sprint 55 (3-C) 체크리스트 100% AND 검증 추가 (미달 시 relay_mode + `checklist_pending: True`)
+- `task_service.py` L555 영역 — Second Close 트리거 `check_category_close_eligible()` 통합
+- `work.py` L513 영역 — `complete_single_action_route()` `_trigger_first_close()` 호출 추가
+- `version.py` 2.15.4 → 2.15.5
+
+### 카테고리별 task close 조건 (옵션 X3-전영역)
+
+| 카테고리 | AND 조건 | 트리거 시점 |
+|---|---|---|
+| MECH | SELF_INSPECTION + 체크리스트 100% | SELF_INSPECTION 시점 |
+| ELEC | IF_2 + INSPECTION + 체크리스트 100% | IF_2 시점 + INSPECTION 시점 (양방향) |
+| TM | PRESSURE_TEST + 체크리스트 100% | PRESSURE_TEST 시점 |
+
+### 영향 매트릭스 (v2.15.4 → v2.15.5)
+
+| 시나리오 | v2.15.4 | v2.15.5 |
+|---|:-:|:-:|
+| TANK_DOCKING → gas1/util1 자동 close | ❌ 미발동 | ✅ 자동 close |
+| ELEC IF_2 "내 작업 완료" + 체크리스트 100% | ❌ task open 영원 | ✅ 자동 finalize → close |
+| MECH/TM 체크리스트 미달 시 close | ❌ 무조건 close | ✅ task open + checklist_pending |
+
+### 신규 응답 플래그
+
+- `checklist_pending: bool` — 체크리스트 100% 미달 시 True
+
+### 다음 세션 후속 액션
+
+1. **사용자 측 Codex 교차 검증 진행** — task_service.py + work.py 정정 영역 검증 위임
+2. **Railway 자동 재배포 확인** — v2.15.5 BUILD_DATE 2026-05-14
+3. **운영 검증** — TEST-1111 영역 재현 (MECH TANK_DOCKING 시 gas1/util1 자동 close + ELEC IF_2 데드락 해소)
+4. **pytest TC 신규 작성 별 sprint P2** — 체크리스트 100% AND 매트릭스 + SINGLE_ACTION First Close
+5. **POST-REVIEW** — 7일 이내 Codex 검토 (deadline 2026-05-21)
+
+### ADR-029 후속 사례 (#24 + #25)
+
+| # | 사례 |
+|---|---|
+| 24 | SINGLE_ACTION task 별 endpoint 영역 trigger 호출 검증 누락 — Codex cross-endpoint 정합 표준 |
+| 25 | 설계서 후속 추가 trail vs 코드 sync 검증 표준 — 옵션 X3-단순 설계만, 코드 미구현 catch 누락 |
+
+---
 
 ---
 
