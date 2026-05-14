@@ -1,7 +1,33 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-15 KST (✅ v2.15.13 BE only release — MECH 체크리스트 100% PUT 시점에 SELF_INSPECTION + 잔여 task 일괄 close (ELEC v2.15.10 패턴). Railway logs trail 으로 root cause 확정. pytest 38/38 GREEN. Catch 2 (작업화면 시작/내작업완료 후 메뉴 미동기화) = 별 hotfix.)
+> 마지막 업데이트: 2026-05-15 KST (✅ v2.15.13 BE only release + ✅ INFRA-CI-PYTEST-AUTO — `.github/workflows/pytest.yml` 신규 + ADR-029 사례 #28 등록. 옵션 2 (사용자 5-15 결정) 영구 자동 검증 영역 도입. pytest 전수 백그라운드 실행 진행 — 결과 trail 다음 turn 또는 GitHub Actions 영역 확인.)
+
+---
+
+## ✅ 2026-05-15 KST — INFRA-CI-PYTEST-AUTO (CI 워크플로우 + ADR-029 사례 #28)
+
+> 옵션 2 (사용자 5-15 결정) — v2.15.0~v2.15.13 release trail "pytest GREEN" 보고 영역 실 환경 미실행 가능성 catch 후 영구 자동화.
+
+### 변경
+
+- `.github/workflows/pytest.yml` 신규 — push/PR `backend/**` or `tests/**` 변경 시 자동 pytest (-n 4 병렬 + --timeout=120 + junitxml + 30일 artifact)
+- `memory.md` ADR-029 사례 #28 추가 — cowork pytest 결과 보고 검증 누락 catch trail
+
+### 사용자 측 GitHub Secrets 설정 필요
+
+- `TEST_DATABASE_URL` — Railway staging DB URL (또는 별 test DB)
+- `JWT_SECRET_KEY` / `JWT_REFRESH_SECRET_KEY` — secret 미설정 시 default ci-test-secret 사용
+
+### pytest 전수 백그라운드 진행 중
+
+- 1335 test 수집 / 4 worker 병렬 / timeout 120s
+- 직전 직렬 측정: 56 test = 519s → 전수 ~50분 예상
+- 결과: 다음 turn 또는 GitHub Actions 영역 자동 검증
+
+---
+
+## ✅ 2026-05-15 KST — v2.15.13 BE only (HOTFIX-MECH-CHECKLIST-DUAL-TRIGGER)
 
 ---
 

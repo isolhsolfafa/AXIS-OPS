@@ -4,6 +4,7 @@
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
 > **현재 버전**: **v2.15.13 (HOTFIX-MECH-CHECKLIST-DUAL-TRIGGER — 체크리스트 100% PUT 시점 SELF_INSPECTION + 잔여 task 일괄 close, 2026-05-15)** — BE only 1 파일 / `_try_mech_close()` 신규 + `upsert_mech_check()` 호출 추가 / ELEC v2.15.10 패턴 모방 / pytest 38/38 GREEN / 회귀 위험 0
+> **INFRA (5-15)**: **INFRA-CI-PYTEST-AUTO** — `.github/workflows/pytest.yml` 신규 도입 (push/PR 시 자동 pytest 실행) + ADR-029 사례 #28 등록 (cowork pytest 결과 보고 검증 누락 catch trail)
 > **선행 release**: v2.15.12 (FIX-MECH-CHECKLIST-PROGRESS-REALTIME-AND-STICKY — 실시간 갱신 + 스크롤 고정, 2026-05-15) — FE only 1 파일
 > **선행 release**: v2.15.11 (FIX-MECH-CHECKLIST-PROGRESS-HEADER — ELEC 패턴 정합 진행률 표시, 2026-05-15) — FE only 1 파일
 > **선행 release**: v2.15.10 (HOTFIX-SPRINT41D-ELEC-CLOSE-CONDITION-DUAL-TRIGGER — IF_2 강제 제거 + Dual-Trigger 완성, 2026-05-14) — BE only 2 파일

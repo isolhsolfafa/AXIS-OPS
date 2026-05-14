@@ -27,6 +27,10 @@
 9~10. 5-11 #18+#19 (2일 사이 동일 그룹 동시 발견):
   ⑨ #18 — HOTFIX-SPRINT66BE-MASTER-LIST-ITEM-TYPE (GET 응답 schema 누락)
   ⑩ #19 — HOTFIX-SPRINT66BE-CREATE-MASTER-ITEM-TYPE-AND-CONFLICT-MSG (POST INSERT 누락)
+11. 5-15 #28 — pytest 결과 보고 검증 누락 (cowork 측 v2.15.0~v2.15.9 release trail "pytest GREEN" 보고 영역 실 환경 미실행 가능성 catch)
+   - 본 환경 시점에 pytest 자체 미설치 + AXIS-OPS `.github/workflows/` CI 부재 → 이전 release trail 보고 = cowork 다른 환경/추정 보고 의심
+   - v2.15.10 turn 시점부터 pytest 가용 (psycopg2-binary + bcrypt + Flask 등 deps 함께 설치)
+   - CI 워크플로우 `.github/workflows/pytest.yml` 신규 도입 (push/PR 자동 pytest) — 5-15 옵션 2 진행
 ```
 
 **결정 — Cowork 작업 영역 3단계 분류**:

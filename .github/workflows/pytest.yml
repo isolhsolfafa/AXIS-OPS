@@ -1,0 +1,78 @@
+name: pytest
+
+# AXIS-OPS pytest auto-run (옵션 2 - 2026-05-15 도입)
+# Trigger: push/PR → main, backend/** or tests/** 변경 시
+# 환경: TEST_DATABASE_URL secret 필요 (Settings > Secrets > Actions)
+# 목적: cowork pytest 결과 보고 자동 검증 (ADR-029 사례 #28 trail)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'tests/**'
+      - 'requirements*.txt'
+      - '.github/workflows/pytest.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'tests/**'
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pytest pytest-mock pytest-xdist pytest-timeout
+
+      - name: Run pytest (parallel, timeout 120s)
+        env:
+          TEST_DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+          JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY || 'ci-test-secret' }}
+          JWT_REFRESH_SECRET_KEY: ${{ secrets.JWT_REFRESH_SECRET_KEY || 'ci-test-refresh' }}
+        run: |
+          pytest tests/backend/ -n 4 --tb=line -q --timeout=120 \
+            --junitxml=pytest-report.xml || true
+          # Note: --tb=line + || true → fail 시에도 report 생성 + 다음 step 진행
+
+      - name: Upload pytest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-report
+          path: pytest-report.xml
+          retention-days: 30
+
+      - name: pytest summary
+        if: always()
+        run: |
+          if [ -f pytest-report.xml ]; then
+            python -c "
+import xml.etree.ElementTree as ET
+tree = ET.parse('pytest-report.xml')
+root = tree.getroot()
+stats = root.attrib if 'tests' in root.attrib else root[0].attrib
+total = int(stats.get('tests', 0))
+failures = int(stats.get('failures', 0))
+errors = int(stats.get('errors', 0))
+skipped = int(stats.get('skipped', 0))
+passed = total - failures - errors - skipped
+print(f'pytest summary: {passed}/{total} passed, {failures} failed, {errors} errors, {skipped} skipped')
+exit(0 if failures + errors == 0 else 1)
+"
+          fi

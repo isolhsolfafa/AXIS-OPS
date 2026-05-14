@@ -65,6 +65,29 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [INFRA] - 2026-05-15 — INFRA-CI-PYTEST-AUTO (CI 워크플로우 신규 + ADR-029 사례 #28)
+
+> 옵션 2 (사용자 5-15 결정) — v2.15.0~v2.15.13 release trail "pytest GREEN" 보고 영역 실 환경 미실행 가능성 catch 후 영구 자동화. `.github/workflows/pytest.yml` 신규 도입 — push/PR 시 자동 pytest 실행. ADR-029 사례 #28 등록 (cowork pytest 결과 보고 검증 누락).
+
+### 변경 (INFRA, version bump 없음)
+
+| 파일 | 변경 |
+|------|------|
+| `.github/workflows/pytest.yml` | 신규 — push/PR `backend/**` or `tests/**` 변경 시 자동 pytest 실행 (Python 3.12 + `pip install -r backend/requirements.txt` + pytest-mock/xdist/timeout + `pytest -n 4 --timeout=120` + junitxml + 30일 artifact 보존) |
+| `memory.md` | ADR-029 사례 #28 추가 — pytest 결과 보고 검증 누락 catch trail |
+
+### 사용자 측 GitHub Secrets 설정 필요 (CI 동작 전제)
+
+- `TEST_DATABASE_URL` — Railway staging DB URL (또는 별 test DB)
+- `JWT_SECRET_KEY` / `JWT_REFRESH_SECRET_KEY` — secret 미설정 시 default ci-test-secret 사용
+
+### 후속
+
+- 다음 push (backend/tests 변경) 시 자동 pytest 실행 → GitHub Actions 탭에서 결과 확인 가능
+- 5-14 23:59 release trail "pytest GREEN" 보고 영역 = cowork 측 별 환경 또는 추정 보고 의심 — 이번 CI 도입 후 영구 검증 가능
+
+---
+
 ## [2.15.13] - 2026-05-15 — HOTFIX-MECH-CHECKLIST-DUAL-TRIGGER (체크리스트 100% PUT 시점 SELF_INSPECTION + 잔여 task 일괄 close)
 
 > 사용자 5-15 운영 catch + Railway logs 결정적 trail 발견 — TEST-1111 SELF_INSPECTION 영역 먼저 complete (체크리스트 미입력 상태) → `check_mech_completion=False` → relay_mode → SELF_INSPECTION.completed_at=NULL → 그 후 체크리스트 100% PUT → **MECH 영역 양방향 트리거 미구현 영역 → 영원히 close X**. v2.15.10 ELEC `_try_elec_close()` 패턴 모방 영역 fix.
