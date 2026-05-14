@@ -1,7 +1,49 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-15 KST (✅ v2.15.12 FE only release — MECH 진행률 바 실시간 갱신 + 스크롤 고정. 추가 catch: 작업화면 시작/내작업완료 후 메뉴 미동기화 + MECH gas2/util2 close 안 됨 (Sentry 콘솔 확인 필요) — 별 hotfix 진단 진행.)
+> 마지막 업데이트: 2026-05-15 KST (✅ v2.15.13 BE only release — MECH 체크리스트 100% PUT 시점에 SELF_INSPECTION + 잔여 task 일괄 close (ELEC v2.15.10 패턴). Railway logs trail 으로 root cause 확정. pytest 38/38 GREEN. Catch 2 (작업화면 시작/내작업완료 후 메뉴 미동기화) = 별 hotfix.)
+
+---
+
+## ✅ 2026-05-15 KST — v2.15.13 BE only (HOTFIX-MECH-CHECKLIST-DUAL-TRIGGER)
+
+> **사용자 5-15 운영 catch + Railway logs trail**: TEST-1111 SELF_INSPECTION 먼저 complete (체크리스트 미입력) → relay_mode → SELF_INSPECTION.completed_at=NULL → 체크리스트 100% PUT 후에도 close X. **MECH 영역 양방향 트리거 미구현** 영역.
+
+### Root cause trail (Railway logs 5-15 00:37 KST)
+
+```
+00:37:24  SELF_INSPECTION 시작
+00:37:29  SELF_INSPECTION 완료 (체크리스트 미입력)
+          → "체크리스트 100% 미달 → close 보류" (정상 동작)
+          → SELF_INSPECTION.completed_at = NULL
+00:37:38~51  체크리스트 11개 NA 입력 → 100% 도달
+          → ❌ MECH 양방향 트리거 미구현 → 영원히 close X
+```
+
+### 변경 (BE only, 1 파일)
+
+- `checklist_service.py`:
+  - `_try_mech_close(serial)` 신규 — SELF_INSPECTION work_completion_log 1+ 확인 + 잔여 MECH task auto_close_relay_task
+  - `upsert_mech_check()` 영역 `is_complete=True` 시 `_try_mech_close()` 호출 + 응답 `mech_closed` 필드
+- `version.py` + `app_version.dart` 2.15.12 → **2.15.13**
+
+### ELEC v2.15.10 패턴 모방 확정
+
+| 영역 | ELEC v2.15.10 | MECH v2.15.13 |
+|------|---|---|
+| 검증 task | INSPECTION work_completion_log 1+ | SELF_INSPECTION work_completion_log 1+ |
+| 액션 task | IF_2 auto_close | SELF_INSPECTION + 잔여 task auto_close |
+
+### 검증
+
+- pytest test_relay_first_final.py 38/38 PASS (14.27s)
+- flutter build GREEN + Netlify 배포 완료
+- 회귀 위험 0
+
+### 후속
+
+- POST-REVIEW deadline 2026-05-22 (7일)
+- **Catch 2 (작업화면 시작/내작업완료 후 메뉴 미동기화)** = 별 hotfix 진단 진행 — BE startTask/completeTask 응답 task 객체 필드 (workers/my_status) 분석 + FE 카드 분기 검증
 
 ---
 

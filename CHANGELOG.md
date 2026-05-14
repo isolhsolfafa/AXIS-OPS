@@ -65,6 +65,61 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.15.13] - 2026-05-15 — HOTFIX-MECH-CHECKLIST-DUAL-TRIGGER (체크리스트 100% PUT 시점 SELF_INSPECTION + 잔여 task 일괄 close)
+
+> 사용자 5-15 운영 catch + Railway logs 결정적 trail 발견 — TEST-1111 SELF_INSPECTION 영역 먼저 complete (체크리스트 미입력 상태) → `check_mech_completion=False` → relay_mode → SELF_INSPECTION.completed_at=NULL → 그 후 체크리스트 100% PUT → **MECH 영역 양방향 트리거 미구현 영역 → 영원히 close X**. v2.15.10 ELEC `_try_elec_close()` 패턴 모방 영역 fix.
+
+### 사용자 실제 운영 흐름 (5-15 00:37 KST 로그 trail)
+
+```
+00:37:24  SELF_INSPECTION 시작
+00:37:29  SELF_INSPECTION 완료 (체크리스트 미입력 상태)
+          → check_mech_completion = False
+          → "체크리스트 100% 미달 → close 보류" (정상 동작)
+          → SELF_INSPECTION.completed_at = NULL (relay_mode 응답)
+00:37:38  사용자 → MECH 체크리스트 화면 진입 → 11개 NA 입력 시작
+00:37:51  체크리스트 100% 완료
+          → ❌ v2.15.12 까지 MECH 양방향 트리거 없음 → close 안 됨
+```
+
+### 변경 (BE only, 1 파일 + version)
+
+| 파일 | 변경 |
+|------|------|
+| `checklist_service.py` | (1) `_try_mech_close(serial)` 신규 — SELF_INSPECTION work_completion_log 1+ 확인 + 잔여 MECH task auto_close_relay_task 호출 (2) `upsert_mech_check()` 영역 `is_complete=True` 시 `_try_mech_close()` 호출 추가 + 응답 `mech_closed` 필드 신규 |
+| `version.py` + `app_version.dart` | 2.15.12 → **2.15.13** |
+
+### Dual-Trigger 매트릭스 (v2.15.13 정합)
+
+| 시점 | 발동 | 액션 |
+|------|------|------|
+| **시점 1**: SELF_INSPECTION complete (체크리스트 이미 100%) | `complete_work` L772 `check_category_close_eligible('MECH')=True` → `_trigger_second_close()` | SELF_INSPECTION + 잔여 task auto_close |
+| **시점 2**: 체크리스트 100% PUT (SELF_INSPECTION 이미 complete) | `upsert_mech_check` 영역 100% 도달 → `_try_mech_close()` (신규) | SELF_INSPECTION + 잔여 task auto_close |
+
+→ 순서 무관. 두 경로 모두 동일 효과.
+
+### ELEC v2.15.10 패턴 모방 확정
+
+| 영역 | ELEC `_try_elec_close()` v2.15.10 | MECH `_try_mech_close()` v2.15.13 |
+|------|---|---|
+| 검증 task | INSPECTION work_completion_log 1+ | SELF_INSPECTION work_completion_log 1+ |
+| 액션 task (본인) | IF_2 auto_close_relay_task | SELF_INSPECTION auto_close_relay_task |
+| 잔여 task | First Close 이미 처리 (panel/cabinet/wiring/IF_1) | 잔여 task auto_close (gas2/util2/HEATING_JACKET 등) |
+
+### 검증
+
+- pytest test_relay_first_final.py 38/38 PASS (14.27s)
+- flutter build web GREEN (12.7s)
+- Netlify prod 배포 완료
+- 회귀 위험 0 (BE only, additive helper + 호출 1줄)
+
+### 후속
+
+- POST-REVIEW deadline 2026-05-22 (7일) — Codex 사후 검토
+- Catch 2 (작업화면 시작/내작업완료 후 메뉴 미동기화) = 별 hotfix 진단 진행
+
+---
+
 ## [2.15.12] - 2026-05-15 — FIX-MECH-CHECKLIST-PROGRESS-REALTIME-AND-STICKY (실시간 갱신 + 스크롤 고정)
 
 > v2.15.11 직후 사용자 catch 2건: ① MECH 진행률 바 실시간 갱신 안 됨 (새로고침 시점만 변경) ② MECH 진행률 바 스크롤 시 위로 사라짐 (ELEC = 고정).

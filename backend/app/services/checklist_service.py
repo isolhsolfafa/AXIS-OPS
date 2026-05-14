@@ -1526,6 +1526,108 @@ def check_mech_completion(serial_number: str, judgment_phase: int = 1) -> bool:
             put_conn(conn)
 
 
+def _try_mech_close(serial_number: str) -> bool:
+    """v2.15.13 — MECH 체크리스트 100% PUT 시점에 SELF_INSPECTION complete 확인 → auto_close.
+
+    Dual-Trigger 경로 2 (ELEC `_try_elec_close()` v2.15.10 패턴 정합):
+      - 호출: upsert_mech_check 100% 도달 시점
+      - 검증: SELF_INSPECTION 영역 work_completion_log 1+ (사용자가 본인 완료 누름, relay 모드 허용)
+      - 액션: SELF_INSPECTION 본인 close + 잔여 MECH task (gas2/util2/HEATING_JACKET 영역) auto_close_relay_task
+
+    사용자 5-15 catch trail: SELF_INSPECTION 영역 먼저 complete (체크리스트 미입력 상태)
+      → check_mech_completion=False → relay_mode → SELF_INSPECTION.completed_at=NULL
+      → 그 후 체크리스트 100% PUT → 본 함수 호출 → SELF_INSPECTION + 잔여 task 일괄 close
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # SELF_INSPECTION 영역 work_completion_log 1+ 확인 (relay 모드 허용)
+        cur.execute(
+            """
+            SELECT td.id AS task_detail_id, td.started_at,
+                   (SELECT MAX(wcl.completed_at) FROM work_completion_log wcl WHERE wcl.task_id = td.id) AS last_completion_at,
+                   (SELECT COUNT(DISTINCT wcl.worker_id) FROM work_completion_log wcl WHERE wcl.task_id = td.id) AS worker_count
+            FROM app_task_details td
+            WHERE td.serial_number = %s
+              AND td.task_category = 'MECH'
+              AND td.task_id = 'SELF_INSPECTION'
+              AND td.is_applicable = TRUE
+              AND EXISTS (SELECT 1 FROM work_completion_log wcl WHERE wcl.task_id = td.id)
+            LIMIT 1
+            """,
+            (serial_number,)
+        )
+        si_row = cur.fetchone()
+        conn.commit()  # HOTFIX-08 patterns: SELECT 후 INTRANS 정리
+
+        if not si_row:
+            logger.info(
+                f"MECH checklist complete but SELF_INSPECTION work_completion_log empty (waiting): "
+                f"serial={serial_number}"
+            )
+            return False
+
+        # 잔여 MECH task 조회 (SELF_INSPECTION 제외 + relay 모드 task)
+        cur.execute(
+            """
+            SELECT td.id AS task_detail_id, td.task_id, td.started_at,
+                   (SELECT MAX(wcl.completed_at) FROM work_completion_log wcl WHERE wcl.task_id = td.id) AS last_completion_at,
+                   (SELECT COUNT(DISTINCT wcl.worker_id) FROM work_completion_log wcl WHERE wcl.task_id = td.id) AS worker_count
+            FROM app_task_details td
+            WHERE td.serial_number = %s
+              AND td.task_category = 'MECH'
+              AND td.task_id <> 'SELF_INSPECTION'
+              AND td.completed_at IS NULL
+              AND td.started_at IS NOT NULL
+              AND td.force_closed = FALSE
+              AND td.is_applicable = TRUE
+            """,
+            (serial_number,)
+        )
+        orphan_rows = cur.fetchall()
+        conn.commit()
+
+        from app.models.task_detail import auto_close_relay_task
+
+        # SELF_INSPECTION 본인 close
+        si_success = auto_close_relay_task(
+            task_detail_id=si_row['task_detail_id'],
+            last_completion_at=si_row['last_completion_at'],
+            worker_count=si_row['worker_count'] or 1,
+        )
+        if si_success:
+            logger.info(
+                f"MECH SELF_INSPECTION auto-closed (path 2: checklist last): "
+                f"serial={serial_number}, task_id={si_row['task_detail_id']}"
+            )
+
+        # 잔여 MECH task auto-close
+        for orphan in orphan_rows:
+            success = auto_close_relay_task(
+                task_detail_id=orphan['task_detail_id'],
+                last_completion_at=orphan['last_completion_at'] or si_row['last_completion_at'],
+                worker_count=orphan['worker_count'] or 1,
+            )
+            if success:
+                logger.info(
+                    f"MECH orphan auto-closed (path 2): serial={serial_number}, "
+                    f"task_id={orphan['task_detail_id']}, task_id_ref={orphan['task_id']}"
+                )
+
+        return True
+
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        logger.error(f"_try_mech_close failed (non-blocking): serial={serial_number}, error={e}")
+        return False
+    finally:
+        if conn:
+            put_conn(conn)
+
+
 def get_mech_checklist(serial_number: str, judgment_phase: int = 1, qr_doc_id: str = '') -> Dict[str, Any]:
     """MECH 체크리스트 조회 (Sprint 63-BE + R2-1 patch v2.11.1) — ELEC 패턴 + scope_rule + tank_in_mech 응답.
 
@@ -1688,10 +1790,17 @@ def upsert_mech_check(
 
         is_complete = check_mech_completion(serial_number, judgment_phase)
 
+        # v2.15.13 — Dual-Trigger 경로 2 (ELEC v2.15.10 패턴 정합)
+        # 체크리스트 100% PUT 시점에 SELF_INSPECTION complete 확인 → SELF_INSPECTION + 잔여 task auto_close
+        mech_closed = False
+        if is_complete:
+            mech_closed = _try_mech_close(serial_number)
+
         return {
             'master_id': master_id,
             'check_result': check_result,
             'is_complete': is_complete,
+            'mech_closed': mech_closed,
             'qr_doc_id': normalized_qr,
         }
 
