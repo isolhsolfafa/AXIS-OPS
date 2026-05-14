@@ -30,6 +30,13 @@ class GxColors {
   static Color dangerBg = const Color(0xFFEF4444).withValues(alpha: 0.08);
   static const info = Color(0xFF3B82F6);
   static Color infoBg = const Color(0xFF3B82F6).withValues(alpha: 0.08);
+
+  // FIX-27 (v2.15.7, 2026-05-14): 본인 완료 + task open semantic 토큰
+  // 사용: "내 종료 / 동료 진행 중" 뱃지 + 비활성 버튼
+  static const peerActive = Color(0xFF14B8A6);  // teal-500 — 본인 완료 + 동료 진행 중
+  static Color peerActiveBg = const Color(0xFF14B8A6).withValues(alpha: 0.08);
+  static const muted = silver;                   // alias — 회색 텍스트
+  static Color mutedBg = const Color(0xFFB8BCC8).withValues(alpha: 0.20);  // 비활성 버튼 배경
 }
 
 class GxRadius {

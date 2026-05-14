@@ -6,6 +6,43 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.15.7] - 2026-05-14 — FIX-27-FE-TASK-CARD-MY-STATUS-AND-PULL-TO-REFRESH (TEST-1111 UX 개선)
+
+> 사용자 catch (TEST-1111 실기기 5-14): (1) 본인 완료 + task open 시각 구분 부재 (v2.15.3 옵션 B 적용 후) (2) 새로고침 수단 부재 (QR 재태깅만 가능) (3) "다시 시작" 라벨 — 상세뷰 이미 구현 확인 후 스킵.
+
+### 변경 (FE only, 3 파일)
+
+- `design_system.dart`: `GxColors.peerActive` + `peerActiveBg` + `muted` + `mutedBg` 신규 토큰
+- `task_management_screen.dart`: 청록 뱃지 + RefreshIndicator + AppBar refresh + `_refreshTasks()` 신규
+- `web/index.html`: `overscroll-behavior-y: contain` (안드로이드 Chrome 자체 새로고침 차단)
+
+### Codex 검증 trail
+
+- 라운드 1: M=2 / A=3 / N=3 → 모두 정정 반영 (M-1 myWorkStatus + M-2 taskProvider + A-1 AlwaysScrollable + A-2 GxColors + A-3 ③ 범위 제거)
+- 라운드 2 미진행 (CLAUDE.md 라운드 상한 1회 정합)
+
+### 동작 변경
+
+| 시나리오 | v2.15.6 | v2.15.7 |
+|---------|---------|---------|
+| 본인 완료 + 동료 진행 중 | "진행 중" 보라 뱃지 (혼동) | 청록 "내 종료 / 동료 진행 중" |
+| 다른 작업자 상태 갱신 | QR 재태깅 필수 | AppBar refresh + Pull-to-refresh |
+| 안드로이드 Chrome pull-to-refresh | 브라우저 자체 새로고침 충돌 | CSS overscroll 차단 |
+
+### 회귀 위험 0
+
+- BE 변경 0 / DB schema 변경 0
+- FE 분기 logic 추가만
+- flutter analyze: error 0
+- flutter build web: GREEN (12.6s)
+
+### 후속 (별 sprint P2)
+
+- pytest 위젯 10 TC (TC-FIX27-01~10) — `test_task_management.dart` 더미 영역 실제 구현
+- BACKLOG `FEAT-TASK-PROGRESS-COUNT-DISPLAY` (옵션 D — "1/2명 종료" BE 응답 확장)
+
+---
+
 ## [2.15.6] - 2026-05-14 — HOTFIX-SPRINT41D-TMS-CLOSE-FIX-MECH-ELEC-PROGRESS-100 (TMS 잘못 매핑 정정 + (나) 옵션)
 
 > v2.15.5 TMS PRESSURE_TEST close 조건에 체크리스트 100% AND 잘못 매핑된 것 사용자 5-14 catch. 사용자 명시: "가압검사는 무조건 이행하기 떄문에 가압검사가 끝나면 close조건으로 하고", "TM 실적 카운트는 VIEW (tank module com + 체크리스트 100%) 별도", "TANK_MODULE 미시작/미완료 = VIEW 일괄 시작/종료 (이미 구현)으로 해결". + MECH/ELEC (나) 옵션 선택 — close 조건에 task progress 100% AND 추가 (실적 조건 정합). + Codex M-1 (v2.15.5) work.py forward 누락 정정 묶음.

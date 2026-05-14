@@ -70,6 +70,12 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
         ),
         centerTitle: false,
         actions: [
+          // FIX-27 (v2.15.7): AppBar 새로고침 버튼 + Pull-to-refresh 양방향 지원
+          IconButton(
+            icon: const Icon(Icons.refresh, color: GxColors.slate, size: 22),
+            tooltip: '새로고침',
+            onPressed: _refreshTasks,
+          ),
           PopupMenuButton<String>(
             icon: const Icon(Icons.filter_list, color: GxColors.slate, size: 22),
             onSelected: (value) {
@@ -201,13 +207,20 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
                               ],
                             ),
                           )
-                        : ListView.builder(
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
-                            itemCount: filteredTasks.length,
-                            itemBuilder: (context, index) {
-                              final task = filteredTasks[index];
-                              return _buildTaskCard(context, task, authState.currentWorkerId ?? 0);
-                            },
+                        : RefreshIndicator(
+                            // FIX-27 (v2.15.7): Pull-to-refresh + 새로고침 버튼
+                            // AlwaysScrollableScrollPhysics — 짧은 목록도 swipe 작동 (Codex A-1)
+                            onRefresh: _refreshTasks,
+                            color: GxColors.accent,
+                            child: ListView.builder(
+                              padding: const EdgeInsets.symmetric(horizontal: 16),
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              itemCount: filteredTasks.length,
+                              itemBuilder: (context, index) {
+                                final task = filteredTasks[index];
+                                return _buildTaskCard(context, task, authState.currentWorkerId ?? 0);
+                              },
+                            ),
                           ),
                   ),
                 ],
@@ -243,10 +256,18 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
     } else {
       switch (task.myWorkStatus) {
         case 'completed':
-          statusColor = GxColors.success;
-          statusBg = GxColors.successBg;
-          statusIcon = Icons.check_circle;
-          statusText = task.status == 'completed' ? '완료' : '내 작업 완료';
+          // FIX-27 (v2.15.7): 본인 완료 + task open 케이스 시각 차별화 (peerActive 토큰)
+          if (task.status != 'completed') {
+            statusColor = GxColors.peerActive;
+            statusBg = GxColors.peerActiveBg;
+            statusIcon = Icons.check_circle_outline;
+            statusText = '내 종료 / 동료 진행 중';
+          } else {
+            statusColor = GxColors.success;
+            statusBg = GxColors.successBg;
+            statusIcon = Icons.check_circle;
+            statusText = '완료';
+          }
           break;
         case 'in_progress':
           statusColor = GxColors.accent;
@@ -647,6 +668,21 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
         );
       }
     }
+  }
+
+  // FIX-27 (v2.15.7): Pull-to-refresh + AppBar 새로고침 버튼 공용 핸들러
+  // currentProduct + currentWorker 영역 기준 task 목록 재조회
+  Future<void> _refreshTasks() async {
+    final currentProduct = ref.read(taskProvider).currentProduct;
+    final workerId = ref.read(authProvider).currentWorkerId;
+    if (currentProduct == null || workerId == null) {
+      return;  // 비정상 상태 (QR 미스캔 또는 로그아웃) — 무시
+    }
+    await ref.read(taskProvider.notifier).fetchTasks(
+          serialNumber: currentProduct.serialNumber,
+          workerId: workerId,
+          qrDocId: currentProduct.qrDocId,
+        );
   }
 
   Future<void> _handleStartTask(int taskId, int workerId) async {

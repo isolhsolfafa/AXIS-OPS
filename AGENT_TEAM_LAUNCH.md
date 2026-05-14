@@ -36393,6 +36393,301 @@ def _match_manager_company(
 
 ---
 
+## FIX-27-FE-TASK-CARD-MY-STATUS-AND-PULL-TO-REFRESH-20260514 (TEST-1111 UX 개선 — 본인 완료 시각화 + 새로고침 + 다시 시작 라벨)
+
+> 등록일: 2026-05-14 KST | 상태: 설계 완료 → 사용자 결정 수신 → Codex 라운드 1 검증 대기 → 구현 착수
+> 트랙: OPS **FE only** (BE 변경 0 — `my_status` 응답 필드 이미 존재, work.py L703-736 영역 확인 완료)
+> Severity: 🟠 S2 (UX 인지 결함 — 본인 완료 후 시각 구분 불가, QR 재태깅 외 새로고침 수단 부재)
+> 우선순위: 🟠 P1 (사용자 운영 catch — TEST-1111 실기기 검증 중 발견)
+> 작업량: ~2~2.5h (FE only 100 LoC + index.html CSS 1줄 + pytest 위젯 테스트 6 TC)
+> 사후 Codex 검토: 7일 이내 (deadline 2026-05-21)
+> 선행 의존성: v2.15.6 prod 배포 완료 (오늘 진행 중)
+> POST-REVIEW: BACKLOG `POST-REVIEW-FIX-27-FE-TASK-CARD-MY-STATUS-AND-PULL-TO-REFRESH-20260514` 등록 예정
+
+## 배경 — 사용자 5-14 catch (TEST-1111 실기기 검증)
+
+### 문제 1 — 본인 완료 상태 시각 구분 부재
+
+사용자 스크린샷 (TEST-1111 GAIA-I, MECH 카드 4개):
+- **Waste Gas LINE 1**: 시작 5/14 15:17, "진행 중" 보라 뱃지, 일시정지 + 완료 버튼 노출
+- **Util LINE 1**: 미시작, "대기" 뱃지, 시작 버튼만
+- **Tank Docking**: SINGLE_ACTION, "대기" + 완료 버튼
+- **Waste Gas LINE 2**: 미시작, "대기" + 시작 버튼
+
+사용자 catch: "내 작업완료 누르면 gas line1은 내 작업 완료 상태, util1은 시작하고 화면이 전환된 상태 — 구분이 안 되는데 구분될 수 있게 아이디어가 필요"
+
+→ v2.15.3 옵션 B (`auto_finalize_blocked` 11 task allowlist) 적용 이후 본인 완료해도 task open 유지 → 화면이 본인 완료 상태를 인지 못함.
+
+### 문제 2 — 새로고침 수단 부재
+
+사용자 catch: "QR을 다시 태깅해야 상태가 갱신이 되는데 화면 자체적으로 갱신할 수 있는 새로고침 키나 아이폰에서 사용하는 위에서 아래로 당기면 새로고침 되는 모션이 필요"
+
+→ 현재 task 화면에 새로고침 기능 0 (QR 재스캔만 가능). 다른 작업자 상태 변경 인지 지연.
+
+### 문제 3 — "다시 시작" 아이콘 텍스트 부재 (사용자 catch 추가)
+
+사용자 스크린샷 (task_detail_screen.dart): 카드 좌하단에 둥근 화살표 아이콘 (Icons.replay) 만 노출, 텍스트 라벨 없음. 처음 본 작업자는 용도 불분명.
+
+사용자 catch: "다시시작 키도 친절하게 다시시작이라고 알려줘야 될거 같아"
+
+## 사용자 결정 (5-14)
+
+| Q | 결정 | trail |
+|---|---|---|
+| Q1. 상태 구분 옵션 | **A+B+C 묶음** (뱃지 분리 + 카드 dim + 버튼 비활성) | 옵션 D (인원 카운트) 는 BE 확장 필요 → 별 sprint P2 |
+| Q2. 새로고침 옵션 | **1+2 묶음** (AppBar 버튼 + Pull-to-refresh) | iOS / Android 양쪽 RefreshIndicator 자동 처리 |
+| Q3. 안드로이드 호환 | OK 확정 | PWA standalone 모드 전제 + brower fallback 대비 CSS `overscroll-behavior-y: contain` |
+| Q4. "다시 시작" 라벨 | **스킵 확정** (5-14 사용자 결정 — Codex Q-8 catch 후) | task_detail_screen 이미 텍스트 라벨 구현 → task_management 카드 목록은 tooltip 유지 (콤팩트). 사용자 발화: "다시 시작은 상세뷰에 있는지 몰랐네 스킵 하자 그럼 굳이 친절할 필요는 없을듯" |
+
+## 변경 범위 (FE only)
+
+### ① 본인 완료 상태 시각 구분 (옵션 A + B + C 묶음)
+
+**대상 파일**: `frontend/lib/screens/task/task_management_screen.dart` (L249-255 영역 + L472-483 영역 + L544 영역 확장)
+
+**현재 상태** (cowork 확인 완료):
+- `my_status` 분기 이미 일부 적용됨 (statusText / 버튼 분기)
+- BUT 본인 완료 시각적 차별화 부족 — "진행 중" 뱃지 그대로 + 완료 버튼 그대로 노출
+
+**BE 응답 필드 명세** (work.py L713-732 확인 — Codex M-2 catch 정정 2026-05-14):
+
+| 필드 | 값 | 출처 |
+|---|---|---|
+| `my_status` | `'completed'` / `'in_progress'` / `'not_started'` | work.py L716-720 (CASE WHEN wcl/wsl JOIN) |
+| `my_pause_status` | `'paused'` / `'working'` | work.py L721-724 (CASE WHEN wpl JOIN, **혼동 주의** — 'working' 값은 pause 상태 표현용) |
+
+> ⚠️ **값 매핑 정정 trail (Codex 라운드 0 M-2)**: 설계서 v1 영역 `task.myStatus == 'working'` 잘못 사용 → my_pause_status 값과 혼동. v2 (현행) 영역 `'in_progress'` 정정 완료. 구현 단계에서 두 필드 절대 혼동 금지.
+
+**변경**:
+
+#### A. 뱃지 분리
+```dart
+// task_management_screen.dart L249-255 영역
+// ⚠️ task.myStatus (nullable) 직접 비교 금지 — task.myWorkStatus getter 경유 (Codex 라운드 1 M-1)
+//   myWorkStatus = myStatus ?? status (task_item.dart L212)
+//   fallback 시 status getter (L205-209) = 'completed' / 'in_progress' / 'pending'
+//   → 'not_started' OR 'pending' 둘 다 "대기" 처리 (cowork 추가 catch)
+String statusText;
+Color statusColor;
+final myWS = task.myWorkStatus;  // null-safe getter
+if (myWS == 'completed' && task.status != 'completed') {
+  statusText = '내 종료 / 동료 진행 중';
+  statusColor = GxColors.peerActive;       // 신규 토큰 (design_system.dart 추가, Codex A-2 Q-6)
+} else if (task.status == 'completed') {
+  statusText = '완료';
+  statusColor = GxColors.success;
+} else if (myWS == 'in_progress') {
+  statusText = '진행 중';
+  statusColor = GxColors.accent;
+} else {
+  // 'not_started' (BE) OR 'pending' (status getter fallback)
+  statusText = '대기';
+  statusColor = GxColors.muted;
+}
+// ⚠️ 값 매핑 trail (Codex 라운드 0 M-2 + 라운드 1 M-1 + cowork 추가 catch 2026-05-14):
+//   my_status BE 값 = 'completed' / 'in_progress' / 'not_started' (work.py L716-720)
+//   my_pause_status 값 = 'paused' / 'working' (work.py L721-724) ← 혼동 주의
+//   status getter fallback = 'completed' / 'in_progress' / 'pending' (task_item.dart L205-209)
+//   → myWorkStatus 분기 시 'not_started' / 'pending' 양쪽 모두 "대기" 흡수 (cowork catch)
+```
+
+#### B. 카드 dim 처리
+```dart
+// ⚠️ myWorkStatus getter 경유 (Codex M-1)
+final bool isMyDone = task.myWorkStatus == 'completed' && task.status != 'completed';
+Opacity(
+  opacity: isMyDone ? 0.65 : 1.0,
+  child: Card(...)
+)
+```
+
+#### C. 액션 버튼 비활성
+```dart
+// 본인 완료 + task open 케이스 — myWorkStatus 경유 (Codex M-1)
+if (task.myWorkStatus == 'completed' && task.status != 'completed') {
+  return Row(
+    children: [
+      ElevatedButton.icon(
+        icon: Icon(Icons.check_circle, size: 18, color: GxColors.muted),
+        label: Text('내 작업 완료됨', style: TextStyle(color: GxColors.muted)),
+        onPressed: null,  // 비활성
+        style: ElevatedButton.styleFrom(backgroundColor: GxColors.mutedBg),
+      ),
+      SizedBox(width: 8),
+      // "다시 시작" 버튼은 기존 IconButton(tooltip) 그대로 유지 (Q-8 사용자 결정)
+      IconButton(
+        icon: Icon(Icons.replay, color: GxColors.accent, size: 20),
+        tooltip: '다시 시작',
+        onPressed: () => _handleStartTask(task.id, workerId),
+      ),
+    ],
+  );
+}
+```
+
+### ② 새로고침 (옵션 1 + 2 묶음)
+
+**대상 파일**: `frontend/lib/screens/task/task_management_screen.dart` (build 메서드 영역)
+
+#### 옵션 1 — AppBar 새로고침 버튼
+```dart
+AppBar(
+  title: Text(...),
+  actions: [
+    IconButton(
+      icon: Icon(Icons.refresh),
+      tooltip: '새로고침',
+      onPressed: _refreshTasks,
+    ),
+    // 기존 필터/메뉴 actions...
+  ],
+)
+```
+
+#### 옵션 2 — Pull-to-refresh
+```dart
+// ⚠️ Provider 명칭 = taskProvider (StateNotifierProvider<TaskNotifier, TaskState>)
+//   task_provider.dart L477 확인. taskListProvider 명칭은 존재하지 않음 (Codex M-2 catch)
+// ⚠️ physics: AlwaysScrollableScrollPhysics() 필수 — 짧은 목록도 pull-to-refresh 동작 보장 (Codex A-1 Q-3)
+RefreshIndicator(
+  onRefresh: _refreshTasks,
+  child: ListView.builder(
+    physics: const AlwaysScrollableScrollPhysics(),
+    itemCount: ...,
+    itemBuilder: ...,
+  ),
+)
+
+Future<void> _refreshTasks() async {
+  // taskProvider 는 StateNotifierProvider → .notifier.fetchTasks() 호출 패턴
+  // (TaskNotifier 의 실제 fetch 메서드 명에 따라 조정 — 구현 시 grep 확인)
+  await ref.read(taskProvider.notifier).fetchTasks();
+}
+```
+
+### ③ "다시 시작" 라벨 추가 — ❌ 본 sprint 범위 제거 (Codex Q-8 catch + 사용자 결정 2026-05-14)
+
+> **결정 trail**: Codex 라운드 1 Q-8 catch — `task_detail_screen.dart` L502-505 영역 이미 `ElevatedButton.icon` + `Text('다시 시작')` 구현 완료. 사용자 확인 결과 (5-14): "다시 시작은 상세뷰에 있는지 몰랐네 스킵 하자 그럼 굳이 친절할 필요는 없을듯" → `task_management_screen.dart` L488-494 영역 `IconButton + tooltip` 만 노출하는 현 동작 유지. 작업자가 상세뷰 진입 시 명확 라벨 인지.
+>
+> **본 sprint 범위 제외 영향**: 추정 시간 ~15분 감소, 코드 변경 0. design 통일성 trail = 카드 목록 = 콤팩트 (tooltip) / 상세뷰 = 풀 텍스트 라벨.
+
+### ④ 안드로이드 브라우저 충돌 방지 (CSS 1줄)
+
+**대상 파일**: `frontend/web/index.html`
+
+```html
+<style>
+  body { overscroll-behavior-y: contain; }
+</style>
+```
+
+→ PWA standalone 모드에서는 영향 0 / 브라우저 모드 사용자는 안드로이드 Chrome 자체 새로고침 충돌 방지.
+
+## 동작 매트릭스 (FIX-27 적용 전 → 후)
+
+| 시나리오 | AS-IS (v2.15.6) | TO-BE (FIX-27) |
+|---|---|---|
+| Waste Gas LINE 1 본인 완료 + task open | "진행 중" 뱃지 + 완료 버튼 노출 | "내 종료 / 동료 진행 중" 청록 뱃지 + 카드 dim + 회색 비활성 버튼 + 다시 시작 |
+| Util LINE 1 시작 후 화면 전환 | "진행 중" 뱃지 + 완료 버튼 (동일) | "진행 중" 보라 뱃지 (변경 0) — 완료 시 위 상태로 전환 |
+| 다른 작업자 상태 변경 후 화면 갱신 | QR 재태깅 필수 | AppBar 새로고침 버튼 1-tap + 위에서 아래 당기기 |
+| 안드로이드 Chrome 브라우저에서 pull-to-refresh | 브라우저 자체 새로고침 발동 가능 | CSS `overscroll-behavior-y: contain` 으로 차단 → RefreshIndicator 만 작동 |
+| "다시 시작" 카드 목록 라벨 (스킵 결정) | IconButton + tooltip only | 변경 없음 (상세뷰 이미 구현됨, 사용자 결정) |
+
+## 회귀 위험 0
+
+- BE 변경 0 (`my_status` 응답 이미 존재 — work.py L735 확인)
+- DB schema 변경 0
+- FE 분기 로직 추가만 (기존 분기 보존)
+- 카드 opacity 분기 = 본인 완료 + task open 케이스에만 적용 (모든 완료 / 미시작 / 진행 중 케이스 변경 0)
+- RefreshIndicator = additive wrapper (기존 ListView 동작 보존)
+- CSS `overscroll-behavior-y: contain` = PWA standalone 모드 영향 0
+- WebSocket 실시간 push 기능 (있다면) 변경 0
+
+## pytest 위젯 테스트 (10 TC 신규 — Codex 라운드 1 M-2 catch 정정: 더미 → 실제 구현)
+
+> **대상 파일**: `tests/frontend/test_task_management.dart` (현재 L10/20/30/73 TODO 더미 → 실제 위젯 테스트 구현 필요)
+> **테스트 패턴**: `testWidgets()` + `WidgetTester` + `ProviderScope` overrides + `find.byType()` + `expect()`
+> **참고**: 기존 `tests/frontend/test_auth_flow.dart` 구조 답습
+
+### 기본 6 TC (v1 영역 — 실제 구현)
+```dart
+// TC-FIX27-01: myWorkStatus='completed' + status!='completed' → "내 종료 / 동료 진행 중" 청록 뱃지 노출 검증
+//   - find.text('내 종료 / 동료 진행 중') / find.byType(Opacity) opacity=0.65 검증
+// TC-FIX27-02: myWorkStatus='in_progress' → "진행 중" 보라 (GxColors.accent) 뱃지 노출
+// TC-FIX27-03: myWorkStatus='not_started' → "대기" 회색 (GxColors.muted) 뱃지 노출
+// TC-FIX27-04: 본인 완료 + task open → 완료 버튼 onPressed=null + label="내 작업 완료됨" + GxColors.mutedBg 배경
+// TC-FIX27-05: RefreshIndicator onRefresh 호출 → ref.read(taskProvider.notifier).fetchTasks() 호출 검증
+//   - mockito + verify(taskNotifier.fetchTasks()).called(1)
+// TC-FIX27-06: AppBar refresh IconButton tap → _refreshTasks() 호출 검증
+```
+
+### 추가 4 TC (Codex 라운드 1 M-2 권고)
+```dart
+// TC-FIX27-07: myStatus=null fallback → myWorkStatus=status.getter ('completed'/'in_progress'/'pending')
+//   - myStatus=null + status='pending' → "대기" 뱃지 (cowork 추가 catch: 'pending' 분기 흡수)
+// TC-FIX27-08: 빈 task 목록 + pull-to-refresh → RefreshIndicator 동작 + onRefresh 1회 호출 (AlwaysScrollableScrollPhysics 검증)
+// TC-FIX27-09: 1건 task 목록 + pull-to-refresh → 짧은 목록 영역에서도 swipe 동작 정상 (Codex A-1 회귀)
+// TC-FIX27-10: relay 상태 (myWorkStatus='completed' + status='in_progress' + workers 2명+) → 카드 dim 0.65 + 비활성 버튼 통합 검증
+```
+
+### 검증 명령
+```bash
+cd frontend
+flutter test tests/frontend/test_task_management.dart
+# 예상: 10/10 PASS (30~60초)
+```
+
+## 검증 (사용자 측 실기기 테스트 — 권장 10분)
+
+1. **PWA 설치 상태 (iOS Safari + Android Chrome)**: 본인 완료 task 카드 → 청록 뱃지 + dim + 비활성 버튼 노출 확인
+2. **Pull-to-refresh**: 위에서 아래 당기기 → 둥근 로딩 인디케이터 → 데이터 갱신 확인
+3. **AppBar 새로고침 버튼**: 1-tap → 데이터 갱신 확인
+4. **안드로이드 브라우저 모드 (PWA 미설치)**: pull-to-refresh 동작 시 브라우저 자체 새로고침 발동 안 됨 확인
+5. **task_detail_screen "다시 시작"**: 아이콘 + 텍스트 노출 확인
+
+## Codex 검토 trail
+
+### 라운드 0 (cowork 자가 검증, 2026-05-14)
+- M-1 ✅ my_status 필드 BE+FE 존재 확인 통과
+- M-2 ✅ 'working' → 'in_progress' 정정 + my_pause_status 혼동 trail 추가
+
+### 라운드 1 (Codex, 2026-05-14)
+- M-1 ✅ task.myStatus → task.myWorkStatus 경유 (null fallback) 전수 교체
+- M-2 ✅ taskListProvider → taskProvider 정정 + pytest TC 더미 → 실제 구현 10 TC
+- A-1 ✅ Q-3 AlwaysScrollableScrollPhysics 1줄 추가 (짧은 목록 영역 pull-to-refresh 회귀)
+- A-2 ✅ Q-6 GxColors.peerActive 토큰 신설 (design_system.dart 신규 1 토큰 — Color(0x...) 청록 계열)
+- A-3 ✅ Q-8 사용자 결정 — task_detail_screen 이미 구현 → 본 sprint ③ 영역 제거 (task_management 카드 목록 tooltip 유지)
+- N-1 GREEN — WebSocket race 0 (alerts/break-time only, task-specific push 없음)
+- N-2 GREEN — CSS overscroll AlertDialog 영향 0 (DOM 격리)
+- N-3 GREEN — iOS PWA Material RefreshIndicator 유지 (gst_products_screen / notice_list_screen 일관성)
+
+### 라운드 2 (대기 — 본 v3 정정 후 위임 예정)
+- N-2 잔존 Codex 검토 권고: GxColors.peerActive 색상 hex 값 (디자인 일관성 — 청록 계열 GxColors 기존 토큰 충돌 없는지)
+- pytest TC 10건 구현 결과 검증 (실 동작 + mockito 패턴)
+
+## 후속 BACKLOG
+
+- `BACKLOG-FEAT-TASK-PROGRESS-COUNT-DISPLAY` (옵션 D 별 sprint P2 — BE 응답 확장으로 "1/2명 종료" 카운트 표시)
+- `POST-REVIEW-FIX-27-FE-TASK-CARD-MY-STATUS-AND-PULL-TO-REFRESH-20260514` 등록 예정
+
+## 추정 시간 분해
+
+| 항목 | LoC | 시간 |
+|---|---|---|
+| ①-A 뱃지 분리 | ~15 | 20분 |
+| ①-B 카드 dim | ~10 | 15분 |
+| ①-C 액션 버튼 비활성 | ~20 | 30분 |
+| ②-1 AppBar 새로고침 버튼 | ~10 | 10분 |
+| ②-2 Pull-to-refresh (+ AlwaysScrollableScrollPhysics) | ~22 | 22분 |
+| ③ "다시 시작" 라벨 | ❌ 스킵 (사용자 결정) | — |
+| ④ CSS overscroll | ~3 | 5분 |
+| GxColors.peerActive 토큰 신설 (design_system.dart) | ~5 | 10분 |
+| 위젯 테스트 10 TC (6 기본 + 4 신규 — null fallback/빈 목록/refresh/relay) | ~120 | 50분 |
+| Codex 라운드 0 + 1 정정 (완료) | — | 60분 |
+| **합계 (v3)** | **~165** | **~2.5h** |
+
+---
+
 ## HOTFIX-SPRINT41D-AUTO-FINALIZE-RANGE-EXTENSION-20260514 (v2.15.3 — Issue A 차단 범위 확장)
 
 > 등록일: 2026-05-14 KST | 상태: 설계 완료 → Codex 라운드 1 검증 대기 → 구현 착수

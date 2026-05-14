@@ -39,6 +39,9 @@
       margin: 0;
       padding: 0;
       background-color: #F5F5F7;
+      /* FIX-27 (v2.15.7): 안드로이드 Chrome 브라우저 모드 영역 pull-to-refresh 자체 발동 차단 */
+      /* PWA standalone 영역 영향 0 / Flutter AlertDialog DOM 격리 영역 영향 0 (Codex N) */
+      overscroll-behavior-y: contain;
     }
 
     #splash-screen {
