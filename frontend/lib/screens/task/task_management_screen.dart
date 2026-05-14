@@ -256,12 +256,14 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
     } else {
       switch (task.myWorkStatus) {
         case 'completed':
-          // FIX-27 (v2.15.7): 본인 완료 + task open 케이스 시각 차별화 (peerActive 토큰)
+          // FIX-27 (v2.15.7 + v2.15.8 정정): 본인 완료 + task open 케이스 시각 차별화
+          // ⚠️ 사용자 catch (5-14): "동료 진행 중" 추측 표현 X — 실제 동료 상태 모름
+          //   → "재참여 가능" 사실 기반 표현 (task open 상태 의미만 명시)
           if (task.status != 'completed') {
             statusColor = GxColors.peerActive;
             statusBg = GxColors.peerActiveBg;
             statusIcon = Icons.check_circle_outline;
-            statusText = '내 종료 / 동료 진행 중';
+            statusText = '내 종료 / 재참여 가능';
           } else {
             statusColor = GxColors.success;
             statusBg = GxColors.successBg;

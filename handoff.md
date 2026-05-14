@@ -1,7 +1,45 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-14 KST (✅ v2.15.6 hotfix 코드 적용 — TMS PRESSURE_TEST 잘못 매핑 정정 + MECH/ELEC task progress 100% AND ((나) 옵션) + Codex M-1 v2.15.5 work.py forward 누락 묶음. Codex 교차 검증 사용자 측 진행 대기.)
+> 마지막 업데이트: 2026-05-14 KST (✅ v2.15.7 + v2.15.8 release 완료 — FIX-27 FE TASK_CARD UX 개선 + statusText "재참여 가능" 정정. Netlify 배포 완료.)
+
+---
+
+## ✅ 2026-05-14 KST — v2.15.8 release (FIX-27 statusText 정정)
+
+> **사용자 catch**: "내 종료 / 동료 진행 중" 표현은 시스템이 실제 동료 상태를 모르는 상태에서 추측한 표현. task open 상태일 뿐 동료 진행 여부 불명. → "재참여 가능" 사실 기반 표현.
+
+### 변경 (FE only)
+
+- `task_management_screen.dart` L249 영역 — statusText `'내 종료 / 동료 진행 중'` → `'내 종료 / 재참여 가능'`
+- 버전: 2.15.7 → 2.15.8
+
+### 검증
+
+- flutter build web GREEN (12.8s) + Netlify 배포 완료
+- 회귀 위험 0 (단일 문자열)
+
+---
+
+## ✅ 2026-05-14 KST — v2.15.7 release (FIX-27 FE TASK_CARD UX 개선)
+
+> **사용자 catch (TEST-1111 실기기 5-14)**: (1) 본인 완료 + task open 시각 구분 부재 (v2.15.3 옵션 B 영향) (2) 새로고침 수단 부재 (QR 재태깅만 가능) (3) "다시 시작" 라벨 — task_detail_screen 이미 구현 확인 → 스킵.
+
+### 변경 (FE only, 3 파일)
+
+- `design_system.dart`: GxColors 신규 토큰 (peerActive + peerActiveBg + muted + mutedBg)
+- `task_management_screen.dart`: 청록 뱃지 + RefreshIndicator + AppBar refresh + `_refreshTasks()` 신규
+- `web/index.html`: `overscroll-behavior-y: contain` (안드로이드 Chrome 자체 새로고침 차단)
+
+### Codex 검증
+
+- 라운드 1: M=2 / A=3 / N=3 → 모두 정정 반영
+- 라운드 2 미진행 (CLAUDE.md 라운드 상한 1회 정합)
+
+### 후속 (별 sprint P2)
+
+- pytest 위젯 10 TC (TC-FIX27-01~10) — 더미 영역 실제 구현
+- BACKLOG `FEAT-TASK-PROGRESS-COUNT-DISPLAY` (옵션 D — "1/2명 종료")
 
 ---
 

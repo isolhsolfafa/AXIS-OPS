@@ -6,6 +6,28 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.15.8] - 2026-05-14 — FIX-27 statusText 정정 ("동료 진행 중" 추측 → "재참여 가능" 사실 기반)
+
+> 사용자 catch (v2.15.7 release 직후 5-14): "내 종료 / 동료 진행 중" 표현은 실제 동료 상태를 모르는 상태에서 추측한 표현. task open 상태일 뿐 동료가 진행 중인지 확실하지 않음. 사용자 권고: "재시작 가능 / 재참여 가능" 사실 기반 표현.
+
+### 변경 (FE only, 1 파일)
+
+| 파일 | 변경 |
+|------|-----|
+| `frontend/lib/screens/task/task_management_screen.dart` L249 영역 | statusText `'내 종료 / 동료 진행 중'` → `'내 종료 / 재참여 가능'` |
+
+### 검증
+
+- flutter build web GREEN (12.8s)
+- Netlify prod 배포 완료
+- 회귀 위험 0 (단일 문자열 변경)
+
+### 학습
+
+- UX 카피라이팅 — 시스템이 알 수 없는 상태 추측 표현 회피, 사용자 액션 가능성만 명시
+
+---
+
 ## [2.15.7] - 2026-05-14 — FIX-27-FE-TASK-CARD-MY-STATUS-AND-PULL-TO-REFRESH (TEST-1111 UX 개선)
 
 > 사용자 catch (TEST-1111 실기기 5-14): (1) 본인 완료 + task open 시각 구분 부재 (v2.15.3 옵션 B 적용 후) (2) 새로고침 수단 부재 (QR 재태깅만 가능) (3) "다시 시작" 라벨 — 상세뷰 이미 구현 확인 후 스킵.
