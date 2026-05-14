@@ -65,6 +65,71 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.15.14] - 2026-05-15 — BUG-SECOND-CLOSE-FORCE-CLOSED-FALSE-POSITIVE + AUDIT TRAIL 통일
+
+> 사용자 5-14 운영 catch (BACKLOG `BUG-SECOND-CLOSE-FORCE-CLOSED-FALSE-POSITIVE-20260514`) — MECH SELF_INSPECTION / ELEC IF_2 누른 후 자동 close 된 잔여 task 영역 "강제종료" 라벨 + duration 0m 잘못 표시. 작업자 본인이 "내 작업 완료" 누른 task도 (work_completion_log row 존재) `force_closed=TRUE` 일괄 적용된 결과. + Codex 라운드 1 옵션 b 채택 (audit trail 통일 — 사용자 5-15 결정 "장기 운영 영역 디테일 중요").
+
+### 사용자 의도 정의 (5-14 운영 catch)
+
+- 작업자가 "내 작업 완료" 누른 task = **자연 close** (`force_closed=FALSE`, duration = MAX(work_completion_log.completed_at) 기준)
+- 작업자 미종료 task = **manager 권한 강제종료** (`force_closed=TRUE`, manager 발동 의미)
+
+### 변경 (BE only, 3 파일 + version)
+
+| 파일 | 변경 |
+|------|------|
+| `backend/app/models/task_detail.py` `auto_close_relay_task()` | `force_closed: bool = True` 인자 추가 (default=True 영역 Sprint 41-B legacy 호환 보존) + UPDATE SQL 양쪽 분기 `force_closed = %s` 변경 |
+| `backend/app/services/task_service.py` `_trigger_first_close()` + `_trigger_second_close()` | SELECT 영역 `unfinished_workers_count` column 추가 (work_start_log JOIN work_completion_log NOT EXISTS) + for loop 영역 `o_unfinished > 0 → force_closed=TRUE` 분기 |
+| `backend/app/services/checklist_service.py` `_try_mech_close()` + `_try_elec_close()` | 동일 패턴 (unfinished_workers_count + last_completion_worker_id) + audit trail 통일 (`trigger_type='SECOND_FINAL'` + `trigger_task_id='SELF_INSPECTION'/'IF_2'` + `closed_by_worker_id=last_completion_worker_id`) |
+| `backend/version.py` + `frontend/lib/utils/app_version.dart` | 2.15.13 → **2.15.14** |
+
+### force_closed 결정 로직
+
+```sql
+unfinished_workers_count = COUNT(DISTINCT wsl.worker_id)
+  FROM work_start_log wsl
+  WHERE wsl.task_id = td.id
+    AND NOT EXISTS (
+      SELECT 1 FROM work_completion_log wcl
+       WHERE wcl.task_id = td.id
+         AND wcl.worker_id = wsl.worker_id
+    )
+
+= 0  → 모든 worker 본인 종료 누름 → force_closed = FALSE (자연 close)
+> 0  → 일부 worker 미종료 → force_closed = TRUE (manager 권한 강제종료)
+```
+
+### Audit Trail 통일 (Codex 옵션 b 채택)
+
+| 경로 | 이전 (혼재) | v2.15.14 (통일) |
+|------|---|---|
+| task_service `_trigger_*_close` | `AUTO_CLOSED_BY_SECOND_FINAL_TRIGGER:...` + closed_by=worker_id | 동일 (기존 정합 유지) |
+| checklist `_try_mech_close` | `AUTO_CLOSED_LEGACY` + closed_by=NULL | **`AUTO_CLOSED_BY_SECOND_FINAL_TRIGGER:SELF_INSPECTION` + closed_by=마지막 완료 worker_id** |
+| checklist `_try_elec_close` | `AUTO_CLOSED_LEGACY` + closed_by=NULL | **`AUTO_CLOSED_BY_SECOND_FINAL_TRIGGER:IF_2` + closed_by=마지막 완료 worker_id** |
+
+→ 4개 trigger 함수 영역 모두 동일 trail 형식 → 추후 데이터 분석 / 디버깅 영역 일관성 확보.
+
+### Codex 라운드 1 결과 (M=0 / A=8 / N=2)
+
+- M (Must) = 0 → 배포 블로커 없음
+- A (Advisory) 8건 중 본 sprint 영역 반영 = 2건 (close_reason trail + closed_by 표준화)
+- 잔존 A 6건 (pytest TC 신규 5건 + test_relay_first_final 카운트 catch) = 별 sprint P2
+
+### 검증
+
+- pytest test_relay_first_final.py 38/38 PASS (19.26s)
+- flutter build web GREEN (13.9s)
+- Netlify prod 배포 완료
+- 회귀 위험 0 (default=TRUE legacy 호환 + Sprint 41-B 기존 호출 그대로)
+
+### 후속
+
+- POST-REVIEW deadline 2026-05-22 (7일)
+- pytest TC 5건 (TC-SC-01~05) = 별 sprint P2
+- Advisory 6건 잔존 = BACKLOG `POST-REVIEW-AUDIT-TRAIL-CONSISTENCY-20260515`
+
+---
+
 ## [INFRA] - 2026-05-15 — INFRA-CI-PYTEST-AUTO (CI 워크플로우 신규 + ADR-029 사례 #28)
 
 > 옵션 2 (사용자 5-15 결정) — v2.15.0~v2.15.13 release trail "pytest GREEN" 보고 영역 실 환경 미실행 가능성 catch 후 영구 자동화. `.github/workflows/pytest.yml` 신규 도입 — push/PR 시 자동 pytest 실행. ADR-029 사례 #28 등록 (cowork pytest 결과 보고 검증 누락).

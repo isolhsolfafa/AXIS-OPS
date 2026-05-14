@@ -1,7 +1,60 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-15 KST (✅ v2.15.13 BE only release + ✅ INFRA-CI-PYTEST-AUTO — `.github/workflows/pytest.yml` 신규 + ADR-029 사례 #28 등록. 옵션 2 (사용자 5-15 결정) 영구 자동 검증 영역 도입. pytest 전수 백그라운드 실행 진행 — 결과 trail 다음 turn 또는 GitHub Actions 영역 확인.)
+> 마지막 업데이트: 2026-05-15 KST (✅ v2.15.14 BE only release — BUG-SECOND-CLOSE-FORCE-CLOSED-FALSE-POSITIVE + AUDIT TRAIL 통일 (Codex 옵션 b 채택). 사용자 결정 "장기 운영 영역 디테일 중요". pytest 38/38 GREEN.)
+
+---
+
+## ✅ 2026-05-15 KST — v2.15.14 BE only (BUG-SECOND-CLOSE-FORCE-CLOSED-FALSE-POSITIVE + AUDIT TRAIL 통일)
+
+> 사용자 5-14 운영 catch — SELF_INSPECTION / IF_2 누른 후 자동 close된 잔여 task 모두 "강제종료" + duration 0m 잘못 표시. Codex 라운드 1 옵션 b 채택 (audit trail 통일 — 사용자 5-15 결정 "장기 운영 디테일 중요").
+
+### Root cause + Fix
+
+- `auto_close_relay_task()` 영역 = `force_closed = TRUE` 일괄 고정 → work_completion_log row 있는 task (자연 close)도 강제종료
+- → `force_closed: bool = True` 인자 추가 + 4개 trigger 함수 영역 `unfinished_workers_count` 분기
+
+### 변경 (BE only, 3 파일)
+
+- `task_detail.py` `auto_close_relay_task()`: force_closed 인자 + UPDATE SQL 분기
+- `task_service.py` `_trigger_first_close()` + `_trigger_second_close()`: unfinished_workers_count + force_closed 분기
+- `checklist_service.py` `_try_mech_close()` + `_try_elec_close()`: 동일 패턴 + Codex 옵션 b (audit trail 통일)
+- `version.py` + `app_version.dart` 2.15.13 → **2.15.14**
+
+### force_closed 결정
+
+- 0 → 자연 close (force_closed=FALSE) — work_start_log workers 모두 work_completion_log 보유
+- > 0 → manager 권한 강제종료 (force_closed=TRUE)
+
+### Codex 옵션 b — audit trail 통일
+
+| 경로 | close_reason | closed_by |
+|------|---|---|
+| task_service `_trigger_*_close` | `AUTO_CLOSED_BY_SECOND_FINAL_TRIGGER:...` ✅ | worker_id ✅ |
+| checklist `_try_mech_close` | **`AUTO_CLOSED_BY_SECOND_FINAL_TRIGGER:SELF_INSPECTION`** | **마지막 완료 worker_id** |
+| checklist `_try_elec_close` | **`AUTO_CLOSED_BY_SECOND_FINAL_TRIGGER:IF_2`** | **마지막 완료 worker_id** |
+
+→ 4개 trigger 함수 영역 모두 동일 trail → 데이터 분석 일관성.
+
+### Codex 라운드 1 (M=0 / A=8 / N=2)
+
+- M = 0 → 배포 블로커 없음
+- A 2건 본 sprint 반영 (옵션 b)
+- A 6건 잔존 = BACKLOG (`POST-REVIEW-AUDIT-TRAIL-CONSISTENCY-20260515` + pytest TC 5건)
+
+### 검증
+
+- pytest test_relay_first_final.py 38/38 PASS (19.26s)
+- flutter build + Netlify 배포 완료
+- 회귀 위험 0 (default=TRUE legacy 호환)
+
+### 후속
+
+- POST-REVIEW deadline 2026-05-22 (7일)
+
+---
+
+## ✅ 2026-05-15 KST — INFRA-CI-PYTEST-AUTO (CI 워크플로우 + ADR-029 사례 #28)
 
 ---
 

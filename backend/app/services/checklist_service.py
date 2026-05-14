@@ -1314,11 +1314,25 @@ def _try_elec_close(serial_number: str) -> bool:
             return False
 
         # IF_2 task 정보 조회 (auto_close_relay_task 호출용)
+        # v2.15.14: unfinished_workers_count + last_completion_worker_id 추가
         cur.execute(
             """
             SELECT td.id AS task_detail_id, td.started_at,
                    (SELECT MAX(wcl.completed_at) FROM work_completion_log wcl WHERE wcl.task_id = td.id) AS last_completion_at,
-                   (SELECT COUNT(DISTINCT wcl.worker_id) FROM work_completion_log wcl WHERE wcl.task_id = td.id) AS worker_count
+                   (SELECT COUNT(DISTINCT wcl.worker_id) FROM work_completion_log wcl WHERE wcl.task_id = td.id) AS worker_count,
+                   (SELECT COUNT(DISTINCT wsl.worker_id)
+                      FROM work_start_log wsl
+                     WHERE wsl.task_id = td.id
+                       AND NOT EXISTS (
+                         SELECT 1 FROM work_completion_log wcl
+                          WHERE wcl.task_id = td.id
+                            AND wcl.worker_id = wsl.worker_id
+                       )) AS unfinished_workers_count,
+                   (SELECT wcl.worker_id
+                      FROM work_completion_log wcl
+                     WHERE wcl.task_id = td.id
+                     ORDER BY wcl.completed_at DESC
+                     LIMIT 1) AS last_completion_worker_id
             FROM app_task_details td
             WHERE td.serial_number = %s
               AND td.task_category = 'ELEC'
@@ -1332,18 +1346,27 @@ def _try_elec_close(serial_number: str) -> bool:
         if2_row = cur.fetchone()
         conn.commit()  # SELECT 후 transaction 정리 (HOTFIX-08 패턴)
 
-        # IF_2 still open → auto_close_relay_task 호출 (v2.15.10 신규)
+        # IF_2 still open → auto_close_relay_task 호출 (v2.15.10 신규 + v2.15.14 force_closed + audit trail 통일)
         if if2_row:
             from app.models.task_detail import auto_close_relay_task
+            if2_unfinished = (if2_row.get('unfinished_workers_count', 0) or 0) if isinstance(if2_row, dict) else 0
+            if2_force_closed = (if2_unfinished > 0)
+            if2_last_worker_id = if2_row.get('last_completion_worker_id') if isinstance(if2_row, dict) else None
             success = auto_close_relay_task(
                 task_detail_id=if2_row['task_detail_id'],
                 last_completion_at=if2_row['last_completion_at'],
                 worker_count=if2_row['worker_count'] or 1,
+                closed_by_worker_id=if2_last_worker_id,    # v2.15.14 옵션 b
+                trigger_task_id='IF_2',                     # v2.15.14 옵션 b
+                trigger_type='SECOND_FINAL',                # v2.15.14 옵션 b
+                force_closed=if2_force_closed,
             )
             if success:
                 logger.info(
                     f"ELEC IF_2 auto-closed (path 2: checklist last + INSPECTION done): "
-                    f"serial={serial_number}, if2_task_id={if2_row['task_detail_id']}"
+                    f"serial={serial_number}, if2_task_id={if2_row['task_detail_id']}, "
+                    f"force_closed={if2_force_closed}, unfinished_workers={if2_unfinished}, "
+                    f"closed_by={if2_last_worker_id}"
                 )
 
         # completion_status flag set (기존 동작 유지)
@@ -1544,11 +1567,26 @@ def _try_mech_close(serial_number: str) -> bool:
         cur = conn.cursor()
 
         # SELF_INSPECTION 영역 work_completion_log 1+ 확인 (relay 모드 허용)
+        # v2.15.14: unfinished_workers_count 추가 (force_closed 결정용)
+        # v2.15.14 옵션 b: last_completion_worker_id 추가 (audit trail 통일 — closed_by 전달용)
         cur.execute(
             """
             SELECT td.id AS task_detail_id, td.started_at,
                    (SELECT MAX(wcl.completed_at) FROM work_completion_log wcl WHERE wcl.task_id = td.id) AS last_completion_at,
-                   (SELECT COUNT(DISTINCT wcl.worker_id) FROM work_completion_log wcl WHERE wcl.task_id = td.id) AS worker_count
+                   (SELECT COUNT(DISTINCT wcl.worker_id) FROM work_completion_log wcl WHERE wcl.task_id = td.id) AS worker_count,
+                   (SELECT COUNT(DISTINCT wsl.worker_id)
+                      FROM work_start_log wsl
+                     WHERE wsl.task_id = td.id
+                       AND NOT EXISTS (
+                         SELECT 1 FROM work_completion_log wcl
+                          WHERE wcl.task_id = td.id
+                            AND wcl.worker_id = wsl.worker_id
+                       )) AS unfinished_workers_count,
+                   (SELECT wcl.worker_id
+                      FROM work_completion_log wcl
+                     WHERE wcl.task_id = td.id
+                     ORDER BY wcl.completed_at DESC
+                     LIMIT 1) AS last_completion_worker_id
             FROM app_task_details td
             WHERE td.serial_number = %s
               AND td.task_category = 'MECH'
@@ -1570,11 +1608,25 @@ def _try_mech_close(serial_number: str) -> bool:
             return False
 
         # 잔여 MECH task 조회 (SELF_INSPECTION 제외 + relay 모드 task)
+        # v2.15.14: unfinished_workers_count + last_completion_worker_id 추가
         cur.execute(
             """
             SELECT td.id AS task_detail_id, td.task_id, td.started_at,
                    (SELECT MAX(wcl.completed_at) FROM work_completion_log wcl WHERE wcl.task_id = td.id) AS last_completion_at,
-                   (SELECT COUNT(DISTINCT wcl.worker_id) FROM work_completion_log wcl WHERE wcl.task_id = td.id) AS worker_count
+                   (SELECT COUNT(DISTINCT wcl.worker_id) FROM work_completion_log wcl WHERE wcl.task_id = td.id) AS worker_count,
+                   (SELECT COUNT(DISTINCT wsl.worker_id)
+                      FROM work_start_log wsl
+                     WHERE wsl.task_id = td.id
+                       AND NOT EXISTS (
+                         SELECT 1 FROM work_completion_log wcl
+                          WHERE wcl.task_id = td.id
+                            AND wcl.worker_id = wsl.worker_id
+                       )) AS unfinished_workers_count,
+                   (SELECT wcl.worker_id
+                      FROM work_completion_log wcl
+                     WHERE wcl.task_id = td.id
+                     ORDER BY wcl.completed_at DESC
+                     LIMIT 1) AS last_completion_worker_id
             FROM app_task_details td
             WHERE td.serial_number = %s
               AND td.task_category = 'MECH'
@@ -1591,29 +1643,47 @@ def _try_mech_close(serial_number: str) -> bool:
 
         from app.models.task_detail import auto_close_relay_task
 
-        # SELF_INSPECTION 본인 close
+        # SELF_INSPECTION 본인 close (v2.15.14: force_closed + audit trail 통일)
+        si_unfinished = (si_row.get('unfinished_workers_count', 0) or 0) if isinstance(si_row, dict) else 0
+        si_force_closed = (si_unfinished > 0)
+        si_last_worker_id = si_row.get('last_completion_worker_id') if isinstance(si_row, dict) else None
         si_success = auto_close_relay_task(
             task_detail_id=si_row['task_detail_id'],
             last_completion_at=si_row['last_completion_at'],
             worker_count=si_row['worker_count'] or 1,
+            closed_by_worker_id=si_last_worker_id,        # v2.15.14 옵션 b: audit trail 통일
+            trigger_task_id='SELF_INSPECTION',             # v2.15.14 옵션 b: trail 명시
+            trigger_type='SECOND_FINAL',                   # v2.15.14 옵션 b: trail 명시
+            force_closed=si_force_closed,
         )
         if si_success:
             logger.info(
                 f"MECH SELF_INSPECTION auto-closed (path 2: checklist last): "
-                f"serial={serial_number}, task_id={si_row['task_detail_id']}"
+                f"serial={serial_number}, task_id={si_row['task_detail_id']}, "
+                f"force_closed={si_force_closed}, unfinished_workers={si_unfinished}, "
+                f"closed_by={si_last_worker_id}"
             )
 
-        # 잔여 MECH task auto-close
+        # 잔여 MECH task auto-close (v2.15.14: force_closed + audit trail 통일)
         for orphan in orphan_rows:
+            o_unfinished = (orphan.get('unfinished_workers_count', 0) or 0) if isinstance(orphan, dict) else 0
+            o_force_closed = (o_unfinished > 0)
+            o_last_worker_id = orphan.get('last_completion_worker_id') if isinstance(orphan, dict) else None
             success = auto_close_relay_task(
                 task_detail_id=orphan['task_detail_id'],
                 last_completion_at=orphan['last_completion_at'] or si_row['last_completion_at'],
                 worker_count=orphan['worker_count'] or 1,
+                closed_by_worker_id=o_last_worker_id,      # v2.15.14 옵션 b
+                trigger_task_id='SELF_INSPECTION',          # v2.15.14 옵션 b — Second Close trigger
+                trigger_type='SECOND_FINAL',                # v2.15.14 옵션 b
+                force_closed=o_force_closed,
             )
             if success:
                 logger.info(
                     f"MECH orphan auto-closed (path 2): serial={serial_number}, "
-                    f"task_id={orphan['task_detail_id']}, task_id_ref={orphan['task_id']}"
+                    f"task_id={orphan['task_detail_id']}, task_id_ref={orphan['task_id']}, "
+                    f"force_closed={o_force_closed}, unfinished_workers={o_unfinished}, "
+                    f"closed_by={o_last_worker_id}"
                 )
 
         return True

@@ -1276,6 +1276,7 @@ class TaskService:
                 #   - Catch B: COALESCE 안전망 — work_start_log row 없으면 td.started_at fallback
                 #   - Catch D 옵션 A: td.started_at IS NOT NULL 가드 — 시작 안 한 task 영역 제외
                 #   - 이전 결함: td.last_started_at = 존재하지 않는 컬럼 → silent fail (Sentry catch)
+                # v2.15.14: unfinished_workers_count 추가 (force_closed 결정용)
                 cur.execute(
                     """
                     SELECT td.id, td.worker_id,
@@ -1288,7 +1289,15 @@ class TaskService:
                            td.total_pause_minutes,
                            (SELECT MAX(wcl.completed_at)
                               FROM work_completion_log wcl
-                             WHERE wcl.task_id = td.id) AS orphan_last_completion_at
+                             WHERE wcl.task_id = td.id) AS orphan_last_completion_at,
+                           (SELECT COUNT(DISTINCT wsl.worker_id)
+                              FROM work_start_log wsl
+                             WHERE wsl.task_id = td.id
+                               AND NOT EXISTS (
+                                 SELECT 1 FROM work_completion_log wcl
+                                  WHERE wcl.task_id = td.id
+                                    AND wcl.worker_id = wsl.worker_id
+                               )) AS unfinished_workers_count
                       FROM app_task_details td
                      WHERE td.serial_number = %s
                        AND td.task_category = %s
@@ -1316,9 +1325,14 @@ class TaskService:
                 o_last_started_at = orphan['last_started_at']
                 o_pause_minutes = orphan['total_pause_minutes'] or 0
                 o_last_completion = orphan.get('orphan_last_completion_at')
+                o_unfinished = orphan.get('unfinished_workers_count', 0) or 0
             else:
-                o_id, o_worker_id, o_last_started_at, o_pause_minutes, o_last_completion = orphan
+                o_id, o_worker_id, o_last_started_at, o_pause_minutes, o_last_completion, o_unfinished = orphan
                 o_pause_minutes = o_pause_minutes or 0
+                o_unfinished = o_unfinished or 0
+
+            # v2.15.14: 모든 worker 본인 종료 시 자연 close / 일부 미종료 시 강제종료
+            is_force_closed = (o_unfinished > 0)
 
             close_at, duration_source = calculate_close_at(
                 worker_id=o_worker_id,
@@ -1341,12 +1355,14 @@ class TaskService:
                 trigger_type='FIRST_FINAL',
                 duration_source=duration_source,
                 duration_minutes=duration_min,
+                force_closed=is_force_closed,  # v2.15.14: 자연 close vs 강제종료 분기
             )
             if success:
                 logger.info(
                     f"First Close trigger: task_id={o_id} closed by "
                     f"{trigger_task.task_id} start (worker_id={trigger_worker_id}, "
-                    f"duration_source={duration_source})"
+                    f"duration_source={duration_source}, force_closed={is_force_closed}, "
+                    f"unfinished_workers={o_unfinished})"
                 )
 
     def _trigger_second_close(
@@ -1375,6 +1391,10 @@ class TaskService:
                 #   - Catch B: COALESCE 안전망 — work_start_log row 없으면 td.started_at fallback
                 #   - Catch D 옵션 A: td.started_at IS NOT NULL 가드 — 시작 안 한 task 영역 제외
                 #   - 이전 결함: td.last_started_at = 존재하지 않는 컬럼 → silent fail (Sentry catch)
+                # v2.15.14 (BUG-SECOND-CLOSE-FORCE-CLOSED-FALSE-POSITIVE-20260514):
+                # unfinished_workers_count 추가 — 시작했으나 본인 종료 안 누른 worker 카운트
+                # = 0 → 모든 worker 종료 = 자연 close (force_closed=FALSE)
+                # > 0 → 일부 미종료 = manager 권한 강제종료 (force_closed=TRUE)
                 cur.execute(
                     """
                     SELECT td.id, td.worker_id,
@@ -1387,7 +1407,15 @@ class TaskService:
                            td.total_pause_minutes,
                            (SELECT MAX(wcl.completed_at)
                               FROM work_completion_log wcl
-                             WHERE wcl.task_id = td.id) AS orphan_last_completion_at
+                             WHERE wcl.task_id = td.id) AS orphan_last_completion_at,
+                           (SELECT COUNT(DISTINCT wsl.worker_id)
+                              FROM work_start_log wsl
+                             WHERE wsl.task_id = td.id
+                               AND NOT EXISTS (
+                                 SELECT 1 FROM work_completion_log wcl
+                                  WHERE wcl.task_id = td.id
+                                    AND wcl.worker_id = wsl.worker_id
+                               )) AS unfinished_workers_count
                       FROM app_task_details td
                      WHERE td.serial_number = %s
                        AND td.task_category = %s
@@ -1414,9 +1442,16 @@ class TaskService:
                 o_last_started_at = orphan['last_started_at']
                 o_pause_minutes = orphan['total_pause_minutes'] or 0
                 o_last_completion = orphan.get('orphan_last_completion_at')
+                # v2.15.14: unfinished_workers_count 추출 → force_closed 결정
+                o_unfinished = orphan.get('unfinished_workers_count', 0) or 0
             else:
-                o_id, o_worker_id, o_last_started_at, o_pause_minutes, o_last_completion = orphan
+                # tuple unpacking — SELECT 컬럼 순서 영역 정합 (id, worker_id, last_started_at, total_pause_minutes, orphan_last_completion_at, unfinished_workers_count)
+                o_id, o_worker_id, o_last_started_at, o_pause_minutes, o_last_completion, o_unfinished = orphan
                 o_pause_minutes = o_pause_minutes or 0
+                o_unfinished = o_unfinished or 0
+
+            # v2.15.14: 모든 worker 본인 종료 시 자연 close (force_closed=FALSE) / 일부 미종료 시 manager 권한 강제종료 (TRUE)
+            is_force_closed = (o_unfinished > 0)
 
             close_at, duration_source = calculate_close_at(
                 worker_id=o_worker_id,
@@ -1439,12 +1474,14 @@ class TaskService:
                 trigger_type='SECOND_FINAL',
                 duration_source=duration_source,
                 duration_minutes=duration_min,
+                force_closed=is_force_closed,  # v2.15.14: 자연 close vs 강제종료 분기
             )
             if success:
                 logger.info(
                     f"Second Close trigger: task_id={o_id} closed by "
                     f"{trigger_task.task_id} complete (worker_id={trigger_worker_id}, "
-                    f"duration_source={duration_source})"
+                    f"duration_source={duration_source}, force_closed={is_force_closed}, "
+                    f"unfinished_workers={o_unfinished})"
                 )
 
     def get_tasks_by_product(

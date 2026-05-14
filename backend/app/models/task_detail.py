@@ -721,6 +721,10 @@ def auto_close_relay_task(
     trigger_type: str = 'LEGACY',
     duration_source: str = 'NORMAL_COMPLETION',
     duration_minutes: Optional[int] = None,
+    # v2.15.14 (BUG-SECOND-CLOSE-FORCE-CLOSED-FALSE-POSITIVE-20260514):
+    # force_closed 인자 추가 — 모든 worker 본인 종료 시 자연 close (False) / 일부 미종료 시 manager 권한 강제종료 (True)
+    # default=True 영역 = Sprint 41-B legacy 호환 보존 (호출자 영역 명시적 영역 False 전달 필수)
+    force_closed: bool = True,
 ) -> bool:
     """
     릴레이 미완료 task 자동 마감.
@@ -772,7 +776,7 @@ def auto_close_relay_task(
                     duration_minutes = %s,
                     elapsed_minutes = EXTRACT(EPOCH FROM (%s - started_at)) / 60,
                     worker_count = %s,
-                    force_closed = TRUE,
+                    force_closed = %s,
                     closed_by = %s,
                     close_reason = %s,
                     duration_source = %s,
@@ -782,7 +786,7 @@ def auto_close_relay_task(
                   AND force_closed = FALSE
                 RETURNING id
             """, (last_completion_at, duration_minutes, last_completion_at,
-                  worker_count, closed_by_worker_id, close_reason, duration_source,
+                  worker_count, force_closed, closed_by_worker_id, close_reason, duration_source,
                   task_detail_id))
         else:
             # Sprint 41-B legacy 호환 — duration_minutes EXTRACT(EPOCH) 자동 계산
@@ -792,7 +796,7 @@ def auto_close_relay_task(
                     duration_minutes = EXTRACT(EPOCH FROM (%s - started_at)) / 60,
                     elapsed_minutes = EXTRACT(EPOCH FROM (%s - started_at)) / 60,
                     worker_count = %s,
-                    force_closed = TRUE,
+                    force_closed = %s,
                     closed_by = %s,
                     close_reason = %s,
                     duration_source = %s,
@@ -802,7 +806,7 @@ def auto_close_relay_task(
                   AND force_closed = FALSE
                 RETURNING id
             """, (last_completion_at, last_completion_at, last_completion_at,
-                  worker_count, closed_by_worker_id, close_reason, duration_source,
+                  worker_count, force_closed, closed_by_worker_id, close_reason, duration_source,
                   task_detail_id))
         result = cur.fetchone()
         conn.commit()
