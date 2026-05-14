@@ -1015,16 +1015,27 @@ class TaskService:
             return  # DRAGON/SWS/GALLANT 안전망
 
         from app.models.task_detail import auto_close_relay_task
-        from app.services.duration_calculator import calculate_close_at
+        from app.services.duration_calculator import calculate_close_at, calculate_auto_close_duration
 
         conn = None
         try:
             conn = get_db_connection()
             with conn.cursor() as cur:
-                # M-2 wire-through: orphan 의 work_completion_log MAX(completed_at) JOIN
+                # ⭐ HOTFIX v2.15.4 (2026-05-14): last_started_at 컬럼명 오류 정정 + 옵션 B + Catch B/D 통합
+                #   - 옵션 B: work_start_log MAX(started_at) JOIN — relay 마지막 worker 시작 시점 정확 측정
+                #   - Catch B: COALESCE 안전망 — work_start_log row 없으면 td.started_at fallback
+                #   - Catch D 옵션 A: td.started_at IS NOT NULL 가드 — 시작 안 한 task 영역 제외
+                #   - 이전 결함: td.last_started_at = 존재하지 않는 컬럼 → silent fail (Sentry catch)
                 cur.execute(
                     """
-                    SELECT td.id, td.worker_id, td.last_started_at, td.total_pause_minutes,
+                    SELECT td.id, td.worker_id,
+                           COALESCE(
+                               (SELECT MAX(wsl.started_at)
+                                  FROM work_start_log wsl
+                                 WHERE wsl.task_id = td.id),
+                               td.started_at
+                           ) AS last_started_at,
+                           td.total_pause_minutes,
                            (SELECT MAX(wcl.completed_at)
                               FROM work_completion_log wcl
                              WHERE wcl.task_id = td.id) AS orphan_last_completion_at
@@ -1032,6 +1043,7 @@ class TaskService:
                      WHERE td.serial_number = %s
                        AND td.task_category = %s
                        AND td.task_id = ANY(%s)
+                       AND td.started_at IS NOT NULL
                        AND td.completed_at IS NULL
                        AND td.force_closed = FALSE
                        AND td.is_applicable = TRUE
@@ -1063,15 +1075,12 @@ class TaskService:
                 trigger_time=trigger_time,
                 orphan_last_completion_at=o_last_completion,
             )
-            # duration 계산 (close_at - last_started_at - pause_minutes, 음수 차단)
-            duration_min = 0
-            if o_last_started_at:
-                # tz-aware 정규화 (KST)
-                last_started_kst = o_last_started_at
-                if last_started_kst.tzinfo is None:
-                    last_started_kst = last_started_kst.replace(tzinfo=Config.KST)
-                raw_min = int((close_at - last_started_kst).total_seconds() / 60)
-                duration_min = max(0, raw_min - o_pause_minutes)
+            # ⭐ HOTFIX v2.15.4 Catch C (DRY 정정): inline → calculate_auto_close_duration() 호출
+            duration_min = calculate_auto_close_duration(
+                close_at=close_at,
+                last_started_at=o_last_started_at,
+                total_pause_minutes=o_pause_minutes,
+            )
 
             success = auto_close_relay_task(
                 task_detail_id=o_id,
@@ -1105,16 +1114,27 @@ class TaskService:
         Idempotent: write-time WHERE 가드로 자동 skip.
         """
         from app.models.task_detail import auto_close_relay_task
-        from app.services.duration_calculator import calculate_close_at
+        from app.services.duration_calculator import calculate_close_at, calculate_auto_close_duration
 
         conn = None
         try:
             conn = get_db_connection()
             with conn.cursor() as cur:
-                # M-2 wire-through: orphan 의 work_completion_log MAX(completed_at) JOIN
+                # ⭐ HOTFIX v2.15.4 (2026-05-14): last_started_at 컬럼명 오류 정정 + 옵션 B + Catch B/D 통합
+                #   - 옵션 B: work_start_log MAX(started_at) JOIN — relay 마지막 worker 시작 시점 정확 측정
+                #   - Catch B: COALESCE 안전망 — work_start_log row 없으면 td.started_at fallback
+                #   - Catch D 옵션 A: td.started_at IS NOT NULL 가드 — 시작 안 한 task 영역 제외
+                #   - 이전 결함: td.last_started_at = 존재하지 않는 컬럼 → silent fail (Sentry catch)
                 cur.execute(
                     """
-                    SELECT td.id, td.worker_id, td.last_started_at, td.total_pause_minutes,
+                    SELECT td.id, td.worker_id,
+                           COALESCE(
+                               (SELECT MAX(wsl.started_at)
+                                  FROM work_start_log wsl
+                                 WHERE wsl.task_id = td.id),
+                               td.started_at
+                           ) AS last_started_at,
+                           td.total_pause_minutes,
                            (SELECT MAX(wcl.completed_at)
                               FROM work_completion_log wcl
                              WHERE wcl.task_id = td.id) AS orphan_last_completion_at
@@ -1122,6 +1142,7 @@ class TaskService:
                      WHERE td.serial_number = %s
                        AND td.task_category = %s
                        AND td.id <> %s
+                       AND td.started_at IS NOT NULL
                        AND td.completed_at IS NULL
                        AND td.force_closed = FALSE
                        AND td.is_applicable = TRUE
@@ -1152,13 +1173,12 @@ class TaskService:
                 trigger_time=trigger_time,
                 orphan_last_completion_at=o_last_completion,
             )
-            duration_min = 0
-            if o_last_started_at:
-                last_started_kst = o_last_started_at
-                if last_started_kst.tzinfo is None:
-                    last_started_kst = last_started_kst.replace(tzinfo=Config.KST)
-                raw_min = int((close_at - last_started_kst).total_seconds() / 60)
-                duration_min = max(0, raw_min - o_pause_minutes)
+            # ⭐ HOTFIX v2.15.4 Catch C (DRY 정정): inline → calculate_auto_close_duration() 호출
+            duration_min = calculate_auto_close_duration(
+                close_at=close_at,
+                last_started_at=o_last_started_at,
+                total_pause_minutes=o_pause_minutes,
+            )
 
             success = auto_close_relay_task(
                 task_detail_id=o_id,

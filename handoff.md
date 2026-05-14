@@ -1,7 +1,62 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-14 KST (✅ v2.15.3 release 완료 — Issue A 차단 범위 확장 / 옵션 B Allowlist 11 task / Codex 라운드 1 M-1 정정 / pytest 46/46 GREEN / commit `7b38d10` push / Netlify + Railway 배포)
+> 마지막 업데이트: 2026-05-14 KST (✅ v2.15.4 hotfix 코드 적용 완료 — task_service.py `last_started_at` SQL 컬럼명 오류 정정 + Catch B/C/D 통합. Sentry silent fail 4 트리거 케이스 해소. Railway 자동 재배포 대기.)
+
+---
+
+## ✅ 2026-05-14 KST — v2.15.4 hotfix (HOTFIX-SPRINT41D-SQL-COLUMN-FIX)
+
+> **사용자 catch + Sentry 검증**: v2.15.3 prod 배포 후 사용자 측 — "MECH TANK_DOCKING 시작해도 gas1/util1 자동 close 안 됨". Sentry 영역 `_trigger_first_close orphan SELECT failed: column td.last_started_at does not exist` 메시지 catch (TEST-1111 + 실 운영 GPWS-0799). Root cause: app_task_details 영역 정식 컬럼 = `started_at`, `last_started_at` 컬럼 존재 안 함. try/except silent fail → 4 트리거 케이스 모두 미발동.
+
+### 변경 (BE only, 2 파일)
+
+- `backend/app/services/task_service.py` L1024-1091 `_trigger_first_close()` + L1115-1187 `_trigger_second_close()` SQL 정정
+  - 옵션 B: `COALESCE((SELECT MAX(wsl.started_at) FROM work_start_log wsl WHERE wsl.task_id = td.id), td.started_at)`
+  - Catch B: COALESCE 안전망
+  - Catch D 옵션 A: `WHERE td.started_at IS NOT NULL` 가드 (시작 안 한 task 영역 제외)
+  - Catch C: inline duration 계산 → `calculate_auto_close_duration()` 호출 통합 (DRY)
+- `backend/version.py` 2.15.2 → 2.15.4 (v2.15.3 결함 영역 우회 skip)
+
+### Sprint 41-D 영향 매트릭스 (v2.15.3 결함 → v2.15.4 fix)
+
+| 트리거 | Before | After |
+|---|:-:|:-:|
+| MECH TANK_DOCKING start → gas1/util1 close | ❌ silent fail | ✅ 자동 close |
+| ELEC IF_2 start → panel/cabinet/wiring/IF_1 close | ❌ silent fail | ✅ 자동 close |
+| MECH SELF_INSPECTION complete → gas2/util2 close | ❌ silent fail | ✅ 자동 close |
+| ELEC IF_2+INSPECTION AND complete → 잔여 close | ❌ silent fail | ✅ 자동 close |
+
+### 운영 영역 영향 catch (사용자 측 SQL 검증)
+
+| S/N | trigger | 영향 |
+|---|---|---|
+| GPWS-0799 (실 운영) | ELEC IF_2 2026-05-14 13:15 | 4 task orphan — **Manager force-close 필요** |
+| TEST-1111 (테스트) | MECH + ELEC 13:29/13:35 | 6 task orphan |
+| GBWS-6979/6980/7087/7088 | Sprint 41-D 이전 영역 | ⚠️ 본 결함 무관 |
+
+### 다음 세션 후속 액션
+
+1. **Railway 자동 재배포 확인** — v2.15.4 BUILD_DATE 2026-05-14
+2. **Sentry 검증** — `column td.last_started_at does not exist` 메시지 0건 확인
+3. **운영 영역 검증** — 사용자 측 GPWS-0799 영역 Manager force-close 직접 처리
+4. **미래 trigger 정상 작동 검증** — 신규 S/N TANK_DOCKING / IF_2 start 후 자동 close 확인
+5. **pytest integration TC 영역 별 sprint P2** — TC-FF-01p/01q/01r (~45분)
+6. **POST-REVIEW** — 7일 이내 Codex 검토 (deadline 2026-05-21)
+
+### ADR-029 후속 사례 보강 (#21~#23)
+
+| # | 사례 |
+|---|---|
+| 21 | pytest mock 영역 vs 실제 동작 검증 분리 표준 |
+| 22 | Codex/SQL 작성 영역 information_schema cross-check 표준 |
+| 23 | 사용자 검증 답변 "True" 영역도 운영 데이터 영역 SQL 검증 권고 |
+
+→ HOTFIX-SPRINT41D 시리즈 완료 후 재논의 영역에 통합 영역 영향.
+
+---
+
+## ✅ 2026-05-14 KST — v2.15.3 release 완료 (HOTFIX-SPRINT41D-AUTO-FINALIZE-RANGE-EXTENSION)
 
 ---
 

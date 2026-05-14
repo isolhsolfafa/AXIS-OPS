@@ -60,6 +60,81 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.15.4] - 2026-05-14 — Sprint 41-D BE 후속 hotfix (SQL 컬럼명 오류 + DRY 정정)
+
+> **사용자 catch + Sentry 검증**: v2.15.3 prod 배포 후 운영 영역 GPWS-0799 (ELEC IF_2 start 시) — First Close 트리거 미발동. Sentry `_trigger_first_close orphan SELECT failed: column td.last_started_at does not exist` 메시지 catch (TEST-1111 + GPWS-0799). **Root cause**: `task_service.py` L1027 + L1117 의 두 SELECT 영역에서 `td.last_started_at` 컬럼 영역 — app_task_details 영역에 존재 안 함 (정식 컬럼명 = `started_at`). try/except 영역 silent fail → 자동 close 미발동. pytest 23/23 + 신규 14 TC GREEN 이었으나 mock 영역 한계 — 실제 DB SQL 영역 실행 영역 검증 누락 (ADR-029 후속 사례 #21).
+
+### 변경 (BE only, 2 파일)
+
+| 파일 | 변경 |
+|------|-----|
+| `backend/app/services/task_service.py` L1024-1091 `_trigger_first_close()` + L1115-1187 `_trigger_second_close()` | SQL SELECT 영역 정정 — `td.last_started_at` → `COALESCE((SELECT MAX(wsl.started_at) FROM work_start_log wsl WHERE wsl.task_id = td.id), td.started_at)` (옵션 B + Catch B 통합) + WHERE 영역에 `td.started_at IS NOT NULL` 가드 추가 (Catch D 옵션 A) + inline duration 계산 → `calculate_auto_close_duration()` 호출 통합 (Catch C DRY) |
+| `backend/version.py` | VERSION 2.15.2 → 2.15.4 (v2.15.3 결함 영역 우회 skip) |
+
+### Sprint 41-D 영향 매트릭스 (v2.15.3 결함 → v2.15.4 fix)
+
+| 트리거 | 대상 task | v2.15.3 (결함) | v2.15.4 (fix) |
+|---|---|:-:|:-:|
+| MECH TANK_DOCKING start | gas1/util1/HEATING_JACKET | ❌ silent fail | ✅ 자동 close |
+| ELEC IF_2 start | panel/cabinet/wiring/IF_1 | ❌ silent fail | ✅ 자동 close |
+| MECH SELF_INSPECTION complete | gas2/util2 (Second Close) | ❌ silent fail | ✅ 자동 close |
+| ELEC IF_2 + INSPECTION AND complete | 잔여 task (Second Close) | ❌ silent fail | ✅ 자동 close |
+
+→ **4 트리거 케이스 모두 silent fail 영역 해소**.
+
+### 운영 영역 영향 catch (사용자 측 SQL 검증)
+
+| S/N | 카테고리 | trigger 시점 | 영향 |
+|---|---|---|---|
+| GPWS-0799 (실 운영) | ELEC IF_2 | 2026-05-14 13:15:31 | panel/cabinet/wiring/IF_1 미close — **Manager force-close 필요** |
+| TEST-1111 (테스트) | MECH TANK_DOCKING | 2026-05-14 13:29:38 | gas1/util1 미close |
+| TEST-1111 (테스트) | ELEC IF_2 | 2026-05-14 13:35:28 | panel/cabinet/wiring/IF_1 미close |
+| GBWS-6979/6980/7087/7088 | ELEC IF_2 | 2026-04-23 ~ 05-09 | ⚠️ Sprint 41-D 이전 영역 — 기존 Manager Rollback 영역 필요 (본 결함 무관) |
+
+→ v2.15.4 fix 는 미래 trigger 영역만 정상 작동. 기존 orphan 영역 = Manager 측 직접 처리.
+
+### Catch 영역 정합 (사용자 5-14)
+
+| Catch | 영역 | 처리 |
+|---|---|---|
+| A | work_start_log.task_id index 없음 (성능) | 별 sprint P3 (5분) |
+| B | work_start_log MAX NULL → COALESCE 안전망 | ✅ 본 hotfix 흡수 |
+| C | calculate_auto_close_duration() DRY 위반 | ✅ 본 hotfix 흡수 (inline → 함수 호출) |
+| **D** | **시작 안 한 task close 정책 → 옵션 A 채택 (started_at IS NOT NULL 가드)** | ✅ **사용자 결정 반영** |
+
+### Codex 영역 검증 trail catch (사후)
+
+- v2.15.3 Codex 라운드 1+2 GREEN (M=1/A=2/N=4) → 그러나 본 결함 catch 누락
+- task_seed.py cross-check 만 진행, information_schema 영역 cross-check 누락
+- pytest 영역 mock 영역 한계 — 실제 DB SQL 영역 검증 누락
+- 사용자 5-14 발화 "Second Close 작동 True" 답변 → 실제로는 Second Close 도 silent fail (코드 영역 동일 오류)
+
+→ ADR-029 후속 사례 추가:
+  - #21 — pytest mock 영역 vs 실제 동작 검증 분리 표준
+  - #22 — Codex/SQL 작성 영역 information_schema cross-check 표준
+  - #23 — 사용자 측 검증 답변 "True" 영역도 운영 데이터 영역 SQL 영역 검증 권고
+
+### pytest 영역 신규 추가 권고
+
+- TC-FF-01p (신규 권고): 실제 DB integration TC — `_trigger_first_close()` 호출 후 work_start_log JOIN + COALESCE 동작 검증
+- TC-FF-01q (신규 권고): `started_at IS NULL` orphan 제외 검증 (Catch D 정합)
+- TC-FF-01r (신규 권고): `_trigger_second_close()` 동일 패턴 정합 검증
+
+→ 본 hotfix 영역 = 코드만 즉시 fix. pytest integration TC 영역은 별 sprint (P2, ~45분).
+
+### 운영 검증 (Pre-deploy Gate)
+
+- ✅ Railway 자동 재배포 후 Sentry 영역 `column td.last_started_at does not exist` 메시지 0건 확인
+- ⚠️ 사용자 측 GPWS-0799 영역 Manager force-close 직접 처리 (기존 orphan)
+- ⚠️ 미래 새 trigger 영역 정상 작동 검증 — 신규 S/N 영역 TANK_DOCKING / IF_2 start 후 gas1/util1 / panel/cabinet/wiring/IF_1 영역 자동 close 확인
+
+### POST-REVIEW
+
+- 7일 이내 Codex 검토 (deadline 2026-05-21) — `POST-REVIEW-HOTFIX-SPRINT41D-SQL-COLUMN-FIX-20260514`
+- pytest integration TC 영역 신규 작성 별 sprint P2
+
+---
+
 ## [2.15.2] - 2026-05-14 — Sprint 41-D BE 후속 hotfix (auto-finalize 차단 결함 fix)
 
 > **사용자 catch**: v2.15.0 + v2.15.1 배포 후에도 운영 영역 "내 작업만 종료 → task close 발생" 사고 재현. **Root cause**: `task_service.py` L363-369 의 First Final 차단 분기가 `logger.info` 만 출력하고 `finalize` 변수 그대로 False 유지 → L408 auto_finalize 분기 진입 → `_all_workers_completed=True` (한 명 참여) 시 `auto_finalized=True` 트리거 → **task close 발생 (의도와 반대)**. 즉 의도된 즉시 return 누락 결함. 설계서 (AGENT_TEAM_LAUNCH.md Sprint 41-D L478-499) 는 즉시 return 명시했으나 구현 단계에서 logger.info 만으로 단순화. pytest 23/23 GREEN 이었으나 TC-FF-01~05 명시 영역이 실제로는 constants/phase map 검증만 작성되어 본 결함 catch 누락.
