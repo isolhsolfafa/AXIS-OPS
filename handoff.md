@@ -1,7 +1,42 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-14 KST (📋 v2.15.3 설계서 영역 — Issue A 차단 범위 확장 + Catch 2 ELEC IF_2 데드락 해소 (옵션 X3-단순) + REF sprint 별 영역 분리 — Codex 라운드 1 검증 대기)
+> 마지막 업데이트: 2026-05-14 KST (✅ v2.15.3 release 완료 — Issue A 차단 범위 확장 / 옵션 B Allowlist 11 task / Codex 라운드 1 M-1 정정 / pytest 46/46 GREEN / commit `7b38d10` push / Netlify + Railway 배포)
+
+---
+
+## ✅ 2026-05-14 KST — v2.15.3 release 완료 (HOTFIX-SPRINT41D-AUTO-FINALIZE-RANGE-EXTENSION)
+
+> **한 줄 요약**: v2.15.2 잔존 catch (Issue A — FIRST_FINAL 만 차단) 영역 옵션 B Allowlist 확장 (AUTO_FINALIZE_BLOCKED_TASK_IDS 11 task) + Codex M-1 정정 (work.py forward) 적용. 사용자 의도 ("relay 한 명 참여 시 close 방지 = 모든 relay-able task") 정합.
+
+### 변경 (3 파일)
+
+- `backend/app/services/task_service.py` — AUTO_FINALIZE_BLOCKED_TASK_IDS 11 task set + 분기 정정 + 응답 플래그
+- `backend/app/routes/work.py` L286-292 — forward 매핑 2 키 추가 (Codex M-1)
+- `tests/backend/test_relay_first_final.py` — parametrize 11 task 신규 + SELF_INSPECTION 회귀 방지 + 기존 보강
+
+### pytest 결과 GREEN
+
+- 신규 v2.15.3: 12 TC (parametrize 11 task + SELF_INSPECTION) PASS (0.21s)
+- 기존: 26 TC PASS (TC-FF-01b/c/d 보강 + 기존 23 TC)
+- 회귀: test_work_api 8/8 PASS (3분 56초)
+- **총 46/46 GREEN**
+
+### Codex 검증
+
+- 라운드 1: M=1 / A=2 / N=4 → M-1 (work.py forward) + A-1 (parametrize TC) 정정 반영
+- 라운드 2 미진행 (CLAUDE.md 핵심 규칙 6 라운드 상한 1회 정합)
+
+### 후속 액션
+
+- **사용자 측 운영 검증** (브라우저 새로고침 후 SW cache invalidation 5~10초):
+  1. TEST-1111 WASTE_GAS_LINE_1 "내 작업만 종료" → task open 유지 확인
+  2. admin 계정 WASTE_GAS_LINE_1 재진입 가능 확인
+  3. TANK_DOCKING start → gas1/util1 자동 close 트리거 확인
+  4. SELF_INSPECTION complete → 잔여 task 일괄 close (Second Close 보존 확인)
+- T+1주 (2026-05-21): Sentry 새 ERROR 0건 관찰
+- T+4주 (2026-06-11): baseline 비교 SQL — Manager Rollback 비율 50%+ 감소 검증
+- REF-CATEGORY-COMPLETION-CONSOLIDATION 영역 재논의 진입 가능 (HOTFIX-SPRINT41D 시리즈 완료 + 1주 운영 안정성 확인 후)
 
 ---
 
