@@ -482,21 +482,29 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
       return const Center(child: Text('체크리스트 항목이 없습니다'));
     }
 
-    return RefreshIndicator(
-      onRefresh: _fetchChecklist,
-      child: ListView.builder(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        itemCount: _groups.length + 2, // +2: header + progress (v2.15.11)
-        itemBuilder: (context, index) {
-          if (index == 0) return _buildHeader();
-          if (index == 1) return _buildProgressHeader();
-          final group = _groups[index - 2];
-          final groupName = group['group_name'] as String? ?? '';
-          // R2-5: INLET 만 Left/Right subgroup 분리, 나머지는 일반
-          if (groupName == 'INLET') return _buildInletGroup(group);
-          return _buildStandardGroup(group);
-        },
-      ),
+    // v2.15.12 — ELEC 패턴 정합: 진행률 헤더 영역 ListView 외부 (Column) → 스크롤 시 고정
+    return Column(
+      children: [
+        _buildHeader(),
+        _buildProgressHeader(),
+        const Divider(color: GxColors.mist, height: 1),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: _fetchChecklist,
+            child: ListView.builder(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              itemCount: _groups.length,
+              itemBuilder: (context, index) {
+                final group = _groups[index];
+                final groupName = group['group_name'] as String? ?? '';
+                // R2-5: INLET 만 Left/Right subgroup 분리, 나머지는 일반
+                if (groupName == 'INLET') return _buildInletGroup(group);
+                return _buildStandardGroup(group);
+              },
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -793,7 +801,12 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
       onTap: masterId == null
           ? null
           : () {
-              setState(() => _checkResultMap[masterId] = value);
+              // v2.15.12 — 진행률 실시간 갱신 정합: _checkResultMap + item['check_result'] 동시 update
+              // (v2.15.11 신규 진행률 getter `_checkedCount` 영역 item['check_result'] 참조 — 옛 값 반환 catch fix)
+              setState(() {
+                _checkResultMap[masterId] = value;
+                item['check_result'] = value;
+              });
               // M5: PASS/NA 라디오 변경 시 번들 PUT (현재 input_value / selected_value 동시 전송)
               // Sprint 66-BE Step 3 (v2.12.2): selectedMaterialId 도 함께 전송 (NEW-M-01 정합)
               _debouncedUpsert(

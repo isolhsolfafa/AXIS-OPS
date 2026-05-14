@@ -65,6 +65,36 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.15.12] - 2026-05-15 — FIX-MECH-CHECKLIST-PROGRESS-REALTIME-AND-STICKY (실시간 갱신 + 스크롤 고정)
+
+> v2.15.11 직후 사용자 catch 2건: ① MECH 진행률 바 실시간 갱신 안 됨 (새로고침 시점만 변경) ② MECH 진행률 바 스크롤 시 위로 사라짐 (ELEC = 고정).
+
+### 변경 (FE only, 1 파일 + version)
+
+| 파일 | 변경 |
+|------|------|
+| `mech_checklist_screen.dart` | (1) 라디오 onTap 영역 `setState` 영역 `_checkResultMap[masterId] = value` + `item['check_result'] = value` 동시 update — v2.15.11 진행률 getter (`_checkedCount`) 영역 `item['check_result']` 참조 정합 (2) `_buildBody()` 영역 ELEC 패턴 모방 — `Column > _buildHeader() + _buildProgressHeader() + Divider + Expanded(RefreshIndicator(ListView))` 영역 영역 진행률 헤더 영역 ListView 외부 고정 (ListView itemCount `+2` → 단순 `_groups.length`) |
+| `version.py` + `app_version.dart` | 2.15.11 → **2.15.12** |
+
+### Root cause
+
+| Catch | Root cause |
+|-------|----------|
+| 실시간 갱신 안 됨 | `_checkResultMap` 만 update, `item['check_result']` 미동기화 — v2.15.11 진행률 getter 옛 값 참조 |
+| 스크롤 시 사라짐 | v2.15.11 진행률 헤더 = ListView item (스크롤 시 위로) — ELEC 영역 = `Column > Expanded(ListView)` 외부 고정 패턴 미적용 |
+
+### 검증
+
+- flutter build web GREEN (12.5s)
+- Netlify prod 배포 완료
+- 회귀 위험 0 (BE 변경 0, 라디오 onTap 영역 +1줄, ListView wrap 영역 Column 변경)
+
+### 후속
+
+- **Catch 2 (작업화면 시작/내작업완료 후 메뉴 미동기화)** = 별 hotfix 진단 진행 — BE startTask/completeTask 응답 task 객체 필드 (workers / my_status 등) 영역 확인 + FE 카드 분기 영역 정합 검증
+
+---
+
 ## [2.15.11] - 2026-05-15 — FIX-MECH-CHECKLIST-PROGRESS-HEADER (ELEC 패턴 정합 진행률 표시)
 
 > 사용자 5-14 운영 catch (Catch 2 영역 진단 중) — "MECH 체크리스트 진행률 카운트 현재 elec 처럼 없으며". ELEC 체크리스트 화면 상단 영역 진행률 헤더 동일 디자인 적용. FE only 단일 파일.

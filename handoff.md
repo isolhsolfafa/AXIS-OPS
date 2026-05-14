@@ -1,7 +1,31 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-15 KST (✅ v2.15.11 FE only release — MECH 체크리스트 상단 진행률 헤더 추가 (ELEC 패턴 정합). 사용자 5-14 Catch 2 진단 중 catch. Catch 2 (MECH gas2/util2 close) hotfix 는 진단 SQL 결과 대기.)
+> 마지막 업데이트: 2026-05-15 KST (✅ v2.15.12 FE only release — MECH 진행률 바 실시간 갱신 + 스크롤 고정. 추가 catch: 작업화면 시작/내작업완료 후 메뉴 미동기화 + MECH gas2/util2 close 안 됨 (Sentry 콘솔 확인 필요) — 별 hotfix 진단 진행.)
+
+---
+
+## ✅ 2026-05-15 KST — v2.15.12 FE only (FIX-MECH-CHECKLIST-PROGRESS-REALTIME-AND-STICKY)
+
+> v2.15.11 직후 사용자 catch 2건: ① MECH 진행률 실시간 갱신 안 됨 ② 스크롤 시 진행률 바 위로 사라짐 (ELEC 고정 패턴 미적용).
+
+### 변경 (FE only, 1 파일)
+
+- `mech_checklist_screen.dart`:
+  - 라디오 onTap 영역 setState 영역 `item['check_result'] = value` 추가 (v2.15.11 진행률 getter 정합)
+  - `_buildBody()` 영역 Column wrap — 진행률 헤더 ListView 외부 고정 (ELEC `Column > Expanded(ListView)` 패턴 모방)
+- `version.py` + `app_version.dart` 2.15.11 → **2.15.12**
+
+### 후속 별 hotfix 진단 진행
+
+- **Catch 2 (작업화면 시작/내작업완료 후 메뉴 미동기화)**:
+  - 사용자 발화: "내작업완료 누름 → 새로고침 자동 → 메뉴 1개만 보임 → 새로고침 한 번 더 → 4개 메뉴 정상 표시"
+  - 추정: BE startTask/completeTask 응답 task 객체 영역 일부 필드 (workers/my_status) 누락 → 카드 메뉴 분기 부분 적용
+  - 검증: BE `/api/app/work/start` 응답 task 객체 + FE TaskItem fromJson 매칭 + 카드 분기 로직 (task_management_screen 영역 메뉴 표시 조건)
+- **MECH gas2/util2 close 안 됨**:
+  - 사용자 SQL 결과: `_trigger_second_close()` SELECT 5조건 모두 통과 (force_closed=FALSE, completed_at NULL, started_at NOT NULL, is_applicable=TRUE)
+  - 즉 trigger 호출됐다면 auto_close 발동되어야 함 → 호출 자체 안 됐거나 silent fail
+  - 검증: Sentry 콘솔 5-14 23:59 시각 `_trigger_second_close orphan SELECT failed` 메시지 검색 + Railway deploy 로그 (v2.15.9 prod 적용 시점)
 
 ---
 
