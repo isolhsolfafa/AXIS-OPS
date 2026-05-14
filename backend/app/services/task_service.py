@@ -139,6 +139,11 @@ def check_category_progress_100(
 ) -> bool:
     """v2.15.6 — 카테고리별 active task 100% complete 검증 (DRY 공용 헬퍼).
 
+    ⚠️ v2.15.7 DEPRECATED — 호출 0건 (v2.15.6 (나) 옵션 catch 후 회귀).
+    v2.15.3 auto_finalize_blocked 와 충돌 catch: "내 작업 완료" 누른 task = completed_at NULL
+    → progress < 100% → SELF_INSPECTION/IF_2 trigger 발동 X (사용자 5-14 운영 catch).
+    Hybrid 진행률 정의 sprint (FEAT-PROGRESS-MY-COMPLETION-HYBRID) 에서 재설계 시 활용 가능.
+
     is_applicable=TRUE 인 모든 task 의 completed_at IS NOT NULL 검증.
     HEATING_JACKET 옵션 비활성 케이스는 is_applicable=FALSE 라서 자동 제외.
 
@@ -196,31 +201,57 @@ def check_category_progress_100(
 
 
 def check_elec_close_eligible_at_if2(serial_number: str) -> bool:
-    """v2.15.6 — ELEC IF_2 본인 complete 직전 시점 사전 검증.
+    """v2.15.7 — ELEC IF_2 본인 complete 직전 시점 사전 검증.
 
-    조건 (사용자 5-14 (나) 결정 — task progress 100% 포함):
-    - ELEC 모든 active task complete (IF_2 본인 제외)
-    - ELEC 체크리스트 100%
+    조건 (사용자 5-14 v2.15.7 정정 — (나) → (가) 회귀):
+    - INSPECTION complete + ELEC 체크리스트 100%
+    - task progress 100% 조건 제거 (v2.15.3 auto_finalize_blocked 와 충돌 catch — 회귀)
 
     충족 시 옵션 B 차단 우회 + finalize=True 강제 → Sprint 55 (3-C) → close 진행.
 
-    Q4 트리거 양방향 (시점 A — IF_2 마지막) 정합. INSPECTION 단독 검증은
-    progress_100 안에 자연 포함됨 (INSPECTION 도 active ELEC task).
+    Q4 트리거 양방향 (시점 A — IF_2 마지막) 정합.
+
+    v2.15.6 catch trail: task progress 100% 조건 + relay 보장 task open 영향으로
+    "내 작업 완료" 누른 task = completed_at NULL = progress < 100% = trigger 발동 X.
+    v2.15.7 회귀 결정 — Hybrid 진행률 정의 별 sprint 분리.
     """
-    if not check_category_progress_100(serial_number, 'ELEC', exclude_task_id='IF_2'):
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*) AS done
+                  FROM app_task_details
+                 WHERE serial_number = %s
+                   AND task_category = 'ELEC'
+                   AND task_id = 'INSPECTION'
+                   AND completed_at IS NOT NULL
+                   AND is_applicable = TRUE
+                """,
+                (serial_number,),
+            )
+            row = cur.fetchone()
+            inspection_done = (row['done'] if isinstance(row, dict) else row[0]) > 0
+        if not inspection_done:
+            return False
+        from app.services.checklist_service import check_elec_completion
+        return check_elec_completion(serial_number)
+    except Exception as e:
+        logger.error(f"check_elec_close_eligible_at_if2 failed: serial={serial_number}, error={e}")
         return False
-    from app.services.checklist_service import check_elec_completion
-    return check_elec_completion(serial_number)
+    finally:
+        if conn is not None:
+            put_conn(conn)
 
 
 def check_category_close_eligible(category: str, serial_number: str) -> bool:
-    """v2.15.6 옵션 X3-전영역 + task progress 100% (사용자 5-14 (나) 결정).
+    """v2.15.7 옵션 X3-전영역 (사용자 5-14 v2.15.7 정정 — (나) → (가) 회귀).
 
     AND 조건:
-    - MECH: task progress 100% + MECH 체크리스트 100%
-    - ELEC: task progress 100% + ELEC 체크리스트 100%
-    - TM/TMS: PRESSURE_TEST complete 만으로 close (체크리스트 무관)
-              · v2.15.5 잘못 매핑 정정 (사용자 5-14 catch)
+    - MECH: MECH 체크리스트 100% 만 (SELF_INSPECTION trigger = force close 보존)
+    - ELEC: IF_2 + INSPECTION complete + ELEC 체크리스트 100% (v2.15.5 영역 회귀)
+    - TM/TMS: PRESSURE_TEST complete 만으로 close (체크리스트 무관 — v2.15.6 정정 보존)
               · 가압검사는 무조건 이행됨 → complete = close
               · TM 실적 카운트는 VIEW (tank module com + 체크리스트 100%) 별도
               · TANK_MODULE 미시작/미완료 = VIEW 일괄 시작/종료 (이미 구현) 로 해결
@@ -231,18 +262,25 @@ def check_category_close_eligible(category: str, serial_number: str) -> bool:
     - MECH: SELF_INSPECTION (FINAL phase 단일)
     - TM:   PRESSURE_TEST (단일)
 
+    v2.15.6 catch trail (사용자 5-14):
+    - cowork 이 사용자 발화 "mech, elec 실적 조건 변동 없음" 을 "close 조건에 task progress 100% AND 추가" 로 잘못 해석 (나)
+    - 실제 사용자 의도 = "실적 조건 정의 불변" (가)
+    - v2.15.3 auto_finalize_blocked 와 충돌: "내 작업 완료" 누른 task = completed_at NULL → progress < 100% → trigger 발동 X
+    - 결과: SELF_INSPECTION/IF_2 누른 시점 gas2/util2 force close 영원히 안 됨 → 사용자 5-14 운영 catch
+    - v2.15.7 = (가) 회귀 + Hybrid 진행률 정의는 별 sprint 분리 (FEAT-PROGRESS-MY-COMPLETION-HYBRID-AND-LABEL-CHANGE-20260514)
+
     체크리스트 미달 (Q5=가, MECH/ELEC 만 해당):
     - close 안 함 → task open 유지 + checklist_pending=True 응답
     - Manager force-close 우회 가능 (Q3)
     """
     if category == 'ELEC':
-        if not check_category_progress_100(serial_number, 'ELEC'):
+        # v2.15.7 — IF_2 + INSPECTION + 체크리스트 100% (task progress 100% 제거)
+        if not check_elec_final_tasks_completed(serial_number):
             return False
         from app.services.checklist_service import check_elec_completion
         return check_elec_completion(serial_number)
     elif category == 'MECH':
-        if not check_category_progress_100(serial_number, 'MECH'):
-            return False
+        # v2.15.7 — 체크리스트 100% 만 (SELF_INSPECTION 자체 complete 는 호출자 영역에서 보장)
         from app.services.checklist_service import check_mech_completion
         return check_mech_completion(serial_number)
     elif category in ('TM', 'TMS'):
@@ -254,8 +292,8 @@ def check_category_close_eligible(category: str, serial_number: str) -> bool:
 def check_elec_final_tasks_completed(serial_number: str) -> bool:
     """Sprint 41-D — ELEC IF_2 + INSPECTION 두 task 모두 complete 여부 판정.
 
-    ⚠️ v2.15.6 DEPRECATED — check_category_progress_100(serial, 'ELEC') 로 대체됨.
-    호출 0건 (test_relay_first_final.py 만 import 보존). 차기 REF sprint 에서 제거 예정.
+    v2.15.7 회복 — v2.15.6 deprecation 해제. check_category_close_eligible('ELEC') 영역
+    재호출 (task progress 100% 제거 후 IF_2+INSPECTION 검증 다시 활용).
     """
     conn = None
     try:

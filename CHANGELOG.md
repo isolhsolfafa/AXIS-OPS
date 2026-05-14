@@ -65,6 +65,58 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.15.9] - 2026-05-14 — HOTFIX-SPRINT41D-PROGRESS-100-REVERT-AND-LABEL-CHANGE ((나) → (가) 회귀 + 다이얼로그 라벨 변경)
+
+> 사용자 release v2.15.7 (FIX-27 FE TASK_CARD UX) + v2.15.8 (statusText "재참여 가능" 정정) 와 별 hotfix. v2.15.6 (나) 옵션 채택이 v2.15.3 `auto_finalize_blocked` 영역과 충돌 catch — 사용자 5-14 운영 검증 시 SELF_INSPECTION + 체크리스트 100% 진행했는데 gas2/util2 close 안 됨. Root cause: task progress 100% AND 검증 시 `app_task_details.completed_at IS NULL` 기준 카운트 → "내 작업 완료" 누른 task = completed_at NULL = pending 잡힘 = `check_category_close_eligible = False` → Sprint 41-D Second Close trigger 발동 X → gas2/util2 영원히 open. cowork 이 사용자 발화 "mech, elec 실적 조건 변동 없음" 을 (나) 로 잘못 해석. 실제 의도 = (가) "실적 정의 불변, close 조건도 그대로". v2.15.9 = (가) 회귀 + 다이얼로그 라벨 "공정 마감" 변경 묶음.
+
+### 변경 (3 파일 + version)
+
+| 파일 | 변경 |
+|------|-----|
+| `backend/app/services/task_service.py` | (1) `check_category_close_eligible()` MECH/ELEC 분기 task progress 100% AND 제거 — MECH=체크리스트 100% 만 / ELEC=IF_2+INSPECTION+체크리스트 100% (v2.15.5 영역 회귀) (2) `check_elec_close_eligible_at_if2()` INSPECTION + 체크리스트 100% 만 (task progress 100% 제거) (3) `check_category_progress_100()` deprecation 마킹 — 호출 0건 (4) `check_elec_final_tasks_completed()` deprecation 해제 — `check_category_close_eligible('ELEC')` 영역 재호출 |
+| `frontend/lib/screens/task/task_management_screen.dart` | L888 다이얼로그 "아니오, 작업 완료" → "아니오, 공정 마감" |
+| `frontend/lib/screens/task/task_detail_screen.dart` | L904 다이얼로그 "아니오, 작업 완료" → "아니오, 공정 마감" |
+| `backend/version.py` + `frontend/lib/utils/app_version.dart` | 2.15.8 → **2.15.9** (사용자 v2.15.7 + v2.15.8 release 별 hotfix) |
+
+### 카테고리별 close 조건 매트릭스 (v2.15.6 → v2.15.9)
+
+| Category | v2.15.6 close 조건 (잘못) | v2.15.9 close 조건 (회귀) | 사용자 의도 정합 |
+|---|---|---|:-:|
+| **MECH** | task progress 100% + 체크리스트 100% | **체크리스트 100% 만** (SELF_INSPECTION trigger force close 보존) | ✅ |
+| **ELEC** | task progress 100% + 체크리스트 100% | **IF_2 + INSPECTION + 체크리스트 100%** | ✅ |
+| **TMS** | PRESSURE_TEST complete 만 | 동일 보존 (v2.15.6 정정) | ✅ |
+| PI/QI/SI | 항상 True | 항상 True (변경 없음) | — |
+
+### 다이얼로그 라벨 변경 의도 (5-14 사용자 결정)
+
+| 키 | 이전 라벨 | v2.15.9 신 라벨 | 의미 |
+|---|---|---|---|
+| finalize=false (relay) | "예, 내 작업만 종료" | 동일 (유지) | "내 개인 작업 끝남, 동료 진행 가능" |
+| finalize=true | "아니오, 작업 완료" | **"아니오, 공정 마감"** | "이 task 1개 정식 close + 자동 정리 trigger 발동" |
+
+> "공정 마감" = task 단위 (util1, gas2 등 개별) 마감 / MECH 카테고리 전체 마감 아님 (사용자 catch 5-14 확인). SELF_INSPECTION 영역 "공정 마감" 시 = MECH 카테고리 전체 정리 trigger 효과 (Sprint 41-D Second Close).
+
+### v2.15.6 catch 정정 trail
+
+- v2.15.6 (나) 옵션 채택 = cowork 의 사용자 발화 해석 catch
+- v2.15.3 `auto_finalize_blocked` 11 task allowlist 와 충돌 = "내 작업 완료" 누른 task = completed_at NULL → progress 카운트 X → trigger 발동 X
+- v2.15.9 = (가) 회귀 = v2.15.5 close 조건 영역 + TM/TMS 정정 (v2.15.6) 보존 + 다이얼로그 라벨 변경 (v2.15.9 신규)
+
+### 후속 별 sprint 등록 (P2)
+
+- `FEAT-PROGRESS-MY-COMPLETION-HYBRID-AND-LABEL-CHANGE-20260514` — Hybrid 진행률 정의 (동적 옵션) + 화면 라벨 통일 + AXIS-VIEW 영향 분석 + 1.5~2일 (1주 운영 후 진행 권고, 사용자 욕심 = v2.15.9 직후 설계 진행)
+
+### 회귀 위험 0
+
+- DB schema 변경 0
+- 함수 시그니처 보존
+- v2.15.5 close 조건 영역 회귀 = 기존 운영 영역 동작 동일
+- v2.15.6 TM/TMS 정정 보존
+- `check_category_progress_100()` 호출 0건 (dead code) — test_relay_first_final.py import 호환 보존
+- `check_elec_final_tasks_completed()` 호출 복귀 — Sprint 41-D 영역 정합
+
+---
+
 ## [2.15.6] - 2026-05-14 — HOTFIX-SPRINT41D-TMS-CLOSE-FIX-MECH-ELEC-PROGRESS-100 (TMS 잘못 매핑 정정 + (나) 옵션)
 
 > v2.15.5 TMS PRESSURE_TEST close 조건에 체크리스트 100% AND 잘못 매핑된 것 사용자 5-14 catch. 사용자 명시: "가압검사는 무조건 이행하기 떄문에 가압검사가 끝나면 close조건으로 하고", "TM 실적 카운트는 VIEW (tank module com + 체크리스트 100%) 별도", "TANK_MODULE 미시작/미완료 = VIEW 일괄 시작/종료 (이미 구현)으로 해결". + MECH/ELEC (나) 옵션 선택 — close 조건에 task progress 100% AND 추가 (실적 조건 정합). + Codex M-1 (v2.15.5) work.py forward 누락 정정 묶음.

@@ -885,7 +885,7 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, 'finalize'),
-            child: const Text('아니오, 작업 완료',
+            child: const Text('아니오, 공정 마감',
               style: TextStyle(color: GxColors.success, fontWeight: FontWeight.w600)),
           ),
         ],

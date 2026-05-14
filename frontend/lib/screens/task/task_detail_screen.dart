@@ -901,7 +901,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, 'finalize'),
-            child: const Text('아니오, 작업 완료', style: TextStyle(color: GxColors.success, fontWeight: FontWeight.w600)),
+            child: const Text('아니오, 공정 마감', style: TextStyle(color: GxColors.success, fontWeight: FontWeight.w600)),
           ),
         ],
       ),

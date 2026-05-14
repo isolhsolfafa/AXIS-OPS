@@ -1,7 +1,62 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-14 KST (✅ v2.15.7 + v2.15.8 release 완료 — FIX-27 FE TASK_CARD UX 개선 + statusText "재참여 가능" 정정. Netlify 배포 완료.)
+> 마지막 업데이트: 2026-05-14 KST (✅ v2.15.9 hotfix 코드 적용 — v2.15.6 (나) 옵션 catch 정정 + 다이얼로그 라벨 "공정 마감" 변경. 사용자 v2.15.7/v2.15.8 release 후 별 hotfix. prod 배포 대기.)
+
+---
+
+## ✅ 2026-05-14 KST — v2.15.9 hotfix (HOTFIX-SPRINT41D-PROGRESS-100-REVERT-AND-LABEL-CHANGE)
+
+> **사용자 catch (5-14 운영 검증)**: v2.15.6 prod 배포 후 SELF_INSPECTION + 체크리스트 100% 진행했는데 gas2/util2 close 안 됨. Root cause: v2.15.3 `auto_finalize_blocked` 와 v2.15.6 task progress 100% AND 조건 충돌 — "내 작업 완료" 누른 task = completed_at IS NULL → progress < 100% → Second Close trigger 발동 X. cowork 이 사용자 발화 "mech, elec 실적 조건 변동 없음" 을 (나) 로 잘못 해석. 실제 의도 = (가) 회귀.
+
+### 변경 (BE + FE, 3 파일 + version)
+
+- `task_service.py` — `check_category_close_eligible()` MECH=체크리스트 100%만 / ELEC=IF_2+INSPECTION+체크리스트 100% (v2.15.5 영역 회귀)
+- `task_service.py` — `check_elec_close_eligible_at_if2()` INSPECTION + 체크리스트 100% 만 (task progress 100% 제거)
+- `task_service.py` — `check_category_progress_100()` deprecation 마킹 (호출 0건 dead code)
+- `task_service.py` — `check_elec_final_tasks_completed()` deprecation 해제 (재호출)
+- `task_management_screen.dart` L888 + `task_detail_screen.dart` L904 — "아니오, 작업 완료" → "아니오, 공정 마감"
+- `version.py` + `app_version.dart` 2.15.8 → **2.15.9** (사용자 v2.15.7 + v2.15.8 release 후 별 hotfix)
+
+### 카테고리별 close 조건 매트릭스 (v2.15.6 → v2.15.9)
+
+| Category | v2.15.6 (잘못) | v2.15.9 (회귀) |
+|---|---|---|
+| MECH | task progress 100% + 체크리스트 100% | **체크리스트 100% 만** |
+| ELEC | task progress 100% + 체크리스트 100% | **IF_2 + INSPECTION + 체크리스트 100%** |
+| TMS | PRESSURE_TEST complete 만 | 동일 보존 |
+| PI/QI/SI | 항상 True | 동일 |
+
+### 다이얼로그 라벨 (UX 변경)
+
+| 키 | 이전 | v2.15.9 |
+|---|---|---|
+| finalize=false (relay) | "예, 내 작업만 종료" | 동일 |
+| finalize=true | "아니오, 작업 완료" | **"아니오, 공정 마감"** |
+
+> "공정 마감" = task 1개 단위 마감 (util1, gas2 등) / MECH 카테고리 전체 마감 아님. SELF_INSPECTION 영역 "공정 마감" 시 = MECH 전체 정리 trigger 효과 (Sprint 41-D Second Close).
+
+### 사용자 결정 trail (5-14)
+
+- 옵션 (가) 회귀 = task progress 100% AND 조건 제거 — gas2/util2 force close 회복
+- "공정 마감" 라벨 변경 = UX 명확화 (작업자 인지)
+- Hybrid 진행률 정의 = 별 sprint 분리 + v2.15.9 직후 설계 진행 (사용자 욕심, 1주 운영 X)
+
+### 다음 단계
+
+1. **사용자 측 prod 배포** — git commit + push + Railway 자동 재배포 + Netlify FE dump (사용자 측 직접 진행)
+2. **운영 영역 검증** — SELF_INSPECTION/IF_2 "공정 마감" 누른 후 gas2/util2 자동 close 동작 확인
+3. **POST-REVIEW Codex 검토 (7일, deadline 2026-05-21)**
+4. **Hybrid sprint 설계 진행** — `FEAT-PROGRESS-MY-COMPLETION-HYBRID-AND-LABEL-CHANGE-20260514` 사용자 욕심 즉시 설계
+
+### 후속 BACKLOG
+
+- `FEAT-PROGRESS-MY-COMPLETION-HYBRID-AND-LABEL-CHANGE-20260514` P2 (v2.15.9 직후 설계, 사용자 욕심)
+- `POST-REVIEW-HOTFIX-SPRINT41D-PROGRESS-100-REVERT-AND-LABEL-CHANGE-20260514` 등록 예정 (7일)
+
+### CHANGELOG entry 순서 catch
+
+CHANGELOG.md 영역 v2.15.9 entry 위치 = L66~L117 (v2.15.6 entry 위) — chronological 순서 (v2.15.9 → v2.15.8 → v2.15.7) 영역 정렬 catch. 별 정리 sprint 권고 (P3, 30분).
 
 ---
 
