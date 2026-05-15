@@ -32,6 +32,10 @@
 - 경로 2 (체크리스트가 마지막): mech_completed flag 정상 set + 2차 검수 미입력 시 close 차단
 - AXIS-VIEW 생산현황 상세뷰 MECH 동기화 정상화
 
+### 후속 (BACKLOG)
+
+- `OPS-65-DOC-DRIFT-20260515` — AXIS-VIEW OPS_API_REQUESTS.md #65 §9 Codex A 5건 (문서 drift) → AXIS-VIEW repo 측 정정 (P3)
+
 ---
 
 ## ✅ 2026-05-15 KST — v2.15.17 BE (FIX-VIEW-ORPHAN-DURATION-MISSING)
