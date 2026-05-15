@@ -78,12 +78,25 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 | `backend/app/services/task_service.py` | `complete_work()` L564 영역 조건 영역 `... and not finalize` 추가 (M-2 catch) — 본인 완료 상태 영역 "공정 마감" 버튼 영역 finalize=True 호출 시 TASK_ALREADY_COMPLETED 우회 → task close 진행 |
 | `backend/version.py` + `frontend/lib/utils/app_version.dart` | 2.15.14 → **2.15.15** |
 
-### 자가 리뷰 catch (M-1 + M-2)
+### 자가 리뷰 catch (M-1 + M-2) + Codex 라운드 1 catch (M-3)
 
 | Catch | 위치 | Root cause | Fix |
 |-------|-----|---|---|
-| M-1 | task_provider.dart fetchTasks() L175 | isLoading=true 다시 set → spinner 두 번 표시 (flickering) | silent 인자 추가 |
-| M-2 | task_service.py L564~569 | 본인 완료 상태 영역 finalize=True 호출 시 `_worker_already_completed_task=True` → TASK_ALREADY_COMPLETED 400 에러 | `and not finalize` 조건 추가 |
+| M-1 (자가) | task_provider.dart fetchTasks() L175 | isLoading=true 다시 set → spinner 두 번 표시 (flickering) | silent 인자 추가 |
+| M-2 (자가) | task_service.py L564~569 | 본인 완료 상태 영역 finalize=True 호출 시 `_worker_already_completed_task=True` → TASK_ALREADY_COMPLETED 400 에러 | `and not finalize` 조건 추가 |
+| **M-3 (Codex Q3)** | task_service.py `_record_completion_log` 영역 | M-2 fix 후 finalize=True 재호출 시 work_completion_log 신규 INSERT → **중복 row 추가** + duration 부풀려짐 | `should_record_completion` 분기 추가 + `_get_latest_worker_completion_duration()` 신규 (기존 duration 재사용) |
+
+### Codex 라운드 1 결과 (M=1 / A=4 / N=4)
+
+- Q1 fetchTasks(silent) 기본값 호환성 = N
+- Q2 silent isLoading 오염 가능성 = A (미사용 경로, 실 위험 낮음)
+- **Q3 work_completion_log 중복 INSERT = M → Codex 자동 정정 완료**
+- Q4 v2.15.14 force_closed 충돌 = N
+- Q5 Sprint 41-D Second Close 충돌 = N
+- Q6 카드 블록 A/B/C 상호 배타성 = N
+- Q7 버튼 연타 락 없음 = A (UI race)
+- Q8 finalize 기본값 회귀 검증 불가 = A (별 검증)
+- 추가 catch: task_finished 메시지 오해 가능성 = A (UX, M 범위 밖)
 
 ### 본인 완료 상태 카드 UI 변경 (v2.15.15)
 

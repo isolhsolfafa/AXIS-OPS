@@ -564,8 +564,15 @@ class TaskService:
         # v2.15.15 (BUG-RELAY-MODE M-2 자가 catch): finalize=True 시 본 분기 영역 skip
         # 본인 완료 상태 영역 "공정 마감" 버튼 (task_management_screen `_handleFinalizeOnly`) 영역 진행 보장
         # → task close 진행 (v2.15.14 force_closed 분기 영역 자연 close 영역 정합)
-        if _worker_already_completed_task(task.id, worker_id) and not finalize:
-            if not _worker_restarted_after_completion(task.id, worker_id):
+        worker_already_completed = _worker_already_completed_task(task.id, worker_id)
+        worker_restarted_after_completion = False
+        if worker_already_completed:
+            worker_restarted_after_completion = _worker_restarted_after_completion(
+                task.id, worker_id
+            )
+
+        if worker_already_completed and not finalize:
+            if not worker_restarted_after_completion:
                 return {
                     'error': 'TASK_ALREADY_COMPLETED',
                     'message': '이미 완료한 작업입니다.'
@@ -722,11 +729,23 @@ class TaskService:
 
         # Sprint 6 Phase C: work_completion_log에 이 작업자의 완료 기록 추가
         # (단일 작업자: 직접 complete_task / 멀티 작업자: 로그에만 기록, 마지막이면 complete_task)
-        this_worker_duration = _record_completion_log(
-            task=task,
-            worker_id=worker_id,
-            completed_at=completed_at,
+        should_record_completion = (
+            not worker_already_completed or worker_restarted_after_completion
         )
+        if should_record_completion:
+            this_worker_duration = _record_completion_log(
+                task=task,
+                worker_id=worker_id,
+                completed_at=completed_at,
+            )
+        else:
+            # finalize=True 재호출 경로: 기존 completion_log 재사용, 중복 INSERT 방지
+            this_worker_duration = _get_latest_worker_completion_duration(task.id, worker_id)
+            logger.info(
+                f"Skipping duplicate completion log on finalize retry: "
+                f"task_id={task.id}, worker_id={worker_id}, "
+                f"duration={this_worker_duration}"
+            )
 
         # Sprint 55 (3-B): auto-finalize — 전원 completion_log 도달 시 자동 finalize
         # Sprint 41: 릴레이 모드 — 내 completion_log만 기록하고 task는 열린 상태 유지
@@ -2243,6 +2262,44 @@ def _worker_restarted_after_completion(task_detail_id: int, worker_id: int) -> b
             f"task_id={task_detail_id}, worker_id={worker_id}, error={e}"
         )
         return False
+    finally:
+        if conn:
+            put_conn(conn)
+
+
+def _get_latest_worker_completion_duration(task_detail_id: int, worker_id: int) -> Optional[int]:
+    """
+    이 작업자의 최신 completion_log duration을 반환.
+
+    finalize=True 재호출 경로에서 기존 completion_log를 재사용할 때 사용한다.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT duration_minutes
+            FROM work_completion_log
+            WHERE task_id = %s AND worker_id = %s
+            ORDER BY completed_at DESC, id DESC
+            LIMIT 1
+            """,
+            (task_detail_id, worker_id)
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+
+        return row.get('duration_minutes') if isinstance(row, dict) else row[0]
+
+    except PsycopgError as e:
+        logger.error(
+            f"_get_latest_worker_completion_duration failed: "
+            f"task_id={task_detail_id}, worker_id={worker_id}, error={e}"
+        )
+        return None
     finally:
         if conn:
             put_conn(conn)
