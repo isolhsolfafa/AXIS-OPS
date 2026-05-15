@@ -642,7 +642,17 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
                     w.company AS worker_company,
                     wsl.started_at,
                     COALESCE(wcl.completed_at, td.completed_at) AS completed_at,
-                    wcl.duration_minutes,
+                    -- FIX-VIEW-ORPHAN-DURATION (v2.15.17): orphan worker (auto-close, wcl 없음)
+                    -- 영역 duration NULL → VIEW '—' 표시 catch. wcl 없으면 close 시각 - started_at
+                    -- 근사 계산 (GREATEST 0 클램프 + FLOOR + ::int — 음수/float 방지, Codex Q1 M).
+                    COALESCE(
+                        wcl.duration_minutes,
+                        GREATEST(0, FLOOR(
+                            EXTRACT(EPOCH FROM (
+                                COALESCE(wcl.completed_at, td.completed_at) - wsl.started_at
+                            )) / 60
+                        ))::int
+                    ) AS duration_minutes,
                     CASE
                         WHEN wcl.id IS NOT NULL           THEN 'completed'
                         WHEN td.completed_at IS NOT NULL  THEN 'completed'

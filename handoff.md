@@ -1,7 +1,38 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-15 KST (✅ v2.15.16 BE 3 파일 + migration 1 + pytest 1 release — SPRINT-V2-15-16-MECH-FORCE-CLOSED-PREV-DAY-CAP-20260515. Catch 3건 fix: MECH Phase 1+2 합산 검증 + force_closed=False 통일 (5곳) + PREV_DAY_CAP. Codex 라운드 1 M=5 전수 반영. POST-REVIEW deadline 2026-05-22.)
+> 마지막 업데이트: 2026-05-15 KST (✅ v2.15.17 BE 2 파일 + pytest 1 release — FIX-VIEW-ORPHAN-DURATION-MISSING. Trigger task auto-close 시 VIEW 소요시간 '—' 미표시 fix. work.py + task_service_batch.py SQL COALESCE fallback. Codex 라운드 1 M=2 반영. pytest 10/10 GREEN.)
+
+---
+
+## ✅ 2026-05-15 KST — v2.15.17 BE (FIX-VIEW-ORPHAN-DURATION-MISSING)
+
+> 사용자 운영 catch (5-15): "Trigger task close 시 VIEW 에서 소요시간 표시 안 됨 / 정상 완료된 task 만 소요시간 표시 됨"
+
+### Root Cause
+
+`work.py` + `task_service_batch.py` worker 배열 SQL 영역 `completed_at` 영역 COALESCE fallback 있는데 `duration_minutes` 영역 `wcl.duration_minutes` 단독 → orphan worker (auto-close, work_completion_log record 없음) 영역 NULL → VIEW '—'.
+
+### Codex 라운드 1 M=2
+
+- Q1 M: 음수 duration + float → `GREATEST(0, FLOOR(...))::int` 클램프
+- Q6 M: `task_service_batch.py` L323 동일 버그 → 같은 PR fix
+
+### 변경 (BE 2 + pytest 1 + version)
+
+- `work.py` L645 + `task_service_batch.py` L323 — `duration_minutes` COALESCE + `GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (close - started))/60))::int`
+- `test_hotfix04_orphan.py` — TC-ORPHAN-01/04 NULL → 240분 + TC-ORPHAN-05 신규 (음수 클램프 0)
+- version 2.15.16 → 2.15.17
+
+### 검증
+
+- pytest test_hotfix04_orphan.py 10/10 PASS (260s)
+- 회귀 위험 0 (SQL 1 expression 2곳, 신규 로직 아님)
+
+### 한계 (별 sprint)
+
+- pause 차감 미반영 근사값 → `REF-WORKER-DURATION-PRECISION`
+- VIEW `is_orphan` "추정" 라벨 → AXIS-VIEW 별 sprint
 
 ---
 

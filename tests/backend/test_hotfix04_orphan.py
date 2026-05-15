@@ -48,7 +48,8 @@ class TestOrphanCase1:
         self, client, create_test_worker, create_test_product,
         create_test_completion_status, get_auth_token, db_conn
     ):
-        """TC-ORPHAN-01: task.completed_at 세팅 + wcl 없음 → status='completed', is_orphan=true, duration_minutes IS NULL"""
+        """TC-ORPHAN-01: task.completed_at 세팅 + wcl 없음 → status='completed', is_orphan=true,
+        duration_minutes = close-start 근사 (FIX-VIEW-ORPHAN-DURATION v2.15.17 — 기존 NULL → 추정값)."""
         if db_conn is None:
             pytest.skip("DB 연결 없음")
 
@@ -106,7 +107,12 @@ class TestOrphanCase1:
         assert w is not None, f"worker entry missing: workers={workers}"
         assert w['status'] == 'completed', f"expected status='completed', got {w['status']}"
         assert w['is_orphan'] is True, f"expected is_orphan=true, got {w['is_orphan']}"
-        assert w['duration_minutes'] is None, f"orphan duration must be NULL, got {w['duration_minutes']}"
+        # FIX-VIEW-ORPHAN-DURATION (v2.15.17): orphan worker duration = close - started 근사.
+        # started_at = now-5h, task_closed_at = now-1h → 4h = 240분. integer 형 보장.
+        assert isinstance(w['duration_minutes'], int), \
+            f"orphan duration must be integer, got {type(w['duration_minutes'])}"
+        assert w['duration_minutes'] == 240, \
+            f"orphan duration = close-start 근사 (240분), got {w['duration_minutes']}"
         assert w['completed_at'] is not None, "completed_at should be populated from task_closed_at"
         assert w['task_closed_at'] is not None
 
@@ -312,10 +318,77 @@ class TestOrphanCase1:
         assert w1['status'] == 'completed'
         assert w1['is_orphan'] is False
         assert w1['duration_minutes'] == 120
-        # W2 orphan
+        # W2 orphan — FIX-VIEW-ORPHAN-DURATION (v2.15.17): close-start 근사 (240분).
+        # started_at = now-5h, task_completed_at = now-1h → 4h = 240분.
         assert w2['status'] == 'completed'
         assert w2['is_orphan'] is True
-        assert w2['duration_minutes'] is None  # M1 미반영 — garbage 방지
+        assert isinstance(w2['duration_minutes'], int), \
+            f"orphan duration must be integer, got {type(w2['duration_minutes'])}"
+        assert w2['duration_minutes'] == 240, \
+            f"orphan duration = close-start 근사 (240분), got {w2['duration_minutes']}"
+
+    def test_tc_orphan_05_duration_clamped_to_zero_when_close_precedes_start(
+        self, client, create_test_worker, create_test_product,
+        create_test_completion_status, get_auth_token, db_conn
+    ):
+        """TC-ORPHAN-05: orphan worker started_at > task close 시각 → duration_minutes = 0 (음수 차단).
+
+        FIX-VIEW-ORPHAN-DURATION (v2.15.17) Codex Q1 M — GREATEST(0, ...) 클램프 검증.
+        멀티 worker 영역 worker B 가 task close 시각보다 늦게 시작한 케이스 (started_at = close + 30분).
+        """
+        if db_conn is None:
+            pytest.skip("DB 연결 없음")
+
+        import time
+        suffix = int(time.time() * 1000) + 5
+
+        worker_id = create_test_worker(
+            email=f'h04_w05_{suffix}@test.com', password='Test123!',
+            name='H04 W5', role='MECH', company='FNI'
+        )
+
+        qr_doc_id = f'DOC-H04-05-{suffix}'
+        serial_number = f'SN-H04-05-{suffix}'
+        create_test_product(qr_doc_id=qr_doc_id, serial_number=serial_number, model='GALLANT-50')
+        create_test_completion_status(serial_number=serial_number)
+
+        # task close 시각보다 worker started_at 이 30분 늦음 → close - start = -30분 → 0 클램프
+        task_closed_at = datetime.now(timezone.utc) - timedelta(hours=2)
+        started_at = task_closed_at + timedelta(minutes=30)
+
+        cur = db_conn.cursor()
+        cur.execute("""
+            INSERT INTO app_task_details
+                (serial_number, qr_doc_id, task_category, task_id, task_name,
+                 is_applicable, started_at, completed_at)
+            VALUES (%s, %s, 'MECH', 'SELF_INSPECTION', '자주검사', TRUE, %s, %s)
+            RETURNING id
+        """, (serial_number, qr_doc_id, task_closed_at, task_closed_at))
+        task_db_id = cur.fetchone()[0]
+
+        cur.execute("""
+            INSERT INTO work_start_log
+                (task_id, worker_id, serial_number, qr_doc_id, task_category, task_id_ref, task_name, started_at)
+            VALUES (%s, %s, %s, %s, 'MECH', 'SELF_INSPECTION', '자주검사', %s)
+        """, (task_db_id, worker_id, serial_number, qr_doc_id, started_at))
+        db_conn.commit()
+        cur.close()
+
+        token = get_auth_token(worker_id, role='MECH')
+        resp = client.get(
+            f'/api/app/tasks/{serial_number}',
+            headers={'Authorization': f'Bearer {token}'}
+        )
+        assert resp.status_code == 200
+        tasks = resp.get_json()
+        task = _find_task(tasks, task_db_id)
+        workers = task.get('workers') or []
+        w = _find_worker_entry(workers, worker_id)
+        assert w is not None
+        assert w['is_orphan'] is True
+        # close - start = -30분 → GREATEST(0, ...) → 0
+        assert w['duration_minutes'] == 0, \
+            f"close < start 케이스 → 0 클램프, got {w['duration_minutes']}"
 
 
 class TestForceCloseNoStart:
