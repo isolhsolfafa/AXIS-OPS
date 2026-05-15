@@ -1,7 +1,40 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-15 KST (✅ v2.15.18 BE 1 파일 + pytest 1 release — POST-REVIEW-OPS-65-PATH2-REOPEN. MECH Dual-Trigger 경로 2 fix (M-A4 mech_completed flag + M-A7 close 게이트). AXIS-VIEW 측 #65 리뷰 catch. Codex 라운드 1 M=2 합의. pytest 5/5 GREEN.)
+> 마지막 업데이트: 2026-05-15 KST (✅ DB Pool V4.1 영구 종결 — T+8d (5-15) 점검 통과, 시나리오 A. FIX-DB-POOL-MAX-SIZE COMPLETED + Phase B task close. ✅ v2.15.18 release — MECH Dual-Trigger 경로 2 fix.)
+
+---
+
+## ✅ 2026-05-15 KST — DB Pool V4.1 영구 종결 (T+8d 점검 통과)
+
+> V4.1 = DB Pool 자가 회복 검증 사이클. T+8d (5-15) 추가 점검 종료 — 신규 사고 0건 확인.
+
+### 점검 결과 (사용자 Railway logs 5-15 공유)
+
+| 지표 | 5-11~5-15 | 판정 |
+|------|-----------|------|
+| Pool exhausted | 0건 | ✅ |
+| 자가 회복 발화 (re-initializing pool) | 0건 | ✅ |
+| 0/0 warmed for 3 consecutive | 0건 | ✅ |
+| Sentry 신규 db_pool alert | 0건 | ✅ |
+
+→ 시나리오 A (이상적). V4.1 영구 종결 확정.
+
+### Using direct connection 11건 — 사고 아님
+
+5-15 00:45~05:56 KST (새벽 idle) — v2.10.13 의도된 안전망 (logger.warning 강등). pool conn Railway proxy idle disconnect → 사이 요청 direct conn 우회. Pool exhausted 와 다른 지표. 사용자 영향 0.
+
+### 종결 처리
+
+- `FIX-DB-POOL-MAX-SIZE-20260427` → COMPLETED 확정
+- Phase B 3일 관찰 task #26 → close
+- `DB_POOL_VERIFICATION_QUERIES_20260427.md` V4.1 T+8d 종료 기록 추가
+
+### 잔존 (별 트랙)
+
+- v2.14.1 work.py conn leak — T+5d (5-17 ± 1d) 검증 별개
+- `OBSERV-DUAL-WORKER-CONN-COEXIST-20260511` (P3, 5 conn 미스터리, 분석 only)
+- `FIX-MODEL-CONFIG-O3-DESTRUCTOR-20260515` (신규 — O3 Destructor model_config, P2)
 
 ---
 

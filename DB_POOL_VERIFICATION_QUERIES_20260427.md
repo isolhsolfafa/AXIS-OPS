@@ -945,6 +945,44 @@ re-initializing 호출 횟수: 1회 (worker pid=2 만)
 
 ---
 
+**🎯 V4.1 T+8d 종료 측정 — 영구 종결 (2026-05-15 측정, 사용자 Railway logs 공유)**:
+
+```
+관찰 기간: 2026-05-11 14:55 (마지막 자가 회복 사고) ~ 2026-05-15
+측정 데이터: 사용자 측 Railway logs (5-15 00:45 ~ 05:56 KST)
+
+🎯 V4.1 영구 종결 조건 — 신규 사고 0건 확인:
+  ├─ Pool exhausted                       : 0건 ✅
+  ├─ 자가 회복 발화 (re-initializing pool) : 0건 ✅
+  ├─ 0/0 warmed for 3 consecutive cycles  : 0건 ✅
+  └─ Sentry 신규 db_pool alert            : 0건 ✅ (사용자 확인)
+
+🎯 시나리오 판정: 🟢 A (이상적) — 5-11 사고 이후 신규 사고 0건
+  → V4.1 영구 종결 확정
+
+📊 Using direct connection 11건 (5-15 00:45~05:56 KST) — 사고 아님:
+  ├─ v2.10.13 FIX-DB-POOL-DIRECT-FALLBACK-LOG-LEVEL 영역 의도된 안전망 (logger.warning 강등)
+  ├─ 발생 시간대 = 새벽 idle (traffic 거의 0) → pool conn Railway proxy idle disconnect
+  │   → 사이 요청 (health check 등) 이 direct conn 우회 — 정상 fallback
+  ├─ Pool exhausted (pool MAX 도달, 심각) 와 다른 지표
+  └─ warmup level=WARNING → Sentry 미포착 (LoggingIntegration event_level=ERROR) 정상
+
+🎯 V4.1 종결 후속:
+  ├─ FIX-DB-POOL-MAX-SIZE-20260427 → COMPLETED 확정
+  ├─ Phase B 3일 관찰 task → close
+  ├─ 별 BACKLOG: OBSERV-DUAL-WORKER-CONN-COEXIST-20260511 (P3, dual worker 5 conn 미스터리)
+  └─ v2.14.1 work.py conn leak 트랙은 별개 — T+5d (5-17 ± 1d) 검증 잔존
+
+🎯 사고 → 종결 전체 trail (4-29 → 5-15):
+  ├─ 1차 (4-29): 수동 Railway Restart 1.5h+
+  ├─ 2차 (5-04): 수동 Railway Restart 40분
+  ├─ 3차 (5-07): 자가 회복 자동 15분 (pid=2 Worker A)
+  ├─ 4차 (5-11): 자가 회복 자동 15분 (pid=3 Worker B) — 양쪽 worker 자동화 달성
+  └─ 5-11 ~ 5-15: 신규 사고 0건 → V4.1 영구 종결 ✅
+```
+
+---
+
 ### V4.2 — Sentry 1주 누적 issue / event 카운트
 
 ```
