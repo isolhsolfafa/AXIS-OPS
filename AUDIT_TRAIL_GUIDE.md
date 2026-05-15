@@ -12,9 +12,16 @@
 | 4W | 컬럼 | 의미 |
 |----|------|------|
 | **언제** | `completed_at` | task 정확히 close된 시각 |
-| **누가** | `closed_by` | trigger 발동시킨 worker_id (마지막 본인 완료 worker) |
+| **누가** | `closed_by` | 자동 close = last_completion_worker_id (마지막 본인 완료 worker, audit trail 보존) / 수동 = 관리자 worker_id |
 | **왜** | `close_reason` | First/Second Final trigger 영역 어느 경로 + 어느 task |
-| **어떻게** | `force_closed` + `duration_minutes` | 자연 close 영역 vs 강제종료 영역 + 작업 시간 |
+| **어떻게** | `force_closed` + `duration_minutes` | 자동 close = FALSE 통일 (v2.15.16 부터) / 수동 강제종료 = TRUE (manager force-close API 전용) |
+
+### closed_by 정책 (v2.15.16, 옵션 B 채택)
+
+- **자동 close**: `closed_by = last_completion_worker_id` 보존 (audit trail 정합).
+  - close_reason prefix `AUTO_CLOSED_BY_*` 영역 자동/수동 구분 가능 → 별 컬럼 불필요.
+  - 운영 영역 VIEW closed_by_name 표시 영역 정보 가치 보존 (마지막 작업자 trail).
+- **수동 강제종료**: `closed_by = 관리자 worker_id` + `close_reason = 'MANUAL_FORCE_CLOSE'`.
 
 ---
 
