@@ -65,6 +65,49 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.15.15] - 2026-05-15 — BUG-RELAY-MODE-AUTO-REFRESH-MISSING + COMPLETE-KEY-USELESS
+
+> 사용자 5-14 catch (BACKLOG L342) + 5-15 결정 — "내 작업만 완료" relay_mode 후 자동 갱신만으로 화면 전환 안 됨 (수동 새로고침 필요) + 본인 완료 상태 "완료" 키 무의미 (TASK_ALREADY_COMPLETED 에러). 사용자 결정: Catch 1=B (FE fetchTasks 호출) / Catch 2=c (확인 다이얼로그) / 결정 3=a (일시정지 조건부 숨김). Codex 라운드 1 (1차) M-1 (목록 화면 else if 정리) 반영 + Opus 자가 리뷰 M-1 (fetchTasks flickering) + M-2 (BE TASK_ALREADY_COMPLETED 에러) 추가 catch + 정정.
+
+### 변경 (BE 1 + FE 2 파일 + version)
+
+| 파일 | 변경 |
+|------|------|
+| `frontend/lib/providers/task_provider.dart` | (1) `fetchTasks()` `silent: bool = false` 인자 추가 — silent=true 시 isLoading set skip (M-1 spinner 두 번 표시 catch) (2) `completeTask()` 응답 후 fetchTasks(silent: true) 호출 — 옵션 B (relay_mode 응답 task 객체 미포함 영역 우회) |
+| `frontend/lib/screens/task/task_management_screen.dart` | (1) 본인 완료 카드 블록 A — `[내 작업 완료]` 표시 + `[재시작]` IconButton + `[공정 마감]` 버튼 신규 (2) 블록 B (일시정지) 조건 영역 `myWorkStatus != 'completed'` 추가 (Codex 1차 catch) (3) 블록 C (진행 중) 조건 영역 동일 추가 (4) `_handleFinalizeOnly()` 신규 — 확인 다이얼로그 "이 task만 정식 종료됩니다." + finalize=true 직행 |
+| `backend/app/services/task_service.py` | `complete_work()` L564 영역 조건 영역 `... and not finalize` 추가 (M-2 catch) — 본인 완료 상태 영역 "공정 마감" 버튼 영역 finalize=True 호출 시 TASK_ALREADY_COMPLETED 우회 → task close 진행 |
+| `backend/version.py` + `frontend/lib/utils/app_version.dart` | 2.15.14 → **2.15.15** |
+
+### 자가 리뷰 catch (M-1 + M-2)
+
+| Catch | 위치 | Root cause | Fix |
+|-------|-----|---|---|
+| M-1 | task_provider.dart fetchTasks() L175 | isLoading=true 다시 set → spinner 두 번 표시 (flickering) | silent 인자 추가 |
+| M-2 | task_service.py L564~569 | 본인 완료 상태 영역 finalize=True 호출 시 `_worker_already_completed_task=True` → TASK_ALREADY_COMPLETED 400 에러 | `and not finalize` 조건 추가 |
+
+### 본인 완료 상태 카드 UI 변경 (v2.15.15)
+
+| 이전 | v2.15.15 |
+|------|---|
+| 내 작업 완료 / 재시작 / 일시정지 / 완료 (4 버튼, 일시정지 + 완료 무의미) | **내 작업 완료 / 재시작 / 공정 마감** (3 버튼, 일시정지 hide + 완료 → 공정 마감 라벨) |
+
+→ 일시정지 conditional hide (myWorkStatus='completed' 시점만) — 재시작 후 다시 표시.
+
+### 검증
+
+- pytest test_relay_first_final.py 38/38 PASS (21.20s)
+- flutter build web GREEN (12.5s)
+- Netlify prod 배포 완료
+- Codex 라운드 1 (2차) = API overload (529) catch 영역 skip — Opus 자가 리뷰 M-1+M-2 catch 충분 + S2 패턴 (7일 사후 Codex)
+- 회귀 위험 0 (silent default=false 영역 기존 호출처 영향 0, finalize=False 영역 기존 동작 보존)
+
+### 후속
+
+- POST-REVIEW deadline 2026-05-22 (7일) — Codex 사후 검토 필수
+- A' (BE route enrichment) 별 sprint BACKLOG `REF-WORK-RESPONSE-ENRICHMENT-20260515` 등록 권고
+
+---
+
 ## [2.15.14] - 2026-05-15 — BUG-SECOND-CLOSE-FORCE-CLOSED-FALSE-POSITIVE + AUDIT TRAIL 통일
 
 > 사용자 5-14 운영 catch (BACKLOG `BUG-SECOND-CLOSE-FORCE-CLOSED-FALSE-POSITIVE-20260514`) — MECH SELF_INSPECTION / ELEC IF_2 누른 후 자동 close 된 잔여 task 영역 "강제종료" 라벨 + duration 0m 잘못 표시. 작업자 본인이 "내 작업 완료" 누른 task도 (work_completion_log row 존재) `force_closed=TRUE` 일괄 적용된 결과. + Codex 라운드 1 옵션 b 채택 (audit trail 통일 — 사용자 5-15 결정 "장기 운영 영역 디테일 중요").

@@ -171,8 +171,13 @@ class TaskNotifier extends StateNotifier<TaskState> {
     required String serialNumber,
     required int workerId,
     String? qrDocId,
+    // v2.15.15 신규 (BUG-RELAY-MODE M-1 자가 catch):
+    // completeTask 영역 내부 호출 시 spinner 두 번 표시 영역 catch → silent=true 영역 isLoading set 영역 skip
+    bool silent = false,
   }) async {
-    state = state.copyWith(isLoading: true, clearError: true);
+    if (!silent) {
+      state = state.copyWith(isLoading: true, clearError: true);
+    }
     try {
       final tasks = await _taskService.getTasksBySerialNumber(
         serialNumber: serialNumber,
@@ -180,13 +185,13 @@ class TaskNotifier extends StateNotifier<TaskState> {
         qrDocId: qrDocId,
       );
       state = state.copyWith(
-        isLoading: false,
+        isLoading: silent ? state.isLoading : false,
         tasks: tasks,
       );
       return true;
     } catch (e) {
       state = state.copyWith(
-        isLoading: false,
+        isLoading: silent ? state.isLoading : false,
         errorMessage: e.toString(),
       );
       return false;
@@ -265,6 +270,19 @@ class TaskNotifier extends StateNotifier<TaskState> {
       // 완료 후 공정 완료 상태 새로고침
       if (state.currentSerialNumber != null) {
         await refreshCompletionStatus(state.currentSerialNumber!);
+      }
+
+      // v2.15.15 (BUG-RELAY-MODE-AUTO-REFRESH-MISSING-20260514, 옵션 B):
+      // BE relay_mode 응답 영역 task 객체 미포함 (task_service.py L641/L691/L746/L763) → result.task 영역 부분 정보 → my_status 영역 미반영
+      // → 응답 후 전체 task 목록 fetch (정확한 my_status / workers / status 영역 정합 보장)
+      // A' (BE route enrichment) 별 sprint BACKLOG `REF-WORK-RESPONSE-ENRICHMENT-20260515` 등록 권고
+      if (state.currentSerialNumber != null && state.currentQrDocId != null) {
+        await fetchTasks(
+          serialNumber: state.currentSerialNumber!,
+          workerId: workerId,
+          qrDocId: state.currentQrDocId,
+          silent: true,  // v2.15.15 M-1 fix — spinner 두 번 표시 catch
+        );
       }
 
       return (success: true, checklistReady: result.checklistReady, checklistCategory: result.checklistCategory);

@@ -561,7 +561,10 @@ class TaskService:
 
         # 이 작업자가 이미 완료 기록을 남긴 경우 확인
         # Sprint 41 Fix: 릴레이 재시작한 경우(last_start > last_completion)는 재완료 허용
-        if _worker_already_completed_task(task.id, worker_id):
+        # v2.15.15 (BUG-RELAY-MODE M-2 자가 catch): finalize=True 시 본 분기 영역 skip
+        # 본인 완료 상태 영역 "공정 마감" 버튼 (task_management_screen `_handleFinalizeOnly`) 영역 진행 보장
+        # → task close 진행 (v2.15.14 force_closed 분기 영역 자연 close 영역 정합)
+        if _worker_already_completed_task(task.id, worker_id) and not finalize:
             if not _worker_restarted_after_completion(task.id, worker_id):
                 return {
                     'error': 'TASK_ALREADY_COMPLETED',

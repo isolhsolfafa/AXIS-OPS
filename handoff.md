@@ -1,7 +1,55 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-15 KST (✅ v2.15.14 BE only release + ✅ AUDIT_TRAIL_GUIDE.md 신규 + 📊 pytest 전수 결과 1201 PASS / 80 FAILED / 20 ERROR (PASS 92.3%) — 운영 검증 우선 + pytest 분석 1주 후 (deadline 2026-05-22, POST-REVIEW-PYTEST-FAILED-ANALYSIS-20260515 BACKLOG 등록 옵션 c 채택).
+> 마지막 업데이트: 2026-05-15 KST (✅ v2.15.15 BE 1 + FE 2 release — BUG-RELAY-MODE-AUTO-REFRESH-MISSING + COMPLETE-KEY-USELESS. 본인 완료 카드 "공정 마감" 버튼 신규 + fetchTasks silent 인자 + complete_work `and not finalize` 정정. 자가 리뷰 M-1+M-2 catch. Codex 라운드 1 = API overload skip, 7일 사후 Codex 검토 deadline 2026-05-22.)
+
+---
+
+## ✅ 2026-05-15 KST — v2.15.15 BE+FE (BUG-RELAY-MODE-AUTO-REFRESH-MISSING + COMPLETE-KEY-USELESS)
+
+> 사용자 5-14 catch (BACKLOG L342) + 5-15 결정. "내 작업만 완료" relay_mode 후 자동 갱신 안 됨 + 본인 완료 "완료" 키 TASK_ALREADY_COMPLETED 에러.
+
+### 사용자 결정 (5-15)
+
+- Catch 1 = B (FE fetchTasks 호출)
+- Catch 2 = c (확인 다이얼로그)
+- 결정 3 = a (일시정지 조건부 숨김)
+
+### 변경 (BE 1 + FE 2)
+
+- `task_provider.dart` fetchTasks() `silent: bool = false` 인자 + completeTask() 응답 후 fetchTasks(silent: true) 호출
+- `task_management_screen.dart` 블록 A 영역 "공정 마감" 버튼 + 블록 B/C 조건 myWorkStatus != 'completed' + `_handleFinalizeOnly()` 신규
+- `task_service.py` L564 영역 `and not finalize` 추가 (M-2 catch)
+- `version.py` + `app_version.dart` 2.15.14 → **2.15.15**
+
+### 자가 리뷰 catch (M-1 + M-2)
+
+- M-1 fetchTasks() spinner 두 번 표시 → silent 인자 추가
+- M-2 본인 완료 영역 finalize=True 호출 시 TASK_ALREADY_COMPLETED 에러 → `and not finalize` 조건 추가
+
+### 본인 완료 카드 UI 변경
+
+| 이전 | v2.15.15 |
+|------|---|
+| 내 작업 완료 / 재시작 / 일시정지 / 완료 (4 버튼) | 내 작업 완료 / 재시작 / 공정 마감 (3 버튼) |
+
+→ 일시정지 conditional hide (myWorkStatus='completed' 시점만)
+
+### 검증
+
+- pytest test_relay_first_final.py 38/38 PASS (21.20s)
+- flutter build GREEN (12.5s) + Netlify 배포 완료
+- Codex 라운드 1 = API overload skip → S2 패턴 (7일 사후 Codex)
+- 회귀 위험 0
+
+### 후속
+
+- POST-REVIEW deadline 2026-05-22 (7일)
+- A' (BE route enrichment) 별 sprint `REF-WORK-RESPONSE-ENRICHMENT-20260515` BACKLOG 등록 권고
+
+---
+
+## 📋 2026-05-15 KST — pytest 전수 결과 + 후속 분석 보류 (옵션 c)
 
 ---
 

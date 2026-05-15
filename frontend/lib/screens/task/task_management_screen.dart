@@ -493,6 +493,9 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
                         ),
                       ),
                     // 내 작업 완료 (나는 완료, 전체 Task는 아직 진행 중) + 릴레이 재시작 버튼
+                    // v2.15.15 (BUG-RELAY-MODE-AUTO-REFRESH-MISSING + 사용자 catch 2 + Codex 라운드 1):
+                    // 본인 완료 상태 영역 — 내 작업 완료 표시 + 재시작 IconButton + 공정 마감 버튼
+                    // 사용자 권고 (5-15): 일시정지 hide + 완료 → 공정 마감 라벨 변경 + 본인 완료 상태에서 finalize=true 직행 확인 다이얼로그
                     if (task.status == 'in_progress' && task.myWorkStatus == 'completed') ...[
                       Container(
                         height: 38,
@@ -515,9 +518,40 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
                         constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                         padding: EdgeInsets.zero,
                       ),
+                      const SizedBox(width: 8),
+                      // 공정 마감 버튼 (v2.15.15 신규) — 본인 완료 상태에서 finalize=true 직행 (확인 다이얼로그 영역)
+                      Expanded(
+                        child: SizedBox(
+                          height: 38,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(colors: [Color(0xFF10B981), Color(0xFF34D399)]),
+                              borderRadius: BorderRadius.circular(GxRadius.sm),
+                            ),
+                            child: Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: () => _handleFinalizeOnly(task.id, workerId),
+                                borderRadius: BorderRadius.circular(GxRadius.sm),
+                                child: Center(
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: const [
+                                      Icon(Icons.check_circle, size: 18, color: Colors.white),
+                                      SizedBox(width: 4),
+                                      Text('공정 마감', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                     ],
                     // 일시정지 상태 (본인 기준): "일시정지" 배지 + "재개" 버튼
-                    if (task.status == 'in_progress' && amIPaused) ...[
+                    // v2.15.15 (Codex 라운드 1 catch): myWorkStatus != 'completed' 추가 — 본인 완료 + 일시정지 케이스 영역 블록 A 영역만 렌더링
+                    if (task.status == 'in_progress' && amIPaused && task.myWorkStatus != 'completed') ...[
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                         margin: const EdgeInsets.only(right: 8),
@@ -565,7 +599,8 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
                       ),
                     ],
                     // 진행 중 (미일시정지, 본인 기준): 일시정지 + 완료 버튼
-                    if (task.status == 'in_progress' && !amIPaused) ...[
+                    // v2.15.15 (Codex 라운드 1 catch): myWorkStatus != 'completed' 추가 — 본인 완료 케이스 영역 블록 A 영역만 렌더링 (else if 패턴 정합)
+                    if (task.status == 'in_progress' && !amIPaused && task.myWorkStatus != 'completed') ...[
                       // 일시정지 버튼
                       SizedBox(
                         width: 38,
@@ -740,6 +775,77 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
       screen = TmChecklistScreen(serialNumber: serialNumber, qrDocId: qrDocId);
     }
     Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
+  }
+
+  // v2.15.15 (BUG-RELAY-MODE 사용자 catch 2 — 본인 완료 상태 영역 "공정 마감" 버튼 전용 핸들러)
+  // 확인 다이얼로그 ("이 task만 정식 종료됩니다") → 예 시 finalize=true 직행 (relay 선택지 영역 skip)
+  Future<void> _handleFinalizeOnly(int taskId, int workerId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.lg)),
+        title: Row(
+          children: [
+            Container(
+              width: 32, height: 32,
+              decoration: BoxDecoration(
+                color: GxColors.successBg,
+                borderRadius: BorderRadius.circular(GxRadius.md),
+              ),
+              child: const Icon(Icons.flag, color: GxColors.success, size: 18),
+            ),
+            const SizedBox(width: 10),
+            const Text('공정 마감 확인', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+          ],
+        ),
+        content: const Text(
+          '이 task만 정식 종료됩니다.',
+          style: TextStyle(fontSize: 13, color: GxColors.charcoal, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('취소', style: TextStyle(color: GxColors.steel)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('예, 마감',
+              style: TextStyle(color: GxColors.success, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    final taskNotifier = ref.read(taskProvider.notifier);
+    final completeResult = await taskNotifier.completeTask(
+      taskId: taskId,
+      workerId: workerId,
+      finalize: true,  // 본인 완료 상태 = finalize=true 직행 (relay 선택지 skip)
+    );
+    if (!mounted) return;
+
+    if (completeResult.success) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('공정 마감 완료'),
+          backgroundColor: GxColors.success,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.sm)),
+        ),
+      );
+    } else {
+      final errorMessage = ref.read(taskProvider).errorMessage;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(errorMessage ?? '공정 마감에 실패했습니다.'),
+          backgroundColor: GxColors.danger,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.sm)),
+        ),
+      );
+    }
   }
 
   Future<void> _handlePauseTask(int taskId) async {
