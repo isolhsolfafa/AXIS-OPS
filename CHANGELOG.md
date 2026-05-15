@@ -65,6 +65,39 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.15.18] - 2026-05-15 — POST-REVIEW-OPS-65-PATH2-REOPEN (MECH Dual-Trigger 경로 2 fix)
+
+> AXIS-VIEW 측 리뷰어가 OPS_API_REQUESTS.md #65 entry 교차검증 중 OPS 배포 코드 (v2.15.13~v2.15.17) 영역 버그 2건 발견. #65 = "MECH 체크리스트 Dual-Trigger" v2.15.13 ✅ COMPLETED 처리됐으나 경로 2 미완성. Codex 라운드 1 M=2 합의.
+
+### MECH Dual-Trigger 경로 2 버그 2건
+
+| catch | 라벨 | 내용 |
+|-------|------|------|
+| **M-A4** | M | `_try_mech_close()` 영역 `UPDATE completion_status SET mech_completed=TRUE` 누락 — ELEC `_try_elec_close()` 영역 존재. 경로 2 (체크리스트가 마지막) close 후 mech_completed=FALSE 잔존 → VIEW 생산현황 "미완료" 표시 |
+| **M-A7** | M | `upsert_mech_check()` close 게이트 = `check_mech_completion(sn, judgment_phase)` 단독 — 1차 검수만 채워도 close. v2.15.16 catch 1 의 경로 2 잔존분 (v2.15.16 영역 경로 1 `check_category_close_eligible` 만 교체) |
+
+### 변경 (BE 1 파일 + pytest 1 + version)
+
+| 파일 | 변경 |
+|------|------|
+| `backend/app/services/checklist_service.py` `_try_mech_close()` | close 후 `UPDATE completion_status SET mech_completed=TRUE WHERE serial_number=%s AND mech_completed=FALSE` + `conn.commit()` 추가 (M-A4, ELEC 패턴 정합, Codex Q1d — auto_close_relay_task 자체 conn 사용이므로 명시 commit 필수) |
+| `backend/app/services/checklist_service.py` `upsert_mech_check()` | close 게이트 분리 — `is_complete` (FE 진행률 표시용, phase별 `check_mech_completion`) 유지 + close 게이트만 `check_mech_completion_all()` (Phase 1+2 합산, 경로 1 정합) (M-A7) |
+| `backend/version.py` + `app_version.dart` | 2.15.17 → 2.15.18 |
+| `tests/backend/test_v2_15_18_mech_path2_close.py` | 신규 TC 5건 (M-A4 completion_status UPDATE 3 + M-A7 close 게이트 2) |
+
+### 검증
+
+- pytest 신규 `test_v2_15_18_mech_path2_close.py` 5/5 PASS (0.09s)
+- 회귀 위험 0 — `task_service.py` 경로 1 touch 0 / ELEC `_try_elec_close()`+`upsert_elec_check()` touch 0 / MECH 경로 2 전용
+
+### 영향
+
+- 경로 1 (SELF_INSPECTION 가 마지막) 정상 동작 중 — 영향 0
+- 경로 2 (체크리스트가 마지막): mech_completed flag 정상 set + 2차 검수 미입력 시 close 차단
+- AXIS-VIEW 생산현황 상세뷰 MECH 동기화 정상화
+
+---
+
 ## [2.15.17] - 2026-05-15 — FIX-VIEW-ORPHAN-DURATION (Trigger task close 시 소요시간 미표시 fix)
 
 > 사용자 운영 catch (5-15): "Trigger task close 시 VIEW 에서 소요시간 표시 안 됨 / 정상 완료된 task 만 소요시간 표시 됨". Codex 라운드 1 M=2/A=4 반영.

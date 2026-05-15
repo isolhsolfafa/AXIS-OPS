@@ -1,7 +1,36 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-15 KST (✅ v2.15.17 BE 2 파일 + pytest 1 release — FIX-VIEW-ORPHAN-DURATION-MISSING. Trigger task auto-close 시 VIEW 소요시간 '—' 미표시 fix. work.py + task_service_batch.py SQL COALESCE fallback. Codex 라운드 1 M=2 반영. pytest 10/10 GREEN.)
+> 마지막 업데이트: 2026-05-15 KST (✅ v2.15.18 BE 1 파일 + pytest 1 release — POST-REVIEW-OPS-65-PATH2-REOPEN. MECH Dual-Trigger 경로 2 fix (M-A4 mech_completed flag + M-A7 close 게이트). AXIS-VIEW 측 #65 리뷰 catch. Codex 라운드 1 M=2 합의. pytest 5/5 GREEN.)
+
+---
+
+## ✅ 2026-05-15 KST — v2.15.18 BE (POST-REVIEW-OPS-65-PATH2-REOPEN)
+
+> AXIS-VIEW 측 리뷰어가 OPS_API_REQUESTS.md #65 entry 교차검증 중 OPS 배포 코드 (v2.15.13~v2.15.17) 영역 버그 2건 발견. #65 v2.15.13 ✅ COMPLETED 처리됐으나 경로 2 (체크리스트가 마지막) 미완성.
+
+### 버그 2건 (Codex 라운드 1 M=2 합의)
+
+- M-A4: `_try_mech_close()` 영역 `UPDATE completion_status SET mech_completed=TRUE` 누락 (ELEC `_try_elec_close()` 영역 존재) → 경로 2 close 후 mech_completed=FALSE 잔존 → VIEW "미완료"
+- M-A7: `upsert_mech_check()` close 게이트 = `check_mech_completion(sn, judgment_phase)` 단독 → 1차만 채워도 close (v2.15.16 catch 1 의 경로 2 잔존분)
+
+### 변경 (BE 1 + pytest 1 + version)
+
+- `checklist_service.py` `_try_mech_close()` — close 후 completion_status UPDATE + conn.commit() (M-A4)
+- `checklist_service.py` `upsert_mech_check()` — close 게이트 `check_mech_completion_all()` 분리, `is_complete` (FE phase별) 유지 (M-A7)
+- `test_v2_15_18_mech_path2_close.py` 신규 5 TC
+- version 2.15.17 → 2.15.18
+
+### 검증
+
+- pytest 신규 5/5 PASS (0.09s)
+- 회귀 위험 0 (task_service.py 경로 1 + ELEC touch 0)
+
+### 영향
+
+- 경로 1 (SELF_INSPECTION 가 마지막) 정상 동작 — 영향 0
+- 경로 2 (체크리스트가 마지막): mech_completed flag 정상 set + 2차 검수 미입력 시 close 차단
+- AXIS-VIEW 생산현황 상세뷰 MECH 동기화 정상화
 
 ---
 

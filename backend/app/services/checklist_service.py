@@ -1707,6 +1707,21 @@ def _try_mech_close(serial_number: str) -> bool:
                     f"unfinished_workers={o_unfinished}, closed_by={o_last_worker_id}"
                 )
 
+        # v2.15.18 M-A4: completion_status flag set — ELEC `_try_elec_close()` 패턴 정합.
+        # 본 함수 진입 조건 = 체크리스트 100% + SELF_INSPECTION work_completion_log 1+ → MECH 완료 조건 충족.
+        # 누락 시 (v2.15.13~17): 경로 2 (체크리스트가 마지막) 영역 task 는 닫히는데 mech_completed=FALSE
+        # 잔존 → AXIS-VIEW 생산현황 상세뷰 MECH "미완료" 표시 (#65 catch).
+        cur.execute(
+            """
+            UPDATE completion_status
+            SET mech_completed = TRUE, updated_at = NOW()
+            WHERE serial_number = %s AND mech_completed = FALSE
+            """,
+            (serial_number,)
+        )
+        conn.commit()
+
+        logger.info(f"MECH close triggered (path 2: checklist last): serial={serial_number}")
         return True
 
     except Exception as e:
@@ -1879,12 +1894,16 @@ def upsert_mech_check(
             f"qr_doc_id={normalized_qr}"
         )
 
+        # FE 진행률 표시용 — judgment_phase 별 100% (1차 검수 화면 = 1차 100% 표시). 유지.
         is_complete = check_mech_completion(serial_number, judgment_phase)
 
         # v2.15.13 — Dual-Trigger 경로 2 (ELEC v2.15.10 패턴 정합)
         # 체크리스트 100% PUT 시점에 SELF_INSPECTION complete 확인 → SELF_INSPECTION + 잔여 task auto_close
+        # v2.15.18 M-A7: close 게이트 = check_mech_completion_all() (Phase 1+2 합산) — 경로 1
+        # (task_service.check_category_close_eligible) 과 정합. 기존 check_mech_completion(sn, phase)
+        # 단독 판정 시 1차 검수만 채워도 close 되던 버그 fix (v2.15.16 catch 1 의 경로 2 잔존분).
         mech_closed = False
-        if is_complete:
+        if check_mech_completion_all(serial_number):
             mech_closed = _try_mech_close(serial_number)
 
         return {
