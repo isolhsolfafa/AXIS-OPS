@@ -34,7 +34,7 @@
 
 - v2.14.1 work.py conn leak — T+5d (5-17 ± 1d) 검증 별개
 - `OBSERV-DUAL-WORKER-CONN-COEXIST-20260511` (P3, 5 conn 미스터리, 분석 only)
-- `FIX-MODEL-CONFIG-O3-DESTRUCTOR-20260515` (신규 — O3 Destructor model_config, P2)
+- `FEAT-MODEL-O3-DESTRUCTOR-TASK-SEED-20260515` (신규, P2 추후) — O3 Destructor 는 task seed 자체가 표준과 다름 (MECH 없음, ELEC 축소 = 판넬/IF_2/자주검사, TMS 없음). model_config INSERT + task_seed.py O3 분기 필요. 사용자 5-15 "추후" 결정
 
 ---
 
