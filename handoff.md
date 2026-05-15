@@ -1,7 +1,61 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-15 KST (✅ v2.15.15 BE 1 + FE 2 release — BUG-RELAY-MODE-AUTO-REFRESH-MISSING + COMPLETE-KEY-USELESS. 본인 완료 카드 "공정 마감" 버튼 신규 + fetchTasks silent 인자 + complete_work `and not finalize` 정정. 자가 리뷰 M-1+M-2 catch. Codex 라운드 1 = API overload skip, 7일 사후 Codex 검토 deadline 2026-05-22.)
+> 마지막 업데이트: 2026-05-15 KST (✅ v2.15.16 BE 3 파일 + migration 1 + pytest 1 release — SPRINT-V2-15-16-MECH-FORCE-CLOSED-PREV-DAY-CAP-20260515. Catch 3건 fix: MECH Phase 1+2 합산 검증 + force_closed=False 통일 (5곳) + PREV_DAY_CAP. Codex 라운드 1 M=5 전수 반영. POST-REVIEW deadline 2026-05-22.)
+
+---
+
+## ✅ 2026-05-15 KST — v2.15.16 BE (Catch 3건 fix + Codex M=5 전수 반영)
+
+> 사용자 운영 catch (v2.15.15 검증 후 5-15) 3건: (1) MECH 체크리스트 1차만 완료해도 task close 됨 (2) ELEC 정상 동작 확인 (3) close trigger 미완료 task force_closed=TRUE 처리 → 사용자 분석상 조건 1/2 무의미.
+
+### Codex 라운드 1 결과 — M 5건 catch (Claude 사전 검토 누락)
+
+| Q | 라벨 | Catch |
+|---|------|-------|
+| Q1 | M | check_mech_completion 호출자 4곳 (Claude 2곳만 식별) → X-β 채택 |
+| Q2 | M | force_closed 버그 5곳 (Claude 2곳만 식별) |
+| Q3 | M | auto-close 영역 validate_duration 미호출 → 본 sprint 포함 |
+| Q4 | N | test_relay_first_final.py 38 TC 회귀 0 |
+| Q5 | M | task_service.py L843 Sprint 41-B 레거시 루프 잔존 |
+| Q6 | N | duration_calculator 활성 사용 중 |
+
+### 변경 (BE 3 파일 + migration 1 + pytest 1 + version)
+
+- `checklist_service.py` 신규 `check_mech_completion_all()` (Phase 1 short-circuit + Phase 2) + IF_2/SELF_INSPECTION/orphan auto-close 3곳 `force_closed=False`
+- `task_service.py` MECH 분기 `check_mech_completion_all()` 호출 + FIRST/SECOND trigger `force_closed=False` + `last_started_at` 전달 + L843 레거시 루프 제거
+- `duration_calculator.py` priority 0 `PREV_DAY_CAP` 추가 (started ≥ 17:00 시 음수 차단 분기 포함)
+- `migrations/057_add_prev_day_cap_duration_source.sql` CHECK constraint 4 → 5 enum
+- `tests/backend/test_v2_15_16_force_closed_and_prev_day_cap.py` 신규 12 TC
+- `version.py` + `app_version.dart` 2.15.15 → **2.15.16**
+
+### 시나리오 매트릭스 (PREV_DAY_CAP)
+
+| 시나리오 | started | trigger | cap 발동? | close_at |
+|----------|---------|---------|-----------|----------|
+| A 정상 (운영 99%) | 5-15 09:00 | 5-15 14:00 | ❌ | 14:00 |
+| B 같은 날 야간 | 5-15 09:00 | 5-15 19:00 | ❌ | 17:00 (fallback) |
+| C 익일 trigger | 5-14 14:00 | 5-15 09:00 | ✅ | **5-14 17:00** |
+| D 주말 후 | 5-10 (금) 14:00 | 5-13 (월) 09:00 | ✅ | **5-10 17:00** |
+| E started ≥ 17:00 | 5-14 18:00 | 5-15 09:00 | ✅ + 보호 | started 그대로 (음수 차단) |
+
+### 검증
+
+- pytest 신규 12/12 PASS (0.14s) — test_v2_15_16_force_closed_and_prev_day_cap.py
+- pytest test_relay_first_final.py 38/38 PASS (21.86s, 회귀 0)
+- 회귀 위험 0 (X-β signature 보존, additive policy 단일화, additive priority 0, 레거시 루프 직후 `_trigger_second_close()` 동일 task 재처리)
+
+### POST-REVIEW (BACKLOG 등록)
+
+- `POST-REVIEW-AUTOCLOSED-CLOSED-BY-20260515` — auto-close `closed_by=worker_id` vs 설계서 "NULL" 모순 정책 명확화
+- `POST-REVIEW-AUDIT-TRAIL-CONSISTENCY-20260515` — force_closed 의미론 변경 영역 AUDIT_TRAIL_GUIDE.md 갱신
+
+### 영향 사용자
+
+- 사용자 5-15 운영 catch 3건 모두 해결
+- 익일/주말 trigger 18h+ 비정상 duration 자동 cap
+- MECH Phase 2 미입력 시 close 발동 차단 (ELEC 패턴 정합)
+- Sprint 41-B 레거시 audit trail 신규 발생 0건 (v2.15.14 표준 통일)
 
 ---
 

@@ -3,6 +3,7 @@
 > **목적**: `app_task_details` 테이블 close 영역 누가/언제/왜/어떻게 4W 추적 가이드. 운영 분석 + 디버깅 + 정합성 검증 + 통계용.
 >
 > **도입**: v2.15.14 (2026-05-15) — BUG-SECOND-CLOSE-FORCE-CLOSED-FALSE-POSITIVE 후 audit trail 4 trigger 함수 통일.
+> **갱신**: v2.15.16 (2026-05-15) — force_closed 의미론 변경 (auto-close = FALSE 통일 / 강제종료 = manager force-close API 전용) + Sprint 41-B 레거시 루프 제거 (AUTO_CLOSED_LEGACY 신규 발생 종료) + duration_source `PREV_DAY_CAP` enum 추가.
 
 ---
 
@@ -30,18 +31,29 @@
 
 ### 사용 안 하는 라벨
 
-- `AUTO_CLOSED_LEGACY` = v2.15.14 이후 = 0건 발생되어야 함. 1건+ 발견 시 = 어디서 LEGACY 분기 새고 있는지 추적 필요.
+- `AUTO_CLOSED_LEGACY` = v2.15.16 이후 = 신규 발생 종료 확정.
+  - v2.15.14 도입 시점 영역 — `_trigger_second_close()` 단일 경로 통일 의도.
+  - **v2.15.16 (5-15) 최종 정리** — Sprint 41-B 레거시 루프 (`task_service.py` L843~L864) 영역 잔존 발견 → 제거 → `_trigger_second_close()` 단일 경로 확정.
+  - 1건+ 신규 발생 시 = 회귀 catch 필요.
 
 ---
 
 ## 3. force_closed 의미
 
-| 값 | 의미 | 판정 기준 |
-|----|------|---------|
-| `FALSE` (자연 close) | 모든 worker 본인 "내 작업 완료" 누른 후 trigger 발동 | `unfinished_workers_count = 0` (work_start_log workers 모두 work_completion_log 보유) |
-| `TRUE` (강제종료) | 일부 worker 미종료 상태에서 trigger 발동 (manager 권한) | `unfinished_workers_count > 0` |
+> **⚠️ v2.15.16 (2026-05-15) 의미론 변경**: 자동 close trigger 영역 force_closed=FALSE 통일. 강제종료(TRUE) 영역 manager force-close API 전용 의미. 사용자 분석 (5-15) — close trigger 가 근무시간 내 발동 → 미완료 worker 존재해도 자연 close 처리 정합.
 
-### 판정 SQL (참조)
+| 값 | 의미 | 발동 경로 |
+|----|------|---------|
+| `FALSE` (자연 close) | 자동 trigger 영역 — 모든 자동 close 경로 (FIRST/SECOND Final trigger, MECH/ELEC Dual-Trigger) | task_service.py trigger 함수 5곳 + checklist_service.py Dual-Trigger 3곳 |
+| `TRUE` (강제종료) | 관리자 수동 강제종료 전용 | `/api/admin/tasks/{id}/force-close` API (manager 권한) |
+
+### v2.15.15 이전 정책 (참조)
+
+> v2.15.14 (5-15) ~ v2.15.15 (5-15) 영역 단기 정책 — `unfinished_workers_count > 0` 일 때 TRUE 처리. 사용자 5-15 운영 catch 후 폐기:
+> - 사용자 분석: close trigger 가 근무시간 내 발동 → 조건 1 (attendance check_out) + 조건 2 (17:00 fallback) 무의미
+> - v2.15.16 영역 자동 close = FALSE 통일
+
+### 판정 SQL (참조 — unfinished_workers_count)
 
 ```sql
 SELECT COUNT(DISTINCT wsl.worker_id) AS unfinished_count
@@ -53,6 +65,29 @@ WHERE wsl.task_id = $TASK_ID
       AND wcl.worker_id = wsl.worker_id
   );
 ```
+
+→ v2.15.16 영역 본 SQL 결과 영역 force_closed 결정 영역 사용 안 함. 별 분석 영역 미완료 worker 카운트만 제공.
+
+## 3-1. duration_source enum (v2.15.16 갱신)
+
+| enum | 발동 경로 | close_at 결정 |
+|------|---------|----------|
+| `NORMAL_COMPLETION` | 정상 worker complete_work() | 본인 work_completion_log 영역 시각 |
+| `PREV_DAY_CAP` | **v2.15.16 신규** — trigger 영역 익일/주말 발동 | started 날짜 17:00 KST (음수 보호 분기: started ≥ 17:00 시 started 그대로) |
+| `NORMAL_COMPLETION` (priority 1) | orphan 영역 work_completion_log 본인 row 있음 | 그대로 사용 |
+| `ATTENDANCE_OUT` | orphan worker attendance check_out 있음 | MIN(check_out, trigger_time) |
+| `FALLBACK_TRIGGER_DATE_17` | 위 3건 모두 없음 | MIN(trigger_date 17:00, trigger_time) |
+| `INVALID_WARNING` | duration_validator 비정상 검출 | 운영 이상치 표시 |
+
+### PREV_DAY_CAP 발동 매트릭스 (v2.15.16)
+
+| 시나리오 | started | trigger | cap 발동? | close_at |
+|----------|---------|---------|-----------|----------|
+| 정상 (운영 99%) | 5-15 09:00 | 5-15 14:00 | ❌ | trigger_time |
+| 같은 날 야간 | 5-15 09:00 | 5-15 19:00 | ❌ | fallback 17:00 |
+| **익일 trigger** | 5-14 14:00 | 5-15 09:00 | ✅ | **5-14 17:00** |
+| **주말 후** | 5-10 (금) 14:00 | 5-13 (월) 09:00 | ✅ | **5-10 17:00** |
+| started ≥ 17:00 | 5-14 18:00 | 5-15 09:00 | ✅ + 보호 | started 그대로 (음수 차단) |
 
 ---
 

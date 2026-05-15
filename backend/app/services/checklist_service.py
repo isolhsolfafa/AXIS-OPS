@@ -1346,11 +1346,12 @@ def _try_elec_close(serial_number: str) -> bool:
         if2_row = cur.fetchone()
         conn.commit()  # SELECT 후 transaction 정리 (HOTFIX-08 패턴)
 
-        # IF_2 still open → auto_close_relay_task 호출 (v2.15.10 신규 + v2.15.14 force_closed + audit trail 통일)
+        # IF_2 still open → auto_close_relay_task 호출 (v2.15.10 신규 + v2.15.14 audit trail 통일)
+        # v2.15.16 (2026-05-15) Codex Q2 M: force_closed=False 항상 (trigger 자체가 정상 close 시점)
+        # 사용자 catch (5-15): close trigger 가 근무시간 내 발동 → 미완료 worker 존재해도 자연 close
         if if2_row:
             from app.models.task_detail import auto_close_relay_task
             if2_unfinished = (if2_row.get('unfinished_workers_count', 0) or 0) if isinstance(if2_row, dict) else 0
-            if2_force_closed = (if2_unfinished > 0)
             if2_last_worker_id = if2_row.get('last_completion_worker_id') if isinstance(if2_row, dict) else None
             success = auto_close_relay_task(
                 task_detail_id=if2_row['task_detail_id'],
@@ -1359,14 +1360,13 @@ def _try_elec_close(serial_number: str) -> bool:
                 closed_by_worker_id=if2_last_worker_id,    # v2.15.14 옵션 b
                 trigger_task_id='IF_2',                     # v2.15.14 옵션 b
                 trigger_type='SECOND_FINAL',                # v2.15.14 옵션 b
-                force_closed=if2_force_closed,
+                force_closed=False,                          # v2.15.16: 자연 close 통일 (Codex Q2 M)
             )
             if success:
                 logger.info(
                     f"ELEC IF_2 auto-closed (path 2: checklist last + INSPECTION done): "
                     f"serial={serial_number}, if2_task_id={if2_row['task_detail_id']}, "
-                    f"force_closed={if2_force_closed}, unfinished_workers={if2_unfinished}, "
-                    f"closed_by={if2_last_worker_id}"
+                    f"unfinished_workers={if2_unfinished}, closed_by={if2_last_worker_id}"
                 )
 
         # completion_status flag set (기존 동작 유지)
@@ -1475,6 +1475,28 @@ def _resolve_active_master_ids(serial_number: str, judgment_phase: int = 1) -> L
             put_conn(conn)
 
 
+def check_mech_completion_all(serial_number: str) -> bool:
+    """MECH 체크리스트 Phase 1+2 합산 완료 여부 (v2.15.16, ELEC 패턴 정합).
+
+    호출자: task_service.check_category_close_eligible() — close 판정 전용.
+    Phase 1 완료 AND Phase 2 완료 둘 다 True 일 때만 True 반환.
+
+    배경 (사용자 5-15 catch):
+      v2.15.15 까지 check_mech_completion(serial_number) default judgment_phase=1 만 검증 →
+      Phase 1 19개만 채워지면 close 발동 → Phase 2 (관리자 input) 미입력 영역도 close 됨.
+      Codex 라운드 1 Q1 M 권고 X-β = 신규 함수 추가 (signature 보존, 호출자만 교체).
+
+    호환성:
+      - 기존 check_mech_completion(serial_number, judgment_phase) signature 보존
+      - upsert_mech_check / checklist.py route / production.py 영역 영향 0
+    """
+    if not check_mech_completion(serial_number, judgment_phase=1):
+        return False
+    if not check_mech_completion(serial_number, judgment_phase=2):
+        return False
+    return True
+
+
 def check_mech_completion(serial_number: str, judgment_phase: int = 1) -> bool:
     """MECH 체크리스트 완료 여부 (Sprint 63-BE).
 
@@ -1486,6 +1508,9 @@ def check_mech_completion(serial_number: str, judgment_phase: int = 1) -> bool:
     SINGLE/DUAL 분기:
       - SINGLE: qr_doc_id='DOC_{S/N}' 한 개 record 만 검증
       - DUAL: 'DOC_{S/N}-L', 'DOC_{S/N}-R' 두 개 모두 완료 시 True
+
+    ⚠️ v2.15.16 (2026-05-15) — close 판정용 합산 검증은 check_mech_completion_all() 사용.
+       본 함수는 Phase 별 진행률 알림 (upsert_mech_check, checklist.py route) 영역 전용.
     """
     active_ids = _resolve_active_master_ids(serial_number, judgment_phase)
     if not active_ids:
@@ -1643,9 +1668,8 @@ def _try_mech_close(serial_number: str) -> bool:
 
         from app.models.task_detail import auto_close_relay_task
 
-        # SELF_INSPECTION 본인 close (v2.15.14: force_closed + audit trail 통일)
+        # SELF_INSPECTION 본인 close (v2.15.14 audit trail 통일 + v2.15.16 force_closed=False 통일)
         si_unfinished = (si_row.get('unfinished_workers_count', 0) or 0) if isinstance(si_row, dict) else 0
-        si_force_closed = (si_unfinished > 0)
         si_last_worker_id = si_row.get('last_completion_worker_id') if isinstance(si_row, dict) else None
         si_success = auto_close_relay_task(
             task_detail_id=si_row['task_detail_id'],
@@ -1654,20 +1678,18 @@ def _try_mech_close(serial_number: str) -> bool:
             closed_by_worker_id=si_last_worker_id,        # v2.15.14 옵션 b: audit trail 통일
             trigger_task_id='SELF_INSPECTION',             # v2.15.14 옵션 b: trail 명시
             trigger_type='SECOND_FINAL',                   # v2.15.14 옵션 b: trail 명시
-            force_closed=si_force_closed,
+            force_closed=False,                            # v2.15.16: 자연 close 통일 (Codex Q2 M)
         )
         if si_success:
             logger.info(
                 f"MECH SELF_INSPECTION auto-closed (path 2: checklist last): "
                 f"serial={serial_number}, task_id={si_row['task_detail_id']}, "
-                f"force_closed={si_force_closed}, unfinished_workers={si_unfinished}, "
-                f"closed_by={si_last_worker_id}"
+                f"unfinished_workers={si_unfinished}, closed_by={si_last_worker_id}"
             )
 
-        # 잔여 MECH task auto-close (v2.15.14: force_closed + audit trail 통일)
+        # 잔여 MECH task auto-close (v2.15.14 audit trail 통일 + v2.15.16 force_closed=False 통일)
         for orphan in orphan_rows:
             o_unfinished = (orphan.get('unfinished_workers_count', 0) or 0) if isinstance(orphan, dict) else 0
-            o_force_closed = (o_unfinished > 0)
             o_last_worker_id = orphan.get('last_completion_worker_id') if isinstance(orphan, dict) else None
             success = auto_close_relay_task(
                 task_detail_id=orphan['task_detail_id'],
@@ -1676,14 +1698,13 @@ def _try_mech_close(serial_number: str) -> bool:
                 closed_by_worker_id=o_last_worker_id,      # v2.15.14 옵션 b
                 trigger_task_id='SELF_INSPECTION',          # v2.15.14 옵션 b — Second Close trigger
                 trigger_type='SECOND_FINAL',                # v2.15.14 옵션 b
-                force_closed=o_force_closed,
+                force_closed=False,                         # v2.15.16: 자연 close 통일 (Codex Q2 M)
             )
             if success:
                 logger.info(
                     f"MECH orphan auto-closed (path 2): serial={serial_number}, "
                     f"task_id={orphan['task_detail_id']}, task_id_ref={orphan['task_id']}, "
-                    f"force_closed={o_force_closed}, unfinished_workers={o_unfinished}, "
-                    f"closed_by={o_last_worker_id}"
+                    f"unfinished_workers={o_unfinished}, closed_by={o_last_worker_id}"
                 )
 
         return True

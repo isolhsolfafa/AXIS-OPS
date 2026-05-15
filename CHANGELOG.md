@@ -65,6 +65,62 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.15.16] - 2026-05-15 — Catch 3건 fix (MECH Phase 1+2 + force_closed=False 통일 + PREV_DAY_CAP)
+
+> 사용자 운영 catch (v2.15.15 검증 후 5-15): (1) MECH 체크리스트 1차만 완료해도 task close 됨 (2) ELEC 정상 동작 확인 (3) close trigger 미완료 task 영역 force_closed=TRUE 처리되는데 사용자 분석상 trigger 가 근무시간 내 발동 → 조건 1 (attendance check_out) + 조건 2 (17:00) 무의미. Codex 라운드 1 M=5 catch (Claude Code 측 사전 검토 누락) 전수 반영.
+
+### Codex 라운드 1 결과 — M 5건 catch (Claude Code 측 사전 검토 누락)
+
+| Q | 라벨 | Catch |
+|---|------|-------|
+| Q1 | M | `check_mech_completion` 호출자 4곳 (Claude 2곳만 식별 — checklist.py L1338 + production.py L279 누락) → X-α 회귀 위험, **X-β 필수** |
+| Q2 | M | force_closed 버그 5곳 (Claude 2곳만 식별 — checklist_service.py L1352 + L1647 + L1669 누락) |
+| Q3 | M | auto-close 영역 validate_duration 미호출 → 별 sprint 불가, **본 sprint 영역 PREV_DAY_CAP 추가** |
+| Q4 | N | test_relay_first_final.py 38 TC 영역 회귀 0 |
+| Q5 | M | task_service.py L843 Sprint 41-B 레거시 루프 잔존 (Claude 미식별) — `AUDIT_TRAIL_GUIDE.md` "v2.15.14 이후 0건" 주장과 모순 |
+| Q6 | N | duration_calculator.py 활성 사용 중, dead path 아님 |
+
+### 변경 (BE 3 파일 + migration 1 + pytest 1 + version)
+
+| 파일 | 변경 |
+|------|------|
+| `backend/app/services/checklist_service.py` | 신규 `check_mech_completion_all()` (Phase 1+2 합산, ELEC 패턴 정합) + IF_2/SELF_INSPECTION/orphan auto-close 3곳 `force_closed=False` 통일 (~50 LOC) |
+| `backend/app/services/task_service.py` | (1) `check_category_close_eligible()` MECH 분기 `check_mech_completion_all()` 호출 (Q1 X-β) (2) `_trigger_first_final_close()` + `_trigger_second_close()` `force_closed=False` 통일 + `last_started_at` 전달 (Q2+Q3) (3) Sprint 41-B 레거시 루프 제거 (Q5) — `_trigger_second_close()` 만 호출 |
+| `backend/app/services/duration_calculator.py` | `calculate_close_at()` signature `last_started_at` 인자 추가 + priority 0 `PREV_DAY_CAP` 추가 (Q3 M, 익일/주말 trigger 시 started.date() 17:00 KST cap) |
+| `backend/migrations/057_add_prev_day_cap_duration_source.sql` | duration_source CHECK constraint 영역 `PREV_DAY_CAP` enum 추가 (4 → 5) |
+| `backend/version.py` + `frontend/lib/utils/app_version.dart` | VERSION 2.15.15 → 2.15.16 |
+| `tests/backend/test_v2_15_16_force_closed_and_prev_day_cap.py` | 신규 TC 12건 (시나리오 A/B/C/D + priority 0 + Phase 1+2 + signature 보존) |
+
+### 시나리오 매트릭스 (PREV_DAY_CAP 발동 검증)
+
+| 시나리오 | started | trigger | cap 발동? | close_at | duration |
+|----------|---------|---------|-----------|----------|----------|
+| A 정상 근무 (운영 99%) | 5-15 09:00 | 5-15 14:00 | ❌ | 14:00 | 5h |
+| B 같은 날 야간 | 5-15 09:00 | 5-15 19:00 | ❌ | 17:00 (fallback) | 8h |
+| C 익일 trigger | 5-14 14:00 | 5-15 09:00 | ✅ | **5-14 17:00** | 3h |
+| D 주말 후 | 5-10 (금) 14:00 | 5-13 (월) 09:00 | ✅ | **5-10 17:00** | 3h |
+| E started ≥ 17:00 (야간 시작) | 5-14 18:00 | 5-15 09:00 | ✅ + 보호 | started 그대로 | 0 (음수 차단) |
+
+### 검증
+
+- pytest 신규 12/12 PASS (0.14s) — `test_v2_15_16_force_closed_and_prev_day_cap.py`
+- pytest `test_relay_first_final.py` 38/38 PASS (21.86s, 회귀 0)
+- 회귀 위험 0 (FIX-A X-β = signature 보존, FIX-B = additive policy 단일화, FIX-C = additive priority 0, FIX-D = 레거시 루프 직후 `_trigger_second_close()` 동일 task 처리)
+
+### POST-REVIEW (별 sprint BACKLOG 등록)
+
+- `POST-REVIEW-AUTOCLOSED-CLOSED-BY-20260515` — Codex Q2 추가 catch: auto-close 영역 `closed_by = worker_id` 기록 중 (설계서 "auto-close = NULL" 기술과 모순). 정책 명확화 필요
+- `POST-REVIEW-AUDIT-TRAIL-CONSISTENCY-20260515` — force_closed 의미론 변경 (auto-close 자연 close 통일 → manager force-close API 전용 강제종료) `AUDIT_TRAIL_GUIDE.md` 갱신 필요
+
+### 영향 사용자
+
+- 사용자 5-15 운영 catch 3건 모두 해결
+- 익일/주말 trigger 시 18h+ 비정상 duration 자동 cap (운영 audit trail 정확화)
+- MECH Phase 2 (관리자 input) 미입력 시 close 발동 차단 (ELEC 패턴 정합)
+- Sprint 41-B 레거시 루프 제거 — `AUTO_CLOSED_LEGACY` audit trail 신규 발생 0건 (v2.15.14 표준 통일)
+
+---
+
 ## [2.15.15] - 2026-05-15 — BUG-RELAY-MODE-AUTO-REFRESH-MISSING + COMPLETE-KEY-USELESS
 
 > 사용자 5-14 catch (BACKLOG L342) + 5-15 결정 — "내 작업만 완료" relay_mode 후 자동 갱신만으로 화면 전환 안 됨 (수동 새로고침 필요) + 본인 완료 상태 "완료" 키 무의미 (TASK_ALREADY_COMPLETED 에러). 사용자 결정: Catch 1=B (FE fetchTasks 호출) / Catch 2=c (확인 다이얼로그) / 결정 3=a (일시정지 조건부 숨김). Codex 라운드 1 (1차) M-1 (목록 화면 else if 정리) 반영 + Opus 자가 리뷰 M-1 (fetchTasks flickering) + M-2 (BE TASK_ALREADY_COMPLETED 에러) 추가 catch + 정정.

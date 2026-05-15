@@ -317,8 +317,11 @@ def check_category_close_eligible(category: str, serial_number: str) -> bool:
         return check_elec_completion(serial_number)
     elif category == 'MECH':
         # v2.15.7 — 체크리스트 100% 만 (SELF_INSPECTION 자체 complete 는 호출자 영역에서 보장)
-        from app.services.checklist_service import check_mech_completion
-        return check_mech_completion(serial_number)
+        # v2.15.16 (Codex Q1 M, X-β): check_mech_completion_all() 호출 — Phase 1+2 합산 검증
+        # 사용자 5-15 catch: 기존 check_mech_completion(serial_number) default phase=1 만 검증 →
+        # Phase 2 (관리자 input) 미입력 영역도 close 발동되던 버그 fix.
+        from app.services.checklist_service import check_mech_completion_all
+        return check_mech_completion_all(serial_number)
     elif category in ('TM', 'TMS'):
         # v2.15.6 — PRESSURE_TEST complete 만으로 close (체크리스트 무관)
         return True
@@ -841,31 +844,15 @@ class TaskService:
                 )
 
         if sprint41d_should_auto_close:
-            from app.models.task_detail import get_orphan_relay_tasks, auto_close_relay_task
-            orphans = get_orphan_relay_tasks(task.serial_number, task.task_category)
-            auto_closed_count = 0
-            for orphan in orphans:
-                success = auto_close_relay_task(
-                    task_detail_id=orphan['task_detail_id'],
-                    last_completion_at=orphan['last_completion_at'],
-                    worker_count=orphan['worker_count'],
-                )
-                if success:
-                    auto_closed_count += 1
-                    logger.info(
-                        f"Auto-closed relay task: task_detail_id={orphan['task_detail_id']}, "
-                        f"task_name={orphan['task_name']}, "
-                        f"last_completion_at={orphan['last_completion_at']}"
-                    )
-            if auto_closed_count > 0:
-                logger.info(
-                    f"Sprint 41-B auto-close: serial_number={task.serial_number}, "
-                    f"category={task.task_category}, closed={auto_closed_count}/{len(orphans)}"
-                )
-
-            # Sprint 41-D Second Close 트리거 (Sprint 41-B 후처리)
-            # SECOND_FINAL/SINGLE_FINAL 영역 — 카테고리 전체 잔여 미완료 + pause task 자동 close
-            # (Sprint 41-B get_orphan_relay_tasks 는 work_completion_log 기준 — pause task 제외 가능)
+            # v2.15.16 (Codex Q5 M): Sprint 41-B 레거시 auto_close_relay_task 루프 제거.
+            # 배경: 레거시 3-arg 호출 (task_detail_id, last_completion_at, worker_count) 시
+            #       auto_close_relay_task() 의 default force_closed=True + closed_by=NULL +
+            #       close_reason='AUTO_CLOSED_LEGACY' 영역 적용 → v2.15.14 audit trail 표준 (force_closed=False,
+            #       closed_by/close_reason 명시) 위반. AUDIT_TRAIL_GUIDE.md "v2.15.14 이후 0건" 주장과 모순.
+            # 영향 0: 본 루프 직후 _trigger_second_close() 가 동일 orphan task 영역 v2.15.14 표준으로
+            #         재처리 + 레거시 루프 처리분은 auto_close_relay_task() WHERE 가드 (completed_at IS NULL
+            #         AND force_closed=FALSE) 영역 no-op 처리되던 상황.
+            # Sprint 41-D Second Close 트리거 — 카테고리 전체 잔여 미완료 + pause task 자동 close.
             self._trigger_second_close(task, worker_id, completed_at)
 
             # Sprint 61-BE: ORPHAN_ON_FINAL — 미시작 task 잔존 알림
@@ -1353,13 +1340,15 @@ class TaskService:
                 o_pause_minutes = o_pause_minutes or 0
                 o_unfinished = o_unfinished or 0
 
-            # v2.15.14: 모든 worker 본인 종료 시 자연 close / 일부 미종료 시 강제종료
-            is_force_closed = (o_unfinished > 0)
+            # v2.15.16 (Codex Q2 M): force_closed=False 항상 — trigger 자체가 정상 close 시점.
+            # 사용자 5-15 catch: close trigger 가 근무시간 내 발동 → 미완료 worker 존재해도 자연 close.
+            # closed_by 는 audit trail 영역 last_completion_worker_id 또는 trigger 영역 보존 (POST-REVIEW 별 sprint).
 
             close_at, duration_source = calculate_close_at(
                 worker_id=o_worker_id,
                 trigger_time=trigger_time,
                 orphan_last_completion_at=o_last_completion,
+                last_started_at=o_last_started_at,  # v2.15.16 (Codex Q3 M): 전일 경계 cap 발동 source
             )
             # ⭐ HOTFIX v2.15.4 Catch C (DRY 정정): inline → calculate_auto_close_duration() 호출
             duration_min = calculate_auto_close_duration(
@@ -1377,14 +1366,13 @@ class TaskService:
                 trigger_type='FIRST_FINAL',
                 duration_source=duration_source,
                 duration_minutes=duration_min,
-                force_closed=is_force_closed,  # v2.15.14: 자연 close vs 강제종료 분기
+                force_closed=False,  # v2.15.16 (Codex Q2 M): 자연 close 통일
             )
             if success:
                 logger.info(
                     f"First Close trigger: task_id={o_id} closed by "
                     f"{trigger_task.task_id} start (worker_id={trigger_worker_id}, "
-                    f"duration_source={duration_source}, force_closed={is_force_closed}, "
-                    f"unfinished_workers={o_unfinished})"
+                    f"duration_source={duration_source}, unfinished_workers={o_unfinished})"
                 )
 
     def _trigger_second_close(
@@ -1472,13 +1460,14 @@ class TaskService:
                 o_pause_minutes = o_pause_minutes or 0
                 o_unfinished = o_unfinished or 0
 
-            # v2.15.14: 모든 worker 본인 종료 시 자연 close (force_closed=FALSE) / 일부 미종료 시 manager 권한 강제종료 (TRUE)
-            is_force_closed = (o_unfinished > 0)
+            # v2.15.16 (Codex Q2 M): force_closed=False 항상 — trigger 자체가 정상 close 시점.
+            # 사용자 5-15 catch: close trigger 가 근무시간 내 발동 → 미완료 worker 존재해도 자연 close.
 
             close_at, duration_source = calculate_close_at(
                 worker_id=o_worker_id,
                 trigger_time=trigger_time,
                 orphan_last_completion_at=o_last_completion,
+                last_started_at=o_last_started_at,  # v2.15.16 (Codex Q3 M): 전일 경계 cap 발동 source
             )
             # ⭐ HOTFIX v2.15.4 Catch C (DRY 정정): inline → calculate_auto_close_duration() 호출
             duration_min = calculate_auto_close_duration(
@@ -1496,14 +1485,13 @@ class TaskService:
                 trigger_type='SECOND_FINAL',
                 duration_source=duration_source,
                 duration_minutes=duration_min,
-                force_closed=is_force_closed,  # v2.15.14: 자연 close vs 강제종료 분기
+                force_closed=False,  # v2.15.16 (Codex Q2 M): 자연 close 통일
             )
             if success:
                 logger.info(
                     f"Second Close trigger: task_id={o_id} closed by "
                     f"{trigger_task.task_id} complete (worker_id={trigger_worker_id}, "
-                    f"duration_source={duration_source}, force_closed={is_force_closed}, "
-                    f"unfinished_workers={o_unfinished})"
+                    f"duration_source={duration_source}, unfinished_workers={o_unfinished})"
                 )
 
     def get_tasks_by_product(
