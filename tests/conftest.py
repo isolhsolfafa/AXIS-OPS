@@ -42,6 +42,13 @@ if _env_test_path.exists():
 if os.getenv('TEST_DATABASE_URL'):
     os.environ['DATABASE_URL'] = os.environ['TEST_DATABASE_URL']
 
+# backend/ 를 sys.path 에 추가 — module-level 에서 app.* import 가능하게
+# (운영 migration_runner._split_statements 재사용용, POST-REVIEW-PYTEST-FAILED-ANALYSIS)
+import sys as _sys
+_backend_path = str(Path(__file__).parent.parent / 'backend')
+if _backend_path not in _sys.path:
+    _sys.path.insert(0, _backend_path)
+
 
 # ============================================================
 # 전역 SMTP Mock (autouse=True) — 모든 테스트에서 실제 메일 발송 차단
@@ -99,60 +106,12 @@ def _parse_db_url(db_url: str) -> dict:
     }
 
 
-def _split_sql_statements(sql: str) -> list:
-    """
-    SQL 파일을 개별 문장으로 분리 (PL/pgSQL $$ 블록 안의 ';'은 분리하지 않음).
-
-    psycopg2의 cursor.execute는 한 번에 하나의 문장만 실행하므로,
-    SQL 파일을 세미콜론으로 분리해야 하되, dollar-quote 블록($$...$$) 내부의
-    세미콜론은 분리 기준에서 제외해야 함.
-    """
-    statements = []
-    current = []
-    in_dollar_quote = False
-    dollar_tag = ''
-    i = 0
-    lines = sql.splitlines(keepends=True)
-    text = sql
-
-    # 단순 상태 머신으로 $$ 추적
-    pos = 0
-    length = len(text)
-    stmt_start = 0
-
-    while pos < length:
-        # dollar-quote 시작/종료 감지
-        if text[pos] == '$':
-            # dollar tag 찾기: $tag$ 또는 $$
-            end = text.find('$', pos + 1)
-            if end != -1:
-                tag = text[pos:end + 1]
-                if not in_dollar_quote:
-                    in_dollar_quote = True
-                    dollar_tag = tag
-                    pos = end + 1
-                    continue
-                elif tag == dollar_tag:
-                    in_dollar_quote = False
-                    dollar_tag = ''
-                    pos = end + 1
-                    continue
-
-        # 문장 종료 감지 (dollar-quote 밖의 ';')
-        if text[pos] == ';' and not in_dollar_quote:
-            stmt = text[stmt_start:pos].strip()
-            if stmt:
-                statements.append(stmt)
-            stmt_start = pos + 1
-
-        pos += 1
-
-    # 마지막 남은 문장
-    remaining = text[stmt_start:].strip()
-    if remaining:
-        statements.append(remaining)
-
-    return statements
+# SQL statement 분리 — 운영 migration_runner._split_statements 재사용 (DRY).
+# 기존 conftest 자체 구현 (_split_sql_statements) 은 single-quote 문자열 리터럴 +
+# 라인 주석 (--) 미처리 결함 → SQL 깨짐 (007 syntax error / 051a·053a "empty query").
+# 운영 runner 는 single-quote(`''` escape) + 라인주석 + dollar-quote 를 모두 정확히
+# 처리하므로 그대로 차용. (POST-REVIEW-PYTEST-FAILED-ANALYSIS, Codex 라운드 1 M)
+from app.migration_runner import _split_statements as _split_sql_statements
 
 
 # Session-scoped: DB 스키마 초기화 (migrations 실행)
@@ -195,23 +154,32 @@ def db_schema():
             migration_files = sorted(migrations_dir.glob('*.sql'))
             print(f"[db_schema] Found {len(migration_files)} migration files")
 
+            failed_stmts = []
             for filepath in migration_files:
                 sql = filepath.read_text(encoding='utf-8')
                 statements = _split_sql_statements(sql)
                 for stmt in statements:
-                    non_comment_lines = [
-                        line for line in stmt.splitlines()
-                        if line.strip() and not line.strip().startswith('--')
-                    ]
-                    effective_stmt = ' '.join(non_comment_lines).strip().upper()
-                    if effective_stmt in ('BEGIN', 'COMMIT', 'ROLLBACK'):
+                    # 빈 / comment-only statement skip (운영 split 가 주석 제거하므로
+                    # 거의 안 생기지만 방어적 — Codex 라운드 1 M)
+                    if not stmt or not stmt.strip():
+                        continue
+                    effective_stmt = stmt.strip().upper()
+                    if not effective_stmt or effective_stmt in ('BEGIN', 'COMMIT', 'ROLLBACK'):
                         continue
                     try:
                         cursor.execute(stmt)
                     except Exception as stmt_err:
+                        failed_stmts.append((filepath.name, str(stmt_err)))
                         print(f"Warning: Migration stmt failed in {filepath.name}: {stmt_err}")
 
-            print("[db_schema] All migrations executed successfully")
+            # 최종 실패 집계 — schema 불완전을 조용히 통과시키지 않음 (Codex 라운드 1 M)
+            if failed_stmts:
+                print(
+                    f"[db_schema] ⚠️ {len(failed_stmts)} migration statement(s) FAILED — "
+                    f"test DB schema may be incomplete"
+                )
+            else:
+                print("[db_schema] All migrations executed successfully")
 
         finally:
             cursor.close()
