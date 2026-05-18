@@ -508,7 +508,7 @@ class TestManagerReactivation:
         pass
 
     def test_tc_41_12_reactivate_clears_task_fields(self):
-        """TC-41-12: Manager 재활성화 → completed_at/started_at/worker_id 모두 NULL"""
+        """TC-41-12: Manager 재활성화 → 작업 필드 + 강제종료 메타데이터 모두 리셋"""
         from app.models.task_detail import reactivate_task
 
         mock_conn = MagicMock()
@@ -521,11 +521,16 @@ class TestManagerReactivation:
                 result = reactivate_task(task_detail_id=1)
 
         assert result is True
-        # UPDATE 쿼리가 completed_at=NULL, started_at=NULL 등을 포함하는지 확인
+        # UPDATE 쿼리가 작업 필드 + 강제종료 메타데이터를 모두 리셋하는지 확인
         executed_sql = mock_cursor.execute.call_args[0][0]
         assert 'completed_at = NULL' in executed_sql
         assert 'started_at = NULL' in executed_sql
         assert 'worker_id = NULL' in executed_sql
+        # FIX-FORCE-CLOSED-REACTIVATION: 강제종료 메타데이터 4컬럼 리셋
+        assert 'force_closed = FALSE' in executed_sql
+        assert 'closed_by = NULL' in executed_sql
+        assert 'close_reason = NULL' in executed_sql
+        assert 'duration_source = NULL' in executed_sql
 
     def test_tc_41_13_reactivate_via_api_completion_status_rollback(self, client, seed_test_data, get_auth_token, db_conn):
         """TC-41-14: 재활성화 후 completion_status 롤백 확인 (API 레벨)
@@ -599,6 +604,102 @@ class TestManagerReactivation:
         assert status_row[0] is False, "mech_completed should be rolled back to False"
 
         # Cleanup
+        cursor.execute("DELETE FROM app_task_details WHERE serial_number=%s", (sn,))
+        cursor.execute("DELETE FROM completion_status WHERE serial_number=%s", (sn,))
+        cursor.execute("DELETE FROM public.qr_registry WHERE qr_doc_id=%s", (qr,))
+        cursor.execute("DELETE FROM plan.product_info WHERE serial_number=%s", (sn,))
+        db_conn.commit()
+        cursor.close()
+
+    def _seed_force_closed_task(self, cursor, db_conn, sn, with_start):
+        """강제종료 상태 task 1건 INSERT 후 (task_id, manager_id) 반환.
+        FIX-FORCE-CLOSED-REACTIVATION 통합 TC 헬퍼."""
+        qr = f'DOC_{sn}'
+        cursor.execute("""
+            INSERT INTO plan.product_info (serial_number, model, mech_partner, elec_partner, prod_date)
+            VALUES (%s, 'GALLANT-50', 'FNI', 'P&S', NOW()::date)
+            ON CONFLICT (serial_number) DO NOTHING
+        """, (sn,))
+        cursor.execute("""
+            INSERT INTO public.qr_registry (qr_doc_id, serial_number, status)
+            VALUES (%s, %s, 'active')
+            ON CONFLICT (qr_doc_id) DO NOTHING
+        """, (qr, sn))
+        cursor.execute("SELECT id FROM workers WHERE email='seed_manager@test.axisos.com'")
+        manager_id = cursor.fetchone()[0]
+        started_expr = "NOW() - INTERVAL '2 hours'" if with_start else "NULL"
+        cursor.execute(f"""
+            INSERT INTO app_task_details
+                (serial_number, qr_doc_id, task_category, task_id, task_name,
+                 is_applicable, started_at, completed_at, duration_minutes,
+                 force_closed, closed_by, close_reason, duration_source)
+            VALUES (%s, %s, 'MECH', 'WASTE_GAS_LINE_1', 'Waste Gas LINE 1',
+                    TRUE, {started_expr}, NOW(), 120,
+                    TRUE, %s, '작업자 미처리', 'FALLBACK_TRIGGER_DATE_17')
+            ON CONFLICT (serial_number, qr_doc_id, task_category, task_id) DO UPDATE
+                SET force_closed=TRUE, closed_by=EXCLUDED.closed_by,
+                    close_reason=EXCLUDED.close_reason, duration_source=EXCLUDED.duration_source,
+                    completed_at=EXCLUDED.completed_at, started_at=EXCLUDED.started_at
+            RETURNING id
+        """, (sn, qr, manager_id))
+        task_id = cursor.fetchone()[0]
+        db_conn.commit()
+        return task_id, manager_id
+
+    def _assert_reactivate_cleared_metadata(self, cursor, task_id):
+        """재활성화 후 강제종료 메타데이터 4컬럼 + completed_at NULL 확인."""
+        cursor.execute("""
+            SELECT force_closed, closed_by, close_reason, duration_source, completed_at
+            FROM app_task_details WHERE id=%s
+        """, (task_id,))
+        r = cursor.fetchone()
+        assert r[0] is False, "force_closed should be reset to FALSE"
+        assert r[1] is None, "closed_by should be NULL"
+        assert r[2] is None, "close_reason should be NULL"
+        assert r[3] is None, "duration_source should be NULL"
+        assert r[4] is None, "completed_at should be NULL"
+
+    def test_tc_41_17_reactivate_clears_force_closed_with_start(self, client, seed_test_data, get_auth_token, db_conn):
+        """TC-41-17: 시작 이력 있는 강제종료 task → reactivate → 4컬럼 + completed_at 리셋.
+        FIX-FORCE-CLOSED-REACTIVATION Codex M-Q6 통합 TC ①."""
+        cursor = db_conn.cursor()
+        sn = 'FC-REACT-STARTED-001'
+        qr = f'DOC_{sn}'
+        task_id, manager_id = self._seed_force_closed_task(cursor, db_conn, sn, with_start=True)
+
+        token = get_auth_token(manager_id, role='MECH', is_admin=False)
+        resp = client.post(
+            '/api/app/work/reactivate-task',
+            json={'task_detail_id': task_id},
+            headers={'Authorization': f'Bearer {token}'}
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.get_json()}"
+        self._assert_reactivate_cleared_metadata(cursor, task_id)
+
+        cursor.execute("DELETE FROM app_task_details WHERE serial_number=%s", (sn,))
+        cursor.execute("DELETE FROM completion_status WHERE serial_number=%s", (sn,))
+        cursor.execute("DELETE FROM public.qr_registry WHERE qr_doc_id=%s", (qr,))
+        cursor.execute("DELETE FROM plan.product_info WHERE serial_number=%s", (sn,))
+        db_conn.commit()
+        cursor.close()
+
+    def test_tc_41_18_reactivate_clears_force_closed_not_started(self, client, seed_test_data, get_auth_token, db_conn):
+        """TC-41-18: 미시작 강제종료 task(started_at NULL) → reactivate → 4컬럼 + completed_at 리셋.
+        FIX-FORCE-CLOSED-REACTIVATION Codex M-Q6 통합 TC ②."""
+        cursor = db_conn.cursor()
+        sn = 'FC-REACT-NOSTART-001'
+        qr = f'DOC_{sn}'
+        task_id, manager_id = self._seed_force_closed_task(cursor, db_conn, sn, with_start=False)
+
+        token = get_auth_token(manager_id, role='MECH', is_admin=False)
+        resp = client.post(
+            '/api/app/work/reactivate-task',
+            json={'task_detail_id': task_id},
+            headers={'Authorization': f'Bearer {token}'}
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.get_json()}"
+        self._assert_reactivate_cleared_metadata(cursor, task_id)
+
         cursor.execute("DELETE FROM app_task_details WHERE serial_number=%s", (sn,))
         cursor.execute("DELETE FROM completion_status WHERE serial_number=%s", (sn,))
         cursor.execute("DELETE FROM public.qr_registry WHERE qr_doc_id=%s", (qr,))
@@ -812,6 +913,7 @@ class TestManagerReactivation:
 
         # Cleanup
         cursor.execute("DELETE FROM app_task_details WHERE serial_number=%s", (sn,))
+        cursor.execute("DELETE FROM completion_status WHERE serial_number=%s", (sn,))
         cursor.execute("DELETE FROM public.qr_registry WHERE qr_doc_id=%s", (qr,))
         cursor.execute("DELETE FROM plan.product_info WHERE serial_number=%s", (sn,))
         db_conn.commit()

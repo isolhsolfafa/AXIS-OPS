@@ -6,6 +6,37 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.15.20] - 2026-05-18 — FIX-FORCE-CLOSED-REACTIVATION (강제종료 task 재활성화 정상화)
+
+> 사용자 catch (5-15~18): 생산현황 상세화면(VIEW)에서 ①강제종료한 task 를 재활성화해도 "🔒 강제종료" 표시가 안 풀림 ②미시작 task 를 강제종료한 경우 재활성화 버튼 자체가 안 뜸.
+
+### Root Cause
+
+| Catch | 원인 |
+|-------|------|
+| 1 (BE) | `reactivate_task()` (task_detail.py) UPDATE SQL 이 `completed_at/started_at/worker_id/duration_minutes/elapsed_minutes/worker_count` 만 NULL 처리 — 강제종료 메타데이터 `force_closed/closed_by/close_reason/duration_source` 4컬럼 미처리 → 재활성화해도 force_closed=TRUE 잔존 |
+| 2 (VIEW) | `ProcessStepCard.tsx` 재활성화 버튼 조건이 `w.completed_at` 의존 — 작업자가 시작했던 task 강제종료는 worker completed_at 채워져 버튼 표시 / 미시작 강제종료는 SNDetailPanel placeholder worker `completed_at=null` 이라 버튼 미표시 |
+
+### 변경
+
+| 파일 | 변경 |
+|------|-----|
+| `backend/app/models/task_detail.py` | `reactivate_task()` UPDATE SET 절에 `force_closed=FALSE, closed_by=NULL, close_reason=NULL, duration_source=NULL` 4줄 추가 + docstring |
+| `AXIS-VIEW ProcessStepCard.tsx` | 재활성화 버튼 조건 `w.completed_at` → `(w.completed_at || w.force_closed)` (1줄) |
+| `tests/backend/test_sprint41_task_relay.py` | TC-41-12 SQL 검증 4컬럼 확장 + 통합 TC-41-17/18 신규 (시작이력有/미시작 force-close→reactivate→4컬럼+completed_at NULL 검증) |
+
+### 연계 영향 검토 (force_closed 등 4컬럼 리셋)
+
+- `closed_by/close_reason/duration_source` — 참조처 전부 LEFT JOIN·NULL 허용 (migration 056/057 CHECK constraint `IS NULL OR IN(...)`) → 안전
+- `force_closed` — factory `_count_shipped()` 가 `force_closed=FALSE` 필터로 출하 KPI 집계하나, reactivate 는 `completed_at=NULL` 동반 → "미완료" 가 우선 → KPI 오염 없음
+
+### 검증
+
+- pytest reactivate 6/6 GREEN (TC-41-12 unit + 13~16 기존 + 17/18 신규 통합)
+- Codex 라운드 1: M=2 (Q2 4컬럼 전부 리셋 / Q6 pytest 추가) 합의 반영, A=2 (Q4 재활성화 audit 로그 / Q5 `@manager_or_admin_required` 일관성) BACKLOG 이관, N=3
+
+---
+
 ## [2.15.8] - 2026-05-14 — FIX-27 statusText 정정 ("동료 진행 중" 추측 → "재참여 가능" 사실 기반)
 
 > 사용자 catch (v2.15.7 release 직후 5-14): "내 종료 / 동료 진행 중" 표현은 실제 동료 상태를 모르는 상태에서 추측한 표현. task open 상태일 뿐 동료가 진행 중인지 확실하지 않음. 사용자 권고: "재시작 가능 / 재참여 가능" 사실 기반 표현.

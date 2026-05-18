@@ -1,7 +1,27 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-18 KST (✅ v2.15.19 release — FEAT-FACTORY-MONTHLY-DETAIL-BY-CUSTOMER (#68). monthly-detail 응답에 by_customer 집계 추가, 공장 대시보드 월간 고객사 도넛용. BE 1 파일 + pytest 1, by_model 1:1 복제. pytest test_factory 19/19 GREEN. ✅ 인프라 — conftest migration SQL 분리 운영 runner 통일 (commit 9b4dd7d). pytest 전수 재측정 deadline 5-22.)
+> 마지막 업데이트: 2026-05-18 KST (✅ v2.15.20 release — FIX-FORCE-CLOSED-REACTIVATION. 강제종료 task 재활성화 정상화: BE `reactivate_task()` 4컬럼 리셋 + VIEW `ProcessStepCard` 재활성화 버튼 조건 확장. Codex 라운드 1 M=2 합의·A=2 BACKLOG. pytest reactivate 6/6 GREEN.)
+
+---
+
+## ✅ 2026-05-18 KST — v2.15.20 (FIX-FORCE-CLOSED-REACTIVATION)
+
+### 사용자 catch (5-15~18)
+
+생산현황 상세화면(VIEW)에서 ①강제종료한 task 를 재활성화해도 "🔒 강제종료" 표시가 안 풀림 ②미시작 task 를 강제종료한 경우 재활성화 버튼 자체가 안 뜸.
+
+### 변경
+
+- `backend/app/models/task_detail.py` `reactivate_task()` — UPDATE SET 절에 `force_closed=FALSE, closed_by=NULL, close_reason=NULL, duration_source=NULL` 4줄 추가
+- `AXIS-VIEW ProcessStepCard.tsx` — 재활성화 버튼 조건 `w.completed_at` → `(w.completed_at || w.force_closed)`
+- `tests/backend/test_sprint41_task_relay.py` — TC-41-12 SQL 4컬럼 검증 확장 + 통합 TC-41-17/18 신규
+
+### 검증
+
+- pytest reactivate 6/6 GREEN, VIEW tsc/vite build GREEN
+- Codex 라운드 1: M=2 (Q2 4컬럼 / Q6 pytest) 반영, A=2 BACKLOG (REACTIVATE-AUDIT-TRAIL / REF-REACTIVATE-DECORATOR), N=3
+- 연계 영향 검토 — closed_by/close_reason/duration_source NULL 허용 안전, force_closed=FALSE 는 completed_at=NULL 동반이라 KPI 오염 0
 
 ---
 

@@ -3,7 +3,8 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: **v2.15.19 (FEAT-FACTORY-MONTHLY-DETAIL-BY-CUSTOMER #68, 2026-05-18)** — BE 1 파일 + pytest 1 / monthly-detail 응답에 by_customer 집계 추가 (공장 대시보드 월간 고객사 도넛) / by_model 1:1 복제 / Codex 라운드 1 M=6 (3건 prompt 오독) / pytest test_factory 19/19 GREEN / 회귀 위험 0 (additive)
+> **현재 버전**: **v2.15.20 (FIX-FORCE-CLOSED-REACTIVATION, 2026-05-18)** — BE 1 파일(task_detail.py) + VIEW 1 파일(ProcessStepCard.tsx v1.44.2) + pytest 1 / 강제종료 task 재활성화 정상화 — `reactivate_task()` 4컬럼 리셋(force_closed/closed_by/close_reason/duration_source) + VIEW 재활성화 버튼 조건 `(completed_at||force_closed)` / Codex 라운드 1 M=2 합의·A=2 BACKLOG·N=3 / pytest reactivate 6/6 GREEN / 회귀 위험 0
+> **선행 release**: v2.15.19 (FEAT-FACTORY-MONTHLY-DETAIL-BY-CUSTOMER #68, 2026-05-18) — BE 1 파일 + pytest 1 / monthly-detail 응답에 by_customer 집계 추가 (공장 대시보드 월간 고객사 도넛) / by_model 1:1 복제 / Codex 라운드 1 M=6 (3건 prompt 오독) / pytest test_factory 19/19 GREEN / 회귀 위험 0 (additive)
 > **선행 release**: v2.15.18 (POST-REVIEW-OPS-65-PATH2-REOPEN, 2026-05-15) — BE 1 파일 + pytest 1 / MECH Dual-Trigger 경로 2 fix (M-A4 mech_completed flag UPDATE + M-A7 close 게이트 check_mech_completion_all) / AXIS-VIEW 측 #65 리뷰 catch / Codex 라운드 1 M=2 합의 / pytest 5/5 GREEN / 회귀 위험 0
 > **인프라 (5-18)**: conftest migration SQL 분리 로직 운영 runner 통일 (POST-REVIEW-PYTEST-FAILED-ANALYSIS, commit 9b4dd7d) — 051 계열 empty query 해소. 전수 재측정 deadline 5-22
 > **선행 release**: v2.15.17 (FIX-VIEW-ORPHAN-DURATION-MISSING, 2026-05-15) — BE 2 파일 + pytest 1 / Trigger task auto-close 시 VIEW 소요시간 '—' 미표시 fix / Codex M=2 반영 / pytest 10/10 GREEN

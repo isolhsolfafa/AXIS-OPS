@@ -627,6 +627,11 @@ def reactivate_task(task_detail_id: int) -> bool:
     completed_at, started_at, worker_id, duration_minutes, elapsed_minutes,
     worker_count 모두 NULL로 초기화.
 
+    FIX-FORCE-CLOSED-REACTIVATION: 강제종료 메타데이터(force_closed,
+    closed_by, close_reason, duration_source)도 함께 리셋. 재활성화는
+    "강제종료 상태 완전 취소"이므로, 이를 남기면 활성 task인데 과거
+    강제종료 사유가 잔존하는 모순 상태가 됨 (Codex 라운드 1 M-Q2 합의).
+
     started_at도 초기화하는 이유: is_first_worker 판단이 started_at IS NULL
     기준이므로, 재활성화 후 새 worker가 시작하면 정상적으로 "최초 시작자"로
     인식되어야 함.
@@ -651,6 +656,10 @@ def reactivate_task(task_detail_id: int) -> bool:
                 duration_minutes = NULL,
                 elapsed_minutes = NULL,
                 worker_count = NULL,
+                force_closed = FALSE,
+                closed_by = NULL,
+                close_reason = NULL,
+                duration_source = NULL,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = %s AND completed_at IS NOT NULL
             RETURNING id
