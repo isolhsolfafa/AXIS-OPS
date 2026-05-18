@@ -215,6 +215,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.routes.admin_materials import admin_materials_bp    # Sprint 66-BE Step 4: 자재 마스터 admin
     from app.routes.admin_checklists import admin_checklists_bp  # Sprint 66-BE Step 4: 체크리스트 매핑 admin
     from app.routes import work_batch                              # Sprint 64-BE v3: work_bp 에 batch route 등록 (side effect import, register_blueprint 전 필수)
+    from app.routes import work_shipment                            # Sprint 68: work_bp 에 ship-complete route 등록 (side effect import)
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(work_bp)

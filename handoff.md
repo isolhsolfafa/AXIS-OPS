@@ -1,7 +1,32 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-18 KST (✅ v2.16.0 release — Sprint 67-BE progress API 공정 토글 신호. progress_service.py `categories` 에 started/completed_at/completed_today 추가, VIEW Sprint 46 토글 필터 BE part. pytest test_sn_progress 22/22 GREEN. + v2.15.21 #69 / v2.15.20 FIX-FORCE-CLOSED-REACTIVATION.)
+> 마지막 업데이트: 2026-05-19 KST (✅ v2.17.0 — Sprint 68 출하 완료 ship-complete endpoint. shipment_service.py + work_shipment.py 신규, SI task 2개 완료 + completed_at 지정 + audit. pytest test_ship_complete 12/12 GREEN. Codex 라운드 1 M=5/A=1 반영. ⚠️ commit 완료·push 보류 — 09:00 KST 이후 push 예정. OPS FE·VIEW Sprint 47 후속.)
+
+---
+
+## ✅ 2026-05-19 KST — v2.17.0 (Sprint 68: 출하 완료 ship-complete endpoint)
+
+### 목적
+
+출하 시점엔 작업자가 QR 태깅으로 SI task 완료가 어려움 → admin/manager 가 VIEW/OPS 화면에서 대행. 신규 `ship-complete` endpoint.
+
+### 변경
+
+- `shipment_service.py`(신규) — `ship_complete()` + 헬퍼 3개
+- `work_shipment.py`(신규) — `POST /api/app/work/ship-complete` (`@manager_or_admin_required`)
+- `__init__.py` — work_shipment side-effect import 1줄
+- SI task 타입별 분기 (SI_FINISHING NORMAL / SI_SHIPMENT SINGLE_ACTION), completed_at 검증, orphan backfill, audit(close_reason='SHIP_COMPLETE'+closed_by, force_closed=FALSE), 멱등
+
+### 검증
+
+- pytest test_ship_complete 12/12 GREEN, Codex 라운드 1 M=5/A=1 전건 반영
+- migration 불필요, 기존 complete/complete-batch 영향 0
+
+### 상태 / 다음
+
+- ⚠️ **commit 완료, push 보류** — 2026-05-19 09:00 KST(2번째 출근시간) 이후 push 예정
+- 후속: OPS FE (SI 마무리공정 화면 출고 버튼 B / PI·QI·SI O/N 표시 C) + VIEW Sprint 47 (출하완료 버튼 A — VIEW 세션 담당)
 
 ---
 

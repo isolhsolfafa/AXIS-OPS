@@ -6,6 +6,36 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.17.0] - 2026-05-19 — Sprint 68: 출하 완료(ship-complete) endpoint
+
+> 출하 시점엔 작업자가 QR 태깅으로 SI task 완료가 어려움 → admin/manager 가 VIEW/OPS 화면에서 대행. 신규 `ship-complete` endpoint.
+
+### 변경 (BE — 신규 2 파일 + 1 파일 1줄)
+
+| 파일 | 변경 |
+|------|-----|
+| `backend/app/services/shipment_service.py` (신규) | `ship_complete()` — SI task 2개(SI_FINISHING+SI_SHIPMENT) 완료 + 헬퍼 3개 |
+| `backend/app/routes/work_shipment.py` (신규) | `POST /api/app/work/ship-complete` (`@manager_or_admin_required`) |
+| `backend/app/__init__.py` | work_shipment side-effect import 1줄 |
+
+### 동작
+
+- SI task 타입별 분기 — SI_FINISHING(NORMAL): `_finalize_task_multi_worker`+`complete_task` / SI_SHIPMENT(SINGLE_ACTION): `complete_single_action`
+- `completed_at` 지정 가능 (없으면 서버 now KST) — 미래 차단 + SI_FINISHING `started_at` 이전 차단
+- 멀티작업자 orphan `work_completion_log` backfill (force_closed 아닌 정상 완료)
+- audit — `close_reason='SHIP_COMPLETE'` + `closed_by`(실행 관리자), `force_closed=FALSE` 유지
+- 멱등 — 둘 다 완료 시 200 + `already_completed:true`
+- `completion_status.si_completed` 갱신
+
+### 검증
+
+- pytest `test_ship_complete` 12/12 GREEN (TC-SHIP-01~12)
+- Codex 라운드 1 (M=5/A=1/N=1) 전건 반영 — 설계: `AGENT_TEAM_LAUNCH.md` § Sprint 68 영역 10+11
+- migration 불필요 (기존 테이블만). 기존 complete/complete-batch 영향 0
+- OPS FE(SI 마무리공정 화면 출고 버튼 / PI·QI·SI O/N 표시) + VIEW Sprint 47(출하완료 버튼)은 후속
+
+---
+
 ## [2.16.0] - 2026-05-18 — Sprint 67-BE: progress API 공정 토글 신호 (VIEW Sprint 46 BE part)
 
 > AXIS-VIEW Sprint 46(생산현황 PI/QI/SI 공정 토글 필터)의 BE 공급. progress API `categories`에 토글 표시 조건 판정용 신호 3개 추가.
