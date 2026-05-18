@@ -43775,4 +43775,189 @@ sn_map[sn]['categories'][cat] = {
 - 선행: VIEW Sprint 45 (v1.45.0) 롤백 — role 자동 스코프 폐기
 - 후속: VIEW Sprint 46 FE 구현 (BE v2.16.0 배포 후)
 
+---
+
+# Sprint 68 — FEAT-SHIPMENT-COMPLETE-20260518
+
+> **Sprint ID**: `FEAT-SHIPMENT-COMPLETE-20260518`
+> **작성일**: 2026-05-18 KST
+> **작성자**: Claude Code (Opus Lead)
+> **우선순위**: 🟡 MEDIUM (출하 완료 처리 편의 — 운영 차단 아님)
+> **상태**: 📝 설계 — Codex 라운드 1 대기
+> **예정 버전**: OPS v2.17.0 (MINOR — 신규 endpoint + FE 화면)
+> **연관**: AXIS-VIEW Sprint 47 (출하완료 버튼 — VIEW part)
+
+---
+
+## 📑 영역 1 — 배경 & 목적
+
+출하 시점에는 제품 포장이 끝나 작업자가 QR 태깅으로 SI task 를 완료하기 어려움. → **admin/manager 가 VIEW/OPS 화면에서 출하 완료를 대행**.
+
+**출하 완료 정의**: 한 S/N 의 SI 공정 task 2개(`SI_FINISHING` 마무리공정 + `SI_SHIPMENT` 출하완료)를 모두 완료 처리 + `completed_at` 시각 지정 가능.
+
+---
+
+## 📑 영역 2 — 작업 분해 (A/B/C + BE)
+
+| 구분 | 작업 | repo |
+|---|---|---|
+| **BE** | SI 출하완료 endpoint + `completed_at` 지정 | OPS backend |
+| **A** | VIEW 출하완료 버튼 (SNDetailPanel) | AXIS-VIEW (Sprint 47 — `DESIGN_FIX_SPRINT.md`) |
+| **B** | OPS SI 마무리공정 화면 `[내 작업 완료]`+`[출고 완료]` 버튼 + 토스트 | OPS frontend |
+| **C** | OPS PI/QI/SI 진행현황 카드에 O/N 표시 | OPS frontend |
+
+A·B 는 동일 BE endpoint 를 호출 (액션 장소만 다름).
+
+---
+
+## 📑 영역 3 — BE 설계 (SI 출하완료 endpoint)
+
+**현황** (조사 완료):
+- `complete-batch`(`work_batch.py`)는 **TANK_MODULE 전용** — `task_id != 'TANK_MODULE'` 이면 skip. SI task 처리 불가.
+- `complete-batch` 에 `completed_at` 파라미터 없음 — 서버 `now()` 고정.
+- 일반 `complete`(`/api/app/work/complete`)는 작업자 본인 task 단건 + `completed_at` 미지원.
+
+**방안 — 신규 endpoint** `POST /api/app/work/ship-complete`:
+```
+body: { "serial_number": str, "completed_at": str|null(옵션) }
+권한: @jwt_required + @manager_or_admin_required
+처리:
+  1. serial_number 의 SI_FINISHING + SI_SHIPMENT task 조회 (is_applicable=TRUE)
+  2. 미완료(completed_at IS NULL) task 를 완료 처리 — finalize (task.completed_at set)
+  3. completed_at 파라미터 있으면 그 시각, 없으면 서버 now(KST)
+  4. completion_status.si_completed 갱신
+응답: { serial_number, completed_tasks: [task_id], si_completed: bool }
+```
+
+- 기존 `complete-batch`(TANK_MODULE)는 유지 — SI 는 별도 endpoint (Codex 검토 — 확장 vs 신규)
+- task_service 의 finalize 완료 로직 재사용 (work_completion_log 기록 + task.completed_at)
+
+## 📑 영역 4 — `completed_at` 지정 검증
+
+`force-close` API 의 `completed_at` 검증 패턴 재사용 (v2.9.6):
+- 미래 시각 차단 (60s skew 허용)
+- task `started_at` 이전 차단
+- naive → KST aware 정규화
+
+## 📑 영역 5 — OPS FE (B): SI 마무리공정 화면 버튼
+
+SI 마무리공정 화면 카드 — "진행중" 뱃지 **아래** 버튼 2개 (admin/manager 만 노출):
+- `[내 작업 완료]` — 기존 `completeTask(finalize=false)` 패턴 (본인 SI 작업만 완료, task 는 계속 열림)
+- `[출고 완료]` — `ship-complete` API 호출 → SI 2개 task 완료. **확인 다이얼로그** + 완료 **토스트**
+
+## 📑 영역 6 — OPS FE (C): PI/QI/SI 카드에 O/N 추가
+
+PI 가압검사 / QI 공정검사 / SI 마무리공정 진행현황 화면 카드에 **O/N(sales_order)** 표시 추가.
+- `customer`(고객사)는 이미 표시 중
+- progress API(`/api/app/product/progress`) 응답에 `sales_order` 이미 포함 → **FE 표시만 추가**, BE 변경 0
+
+## 📑 영역 7 — 구현 전 확인 필요
+
+> 조사에서 `sn_progress_screen.dart` 가 후보로 나왔으나 사용자 제공 화면(SI 마무리공정 — task명/작업자/"진행중" 뱃지 카드)과 카드 구성이 달라, **정확한 dart 파일 재확인 필수**.
+
+1. SI 마무리공정 / PI 가압검사 / QI 공정검사 화면 각각의 정확한 dart 파일 + 카드 위젯
+2. 그 화면들이 쓰는 API (progress API 인지 별도인지) — sales_order 응답 여부
+3. `[내 작업 완료]` 기존 `task_management` 로직 재사용 범위
+
+## 📑 영역 8 — 회귀 영향
+
+- BE: 신규 endpoint → 기존 complete/complete-batch 영향 0
+- FE B: SI 화면에 버튼 추가 (additive)
+- FE C: 카드에 O/N 텍스트 1줄 추가 (additive)
+- `completion_status.si_completed` 갱신 — 기존 완료 판정 로직과 정합 확인 필요
+
+## 📑 영역 9 — 구현 체크리스트
+
+- [ ] 영역 7 화면 dart 파일 + API 확인
+- [ ] BE `ship-complete` endpoint + `completed_at` 검증
+- [ ] pytest — SI 2 task 완료 / completed_at 지정·검증 / si_completed 갱신
+- [ ] OPS FE B — SI 화면 버튼 2개 + 확인 다이얼로그 + 토스트
+- [ ] OPS FE C — PI/QI/SI 카드 O/N 표시
+- [ ] Codex 교차검증
+- [ ] OPS v2.17.0 release
+
+## 🔗 관련 문서
+
+- AXIS-VIEW `DESIGN_FIX_SPRINT.md` Sprint 47 — VIEW 출하완료 버튼 (A)
+- 출하완료 기준: SI task 2개 완료 = Sprint 46 SI 토글 "출하 완료 시 제거" 와 정합
+
+---
+
+## 📑 영역 10 — Codex 교차검증 반영 (2026-05-18, 1라운드 — BE)
+
+> Codex 1라운드 M=5 / A=1 / N=1. 핵심 — force-close 의 **"검증 로직"**(completed_at 파싱·범위 검증)은 차용하되 **"write 시맨틱"**(`force_closed=TRUE`)은 절대 차용 금지. 출하 완료 = 정상 비즈니스 종료.
+> ⚠️ Claude 원안 약점: 영역 3·4 가 "force-close 패턴 재사용" 을 뭉뚱그려 표현 → Codex M-Q3 catch (force_closed write 혼입 위험).
+
+### N-Q1 — 신규 endpoint 확정
+
+`ship-complete` 신규 endpoint 맞음. `complete-batch`(TANK_MODULE 전용 hard-reject) 확장 X. 단 `TaskService.complete_work()` 호출 패턴은 재사용.
+
+### M-Q2 — SI task 타입별 완료 경로 분기 (핵심)
+
+`SI_FINISHING`(FINAL) ≠ `SI_SHIPMENT`(SINGLE_ACTION). `complete_work()` 는 미시작 task 를 400 거부 → 미시작 가능한 `SI_SHIPMENT` 처리가 깨짐.
+→ ship-complete 내부 task_type 분기:
+- `SI_FINISHING` → 일반 `complete_work` 경로 (finalize)
+- `SI_SHIPMENT` → `complete-single` 상응 경로 (`started_at=completed_at` 동시 set — `task_detail.py` L478 SINGLE_ACTION 패턴)
+
+### M-Q3 — `force_closed=FALSE` 유지 (정상 종료)
+
+- admin `force-close` 경로 **재사용 금지** (`force_closed=TRUE` 기록 — 출하 완료를 강제종료로 오표시)
+- `SINGLE_FINAL_TASK_IDS` 에 `('SI','SI_SHIPMENT')` 이미 등록 → relay/FINAL 트리거 별도 발동 불필요
+- `completed_at` 검증 로직만 force-close 에서 차용, `force_closed` write 는 차용 안 함 — 모든 SI task `force_closed=FALSE` 유지
+
+### M-Q4 — 멀티 작업자 SI_FINISHING completion log backfill
+
+`SI_FINISHING` 여러 작업자 중 미완료(`work_completion_log` 없음) 작업자 → `force_closed` 아닌 **정상 완료**.
+→ started 작업자 전원에게 `completed_at` 시각으로 `work_completion_log` backfill → `_finalize_task_multi_worker()` 정상 집계 (duration/elapsed/worker_count).
+
+### M-Q5 — `completed_at` 검증 기준
+
+- 닫히는 task **각각** `completed_at >= task.started_at` 검증 (SI_FINISHING / SI_SHIPMENT 개별)
+- `SI_SHIPMENT`(SINGLE_ACTION)은 started_at 이 ship-complete 시점에 set → completed_at 과 동일
+- `completion_status.si_completed = TRUE` 는 SI 2 task **모두 완료 후에만** (`update_process_completion('SI', True)`)
+
+### A-Q6 — 멱등성
+
+- 이미 완료된 task → `completed_at` 보존, skip
+- 미완료 SI task 0개(둘 다 완료) → **400 아닌 200 + `already_completed: true`**
+
+### M-Q7 — pytest TC (영역 9 갱신)
+
+Must: 양쪽 완료 / SI_SHIPMENT single-action 시맨틱 / completed_at started 이전 차단 / 미래 차단 / si_completed 양쪽 완료 후 / SI_FINISHING 기존 completed_at 보존 + shipment 만 완료 / 멱등(둘 다 완료 재호출) / 멀티작업자 orphan backfill+집계 / `force_closed=FALSE` 확인
+Advisory: manager 권한 거부 / non-applicable SI task skip / SI task 쌍 누락 시 명확한 에러
+
+→ M=5 + A=1 반영. **설계 확정 (GO).** 구현 진입 시 영역 10 + 11 = 단일 기준.
+
+---
+
+## 📑 영역 11 — 출하완료 audit (Twin파파 요청 2026-05-18)
+
+> 요구: 출하 완료 이력을 나중에 DB 에서 추적 가능해야 함.
+
+ship-complete 처리 시 `app_task_details`(SI_FINISHING + SI_SHIPMENT)에 audit 컬럼 기록:
+
+| 컬럼 | 값 | 의미 |
+|---|---|---|
+| `close_reason` | `'SHIP_COMPLETE'` | 출하완료 식별자 |
+| `closed_by` | 실행 관리자 `worker_id` (`g.worker_id`) | 출하완료를 실행한 admin/manager |
+| `force_closed` | `FALSE` | 정상 종료 (영역 10 M-Q3 — 강제종료 아님) |
+
+→ `closed_by` 의미 = **"관리자가 종료 처리한 task 의 그 관리자"** (강제종료 OR 출하완료 공통). `force_closed` 로 종류 구분:
+- 강제종료: `force_closed=TRUE`, `close_reason='작업자 미처리'` 등
+- 출하완료: `force_closed=FALSE`, `close_reason='SHIP_COMPLETE'`
+
+**DB 조회 예** (출하완료 추적):
+```sql
+SELECT serial_number, task_id, closed_by, close_reason, completed_at
+FROM app_task_details
+WHERE close_reason = 'SHIP_COMPLETE'
+ORDER BY completed_at DESC;
+```
+
+**재활성화 정합**: `reactivate_task()`(v2.15.20)가 `force_closed/closed_by/close_reason/duration_source` 4컬럼을 리셋 → 출하완료 task 재활성화 시 audit 자동 정리 (출하완료 취소 = audit 제거, 의미 정합).
+
+**구현 전 확인 추가**: `work.py _task_to_dict()` / VIEW `ProcessStepCard` 가 `closed_by`(closed_by_name)를 `force_closed=TRUE` 일 때만 노출하는지 확인 — `force_closed=FALSE + closed_by` 조합(출하완료)에서 "🔒 강제종료" 오표시 없어야 함.
+
+**pytest 추가 TC**: `test_ship_complete_records_close_reason_and_closed_by` / `test_ship_complete_keeps_force_closed_false_with_closed_by_set`
+
 
