@@ -554,9 +554,11 @@ def get_monthly_kpi() -> Tuple[Dict[str, Any], int]:
         cur = conn.cursor()
 
         # production_count: date_field 기준 COUNT (화이트리스트 검증 완료, f-string 안전)
+        # #69: TEST CUSTOMER 제외 — 테스트 데이터가 실 생산량에 집계되어 도넛(by_customer)과 불일치
         cur.execute(
             f"SELECT COUNT(*) AS cnt FROM plan.product_info p "
-            f"WHERE p.{date_field} >= %s AND p.{date_field} < %s",
+            f"WHERE p.{date_field} >= %s AND p.{date_field} < %s "
+            f"AND COALESCE(p.customer, '') <> 'TEST CUSTOMER'",
             (start_date, end_date)
         )
         row = cur.fetchone()

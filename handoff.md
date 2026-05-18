@@ -1,7 +1,16 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-18 KST (✅ v2.15.20 release — FIX-FORCE-CLOSED-REACTIVATION. 강제종료 task 재활성화 정상화: BE `reactivate_task()` 4컬럼 리셋 + VIEW `ProcessStepCard` 재활성화 버튼 조건 확장. Codex 라운드 1 M=2 합의·A=2 BACKLOG. pytest reactivate 6/6 GREEN.)
+> 마지막 업데이트: 2026-05-18 KST (✅ v2.15.21 release — #69 월간 생산량 KPI TEST CUSTOMER 제외. `get_monthly_kpi()` production_count WHERE 절 1줄 추가, 169→164 (고객사 도넛 일치). pytest test_factory 19/19 GREEN. + v2.15.20 FIX-FORCE-CLOSED-REACTIVATION.)
+
+---
+
+## ✅ 2026-05-18 KST — v2.15.21 (#69 월간 생산량 KPI TEST CUSTOMER 제외)
+
+- 사용자 catch — 월간 생산량 KPI 카드(169)와 Sprint 44 고객사 도넛 중앙(164) 불일치. TEST CUSTOMER 5대가 KPI 에 집계됨
+- `backend/app/routes/factory.py` `get_monthly_kpi()` — `production_count` 쿼리 WHERE 에 `AND COALESCE(p.customer, '') <> 'TEST CUSTOMER'` 1줄
+- pytest test_factory 19/19 GREEN, FE 변경 0 (production_count 자동 반영)
+- AXIS-VIEW `OPS_API_REQUESTS.md` #69 상태 → BE DONE 갱신
 
 ---
 

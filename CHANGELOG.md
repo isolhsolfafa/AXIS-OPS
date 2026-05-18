@@ -6,6 +6,24 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.15.21] - 2026-05-18 — #69 월간 생산량 KPI TEST CUSTOMER 제외
+
+> 사용자 catch (5-18): 공장 대시보드 월간 생산량 KPI 카드(169)와 Sprint 44 고객사 도넛 중앙(164)이 불일치. `TEST CUSTOMER` 테스트 데이터 5대가 월간 생산량 KPI 에 집계되어 부풀려짐.
+
+### 변경 (BE only, 1 파일)
+
+| 파일 | 변경 |
+|------|-----|
+| `backend/app/routes/factory.py` `get_monthly_kpi()` | `production_count` 쿼리 WHERE 절에 `AND COALESCE(p.customer, '') <> 'TEST CUSTOMER'` 1줄 추가 |
+
+### 검증
+
+- pytest test_factory 19/19 GREEN (회귀 0)
+- FE 변경 0 — `production_count` 응답값만 169→164 (월간 생산량 카드 자동 반영, 도넛과 일치)
+- DB/마이그레이션 변경 0. ②단계 자동 Codex 이관 체크리스트 6항목 0개 해당 (WHERE 1줄) → Opus 자가 리뷰
+
+---
+
 ## [2.15.20] - 2026-05-18 — FIX-FORCE-CLOSED-REACTIVATION (강제종료 task 재활성화 정상화)
 
 > 사용자 catch (5-15~18): 생산현황 상세화면(VIEW)에서 ①강제종료한 task 를 재활성화해도 "🔒 강제종료" 표시가 안 풀림 ②미시작 task 를 강제종료한 경우 재활성화 버튼 자체가 안 뜸.
