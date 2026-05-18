@@ -33,6 +33,10 @@ def cleanup_progress_data(db_conn):
             cursor = db_conn.cursor()
             # 역순 삭제 (FK 관계 존중)
             cursor.execute(
+                "DELETE FROM work_start_log WHERE serial_number LIKE %s",
+                (f'{_PREFIX}%',)
+            )
+            cursor.execute(
                 "DELETE FROM app_task_details WHERE serial_number LIKE %s",
                 (f'{_PREFIX}%',)
             )
@@ -105,6 +109,26 @@ def _seed_task(db_conn, serial_number: str, qr_doc_id: str, worker_id: int,
         ON CONFLICT (serial_number, qr_doc_id, task_category, task_id) DO NOTHING
     """, (worker_id, serial_number, qr_doc_id, category, task_id, task_name, is_applicable))
 
+    db_conn.commit()
+    cursor.close()
+
+
+def _seed_work_start_log(db_conn, serial_number: str, qr_doc_id: str, worker_id: int,
+                         category: str, task_id: str, task_name: str):
+    """work_start_log 시드 — 해당 공정 task 의 작업 시작 이력 ("태깅됨", Sprint 67-BE)"""
+    cursor = db_conn.cursor()
+    cursor.execute("""
+        SELECT id FROM app_task_details
+        WHERE serial_number=%s AND task_category=%s AND task_id=%s
+    """, (serial_number, category, task_id))
+    row = cursor.fetchone()
+    atd_id = row[0] if row else None
+    cursor.execute("""
+        INSERT INTO work_start_log
+            (task_id, worker_id, serial_number, qr_doc_id,
+             task_category, task_id_ref, task_name, started_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+    """, (atd_id, worker_id, serial_number, qr_doc_id, category, task_id, task_name))
     db_conn.commit()
     cursor.close()
 
@@ -571,3 +595,136 @@ class TestProductInfoFields:
             assert p is not None and p['line'] == 'TW(F16)'
         p15 = self._find(products, sn_f15)
         assert p15 is not None and p15['line'] == 'JP(F15)'
+
+
+class TestProcessToggleSignals:
+    """Sprint 67-BE: progress API 공정 토글 신호 (started/completed_at/completed_today)
+    AXIS-VIEW Sprint 46 PI/QI/SI 토글 필터용 BE 신호."""
+
+    def _find(self, products, sn):
+        for p in products:
+            if p['serial_number'] == sn:
+                return p
+        return None
+
+    def _admin_token(self, create_test_worker, get_auth_token, tag):
+        wid = create_test_worker(
+            email=f'tg_{tag}_{_TS()}@test.com', password='Test123!',
+            name=f'TG {tag}', role='ADMIN', company='GST', is_admin=True,
+        )
+        return get_auth_token(wid), wid
+
+    def test_tc_toggle_01_category_completed_at(self, client, create_test_worker, get_auth_token, db_conn):
+        """TC-PROGRESS-TOGGLE-01: category_completed_at = 공정 마지막 완료 시각"""
+        sn = _sn(f'TG01_{_TS()}')
+        qr = _seed_product(db_conn, sn, mech_partner='FNI')
+        token, wid = self._admin_token(create_test_worker, get_auth_token, '01')
+        _seed_task(db_conn, sn, qr, wid, 'MECH', 'M1', 'T1', completed=True)
+        _seed_task(db_conn, sn, qr, wid, 'MECH', 'M2', 'T2', completed=False)
+
+        resp = client.get('/api/app/product/progress', headers={'Authorization': f'Bearer {token}'})
+        assert resp.status_code == 200
+        p = self._find(resp.get_json()['products'], sn)
+        assert p is not None
+        assert p['categories']['MECH']['completed_at'] is not None
+
+    def test_tc_toggle_02_started_true_with_wsl(self, client, create_test_worker, get_auth_token, db_conn):
+        """TC-PROGRESS-TOGGLE-02: work_start_log 있으면 started=true"""
+        sn = _sn(f'TG02_{_TS()}')
+        qr = _seed_product(db_conn, sn, mech_partner='FNI')
+        token, wid = self._admin_token(create_test_worker, get_auth_token, '02')
+        _seed_task(db_conn, sn, qr, wid, 'MECH', 'M1', 'T1', completed=False)
+        _seed_work_start_log(db_conn, sn, qr, wid, 'MECH', 'M1', 'T1')
+
+        resp = client.get('/api/app/product/progress', headers={'Authorization': f'Bearer {token}'})
+        assert resp.status_code == 200
+        p = self._find(resp.get_json()['products'], sn)
+        assert p is not None
+        assert p['categories']['MECH']['started'] is True
+
+    def test_tc_toggle_03_started_false_no_wsl(self, client, create_test_worker, get_auth_token, db_conn):
+        """TC-PROGRESS-TOGGLE-03: work_start_log 없으면 started=false (seed만 된 task)"""
+        sn = _sn(f'TG03_{_TS()}')
+        qr = _seed_product(db_conn, sn, mech_partner='FNI')
+        token, wid = self._admin_token(create_test_worker, get_auth_token, '03')
+        _seed_task(db_conn, sn, qr, wid, 'MECH', 'M1', 'T1', completed=False)
+
+        resp = client.get('/api/app/product/progress', headers={'Authorization': f'Bearer {token}'})
+        assert resp.status_code == 200
+        p = self._find(resp.get_json()['products'], sn)
+        assert p is not None
+        assert p['categories']['MECH']['started'] is False
+
+    def test_tc_toggle_04_started_persists_after_reactivation(self, client, create_test_worker, get_auth_token, db_conn):
+        """TC-PROGRESS-TOGGLE-04: 재활성화(completed_at NULL)해도 work_start_log 보존 → started 유지"""
+        sn = _sn(f'TG04_{_TS()}')
+        qr = _seed_product(db_conn, sn, mech_partner='FNI')
+        token, wid = self._admin_token(create_test_worker, get_auth_token, '04')
+        _seed_task(db_conn, sn, qr, wid, 'MECH', 'M1', 'T1', completed=True)
+        _seed_work_start_log(db_conn, sn, qr, wid, 'MECH', 'M1', 'T1')
+
+        # 재활성화 시뮬레이션 — reactivate_task() 동작: completed_at/started_at NULL (work_start_log 보존)
+        cursor = db_conn.cursor()
+        cursor.execute(
+            "UPDATE app_task_details SET completed_at=NULL, started_at=NULL "
+            "WHERE serial_number=%s AND task_category='MECH' AND task_id='M1'", (sn,)
+        )
+        db_conn.commit()
+        cursor.close()
+
+        resp = client.get('/api/app/product/progress', headers={'Authorization': f'Bearer {token}'})
+        assert resp.status_code == 200
+        p = self._find(resp.get_json()['products'], sn)
+        assert p is not None
+        # work_start_log 보존 → started 유지, completed_at NULL → done 0
+        assert p['categories']['MECH']['started'] is True
+        assert p['categories']['MECH']['done'] == 0
+
+    def test_tc_toggle_05_completed_today(self, client, create_test_worker, get_auth_token, db_conn):
+        """TC-PROGRESS-TOGGLE-05: 오늘 완료 → completed_today=true / 어제 완료 → false"""
+        sn_today = _sn(f'TG05T_{_TS()}')
+        sn_yest = _sn(f'TG05Y_{_TS()}')
+        qr_t = _seed_product(db_conn, sn_today, mech_partner='FNI')
+        qr_y = _seed_product(db_conn, sn_yest, mech_partner='FNI')
+        token, wid = self._admin_token(create_test_worker, get_auth_token, '05')
+        _seed_task(db_conn, sn_today, qr_t, wid, 'MECH', 'M1', 'T1', completed=True)
+        _seed_task(db_conn, sn_yest, qr_y, wid, 'MECH', 'M1', 'T1', completed=True)
+
+        # sn_yest 의 완료 시각을 어제로 조정
+        cursor = db_conn.cursor()
+        cursor.execute(
+            "UPDATE app_task_details SET completed_at = NOW() - INTERVAL '1 day' "
+            "WHERE serial_number=%s AND task_category='MECH' AND task_id='M1'", (sn_yest,)
+        )
+        db_conn.commit()
+        cursor.close()
+
+        resp = client.get('/api/app/product/progress', headers={'Authorization': f'Bearer {token}'})
+        assert resp.status_code == 200
+        products = resp.get_json()['products']
+        p_today = self._find(products, sn_today)
+        p_yest = self._find(products, sn_yest)
+        assert p_today is not None and p_yest is not None
+        assert p_today['categories']['MECH']['completed_today'] is True
+        assert p_yest['categories']['MECH']['completed_today'] is False
+
+    def test_tc_toggle_06_regression_total_done_percent(self, client, create_test_worker, get_auth_token, db_conn):
+        """TC-PROGRESS-TOGGLE-06: 기존 total/done/percent 불변 + 신규 3키 존재 (regression)"""
+        sn = _sn(f'TG06_{_TS()}')
+        qr = _seed_product(db_conn, sn, mech_partner='FNI')
+        token, wid = self._admin_token(create_test_worker, get_auth_token, '06')
+        _seed_task(db_conn, sn, qr, wid, 'MECH', 'M1', 'T1', completed=True)
+        _seed_task(db_conn, sn, qr, wid, 'MECH', 'M2', 'T2', completed=True)
+        _seed_task(db_conn, sn, qr, wid, 'MECH', 'M3', 'T3', completed=False)
+
+        resp = client.get('/api/app/product/progress', headers={'Authorization': f'Bearer {token}'})
+        assert resp.status_code == 200
+        p = self._find(resp.get_json()['products'], sn)
+        assert p is not None
+        mech = p['categories']['MECH']
+        # 기존 3키 불변
+        assert mech['total'] == 3
+        assert mech['done'] == 2
+        assert mech['percent'] == 67
+        # 신규 3키 존재
+        assert 'started' in mech and 'completed_at' in mech and 'completed_today' in mech

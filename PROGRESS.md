@@ -3,7 +3,8 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: **v2.15.21 (#69 월간 생산량 KPI TEST CUSTOMER 제외, 2026-05-18)** — BE 1 파일(factory.py) / `get_monthly_kpi()` `production_count` 쿼리 WHERE 절에 `COALESCE(p.customer,'') <> 'TEST CUSTOMER'` 추가 / 월간 생산량 KPI 169→164 (Sprint 44 고객사 도넛과 일치) / pytest test_factory 19/19 GREEN / 회귀 위험 0
+> **현재 버전**: **v2.16.0 (Sprint 67-BE: progress API 공정 토글 신호, 2026-05-18)** — BE 1 파일(progress_service.py) + pytest 1 / VIEW Sprint 46 공정 토글 필터 BE part — progress API `categories` 에 `started`(work_start_log 기반)/`completed_at`/`completed_today`(KST) 3신호 추가 / additive·migration 불필요 / Codex 라운드 1 M=1/A=6 합의 / pytest test_sn_progress 22/22 GREEN / 회귀 위험 0
+> **선행 release**: v2.15.21 (#69 월간 생산량 KPI TEST CUSTOMER 제외, 2026-05-18) — BE 1 파일(factory.py) / `get_monthly_kpi()` `production_count` 쿼리 WHERE 절에 `COALESCE(p.customer,'') <> 'TEST CUSTOMER'` 추가 / 월간 생산량 KPI 169→164 (Sprint 44 고객사 도넛과 일치) / pytest test_factory 19/19 GREEN / 회귀 위험 0
 > **선행 release**: v2.15.20 (FIX-FORCE-CLOSED-REACTIVATION, 2026-05-18) — BE 1 파일(task_detail.py) + VIEW 1 파일(ProcessStepCard.tsx v1.44.2) + pytest 1 / 강제종료 task 재활성화 정상화 — `reactivate_task()` 4컬럼 리셋(force_closed/closed_by/close_reason/duration_source) + VIEW 재활성화 버튼 조건 `(completed_at||force_closed)` / Codex 라운드 1 M=2 합의·A=2 BACKLOG·N=3 / pytest reactivate 6/6 GREEN / 회귀 위험 0
 > **선행 release**: v2.15.19 (FEAT-FACTORY-MONTHLY-DETAIL-BY-CUSTOMER #68, 2026-05-18) — BE 1 파일 + pytest 1 / monthly-detail 응답에 by_customer 집계 추가 (공장 대시보드 월간 고객사 도넛) / by_model 1:1 복제 / Codex 라운드 1 M=6 (3건 prompt 오독) / pytest test_factory 19/19 GREEN / 회귀 위험 0 (additive)
 > **선행 release**: v2.15.18 (POST-REVIEW-OPS-65-PATH2-REOPEN, 2026-05-15) — BE 1 파일 + pytest 1 / MECH Dual-Trigger 경로 2 fix (M-A4 mech_completed flag UPDATE + M-A7 close 게이트 check_mech_completion_all) / AXIS-VIEW 측 #65 리뷰 catch / Codex 라운드 1 M=2 합의 / pytest 5/5 GREEN / 회귀 위험 0

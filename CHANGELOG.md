@@ -6,6 +6,33 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.16.0] - 2026-05-18 — Sprint 67-BE: progress API 공정 토글 신호 (VIEW Sprint 46 BE part)
+
+> AXIS-VIEW Sprint 46(생산현황 PI/QI/SI 공정 토글 필터)의 BE 공급. progress API `categories`에 토글 표시 조건 판정용 신호 3개 추가.
+
+### 변경 (BE only, 1 파일)
+
+| 파일 | 변경 |
+|------|-----|
+| `backend/app/services/progress_service.py` | `task_progress` CTE에 `MAX(completed_at)` + `completed_today`(KST) / `tagged_categories` CTE 신규(work_start_log 기반) / 메인 SELECT JOIN / `_aggregate_products()` categories dict 3필드 확장 |
+
+### 응답 스키마 (additive)
+
+`categories[CAT]` = `{total, done, percent}` → `{total, done, percent, started, completed_at, completed_today}`
+
+- `started`: `work_start_log` 기반 작업 시작 이력 = "태깅됨" (재활성화 시에도 보존)
+- `completed_at`: `MAX(app_task_details.completed_at)` — 공정 마지막 완료 시각
+- `completed_today`: `completed_at`의 KST 날짜 == 오늘 (BE 계산)
+
+### 검증
+
+- pytest test_sn_progress 22/22 GREEN (기존 16 + 신규 TC-PROGRESS-TOGGLE-01~06)
+- additive — 기존 `{total,done,percent}` 불변, VIEW 기존 소비처 회귀 0
+- migration 불필요 (기존 테이블만 조회)
+- Codex 라운드 1 (M=1/A=6) 합의 반영 — 설계서: `AGENT_TEAM_LAUNCH.md` § Sprint 67-BE / `AXIS-VIEW/DESIGN_FIX_SPRINT.md` Sprint 46 영역 9
+
+---
+
 ## [2.15.21] - 2026-05-18 — #69 월간 생산량 KPI TEST CUSTOMER 제외
 
 > 사용자 catch (5-18): 공장 대시보드 월간 생산량 KPI 카드(169)와 Sprint 44 고객사 도넛 중앙(164)이 불일치. `TEST CUSTOMER` 테스트 데이터 5대가 월간 생산량 KPI 에 집계되어 부풀려짐.

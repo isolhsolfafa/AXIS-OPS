@@ -81,10 +81,19 @@ def get_partner_sn_progress(
                     atd.serial_number,
                     atd.task_category,
                     COUNT(*) FILTER (WHERE atd.is_applicable = true) AS total_tasks,
-                    COUNT(*) FILTER (WHERE atd.is_applicable = true AND atd.completed_at IS NOT NULL) AS done_tasks
+                    COUNT(*) FILTER (WHERE atd.is_applicable = true AND atd.completed_at IS NOT NULL) AS done_tasks,
+                    MAX(atd.completed_at) FILTER (WHERE atd.is_applicable = true) AS category_completed_at,
+                    (DATE(MAX(atd.completed_at) FILTER (WHERE atd.is_applicable = true)) = CURRENT_DATE)
+                        AS category_completed_today
                 FROM app_task_details atd
                 WHERE atd.serial_number IN (SELECT serial_number FROM sn_list)
                 GROUP BY atd.serial_number, atd.task_category
+            ),
+            tagged_categories AS (
+                -- Sprint 67-BE: "태깅됨" = work_start_log 기반 (재활성화 시에도 보존)
+                SELECT DISTINCT serial_number, task_category
+                FROM work_start_log
+                WHERE serial_number IN (SELECT serial_number FROM sn_list)
             )
             SELECT
                 sn.serial_number,
@@ -101,9 +110,14 @@ def get_partner_sn_progress(
                 sn.all_completed_at,
                 tp.task_category,
                 COALESCE(tp.total_tasks, 0) AS total_tasks,
-                COALESCE(tp.done_tasks, 0) AS done_tasks
+                COALESCE(tp.done_tasks, 0) AS done_tasks,
+                tp.category_completed_at,
+                COALESCE(tp.category_completed_today, false) AS category_completed_today,
+                (tc.serial_number IS NOT NULL) AS started
             FROM sn_list sn
             LEFT JOIN task_progress tp ON sn.serial_number = tp.serial_number
+            LEFT JOIN tagged_categories tc
+                ON sn.serial_number = tc.serial_number AND tp.task_category = tc.task_category
             ORDER BY sn.ship_plan_date ASC NULLS LAST, sn.serial_number ASC, tp.task_category ASC
         """
 
@@ -242,7 +256,9 @@ def _aggregate_products(
                 "ship_plan_date": str|null,
                 "all_completed": bool,
                 "all_completed_at": str|null,
-                "categories": { "MECH": {"total": n, "done": n, "percent": n}, ... },
+                "categories": { "MECH": {"total": n, "done": n, "percent": n,
+                                         "started": bool, "completed_at": str|null,
+                                         "completed_today": bool}, ... },
                 "overall_percent": int,
                 "my_category": str|null  # 자사 담당 카테고리 강조용
             },
@@ -276,10 +292,15 @@ def _aggregate_products(
             total = row['total_tasks']
             done = row['done_tasks']
             percent = round((done / total) * 100) if total > 0 else 0
+            completed_at = row['category_completed_at']
             sn_map[sn]['categories'][cat] = {
                 'total': total,
                 'done': done,
                 'percent': percent,
+                # Sprint 67-BE: VIEW Sprint 46 공정 토글 필터용 신호
+                'started': row['started'],
+                'completed_at': completed_at.isoformat() if completed_at else None,
+                'completed_today': row['category_completed_today'],
             }
 
     # overall_percent 계산 + my_category 결정

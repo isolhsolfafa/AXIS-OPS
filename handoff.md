@@ -1,7 +1,31 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-18 KST (✅ v2.15.21 release — #69 월간 생산량 KPI TEST CUSTOMER 제외. `get_monthly_kpi()` production_count WHERE 절 1줄 추가, 169→164 (고객사 도넛 일치). pytest test_factory 19/19 GREEN. + v2.15.20 FIX-FORCE-CLOSED-REACTIVATION.)
+> 마지막 업데이트: 2026-05-18 KST (✅ v2.16.0 release — Sprint 67-BE progress API 공정 토글 신호. progress_service.py `categories` 에 started/completed_at/completed_today 추가, VIEW Sprint 46 토글 필터 BE part. pytest test_sn_progress 22/22 GREEN. + v2.15.21 #69 / v2.15.20 FIX-FORCE-CLOSED-REACTIVATION.)
+
+---
+
+## ✅ 2026-05-18 KST — v2.16.0 (Sprint 67-BE: progress API 공정 토글 신호)
+
+### 목적
+
+AXIS-VIEW Sprint 46 (생산현황 PI/QI/SI 공정 토글 필터)의 BE 공급. progress API `categories` 에 토글 표시 조건 판정용 신호 추가.
+
+### 변경
+
+- `progress_service.py` — `task_progress` CTE 에 `MAX(completed_at)` + `completed_today`(KST) / `tagged_categories` CTE 신규(work_start_log) / 메인 SELECT JOIN / `_aggregate_products()` categories dict 3필드
+- `categories[CAT]` = `{total, done, percent}` → `+ {started, completed_at, completed_today}`
+- "태깅됨" = `work_start_log` 기반 (재활성화 시에도 보존 — Codex M-Q2)
+
+### 검증
+
+- pytest test_sn_progress 22/22 GREEN (기존 16 + TC-PROGRESS-TOGGLE-01~06)
+- additive, migration 불필요, 회귀 위험 0
+- Codex 라운드 1 M=1/A=6 합의 — 설계: `AGENT_TEAM_LAUNCH.md` Sprint 67-BE
+
+### 다음
+
+- VIEW Sprint 46 FE 구현 (v1.46.0) — Sprint 45 롤백 + PI/QI/SI 토글 UI + 표시 조건. BE v2.16.0 배포 후 착수.
 
 ---
 

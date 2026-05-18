@@ -43613,7 +43613,7 @@ pytest TC (2건):
 > **작성일**: 2026-05-18 KST
 > **작성자**: Claude Code (Opus Lead)
 > **우선순위**: 🟡 MEDIUM (VIEW 생산현황 토글 필터 BE 공급 — 운영 차단 아님)
-> **상태**: 📝 설계 — Codex 라운드 1 합의 완료 (`AXIS-VIEW/DESIGN_FIX_SPRINT.md` Sprint 46 영역 9)
+> **상태**: ✅ 구현 완료 (v2.16.0, 2026-05-18) — pytest test_sn_progress 22/22 GREEN. Codex 라운드 1 합의 (`AXIS-VIEW/DESIGN_FIX_SPRINT.md` Sprint 46 영역 9)
 > **연관**: AXIS-VIEW Sprint 46 (`FEAT-SNSTATUS-PROCESS-TOGGLE-FILTER-20260518`) 의 BE part
 > **예정 버전**: OPS v2.16.0 (MINOR — progress API 응답 확장)
 > **선행 의존성**: 없음 (기존 테이블만 조회, migration 불필요)
