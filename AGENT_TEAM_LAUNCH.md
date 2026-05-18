@@ -43605,4 +43605,174 @@ pytest TC (2건):
 - POST-REVIEW: `POST-REVIEW-HOTFIX-SPRINT66BE-ENRICH-SELECT-OPTIONS-ITEMCODE-20260509` (deadline 2026-05-16)
 - Cowork 실수 trail #16: 자재코드 string[] vs legacy placeholder 구분 영역 미설계 (ADR-023 보강 권장)
 
+---
+
+# Sprint 67-BE — FEAT-SNSTATUS-PROGRESS-TOGGLE-SIGNALS-20260518
+
+> **Sprint ID**: `SPRINT-67-BE-SNSTATUS-PROGRESS-TOGGLE-SIGNALS-20260518`
+> **작성일**: 2026-05-18 KST
+> **작성자**: Claude Code (Opus Lead)
+> **우선순위**: 🟡 MEDIUM (VIEW 생산현황 토글 필터 BE 공급 — 운영 차단 아님)
+> **상태**: 📝 설계 — Codex 라운드 1 합의 완료 (`AXIS-VIEW/DESIGN_FIX_SPRINT.md` Sprint 46 영역 9)
+> **연관**: AXIS-VIEW Sprint 46 (`FEAT-SNSTATUS-PROCESS-TOGGLE-FILTER-20260518`) 의 BE part
+> **예정 버전**: OPS v2.16.0 (MINOR — progress API 응답 확장)
+> **선행 의존성**: 없음 (기존 테이블만 조회, migration 불필요)
+
+---
+
+## 📑 영역 1 — 배경 & 목적
+
+AXIS-VIEW 생산현황(`SNStatusPage`)에 PI/QI/SI 공정 토글 필터 추가 (VIEW Sprint 46). 토글 표시 조건이 공정별 **"태깅 여부 / 완료 시각 / 오늘 완료 여부"** 를 요구하나, 현재 progress API `GET /api/app/product/progress` 의 `categories` 는 `{total, done, percent}` 3필드만 → BE 보강 필요.
+
+Codex 라운드 1 검증 (M=1 / A=6 / N=0) — 상세는 `AXIS-VIEW/DESIGN_FIX_SPRINT.md` Sprint 46 § 영역 9.
+
+### VIEW 토글 표시 조건 (BE 가 공급해야 할 신호)
+
+| 토글 | 조건 | 필요 신호 |
+|---|---|---|
+| PI | PI task 태깅됨 AND (PI 미완료 OR PI 완료일=오늘) | `started`, `done<total`, `completed_today` |
+| QI | 동일 | 동일 |
+| SI | SI task(2개) 중 하나라도 미완료 | `done < total` (categories[SI]) |
+
+---
+
+## 📑 영역 2 — 변경 대상
+
+| 파일 | 변경 |
+|---|---|
+| `backend/app/services/progress_service.py` | `get_partner_sn_progress()` — `task_progress` CTE 확장 + `tagged_categories` CTE 신규 + 메인 SELECT JOIN + `_aggregate_products()` categories dict 확장 |
+
+- **migration 불필요** — `completion_status` 에 `pi_completed_at` 류 컬럼 없음(Codex Q1 확인). 공정별 완료 시각은 `MAX(app_task_details.completed_at)` 집계로 산출. 신규 컬럼 0.
+- 단일 파일 touch.
+
+---
+
+## 📑 영역 3 — 응답 스키마 변경 (additive)
+
+`categories[CAT]` 객체 확장:
+
+```
+Before: { "total": n, "done": n, "percent": n }
+After:  { "total": n, "done": n, "percent": n,
+          "started": bool, "completed_at": ISO8601|null, "completed_today": bool }
+```
+
+| 신규 필드 | 의미 |
+|---|---|
+| `started` | `work_start_log` 에 해당 `(serial_number, task_category)` 작업 시작 이력 존재 = "태깅됨" |
+| `completed_at` | `MAX(app_task_details.completed_at)` — 해당 공정 마지막 완료 시각 |
+| `completed_today` | `completed_at` 의 KST 날짜 == 오늘 |
+
+→ **additive** — 기존 3필드 불변, VIEW 기존 소비처(Sprint 41 `companyScopedProgress` 등) 회귀 0.
+
+---
+
+## 📑 영역 4 — SQL 설계
+
+**(1) `task_progress` CTE 확장** — 공정별 마지막 완료 시각:
+```sql
+task_progress AS (
+    SELECT
+        atd.serial_number,
+        atd.task_category,
+        COUNT(*) FILTER (WHERE atd.is_applicable = true) AS total_tasks,
+        COUNT(*) FILTER (WHERE atd.is_applicable = true AND atd.completed_at IS NOT NULL) AS done_tasks,
+        MAX(atd.completed_at) FILTER (WHERE atd.is_applicable = true) AS category_completed_at  -- 신규
+    FROM app_task_details atd
+    WHERE atd.serial_number IN (SELECT serial_number FROM sn_list)
+    GROUP BY atd.serial_number, atd.task_category
+)
+```
+
+**(2) `tagged_categories` CTE 신규** — `work_start_log` 기반 "태깅됨":
+```sql
+tagged_categories AS (
+    SELECT DISTINCT serial_number, task_category
+    FROM work_start_log
+    WHERE serial_number IN (SELECT serial_number FROM sn_list)
+)
+```
+
+**(3) 메인 SELECT** — `started` 산출:
+```sql
+LEFT JOIN tagged_categories tc
+    ON sn.serial_number = tc.serial_number AND tp.task_category = tc.task_category
+...
+(tc.serial_number IS NOT NULL) AS started,
+tp.category_completed_at
+```
+
+> ⚠️ **"태깅됨" = `work_start_log` 기반 필수** (Codex M-Q2 + A-Q6). `app_task_details.started_at` 기반이면 — `reactivate_task()`(v2.15.20)가 재활성화 시 `started_at` 을 NULL 로 리셋하므로 "태깅됨" 이력이 소실됨. `work_start_log` 는 재활성화 시에도 보존되므로, 재활성화된 task 가 토글 목록에 자동 재등장하는 동작이 보장됨.
+
+---
+
+## 📑 영역 5 — `completed_today` KST 판정 (Codex A-Q3)
+
+`completed_today` 는 **BE 에서 계산**. FE 가 ISO string 으로 날짜 비교 시 브라우저 timezone 의존 → 자정 경계 오류.
+
+- DB 연결은 `db_pool` 에서 `timezone=Asia/Seoul` 강제 → SQL `CURRENT_DATE` = KST 당일
+- **옵션 A (SQL, 권장)**: `task_progress` CTE 에 `(DATE(MAX(atd.completed_at) FILTER (WHERE atd.is_applicable = true)) = CURRENT_DATE) AS category_completed_today` — SQL 일괄, Python 날짜 라이브러리 의존 0
+- 옵션 B (Python): `_aggregate_products()` 에서 `category_completed_at` 의 KST date 비교
+
+→ 구현 시 옵션 A 채택, `DATE()` 가 세션 timezone(KST)을 따르는지 명시 검증.
+
+---
+
+## 📑 영역 6 — `_aggregate_products()` 확장
+
+```python
+sn_map[sn]['categories'][cat] = {
+    'total': total,
+    'done': done,
+    'percent': percent,
+    'started': row['started'],                                              # 신규
+    'completed_at': row['category_completed_at'].isoformat()                 # 신규
+        if row['category_completed_at'] else None,
+    'completed_today': row['category_completed_today'],                      # 신규 (옵션 A)
+}
+```
+
+---
+
+## 📑 영역 7 — pytest TC
+
+| TC | 검증 |
+|---|---|
+| TC-PROGRESS-TOGGLE-01 | `category_completed_at` = 공정 마지막 완료 시각 정확 |
+| TC-PROGRESS-TOGGLE-02 | `started` = `work_start_log` 있으면 true |
+| TC-PROGRESS-TOGGLE-03 | `started` = `work_start_log` 없으면 false (seed만 된 task) |
+| TC-PROGRESS-TOGGLE-04 | 재활성화 후 `started` 유지 (`completed_at` NULL 이어도 `work_start_log` 보존) |
+| TC-PROGRESS-TOGGLE-05 | `completed_today` = 오늘 완료 true / 어제 완료 false |
+| TC-PROGRESS-TOGGLE-06 | 기존 progress API regression 0 (categories total/done/percent 불변) |
+
+---
+
+## 📑 영역 8 — 회귀 영향
+
+- **additive** — 응답 키 3개 추가, 기존 `categories` 3키 불변 → VIEW 기존 소비처 회귀 0
+- SQL — CTE 1개 추가 + JOIN 1개 + MAX 집계 1개. `sn_list` 가 이미 회사/완료 필터로 제한되므로 성능 영향 미미
+- DB 스키마/migration 변경 0
+- ②단계 자동 Codex 이관 체크리스트 — "API 응답 계약 변경(additive, breaking 아님)" 해당 → 본 설계서 Codex 라운드 1 완료 (VIEW Sprint 46 영역 9 통합 검증)
+
+---
+
+## 📑 영역 9 — 구현 체크리스트
+
+- [ ] `progress_service.py` `task_progress` CTE — `MAX(completed_at)` + `completed_today` (옵션 A)
+- [ ] `tagged_categories` CTE 신규 + 메인 SELECT JOIN
+- [ ] `_aggregate_products()` categories dict 3필드 추가
+- [ ] pytest TC-PROGRESS-TOGGLE-01~06
+- [ ] `DATE()` KST timezone 동작 검증
+- [ ] 기존 progress API regression pytest GREEN
+- [ ] OPS v2.16.0 release (version.py + app_version.dart + CHANGELOG)
+
+---
+
+## 🔗 관련 문서
+
+- AXIS-VIEW `DESIGN_FIX_SPRINT.md` Sprint 46 — FE part (토글 UI + 표시 조건) + 영역 9 Codex 검증
+- Codex 라운드 1 trail — VIEW Sprint 46 영역 9 (M=1/A=6/N=0 전건 반영)
+- 선행: VIEW Sprint 45 (v1.45.0) 롤백 — role 자동 스코프 폐기
+- 후속: VIEW Sprint 46 FE 구현 (BE v2.16.0 배포 후)
+
 
