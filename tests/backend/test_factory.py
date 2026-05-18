@@ -15,7 +15,7 @@ class TestMonthlyDetail:
     """GET /api/admin/factory/monthly-detail 테스트"""
 
     def test_md01_default_params(self, client, create_test_admin, get_admin_auth_token):
-        """기본 파라미터로 조회 → 200, items + total + by_model"""
+        """기본 파라미터로 조회 → 200, items + total + by_model + by_customer"""
         admin = create_test_admin
         token = get_admin_auth_token(admin['id'])
 
@@ -28,10 +28,34 @@ class TestMonthlyDetail:
         assert 'items' in data
         assert 'total' in data
         assert 'by_model' in data
+        assert 'by_customer' in data
         assert 'page' in data
         assert 'per_page' in data
         assert 'total_pages' in data
         assert 'month' in data
+
+    def test_md01b_by_customer_aggregate(self, client, create_test_admin, get_admin_auth_token):
+        """#68: by_customer 집계 — 키 구조 + count 내림차순 + 합계 = total"""
+        admin = create_test_admin
+        token = get_admin_auth_token(admin['id'])
+
+        resp = client.get(
+            '/api/admin/factory/monthly-detail?month=2026-03&per_page=500',
+            headers={'Authorization': f'Bearer {token}'}
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        by_customer = data['by_customer']
+        assert isinstance(by_customer, list)
+        for row in by_customer:
+            assert set(row.keys()) == {'customer', 'count'}
+            assert isinstance(row['count'], int)
+        # count 내림차순 정렬 검증
+        counts = [r['count'] for r in by_customer]
+        assert counts == sorted(counts, reverse=True), f"count 내림차순 기대, got {counts}"
+        # by_customer 합계 = total (월 전체 집계 — page 무관)
+        assert sum(counts) == data['total'], \
+            f"by_customer 합계({sum(counts)}) = total({data['total']}) 기대"
 
     def test_md02_date_field_mech_start(self, client, create_test_admin, get_admin_auth_token):
         """date_field=mech_start → 200"""

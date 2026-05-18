@@ -278,6 +278,19 @@ def get_monthly_detail() -> Tuple[Dict[str, Any], int]:
         )
         by_model = [{'model': r['model'], 'count': r['count']} for r in cur.fetchall()]
 
+        # by_customer 집계 쿼리 (#68 — 공장 대시보드 월간 고객사 도넛)
+        # by_model 과 동일 패턴: date_field 화이트리스트 검증 완료(L200) → f-string 안전.
+        # NULL customer 는 by_model 의 NULL model 과 동일하게 GROUP BY 자연 처리 (FE 필터).
+        cur.execute(
+            f"""SELECT p.customer, COUNT(*) AS count
+                FROM plan.product_info p
+                WHERE p.{date_field} >= %s AND p.{date_field} < %s
+                GROUP BY p.customer
+                ORDER BY count DESC, p.customer ASC""",
+            (start_date, end_date)
+        )
+        by_customer = [{'customer': r['customer'], 'count': r['count']} for r in cur.fetchall()]
+
         # Sprint 31B: 태스크 레벨 진행률 조회
         serial_numbers = [row['serial_number'] for row in rows if row.get('serial_number')]
         task_progress = _get_task_progress_by_serial(cur, serial_numbers)
@@ -321,6 +334,7 @@ def get_monthly_detail() -> Tuple[Dict[str, Any], int]:
             'month': month_str,
             'items': items,
             'by_model': by_model,
+            'by_customer': by_customer,
             'total': total,
             'page': page,
             'per_page': per_page,

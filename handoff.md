@@ -1,7 +1,34 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-15 KST (✅ DB Pool V4.1 영구 종결 — T+8d (5-15) 점검 통과, 시나리오 A. FIX-DB-POOL-MAX-SIZE COMPLETED + Phase B task close. ✅ v2.15.18 release — MECH Dual-Trigger 경로 2 fix.)
+> 마지막 업데이트: 2026-05-18 KST (✅ v2.15.19 release — FEAT-FACTORY-MONTHLY-DETAIL-BY-CUSTOMER (#68). monthly-detail 응답에 by_customer 집계 추가, 공장 대시보드 월간 고객사 도넛용. BE 1 파일 + pytest 1, by_model 1:1 복제. pytest test_factory 19/19 GREEN. ✅ 인프라 — conftest migration SQL 분리 운영 runner 통일 (commit 9b4dd7d). pytest 전수 재측정 deadline 5-22.)
+
+---
+
+## ✅ 2026-05-18 KST — v2.15.19 (FEAT-FACTORY-MONTHLY-DETAIL-BY-CUSTOMER #68) + conftest 인프라
+
+### v2.15.19 — monthly-detail by_customer 집계 (AXIS-VIEW #68)
+
+- 공장 대시보드 월간 "고객사 비율 도넛" 위젯용 BE 집계 필드 추가
+- `factory.py get_monthly_detail()` — `by_customer` 집계 쿼리 + 응답 키 (~14 LOC, by_model 1:1 복제)
+- `test_factory.py` — by_customer 키 검증 + `test_md01b_by_customer_aggregate` 신규
+- Codex 라운드 1 M=6 (3건 prompt 오독) — 유효분 TC 반영
+- pytest test_factory 19/19 GREEN. 회귀 위험 0 (additive)
+
+### 인프라 — conftest migration SQL 분리 통일 (commit 9b4dd7d)
+
+- POST-REVIEW-PYTEST-FAILED-ANALYSIS — conftest `_split_sql_statements` 가 single-quote/주석 미처리 결함
+- → 운영 `migration_runner._split_statements` import 통일 + empty stmt skip + 실패 집계
+- 051 계열 "empty query" 해소 입증. 007/055 는 별 SQL 결함 (별도)
+- pytest 전수 재측정 (65 FAILED → ?) deadline 2026-05-22
+
+### 남은 우선순위
+
+| 순위 | 항목 |
+|:-:|------|
+| 1 (P0) | BUG-MECH-CHECKLIST-DUAL-MODEL-QR-DOC-ID-MISMATCH (옵션 B/D 결정 대기) |
+| 2 (5-22) | POST-REVIEW-PYTEST-FAILED-ANALYSIS 전수 재측정 + 007/055 SQL fix |
+| 3 | #66 production 토글 / FEAT-PROGRESS-MY-COMPLETION-HYBRID / v2.14.1 T+5d (5-17 경과) |
 
 ---
 

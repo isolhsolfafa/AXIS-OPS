@@ -65,6 +65,33 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.15.19] - 2026-05-18 — FEAT-FACTORY-MONTHLY-DETAIL-BY-CUSTOMER (#68)
+
+> AXIS-VIEW OPS_API_REQUESTS.md #68 — 공장 대시보드 월간 뷰 "고객사 비율 도넛 차트" 위젯용 BE 집계 필드 추가.
+
+### 변경 (BE 1 파일 + pytest 1 + version)
+
+| 파일 | 변경 |
+|------|------|
+| `backend/app/routes/factory.py` `get_monthly_detail()` | `by_customer` 집계 쿼리 1건 + 응답 dict 1 키 추가 (~14 LOC) — `by_model` 1:1 복제 패턴 |
+| `tests/backend/test_factory.py` | `test_md01` by_customer 키 검증 + `test_md01b_by_customer_aggregate` 신규 (키 구조 + count 내림차순 + 합계=total) |
+| `backend/version.py` + `app_version.dart` | 2.15.18 → 2.15.19 |
+
+### 동작
+
+`SELECT p.customer, COUNT(*) FROM plan.product_info WHERE {date_field} 범위 GROUP BY p.customer ORDER BY count DESC, p.customer ASC` — `date_field` 화이트리스트 검증(기존) 후 f-string 안전. NULL customer 는 `by_model` 의 NULL model 과 동일하게 GROUP BY 자연 처리 (FE 필터).
+
+### 검증
+
+- pytest `test_factory.py` 19/19 PASS (241s) — 신규 TC 포함
+- 회귀 위험 0 — additive (응답 키 1개 추가, breaking 아님), DB 스키마/migration 변경 0
+
+### Codex 라운드 1
+
+M=6/A=2/N=2 — M 6건 중 3건(Q1-1/Q1-2/Q2-1)은 Codex 의 prompt 코드블록 오독(실제 SQL 정상). 유효분 = 응답 dict `by_customer` 추가(설계 포함) + test_factory `by_customer` TC(반영). NULL = `by_model` 일관성 위해 원본 유지.
+
+---
+
 ## [2.15.18] - 2026-05-15 — POST-REVIEW-OPS-65-PATH2-REOPEN (MECH Dual-Trigger 경로 2 fix)
 
 > AXIS-VIEW 측 리뷰어가 OPS_API_REQUESTS.md #65 entry 교차검증 중 OPS 배포 코드 (v2.15.13~v2.15.17) 영역 버그 2건 발견. #65 = "MECH 체크리스트 Dual-Trigger" v2.15.13 ✅ COMPLETED 처리됐으나 경로 2 미완성. Codex 라운드 1 M=2 합의.
