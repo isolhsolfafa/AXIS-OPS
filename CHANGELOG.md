@@ -6,6 +6,29 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.17.2] - 2026-05-19 — Sprint 68 fix: OPS SI 마무리공정 화면 출고 대기 누락
+
+> 사용자 catch — OPS SI 마무리공정 화면에 SI_FINISHING 작업이 완료된 출고 대기 제품(GBWS-7094/7095)이 안 보이고, 진행중인 TEST 제품만 표시됨.
+
+### 원인
+
+`gst.py get_gst_products()`의 SI 화면이 `started_at IS NOT NULL AND completed_at IS NULL`(= SI_FINISHING **작업 진행중**)만 표시 → SI_FINISHING 작업은 완료됐고 출하완료(SI_SHIPMENT)만 안 된 **출고 대기** 제품이 누락. 출고 완료 버튼 대상이 정작 화면에 없는 모순.
+
+### 변경 (BE 1 파일)
+
+| 파일 | 변경 |
+|------|-----|
+| `backend/app/routes/gst.py` | SI 카테고리 WHERE 분기 — `task_id='SI_FINISHING' AND started_at IS NOT NULL AND COALESCE(cs.si_completed, false)=false` + `completion_status` LEFT JOIN. PI/QI는 현행(진행중) 유지 |
+
+→ SI 마무리공정 화면 = **출고 대기**(SI 작업 시작됨 + 미출고) 기준. SI_FINISHING 완료 여부 무관, `si_completed=false`면 표시. VIEW SI 토글 기준과 일치.
+
+### 검증
+
+- SQL 검증 — SI 화면 7건 (진행중 4 + 완료·출고대기 3: TEST-1114 / GBWS-7094 / GBWS-7095)
+- Flask boot OK, PI/QI 화면 회귀 0 (현행 유지)
+
+---
+
 ## [2.17.1] - 2026-05-19 — Sprint 68 OPS FE: SI 출고 버튼 + PI/QI/SI O/N 표시
 
 > Sprint 68(`FEAT-SHIPMENT-COMPLETE`)의 OPS FE part — B(SI 마무리공정 화면 출고 버튼) + C(PI/QI/SI 카드 O/N·고객사 표시).

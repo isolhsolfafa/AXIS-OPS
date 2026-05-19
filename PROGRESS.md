@@ -3,7 +3,8 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: **v2.17.1 (Sprint 68 OPS FE: SI 출고 버튼 + O/N 표시, 2026-05-19)** — BE 1 파일(gst.py) + FE 1 파일(gst_products_screen.dart) / B: SI 마무리공정 화면 카드 [내 작업 완료]+[출고 완료] 버튼 + 확인 다이얼로그 + 토스트 / C: PI·QI·SI 카드에 O/N·고객사 표시 / Codex 라운드 1 M=2(멱등 토스트·권한 친화 메시지)+A-Q7 반영 / flutter build web GREEN / gst.py additive 회귀 0
+> **현재 버전**: **v2.17.2 (Sprint 68 fix: SI 마무리공정 화면 출고 대기 누락, 2026-05-19)** — BE 1 파일(gst.py) / SI 화면이 SI_FINISHING 진행중만 표시 → 출고 대기(SI_FINISHING 완료+미출고) 제품 누락 fix / SI WHERE 분기 `task_id='SI_FINISHING' AND started AND si_completed=false` + completion_status JOIN / SQL 검증 SI 7건(진행중 4+출고대기 3) / PI/QI 현행 유지 회귀 0
+> **선행 release**: v2.17.1 (Sprint 68 OPS FE: SI 출고 버튼 + O/N 표시, 2026-05-19) — BE 1(gst.py) + FE 1(gst_products_screen.dart) / SI 카드 [내 작업 완료]+[출고 완료] 버튼 + PI·QI·SI O/N·고객사 표시 / Codex 라운드 1 M=2+A-Q7 / flutter build GREEN
 > **선행 release**: v2.17.0 (Sprint 68: 출하 완료 ship-complete endpoint, 2026-05-19) — BE 신규 2 파일(shipment_service.py + work_shipment.py) + pytest 1 / `POST /api/app/work/ship-complete` — SI task 2개 완료 + completed_at 지정 + audit / Codex 라운드 1 M=5/A=1 / pytest test_ship_complete 12/12 GREEN
 > **선행 release**: v2.16.0 (Sprint 67-BE: progress API 공정 토글 신호, 2026-05-18) — BE 1 파일(progress_service.py) + pytest 1 / VIEW Sprint 46 공정 토글 필터 BE part — progress API `categories` 에 `started`/`completed_at`/`completed_today` 3신호 추가 / Codex 라운드 1 M=1/A=6 / pytest test_sn_progress 22/22 GREEN
 > **선행 release**: v2.15.21 (#69 월간 생산량 KPI TEST CUSTOMER 제외, 2026-05-18) — BE 1 파일(factory.py) / `get_monthly_kpi()` `production_count` 쿼리 WHERE 절에 `COALESCE(p.customer,'') <> 'TEST CUSTOMER'` 추가 / 월간 생산량 KPI 169→164 (Sprint 44 고객사 도넛과 일치) / pytest test_factory 19/19 GREEN / 회귀 위험 0

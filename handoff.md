@@ -1,7 +1,29 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-19 KST (✅ v2.17.1 — Sprint 68 OPS FE part. SI 마무리공정 화면 [내 작업 완료]+[출고 완료] 버튼 + PI/QI/SI 카드 O/N·고객사 표시. gst.py + gst_products_screen.dart. Codex 라운드 1 M=2+A-Q7 반영. flutter build GREEN. + v2.17.0 ship-complete endpoint.)
+> 마지막 업데이트: 2026-05-19 KST (✅ v2.17.2 — Sprint 68 fix. OPS SI 마무리공정 화면이 SI_FINISHING 진행중만 표시 → 출고 대기(SI_FINISHING 완료+미출고, GBWS-7094/7095) 제품 누락 fix. gst.py SI WHERE 분기. SQL 검증 SI 7건. + v2.17.1 SI 출고 버튼 / v2.17.0 ship-complete endpoint.)
+
+---
+
+## ✅ 2026-05-19 KST — v2.17.2 (Sprint 68 fix: SI 마무리공정 화면 출고 대기 누락)
+
+### 사용자 catch
+
+OPS SI 마무리공정 화면에 SI_FINISHING 작업 완료 후 출고 대기인 GBWS-7094/7095가 안 보이고 진행중 TEST 제품만 표시.
+
+### 변경
+
+- `gst.py get_gst_products()` — SI 카테고리 WHERE 분기: `task_id='SI_FINISHING' AND started_at IS NOT NULL AND COALESCE(cs.si_completed, false)=false` + `completion_status` LEFT JOIN
+- SI 화면 = "출고 대기"(SI 시작됨 + 미출고) 기준. PI/QI 현행(진행중) 유지
+
+### 검증
+
+- SQL 검증 — SI 화면 7건 (진행중 4 + 완료·출고대기 3)
+- Flask boot OK, PI/QI 회귀 0
+
+### 다음 (제안)
+
+- PI/QI 종료키 — SI `[내 작업 완료]` 패턴을 PI/QI 화면으로 확장 (사용자 제안, 미착수)
 
 ---
 

@@ -117,6 +117,17 @@ def get_gst_products(category: str) -> Tuple[Dict[str, Any], int]:
             # default: active = 태깅(작업시작)된 제품만 (in_progress + paused)
             status_condition = "(t.started_at IS NOT NULL AND t.completed_at IS NULL)"
 
+        # SI 마무리공정 화면 = 출고 대기 (SI_FINISHING 시작됨 + 미출고)
+        # SI_FINISHING 작업이 완료됐어도 출하완료(SI_SHIPMENT) 전이면 표시 — 출고 완료 처리 대상.
+        # PI/QI 는 현행 status_condition(진행중) 유지 — SI 만 출하 워크플로우 특수.
+        if category == 'SI':
+            where_clause = (
+                "t.task_id = 'SI_FINISHING' AND t.started_at IS NOT NULL "
+                "AND COALESCE(cs.si_completed, false) = false"
+            )
+        else:
+            where_clause = status_condition
+
         cur.execute(
             f"""
             SELECT
@@ -137,8 +148,9 @@ def get_gst_products(category: str) -> Tuple[Dict[str, Any], int]:
             FROM app_task_details t
             LEFT JOIN workers w ON w.id = t.worker_id
             LEFT JOIN plan.product_info p ON p.serial_number = t.serial_number
+            LEFT JOIN completion_status cs ON cs.serial_number = t.serial_number
             WHERE t.task_category = %s
-              AND {status_condition}
+              AND {where_clause}
             ORDER BY t.created_at DESC
             """,
             (category,)
