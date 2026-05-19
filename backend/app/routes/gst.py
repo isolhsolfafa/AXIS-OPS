@@ -131,7 +131,9 @@ def get_gst_products(category: str) -> Tuple[Dict[str, Any], int]:
                 t.worker_id,
                 t.created_at AS task_created_at,
                 w.name AS worker_name,
-                p.model
+                p.model,
+                p.customer,
+                p.sales_order
             FROM app_task_details t
             LEFT JOIN workers w ON w.id = t.worker_id
             LEFT JOIN plan.product_info p ON p.serial_number = t.serial_number
@@ -160,6 +162,8 @@ def get_gst_products(category: str) -> Tuple[Dict[str, Any], int]:
                 'task_detail_id': row['task_detail_id'],
                 'serial_number': row['serial_number'],
                 'model': row['model'],
+                'customer': row['customer'],
+                'sales_order': row['sales_order'],
                 'task_id': row['task_id'],
                 'task_name': row['task_name'],
                 'task_status': task_status,

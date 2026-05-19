@@ -6,6 +6,30 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.17.1] - 2026-05-19 — Sprint 68 OPS FE: SI 출고 버튼 + PI/QI/SI O/N 표시
+
+> Sprint 68(`FEAT-SHIPMENT-COMPLETE`)의 OPS FE part — B(SI 마무리공정 화면 출고 버튼) + C(PI/QI/SI 카드 O/N·고객사 표시).
+
+### 변경
+
+| 파일 | 변경 |
+|------|-----|
+| `backend/app/routes/gst.py` | (C) products 응답에 `customer`/`sales_order` 추가 (additive) |
+| `frontend/lib/screens/gst/gst_products_screen.dart` | (B) SI 카드 `[내 작업 완료]`+`[출고 완료]` 버튼 + 확인 다이얼로그 + 토스트 / (C) 카드에 `O/N · 고객사` 표시 |
+
+### 동작
+
+- **B** — `[출고 완료]` → `POST /api/app/work/ship-complete` (admin/manager만 노출), `[내 작업 완료]` → `POST /api/app/work/complete` finalize=false (진행 중 task만 노출). 둘 다 확인 다이얼로그 + 완료 토스트
+- **C** — PI 가압검사 / QI 공정검사 / SI 마무리공정 3화면 공용 카드에 O/N(sales_order) + 고객사 표시
+
+### 검증
+
+- flutter build web GREEN
+- Codex 라운드 1 M=2 (멱등 응답 `already_completed` 토스트 분기 / 권한 403 친화 메시지) + A-Q7(`_fetchProducts` mounted 가드) 반영, A-Q4·Q6 미반영(advisory)
+- BE `gst.py` additive — 기존 소비처 회귀 0, migration 불필요
+
+---
+
 ## [2.17.0] - 2026-05-19 — Sprint 68: 출하 완료(ship-complete) endpoint
 
 > 출하 시점엔 작업자가 QR 태깅으로 SI task 완료가 어려움 → admin/manager 가 VIEW/OPS 화면에서 대행. 신규 `ship-complete` endpoint.

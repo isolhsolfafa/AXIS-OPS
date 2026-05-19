@@ -1,7 +1,26 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-19 KST (✅ v2.17.0 — Sprint 68 출하 완료 ship-complete endpoint. shipment_service.py + work_shipment.py 신규, SI task 2개 완료 + completed_at 지정 + audit. pytest test_ship_complete 12/12 GREEN. Codex 라운드 1 M=5/A=1 반영. ⚠️ commit 완료·push 보류 — 09:00 KST 이후 push 예정. OPS FE·VIEW Sprint 47 후속.)
+> 마지막 업데이트: 2026-05-19 KST (✅ v2.17.1 — Sprint 68 OPS FE part. SI 마무리공정 화면 [내 작업 완료]+[출고 완료] 버튼 + PI/QI/SI 카드 O/N·고객사 표시. gst.py + gst_products_screen.dart. Codex 라운드 1 M=2+A-Q7 반영. flutter build GREEN. + v2.17.0 ship-complete endpoint.)
+
+---
+
+## ✅ 2026-05-19 KST — v2.17.1 (Sprint 68 OPS FE: SI 출고 버튼 + O/N 표시)
+
+### 변경
+
+- **B** — `gst_products_screen.dart` SI 마무리공정 카드에 `[내 작업 완료]`(complete finalize=false, 진행 중 task만) + `[출고 완료]`(ship-complete, admin/manager) 버튼 + 확인 다이얼로그 + 토스트
+- **C** — `gst.py` products 응답에 `customer`/`sales_order` 추가 + 카드에 `O/N · 고객사` 표시 (PI/QI/SI 3화면 공용)
+
+### 검증
+
+- flutter build web GREEN
+- Codex 라운드 1 M=2(멱등 응답 토스트 분기 / 403 친화 메시지) + A-Q7(mounted 가드) 반영
+- gst.py additive — 회귀 0, migration 불필요
+
+### 다음
+
+- VIEW Sprint 47 (출하완료 버튼 A — VIEW 세션 담당, 영역 8 작성 필요)
 
 ---
 
@@ -25,7 +44,7 @@
 
 ### 상태 / 다음
 
-- ⚠️ **commit 완료, push 보류** — 2026-05-19 09:00 KST(2번째 출근시간) 이후 push 예정
+- ✅ **push 완료** — commit e18beef, Railway 자동 배포 (2026-05-19 09:00 KST 이후)
 - 후속: OPS FE (SI 마무리공정 화면 출고 버튼 B / PI·QI·SI O/N 표시 C) + VIEW Sprint 47 (출하완료 버튼 A — VIEW 세션 담당)
 
 ---

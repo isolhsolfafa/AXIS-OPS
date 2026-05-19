@@ -48,15 +48,124 @@ class _GstProductsScreenState extends ConsumerState<GstProductsScreen> {
         products = (response['products'] as List).cast<Map<String, dynamic>>();
       }
 
+      if (!mounted) return;
       setState(() {
         _products = products;
         _isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _errorMessage = e.toString();
         _isLoading = false;
       });
+    }
+  }
+
+  /// 출고 완료 — SI task 2개(마무리공정 + 출하완료) 완료 처리 (admin/manager)
+  Future<void> _shipComplete(String serialNumber) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('출고 완료'),
+        content: Text(
+          '$serialNumber 을(를) 출고 완료 처리하시겠습니까?\n\n'
+          'SI 마무리공정과 출하완료 작업이 모두 완료 처리됩니다.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('취소'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: GxColors.accent,
+              foregroundColor: GxColors.white,
+            ),
+            child: const Text('출고 완료'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      final apiService = ref.read(apiServiceProvider);
+      final resp = await apiService.post(
+        '/app/work/ship-complete',
+        data: {'serial_number': serialNumber},
+      );
+      if (!mounted) return;
+      // Codex M-Q2: 멱등 응답(already_completed) 시 사실 기반 메시지
+      final alreadyDone = resp is Map && resp['already_completed'] == true;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(alreadyDone
+              ? '$serialNumber 은(는) 이미 출고 완료된 제품입니다.'
+              : '$serialNumber 출고 완료 처리되었습니다.'),
+          backgroundColor: GxColors.success,
+        ),
+      );
+      _fetchProducts();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('출고 완료 실패: $e'),
+          backgroundColor: GxColors.danger,
+        ),
+      );
+    }
+  }
+
+  /// 내 작업 완료 — 본인의 SI 마무리공정 작업만 완료 (relay 모드)
+  Future<void> _completeMyWork(int taskDetailId) async {
+    final workerId = ref.read(authProvider).currentWorker?.id;
+    if (workerId == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('내 작업 완료'),
+        content: const Text('본인의 SI 마무리공정 작업을 완료 처리하시겠습니까?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('취소'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('완료'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      final apiService = ref.read(apiServiceProvider);
+      await apiService.post(
+        '/app/work/complete',
+        data: {'task_id': taskDetailId, 'worker_id': workerId, 'finalize': false},
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('내 작업이 완료 처리되었습니다.'),
+          backgroundColor: GxColors.success,
+        ),
+      );
+      _fetchProducts();
+    } catch (e) {
+      if (!mounted) return;
+      // Codex M-Q3: 권한 오류(403 FORBIDDEN)는 사용자 친화 메시지로 매핑
+      final msg = e.toString().contains('FORBIDDEN')
+          ? '본인이 시작한 작업만 완료할 수 있습니다.'
+          : '작업 완료 실패: $e';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(msg),
+          backgroundColor: GxColors.danger,
+        ),
+      );
     }
   }
 
@@ -252,6 +361,8 @@ class _GstProductsScreenState extends ConsumerState<GstProductsScreen> {
     final statusColor = _getStatusColor(status);
     final serialNumber = product['serial_number'] as String? ?? '-';
     final model = product['model'] as String? ?? '-';
+    final customer = product['customer'] as String? ?? '';
+    final salesOrder = product['sales_order'] as String? ?? '';
     final taskName = product['task_name'] as String? ?? '-';
     // 멀티 작업자 지원: workers 배열 우선, 없으면 worker_name fallback
     final workers = product['workers'] as List?;
@@ -262,6 +373,8 @@ class _GstProductsScreenState extends ConsumerState<GstProductsScreen> {
         : product['worker_name'] as String?;
     final startedAt = product['started_at'] as String?;
     final taskDetailId = product['task_detail_id'] as int?;
+    final auth = ref.read(authProvider);
+    final canShip = auth.isAdmin || auth.isManager;
 
     String? formattedStartedAt;
     if (startedAt != null) {
@@ -310,6 +423,16 @@ class _GstProductsScreenState extends ConsumerState<GstProductsScreen> {
                             model,
                             style: const TextStyle(fontSize: 12, color: GxColors.slate),
                           ),
+                          if (customer.isNotEmpty || salesOrder.isNotEmpty) ...[
+                            const SizedBox(height: 2),
+                            Text(
+                              [
+                                if (salesOrder.isNotEmpty) 'O/N $salesOrder',
+                                if (customer.isNotEmpty) customer,
+                              ].join('  ·  '),
+                              style: const TextStyle(fontSize: 11, color: GxColors.steel),
+                            ),
+                          ],
                         ],
                       ),
                     ),
@@ -376,6 +499,46 @@ class _GstProductsScreenState extends ConsumerState<GstProductsScreen> {
                           style: const TextStyle(fontSize: 11, color: GxColors.steel),
                         ),
                       ],
+                    ],
+                  ),
+                ],
+                // Sprint 68 B: SI 마무리공정 화면 — 출고 처리 버튼 ("진행중" 뱃지 아래)
+                // Codex M-Q3: [내 작업 완료]는 진행 중 task 에만 노출
+                if (widget.category == 'SI' && taskDetailId != null &&
+                    (status == 'in_progress' || canShip)) ...[
+                  const SizedBox(height: 12),
+                  const Divider(color: GxColors.mist, height: 1),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      if (status == 'in_progress')
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () => _completeMyWork(taskDetailId),
+                            icon: const Icon(Icons.check, size: 15),
+                            label: const Text('내 작업 완료', style: TextStyle(fontSize: 12)),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: GxColors.info,
+                              side: const BorderSide(color: GxColors.info),
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                            ),
+                          ),
+                        ),
+                      if (status == 'in_progress' && canShip)
+                        const SizedBox(width: 8),
+                      if (canShip)
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: () => _shipComplete(serialNumber),
+                            icon: const Icon(Icons.local_shipping, size: 15),
+                            label: const Text('출고 완료', style: TextStyle(fontSize: 12)),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: GxColors.accent,
+                              foregroundColor: GxColors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                            ),
+                          ),
+                        ),
                     ],
                   ),
                 ],

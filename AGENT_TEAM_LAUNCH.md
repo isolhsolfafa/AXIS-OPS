@@ -43783,7 +43783,7 @@ sn_map[sn]['categories'][cat] = {
 > **작성일**: 2026-05-18 KST
 > **작성자**: Claude Code (Opus Lead)
 > **우선순위**: 🟡 MEDIUM (출하 완료 처리 편의 — 운영 차단 아님)
-> **상태**: ✅ BE 구현 완료 (v2.17.0, 2026-05-19) — pytest test_ship_complete 12/12 GREEN. OPS FE(B/C) 후속. Codex 라운드 1 (M=5/A=1) 영역 10+11 반영.
+> **상태**: ✅ BE + OPS FE 구현 완료 (v2.17.0 BE / v2.17.1 OPS FE B·C, 2026-05-19) — pytest test_ship_complete 12/12 GREEN + flutter build GREEN. Codex 라운드 1 BE(M=5/A=1) + OPS FE(M=2/A=3) 반영. VIEW Sprint 47(A)은 VIEW 세션 담당.
 > **예정 버전**: OPS v2.17.0 (MINOR — 신규 endpoint + FE 화면)
 > **연관**: AXIS-VIEW Sprint 47 (출하완료 버튼 — VIEW part)
 
