@@ -119,7 +119,7 @@ class _GstProductsScreenState extends ConsumerState<GstProductsScreen> {
     }
   }
 
-  /// 내 작업 완료 — 본인의 SI 마무리공정 작업만 완료 (relay 모드)
+  /// 내 작업 완료 — 본인의 해당 공정 작업만 완료 (relay 모드)
   Future<void> _completeMyWork(int taskDetailId) async {
     final workerId = ref.read(authProvider).currentWorker?.id;
     if (workerId == null) return;
@@ -127,7 +127,7 @@ class _GstProductsScreenState extends ConsumerState<GstProductsScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('내 작업 완료'),
-        content: const Text('본인의 SI 마무리공정 작업을 완료 처리하시겠습니까?'),
+        content: Text('본인의 $_categoryLabel 작업을 완료 처리하시겠습니까?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),

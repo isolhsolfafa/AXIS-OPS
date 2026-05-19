@@ -6,6 +6,24 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.18.1] - 2026-05-19 — Sprint 69 fix: 내 작업 완료 확인 다이얼로그 공정명 하드코딩
+
+> 사용자 catch — OPS PI/QI 화면에서 `[내 작업 완료]` 누르면 확인 다이얼로그가 "본인의 SI 마무리공정 작업을..."로 SI 문구가 모든 공정에 동일하게 표시.
+
+### 변경
+
+| 파일 | 내용 |
+|------|-----|
+| `gst_products_screen.dart` | `_completeMyWork()` 확인 다이얼로그 content `'SI 마무리공정'` 하드코딩 → `$_categoryLabel` (PI 가압검사 / QI 공정검사 / SI 마무리공정) |
+
+### 검증
+
+- flutter build web GREEN
+- FE only 1줄 문구 — ②단계 자동 Codex 이관 체크리스트 0항목 해당 → Opus 자가 리뷰
+- 회귀 위험 0
+
+---
+
 ## [2.18.0] - 2026-05-19 — Sprint 69: PI/QI 완료 권한 잠금 + admin 정상완료 + 검색 칸
 
 > PI/QI는 GST 사내 검사 공정. cross-worker 완료(worker2가 worker1 task 완료)가 worker tracking·진행률을 왜곡 → PI/QI는 시작한 본인만 완료 + 불가피 시 admin/manager 정상완료.

@@ -1,7 +1,23 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-19 KST (✅ v2.18.0 — Sprint 69. PI/QI는 시작한 본인만 완료(cross-worker 차단), 불가피 시 admin/manager가 종료 시각 다이얼로그로 정상완료(admin-complete endpoint, force_closed=FALSE). PI/QI 카드 [종료] 버튼 + O/N·S/N 검색 칸. Codex BE M=10/FE M=1. pytest 10/10 GREEN.)
+> 마지막 업데이트: 2026-05-19 KST (✅ v2.18.1 — Sprint 69 fix. OPS PI/QI `[내 작업 완료]` 확인 다이얼로그가 'SI 마무리공정' 하드코딩 → `$_categoryLabel` 로 수정. FE only 1줄. + v2.18.0 Sprint 69.)
+
+---
+
+## ✅ 2026-05-19 KST — v2.18.1 (Sprint 69 fix: 내 작업 완료 다이얼로그 공정명 하드코딩)
+
+### 사용자 catch
+
+OPS PI/QI 화면에서 `[내 작업 완료]` 누르면 확인 다이얼로그가 "본인의 SI 마무리공정 작업을..."로 SI 문구가 PI/QI에도 동일 표시.
+
+### 변경
+
+- `gst_products_screen.dart` `_completeMyWork()` 확인 다이얼로그 content `const Text('본인의 SI 마무리공정 작업을...')` → `Text('본인의 $_categoryLabel 작업을...')`
+
+### 검증
+
+- flutter build web GREEN / FE only 1줄 / 회귀 0
 
 ---
 
