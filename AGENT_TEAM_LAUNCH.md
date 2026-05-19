@@ -44119,4 +44119,83 @@ Must 10건: cross 차단 PI / cross 차단 QI / admin-complete PI 성공(pi_comp
 
 → M=10 + A=4 반영. **설계 확정 (GO).** 구현 진입 시 영역 10 = 단일 기준.
 
+---
+
+# FIX-MECH-CHECKLIST-QR-DOC-ID-SINGLE-UNIFY-20260519 (v2.18.2)
+
+> BACKLOG L354 `BUG-MECH-CHECKLIST-DUAL-MODEL-QR-DOC-ID-MISMATCH-20260514` (🔴 P0) 해소.
+> 사용자 결정: 옵션 D 채택 (qr_doc_id SINGLE 통일). 옵션 B(3분리 SELECT)는 혼재 컨벤션 유지라 반창고 → 기각.
+
+## 1. 배경 / Root Cause
+
+DRAGON DUAL 모델 MECH 체크리스트가 영원히 100% 안 됨 → SELF_INSPECTION "공정 마감" finalize 차단 → gas2/util2 force close 불가.
+
+원인 = qr_doc_id 저장 컨벤션 혼재:
+- INLET 배관 S/N 8항목 (scope_rule='DRAGON', item_type='INPUT') → OPS FE `_qrDocIdForItem` 가 `DOC_{S/N}-L` / `DOC_{S/N}-R` 분리 저장
+- 나머지 MECH 항목 → `DOC_{S/N}` SINGLE 저장
+- BE `check_mech_completion` DUAL 분기: `qr_doc_ids=[DOC_{S/N}-L, DOC_{S/N}-R]` loop → 각 qr_doc_id 에서 active_ids 전수 매칭 요구 → SINGLE 저장 항목이 `-L`/`-R` 어디서도 매칭 X → 영원히 False.
+
+추가: BE 읽기 경로 `get_mech_checklist` (checklist_service.py L633) 는 이미 `_normalize_qr_doc_id(serial_number)` = `DOC_{S/N}` SINGLE → INLET `-L`/`-R` record 가 조회/VIEW 에서 안 보이는 상태이기도 함.
+
+## 2. 운영 데이터 검증 (2026-05-19 SQL)
+
+| 카테고리 | L | R | SINGLE | 판정 |
+|---|---|---|---|---|
+| ELEC | 0 | 0 | 1455 | L/R 미사용 — 무관 |
+| MECH | 8 | 8 | 306 | `-L`/`-R` = TEST-333(테스트 S/N) 16건뿐 — **운영 0건** |
+| TM | 450 | 540 | 435 | dual tank 정상 사용 — **D 범위 제외** |
+
+- MECH `-L`/`-R` 16건 = TEST-333 의 `배관 S/N 확인 - Left/Right #1~4` (INPUT, scope_rule='DRAGON') 8 master × 2 phase. → 사용자 직접 초기화 (migration 불필요).
+- UNIQUE 키 = `(serial_number, master_id, judgment_phase, qr_doc_id)` — master_id 포함 → Left#1/Right#1 은 master_id 가 달라 qr_doc_id 를 `DOC_{S/N}` 로 합쳐도 충돌 0.
+- DRAGON 생산 감소 추세 + 현재 운영 MECH 체크리스트 0건 → 생산 시작 전 정리 = 최적 타이밍.
+
+## 3. 변경 범위
+
+### BE — `checklist_service.py` `check_mech_completion()` (L1500~)
+- DUAL 분기 제거: model SELECT(L1525-1532) + `is_dual` 분기(L1534-1541) 삭제 → `qr_doc_ids = [_normalize_qr_doc_id(serial_number)]` 단일.
+- `check_mech_completion_all()` (Phase 1+2 합산, close 게이트)는 `check_mech_completion` 호출만 하므로 자동 정합.
+- ⚠️ `check_tm_completion()` (L778, TM DUAL `-L`/`-R`) **절대 미변경** — TM dual tank 정상.
+- 읽기 경로 L633 이미 SINGLE → 변경 0.
+
+### OPS FE — `mech_checklist_screen.dart` `_qrDocIdForItem()` (L270~)
+- `requiresLrHint` 로직(L273-286) 제거 → 항상 `_normalizeQrDocId(widget.serialNumber)` SINGLE 반환.
+- `_normalizeQrDocId` helper 는 보존 (hint 인자만 MECH 에서 미사용). TM 화면은 별도 파일 → 영향 0.
+- 호출처 L349 `_qrDocIdForItem(item)` (hint 없이 호출) — 그대로.
+
+### VIEW FE — 코드 변경 0 (검증만)
+- VIEW 는 `qr_doc_id` 를 직접 쓰지 않음. 체크리스트 조회 = `/api/app/checklist/mech/{sn}` (BE 읽기 = SINGLE), 체크리스트관리 = checklist_master CRUD (qr_doc_id 무관).
+- D 후 OPS FE 쓰기가 SINGLE 로 통일 → 읽기·쓰기·완료판정 3박자 정합 → VIEW 체크리스트 조회 자동 정상화.
+- 검증 항목: ① VIEW 체크리스트 — DRAGON DUAL S/N 의 INLET 8항목이 입력값과 함께 표시되는지 ② VIEW 체크리스트관리 — master CRUD 정상.
+
+### 테스트 데이터
+- TEST-333 — 사용자 직접 초기화 (test data).
+
+### pytest — `tests/backend/test_*` (신규 TC — Codex 라운드 1 M-Q1+M-Q5 반영: 호출자 전수 커버)
+- TC-MECH-QR-01: DRAGON DUAL S/N — MECH 전 항목 `DOC_{S/N}` SINGLE record 입력 → `check_mech_completion(phase=1)` True.
+- TC-MECH-QR-02: 일부 미입력 → `check_mech_completion(phase=1)` False (회귀).
+- TC-MECH-QR-03: SINGLE 모델(MITHAS 등) — `check_mech_completion` 기존 동작 불변 (회귀).
+- TC-MECH-QR-04: `check_tm_completion` TM DUAL — `-L`/`-R` 동작 불변 (TM 미변경 회귀 보장).
+- **TC-MECH-QR-05 (M-Q1)**: `check_mech_completion_all()` — DRAGON DUAL phase 1+2 전 항목 SINGLE record → True / phase 2 미입력 → False.
+- **TC-MECH-QR-06 (M-Q5)**: `task_service.check_category_close_eligible(sn, 'MECH')` — DRAGON DUAL MECH 100% SINGLE 입력 후 close 게이트 True 반환.
+- **TC-MECH-QR-07 (M-Q5)**: `production.py _check_sn_checklist_complete` 경로 — DRAGON DUAL MECH SINGLE 입력 후 정상 판정 (호출 가능 시) — 또는 `get_mech_checklist` route 응답이 INLET 8항목 입력값 포함 표시 검증.
+
+> Codex M-Q1: `check_mech_completion` 호출자 5곳 = `check_mech_completion_all` / `upsert_mech_check` / `checklist.py` route / `production._check_sn_checklist_complete` / `task_service.check_category_close_eligible` — 위 TC-05~07 로 게이트 경로 커버. `upsert_mech_check` 는 progress 표시용(phase별 `check_mech_completion`)이라 SINGLE 통일 후 자동 정합.
+
+## 4. 회귀 위험
+
+- 운영 MECH `-L`/`-R` record 0건 → 기존 운영 체크리스트 영향 0.
+- TM `check_tm_completion` 미변경 → TM dual tank 영향 0.
+- ELEC 무관.
+- SINGLE 모델 MECH — `check_mech_completion` 의 SINGLE 분기는 원래대로 (DUAL 분기만 삭제) → 영향 0.
+
+## 5. 버전 / 배포
+
+- v2.18.2 (PATCH — P0 버그 fix, 기능 변경 없음).
+- BE: Railway 자동 배포. OPS FE: Netlify. VIEW: 코드 변경 0 (배포 불필요, 검증만).
+
+## 6. Codex 교차검증 영역
+
+- ②단계 자동 이관 체크리스트: BE/FE 2 파일 + pytest + VIEW 검증 → 3+ 파일 touch + 클린 코어 인접(체크리스트 완료판정 = finalize 트리거) → 자동 이관.
+- 검증 요청: (Q1) `check_mech_completion` DUAL 분기 제거 시 호출자 영향 — `check_mech_completion_all` / `upsert_mech_check` / checklist.py route / production.py / task_service close 게이트 전수. (Q2) `_resolve_active_master_ids` 가 qr_doc_id 무관하게 INLET master 포함하는지. (Q3) OPS FE `_qrDocIdForItem` 단순화 후 INLET 8항목 재진입 hydrate 정상 — BE 읽기 SINGLE 과 정합. (Q4) TM 미변경 보장 확인. (Q5) pytest TC 매트릭스 충분성.
+
 

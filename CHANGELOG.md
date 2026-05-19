@@ -6,6 +6,33 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.18.2] - 2026-05-19 — FIX-MECH-CHECKLIST-QR-DOC-ID-SINGLE-UNIFY: DRAGON DUAL MECH 체크리스트 완료판정 (P0)
+
+> BACKLOG `BUG-MECH-CHECKLIST-DUAL-MODEL-QR-DOC-ID-MISMATCH` (🔴 P0). DRAGON DUAL 모델 MECH 체크리스트가 영원히 100% 안 되던 버그 — qr_doc_id 저장 컨벤션 혼재(INLET `-L`/`-R` vs 나머지 SINGLE)가 원인. 옵션 D 채택: qr_doc_id를 모델 무관 `DOC_{S/N}` SINGLE로 통일.
+
+### 변경
+
+| 영역 | 파일 | 내용 |
+|------|------|-----|
+| BE | `checklist_service.py` | `check_mech_completion()` DUAL 분기(model SELECT + `-L`/`-R` loop) 제거 → `DOC_{S/N}` SINGLE 단일. `check_tm_completion()`은 미변경(TM dual tank 정상) |
+| OPS FE | `mech_checklist_screen.dart` | `_qrDocIdForItem()` `requiresLrHint` 로직 제거 → 항상 SINGLE 반환 |
+| VIEW FE | — | 코드 변경 0 (BE 읽기 경로가 이미 SINGLE → 자동 정합) |
+
+### 동작
+
+- MECH 체크리스트 record는 모델 무관 `DOC_{S/N}` 한 가지로만 저장. INLET 배관 S/N L/R 구분은 master(`item_name` 'Left/Right #N' + 별도 `master_id`)가 담당 → qr_doc_id 접미사 불필요
+- DRAGON DUAL MECH 체크리스트 100% 정상 도달 → SELF_INSPECTION 공정 마감 → finalize 정상
+
+### 검증
+
+- pytest `test_v2_18_2_mech_qr_doc_id_unify` 12 TC GREEN (SINGLE qr_doc_id / 부분미입력 False / DUAL 분기 제거 소스검증 / TM 분기 보존 / `check_mech_completion_all` / close 게이트 경로)
+- 회귀: `test_mech_checklist` 69 + `test_relay_first_final` 38 + `test_v2_15_16/18` 24 GREEN
+- flutter build web GREEN
+- Codex 라운드 1 M=2(호출자 전수 TC + 게이트 경로 TC)/A=4 반영
+- 운영 MECH `-L`/`-R` record 0건(테스트 S/N TEST-333만) → migration 불필요, 회귀 위험 0
+
+---
+
 ## [2.18.1] - 2026-05-19 — Sprint 69 fix: 내 작업 완료 확인 다이얼로그 공정명 하드코딩
 
 > 사용자 catch — OPS PI/QI 화면에서 `[내 작업 완료]` 누르면 확인 다이얼로그가 "본인의 SI 마무리공정 작업을..."로 SI 문구가 모든 공정에 동일하게 표시.

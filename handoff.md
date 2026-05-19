@@ -1,7 +1,38 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-19 KST (✅ v2.18.1 — Sprint 69 fix. OPS PI/QI `[내 작업 완료]` 확인 다이얼로그가 'SI 마무리공정' 하드코딩 → `$_categoryLabel` 로 수정. FE only 1줄. + v2.18.0 Sprint 69.)
+> 마지막 업데이트: 2026-05-19 KST (✅ v2.18.2 — DRAGON DUAL MECH 체크리스트 완료판정 P0 fix. qr_doc_id 컨벤션 혼재(INLET `-L`/`-R` vs SINGLE) → 옵션 D로 `DOC_{S/N}` SINGLE 통일. `check_mech_completion` DUAL 분기 제거. Codex M=2(TC 보강). pytest 12 신규 + 회귀 131 GREEN.)
+
+---
+
+## ✅ 2026-05-19 KST — v2.18.2 (FIX-MECH-CHECKLIST-QR-DOC-ID-SINGLE-UNIFY: DRAGON DUAL MECH 체크리스트 P0)
+
+### 배경
+
+BACKLOG `BUG-MECH-CHECKLIST-DUAL-MODEL-QR-DOC-ID-MISMATCH` (🔴 P0) — DRAGON DUAL MECH 체크리스트가 영원히 100% 안 됨 → finalize 차단.
+
+### Root Cause
+
+`checklist_record.qr_doc_id` 혼재 — INLET 8항목 `-L`/`-R` 분리 저장 / 나머지 `DOC_{S/N}` SINGLE → `check_mech_completion` DUAL 분기 전수 매칭 요구 → SINGLE 항목 영원히 mismatch.
+
+### 변경 (옵션 D — qr_doc_id SINGLE 통일)
+
+- BE `checklist_service.py check_mech_completion()` — DUAL 분기 제거 → `DOC_{S/N}` SINGLE. `check_tm_completion()` 미변경(TM dual tank)
+- OPS FE `mech_checklist_screen.dart _qrDocIdForItem()` — `requiresLrHint` 제거 → SINGLE
+- VIEW FE — 코드 변경 0 (자동 정합)
+- TEST-333 — 사용자 직접 초기화
+
+### 검증
+
+- pytest 신규 12 TC + 회귀(test_mech_checklist 69 + test_relay_first_final 38 + v2.15.16/18 24) GREEN
+- flutter build web GREEN
+- Codex 라운드 1 M=2/A=4 반영
+- 운영 MECH `-L`/`-R` 0건 → 회귀 위험 0
+
+### 다음 (제안)
+
+- `_is_report_dual_model` TM 전용 명칭 정비 (Codex A-Q6) — 별 sprint advisory
+- VIEW Sprint 48 (PI/QI 종료 버튼) — VIEW 세션 담당
 
 ---
 

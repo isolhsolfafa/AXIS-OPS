@@ -1505,9 +1505,12 @@ def check_mech_completion(serial_number: str, judgment_phase: int = 1) -> bool:
                      - 1차 미입력 항목도 관리자가 phase=2 record 입력 시 cover.
                      - 1차 record 강제 안 함.
 
-    SINGLE/DUAL 분기:
-      - SINGLE: qr_doc_id='DOC_{S/N}' 한 개 record 만 검증
-      - DUAL: 'DOC_{S/N}-L', 'DOC_{S/N}-R' 두 개 모두 완료 시 True
+    qr_doc_id 통일 (v2.18.2, FIX-MECH-CHECKLIST-QR-DOC-ID-SINGLE-UNIFY):
+      - MECH 체크리스트 record 는 모델 무관 'DOC_{S/N}' SINGLE 한 가지로만 저장.
+      - INLET 배관 S/N L/R 구분은 master(item_name 'Left/Right #N' + 별도 master_id)가
+        담당 — qr_doc_id 에 -L/-R 접미사를 둘 필요 없음.
+      - DUAL 분기 폐기: 이전엔 'DOC_{S/N}-L'/'-R' loop 검증 → SINGLE 저장 항목이
+        영원히 mismatch → DRAGON DUAL MECH 체크리스트 100% 불가 버그.
 
     ⚠️ v2.15.16 (2026-05-15) — close 판정용 합산 검증은 check_mech_completion_all() 사용.
        본 함수는 Phase 별 진행률 알림 (upsert_mech_check, checklist.py route) 영역 전용.
@@ -1521,24 +1524,8 @@ def check_mech_completion(serial_number: str, judgment_phase: int = 1) -> bool:
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # SINGLE/DUAL 판별 (TM 패턴 차용)
-        cur.execute(
-            "SELECT model FROM plan.product_info WHERE serial_number = %s",
-            (serial_number,)
-        )
-        product_row = cur.fetchone()
-        if not product_row:
-            return False
-        model = product_row['model']
-
-        is_dual = _is_report_dual_model(model)
-        if is_dual:
-            qr_doc_ids = [
-                _normalize_qr_doc_id(serial_number, 'L'),
-                _normalize_qr_doc_id(serial_number, 'R'),
-            ]
-        else:
-            qr_doc_ids = [_normalize_qr_doc_id(serial_number)]
+        # MECH 는 모델 무관 SINGLE qr_doc_id (v2.18.2 — TM check_tm_completion 과 무관)
+        qr_doc_ids = [_normalize_qr_doc_id(serial_number)]
 
         # qr_doc_id별 loop — 각각 active_ids 모두 채워져야 함
         for qr in qr_doc_ids:

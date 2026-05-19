@@ -265,26 +265,13 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
     return 'DOC_$s';
   }
 
-  /// M-R2-3: master 의 scope+item_type 보고 hint 강제 여부 결정
-  /// DRAGON+INPUT (DUAL INLET S/N 8개) 만 hint 강제, 도면 등은 SINGLE-style fallback
-  String _qrDocIdForItem(Map<String, dynamic> item, {String? lrHint}) {
-    final scopeRule = item['scope_rule'] as String?;
-    final itemType = item['item_type'] as String?;
-    final requiresLrHint =
-        (scopeRule == 'DRAGON' && itemType == 'INPUT' && _isDualModel);
-    if (requiresLrHint && (lrHint == null || lrHint.isEmpty)) {
-      // 호출자 측 책임 — INLET S/N 입력 시 item_name 에서 'L'/'R' 추출 필수
-      final name = (item['item_name'] as String? ?? '').toUpperCase();
-      if (name.contains('LEFT')) {
-        lrHint = 'L';
-      } else if (name.contains('RIGHT')) {
-        lrHint = 'R';
-      } else {
-        throw ArgumentError(
-            'DUAL INLET S/N requires hint L/R (master_id=${item['master_id']})');
-      }
-    }
-    return _normalizeQrDocId(widget.serialNumber, hint: lrHint);
+  /// v2.18.2 (FIX-MECH-CHECKLIST-QR-DOC-ID-SINGLE-UNIFY):
+  /// MECH 체크리스트 record 는 모델 무관 'DOC_{S/N}' SINGLE 한 가지로만 저장.
+  /// INLET 배관 S/N L/R 구분은 master(item_name 'Left/Right #N' + 별도 master_id)가
+  /// 담당하므로 qr_doc_id 에 -L/-R 접미사 불필요. 이전 DRAGON+INPUT hint 강제 로직은
+  /// SINGLE 저장 항목과 컨벤션이 혼재돼 DUAL DRAGON 완료판정이 영원히 실패하던 버그.
+  String _qrDocIdForItem(Map<String, dynamic> item) {
+    return _normalizeQrDocId(widget.serialNumber);
   }
 
   /// R2-4: 현재 PASS/NA 상태 lookup
