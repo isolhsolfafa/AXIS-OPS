@@ -6,6 +6,34 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.18.0] - 2026-05-19 — Sprint 69: PI/QI 완료 권한 잠금 + admin 정상완료 + 검색 칸
+
+> PI/QI는 GST 사내 검사 공정. cross-worker 완료(worker2가 worker1 task 완료)가 worker tracking·진행률을 왜곡 → PI/QI는 시작한 본인만 완료 + 불가피 시 admin/manager 정상완료.
+
+### 변경
+
+| 영역 | 파일 | 내용 |
+|------|------|-----|
+| BE-1 | `task_service.py` `complete_work()` | PI/QI cross-worker 완료 차단 (시작 안 한 사람 403) |
+| BE-2 | `shipment_service.py` / `work_shipment.py` | `admin_complete()` + `POST /api/app/work/admin-complete` |
+| FE-A | `gst_products_screen.dart` | PI/QI 카드 admin/manager `[종료]` 버튼 + 종료 시각 다이얼로그 |
+| FE-B | `gst_products_screen.dart` | 상단 O/N·S/N 검색 칸 (PI/QI/SI 3화면 공용) |
+
+### 동작
+
+- PI/QI는 시작한 본인만 `complete` (cross 차단). 불가피 시 admin/manager `admin-complete` — `force_closed=FALSE` 정상완료, `completed_at` 지정
+- `admin-complete` = PI/QI category 미완료 task 전수 완료 + audit `close_reason='ADMIN_COMPLETE'` + 멀티작업자 backfill + 멱등
+- SI/MECH/ELEC/TMS cross 현행 유지 — PI/QI만 차단
+
+### 검증
+
+- pytest `test_admin_complete` 10/10 GREEN (cross 차단 PI/QI / admin-complete 성공 / 멱등 / completed_at 검증 / 멀티작업자 backfill / **PI 위임 모델(DRAGON) regression**)
+- flutter build web GREEN
+- Codex 라운드 1 — BE M=10/A=4 + OPS FE M=1(미래 시각 차단)/A=3 반영
+- AXIS-VIEW Sprint 48 (PI/QI 종료 버튼)은 VIEW 세션 담당
+
+---
+
 ## [2.17.2] - 2026-05-19 — Sprint 68 fix: OPS SI 마무리공정 화면 출고 대기 누락
 
 > 사용자 catch — OPS SI 마무리공정 화면에 SI_FINISHING 작업이 완료된 출고 대기 제품(GBWS-7094/7095)이 안 보이고, 진행중인 TEST 제품만 표시됨.

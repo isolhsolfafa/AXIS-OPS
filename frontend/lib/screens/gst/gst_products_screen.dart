@@ -20,6 +20,7 @@ class _GstProductsScreenState extends ConsumerState<GstProductsScreen> {
   bool _isLoading = false;
   String? _errorMessage;
   List<Map<String, dynamic>> _products = [];
+  String _searchQuery = '';
 
   @override
   void initState() {
@@ -167,6 +168,130 @@ class _GstProductsScreenState extends ConsumerState<GstProductsScreen> {
         ),
       );
     }
+  }
+
+  /// PI/QI 공정 종료 — admin/manager 정상 완료 (Sprint 69, 종료 시각 지정)
+  Future<void> _adminComplete(String serialNumber) async {
+    DateTime selected = DateTime.now();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text('$_categoryLabel 종료'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('$serialNumber 의 $_categoryLabel을(를) 종료 처리하시겠습니까?'),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  const Text('종료 시각  ',
+                      style: TextStyle(fontSize: 12, color: GxColors.steel)),
+                  Expanded(
+                    child: Text(
+                      '${selected.month}/${selected.day} '
+                      '${selected.hour.toString().padLeft(2, '0')}:'
+                      '${selected.minute.toString().padLeft(2, '0')}',
+                      style: const TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      final d = await showDatePicker(
+                        context: ctx,
+                        initialDate: selected,
+                        firstDate: DateTime(2020),
+                        lastDate: DateTime.now(),
+                      );
+                      if (d == null) return;
+                      final t = await showTimePicker(
+                        context: ctx,
+                        initialTime: TimeOfDay.fromDateTime(selected),
+                      );
+                      if (t == null) return;
+                      setDialogState(() {
+                        selected = DateTime(
+                            d.year, d.month, d.day, t.hour, t.minute);
+                      });
+                    },
+                    child: const Text('변경'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('취소'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _categoryColor,
+                foregroundColor: GxColors.white,
+              ),
+              child: const Text('종료'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true) return;
+    // Codex M-Q1: showTimePicker 는 시각 무제한 → 오늘 날짜 + 미래 시각 조합 차단
+    if (selected.isAfter(DateTime.now())) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('종료 시각은 현재 시각보다 미래일 수 없습니다.'),
+          backgroundColor: GxColors.danger,
+        ),
+      );
+      return;
+    }
+    try {
+      final apiService = ref.read(apiServiceProvider);
+      final resp = await apiService.post(
+        '/app/work/admin-complete',
+        data: {
+          'serial_number': serialNumber,
+          'task_category': widget.category,
+          'completed_at': selected.toIso8601String(),
+        },
+      );
+      if (!mounted) return;
+      final alreadyDone = resp is Map && resp['already_completed'] == true;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(alreadyDone
+              ? '$serialNumber 은(는) 이미 $_categoryLabel이(가) 종료된 S/N 입니다.'
+              : '$serialNumber $_categoryLabel 종료 처리되었습니다.'),
+          backgroundColor: GxColors.success,
+        ),
+      );
+      _fetchProducts();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('종료 처리 실패: $e'),
+          backgroundColor: GxColors.danger,
+        ),
+      );
+    }
+  }
+
+  /// O/N · S/N 검색 필터 (Sprint 69 FE-B)
+  List<Map<String, dynamic>> get _filteredProducts {
+    final q = _searchQuery.trim().toLowerCase();
+    if (q.isEmpty) return _products;
+    return _products.where((p) {
+      final sn = (p['serial_number'] as String? ?? '').toLowerCase();
+      final on = (p['sales_order'] as String? ?? '').toLowerCase();
+      return sn.contains(q) || on.contains(q);
+    }).toList();
   }
 
   /// 카테고리 한국어 레이블
@@ -341,18 +466,54 @@ class _GstProductsScreenState extends ConsumerState<GstProductsScreen> {
       );
     }
 
-    return RefreshIndicator(
-      color: GxColors.accent,
-      onRefresh: _fetchProducts,
-      child: ListView.separated(
-        padding: const EdgeInsets.all(16),
-        itemCount: _products.length,
-        separatorBuilder: (_, __) => const SizedBox(height: 8),
-        itemBuilder: (context, index) {
-          final product = _products[index];
-          return _buildProductCard(product);
-        },
-      ),
+    final filtered = _filteredProducts;
+    return Column(
+      children: [
+        // Sprint 69 FE-B: O/N · S/N 검색 칸
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: TextField(
+            onChanged: (v) => setState(() => _searchQuery = v),
+            decoration: InputDecoration(
+              hintText: 'O/N · S/N 검색',
+              prefixIcon: const Icon(Icons.search, size: 18, color: GxColors.steel),
+              isDense: true,
+              contentPadding:
+                  const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(GxRadius.sm),
+                borderSide: const BorderSide(color: GxColors.mist),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(GxRadius.sm),
+                borderSide: const BorderSide(color: GxColors.mist),
+              ),
+            ),
+            style: const TextStyle(fontSize: 13),
+          ),
+        ),
+        Expanded(
+          child: filtered.isEmpty
+              ? const Center(
+                  child: Text(
+                    '검색 결과가 없습니다',
+                    style: TextStyle(fontSize: 13, color: GxColors.steel),
+                  ),
+                )
+              : RefreshIndicator(
+                  color: GxColors.accent,
+                  onRefresh: _fetchProducts,
+                  child: ListView.separated(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: filtered.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (context, index) {
+                      return _buildProductCard(filtered[index]);
+                    },
+                  ),
+                ),
+        ),
+      ],
     );
   }
 
@@ -502,9 +663,9 @@ class _GstProductsScreenState extends ConsumerState<GstProductsScreen> {
                     ],
                   ),
                 ],
-                // Sprint 68 B: SI 마무리공정 화면 — 출고 처리 버튼 ("진행중" 뱃지 아래)
-                // Codex M-Q3: [내 작업 완료]는 진행 중 task 에만 노출
-                if (widget.category == 'SI' && taskDetailId != null &&
+                // Sprint 68/69: 작업 완료 버튼 영역 ("진행중" 뱃지 아래)
+                // [내 작업 완료] = 진행 중 task / SI=[출고 완료], PI·QI=[종료] (admin·manager)
+                if (taskDetailId != null &&
                     (status == 'in_progress' || canShip)) ...[
                   const SizedBox(height: 12),
                   const Divider(color: GxColors.mist, height: 1),
@@ -528,16 +689,29 @@ class _GstProductsScreenState extends ConsumerState<GstProductsScreen> {
                         const SizedBox(width: 8),
                       if (canShip)
                         Expanded(
-                          child: ElevatedButton.icon(
-                            onPressed: () => _shipComplete(serialNumber),
-                            icon: const Icon(Icons.local_shipping, size: 15),
-                            label: const Text('출고 완료', style: TextStyle(fontSize: 12)),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: GxColors.accent,
-                              foregroundColor: GxColors.white,
-                              padding: const EdgeInsets.symmetric(vertical: 8),
-                            ),
-                          ),
+                          child: widget.category == 'SI'
+                              ? ElevatedButton.icon(
+                                  onPressed: () => _shipComplete(serialNumber),
+                                  icon: const Icon(Icons.local_shipping, size: 15),
+                                  label: const Text('출고 완료',
+                                      style: TextStyle(fontSize: 12)),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: GxColors.accent,
+                                    foregroundColor: GxColors.white,
+                                    padding: const EdgeInsets.symmetric(vertical: 8),
+                                  ),
+                                )
+                              : ElevatedButton.icon(
+                                  onPressed: () => _adminComplete(serialNumber),
+                                  icon: const Icon(Icons.task_alt, size: 15),
+                                  label: const Text('종료',
+                                      style: TextStyle(fontSize: 12)),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: _categoryColor,
+                                    foregroundColor: GxColors.white,
+                                    padding: const EdgeInsets.symmetric(vertical: 8),
+                                  ),
+                                ),
                         ),
                     ],
                   ),

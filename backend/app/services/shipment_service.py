@@ -97,12 +97,13 @@ def _backfill_orphan_completion_logs(task, completed_at: datetime) -> list:
     return orphan_ids
 
 
-def _set_ship_audit(task_detail_id: int, closed_by: int) -> None:
+def _set_close_audit(task_detail_id: int, closed_by: int,
+                     close_reason: str = 'SHIP_COMPLETE') -> None:
     """
-    출하완료 audit 기록 (영역 11) — force_closed=FALSE 유지 (정상 종료).
+    admin/manager 정상 완료 audit 기록 — force_closed=FALSE 유지 (정상 종료).
 
-    close_reason='SHIP_COMPLETE' + closed_by(실행 관리자). 강제종료가 아니므로
-    force_closed 는 FALSE 로 명시 유지 — DB 에서 close_reason 으로 출하완료 추적.
+    close_reason: 'SHIP_COMPLETE'(SI 출하완료) / 'ADMIN_COMPLETE'(PI/QI 관리자 완료, Sprint 69).
+    강제종료가 아니므로 force_closed 는 FALSE 명시 유지 — DB 에서 close_reason 으로 추적.
     """
     conn = None
     try:
@@ -111,13 +112,13 @@ def _set_ship_audit(task_detail_id: int, closed_by: int) -> None:
         cur.execute(
             """
             UPDATE app_task_details
-            SET close_reason = 'SHIP_COMPLETE',
+            SET close_reason = %s,
                 closed_by = %s,
                 force_closed = FALSE,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = %s
             """,
-            (closed_by, task_detail_id)
+            (close_reason, closed_by, task_detail_id)
         )
         conn.commit()
     finally:
@@ -195,7 +196,7 @@ def ship_complete(
                 'error': 'SHIP_COMPLETE_FAILED',
                 'message': 'SI 마무리공정 완료 처리에 실패했습니다.'
             }, 500
-        _set_ship_audit(finishing.id, admin_worker_id)
+        _set_close_audit(finishing.id, admin_worker_id)
         completed_tasks.append(SI_FINISHING)
 
     # ── SI_SHIPMENT (SINGLE_ACTION task) ──
@@ -206,7 +207,7 @@ def ship_complete(
                 'error': 'SHIP_COMPLETE_FAILED',
                 'message': 'SI 출하완료 task 완료 처리에 실패했습니다.'
             }, 500
-        _set_ship_audit(shipment.id, admin_worker_id)
+        _set_close_audit(shipment.id, admin_worker_id)
         completed_tasks.append(SI_SHIPMENT)
 
     # SI 공정 전체 완료 → completion_status.si_completed 갱신
@@ -222,6 +223,104 @@ def ship_complete(
         'serial_number': serial_number,
         'completed_tasks': completed_tasks,
         'si_completed': True,
+        'completed_at': completed_at.isoformat(),
+        'already_completed': False,
+    }, 200
+
+
+def admin_complete(
+    serial_number: str,
+    task_category: str,
+    admin_worker_id: int,
+    completed_at_raw: Optional[str] = None,
+) -> Tuple[Dict[str, Any], int]:
+    """
+    PI/QI 공정 admin/manager 정상 완료 (Sprint 69) — 미완료 task 전수 완료.
+
+    PI/QI 검사는 시작한 본인만 완료(complete_work cross 차단). 불가피 시
+    admin/manager 가 종료 시각을 지정해 정상 완료 — force_closed=FALSE.
+    설계: AGENT_TEAM_LAUNCH.md § Sprint 69 영역 10.
+
+    Args:
+        serial_number: 대상 S/N
+        task_category: 'PI' 또는 'QI'
+        admin_worker_id: 실행 admin/manager (g.worker_id)
+        completed_at_raw: 완료 시각 ISO8601 (옵션 — 없으면 서버 now KST)
+
+    Returns:
+        (response dict, status code)
+    """
+    if task_category not in ('PI', 'QI'):
+        return {
+            'error': 'INVALID_CATEGORY',
+            'message': 'admin-complete 는 PI/QI 공정만 지원합니다.'
+        }, 400
+
+    completed_at, err = _parse_completed_at(completed_at_raw)
+    if err:
+        return err
+
+    # 해당 공정 applicable task 전수 조회 (Codex M-Q4 — category 단위)
+    tasks = get_tasks_by_serial_number(serial_number, task_category=task_category)
+    applicable = [t for t in tasks if t.is_applicable]
+    if not applicable:
+        return {
+            'error': 'TASK_NOT_FOUND',
+            'message': f'{task_category} 공정의 task 를 찾을 수 없습니다.'
+        }, 404
+
+    incomplete = [t for t in applicable if not t.completed_at]
+
+    # 멱등성 — 모두 완료 (Codex M-Q6)
+    if not incomplete:
+        return {
+            'serial_number': serial_number,
+            'task_category': task_category,
+            'already_completed': True,
+            'completed_tasks': [],
+            'message': f'이미 {task_category} 공정이 완료된 S/N 입니다.'
+        }, 200
+
+    # 미완료 task 검증 — task 단위 개별 (Codex M-Q5)
+    for t in incomplete:
+        if not t.started_at:
+            return {
+                'error': 'TASK_NOT_STARTED',
+                'message': f'{t.task_name} 작업이 아직 시작되지 않았습니다.'
+            }, 400
+        if completed_at < t.started_at:
+            return {
+                'error': 'INVALID_COMPLETED_AT_BEFORE_START',
+                'message': f'완료 시각이 {t.task_name} 시작 시각보다 빠를 수 없습니다.'
+            }, 400
+
+    # 미완료 task 전수 완료 (PI/QI = NORMAL task — 멀티작업자 backfill + 집계)
+    from app.services.task_service import _finalize_task_multi_worker
+    completed_tasks = []
+    for t in incomplete:
+        _backfill_orphan_completion_logs(t, completed_at)
+        _finalize_task_multi_worker(t.id, completed_at)
+        if not complete_task(t.id, completed_at):
+            return {
+                'error': 'ADMIN_COMPLETE_FAILED',
+                'message': f'{t.task_name} 완료 처리에 실패했습니다.'
+            }, 500
+        _set_close_audit(t.id, admin_worker_id, 'ADMIN_COMPLETE')
+        completed_tasks.append(t.task_id)
+
+    # 공정 전체 완료 → completion_status 갱신
+    update_process_completion(serial_number, task_category, True)
+
+    logger.info(
+        f"Admin complete: serial_number={serial_number}, category={task_category}, "
+        f"completed_tasks={completed_tasks}, completed_at={completed_at.isoformat()}, "
+        f"by admin_worker_id={admin_worker_id}"
+    )
+
+    return {
+        'serial_number': serial_number,
+        'task_category': task_category,
+        'completed_tasks': completed_tasks,
         'completed_at': completed_at.isoformat(),
         'already_completed': False,
     }, 200

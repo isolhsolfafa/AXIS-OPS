@@ -1,7 +1,34 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-19 KST (✅ v2.17.2 — Sprint 68 fix. OPS SI 마무리공정 화면이 SI_FINISHING 진행중만 표시 → 출고 대기(SI_FINISHING 완료+미출고, GBWS-7094/7095) 제품 누락 fix. gst.py SI WHERE 분기. SQL 검증 SI 7건. + v2.17.1 SI 출고 버튼 / v2.17.0 ship-complete endpoint.)
+> 마지막 업데이트: 2026-05-19 KST (✅ v2.18.0 — Sprint 69. PI/QI는 시작한 본인만 완료(cross-worker 차단), 불가피 시 admin/manager가 종료 시각 다이얼로그로 정상완료(admin-complete endpoint, force_closed=FALSE). PI/QI 카드 [종료] 버튼 + O/N·S/N 검색 칸. Codex BE M=10/FE M=1. pytest 10/10 GREEN.)
+
+---
+
+## ✅ 2026-05-19 KST — v2.18.0 (Sprint 69: PI/QI 완료 권한 잠금 + admin 정상완료)
+
+### 배경
+
+PI/QI = GST 사내 검사 공정. GST 작업자끼리 cross-worker 완료가 worker tracking·진행률·CT를 왜곡 → 사용자 결정: PI/QI는 시작한 본인만 완료, 불가피 시 admin/manager 정상완료.
+
+### 변경
+
+- **BE-1** `task_service.py complete_work()` — PI/QI cross-worker 완료 차단 (시작 worker ≠ 호출 worker → 403 FORBIDDEN)
+- **BE-2** `shipment_service.py admin_complete()` 신규 + `work_shipment.py` `POST /api/app/work/admin-complete` (`@manager_or_admin_required`) — PI/QI 미완료 task 전수 완료, completed_at 검증, 멀티작업자 backfill, audit `close_reason='ADMIN_COMPLETE'` force_closed=FALSE, 멱등
+- **FE-A** `gst_products_screen.dart` — PI/QI 카드 admin/manager [종료] 버튼 + 종료 시각 다이얼로그(미래 차단)
+- **FE-B** 상단 O/N·S/N 검색 칸 (PI/QI/SI 3화면 공용)
+
+### 검증
+
+- pytest `test_admin_complete` 10/10 GREEN (cross 차단 / admin-complete / 멱등 / completed_at 검증 / 멀티작업자 / PI 위임 DRAGON regression)
+- flutter build web GREEN
+- Codex 라운드 1 BE M=10/A=4 + FE M=1/A=3 반영
+- migration 불필요, 회귀 0
+
+### 다음 (제안)
+
+- VIEW Sprint 48 (PI/QI 종료 버튼) — VIEW 세션 담당
+- DRAGON checklist BACKLOG 등록건 — 사용자 명시 ("이거 완료되면 dragon checklist backlog등록건 진행")
 
 ---
 

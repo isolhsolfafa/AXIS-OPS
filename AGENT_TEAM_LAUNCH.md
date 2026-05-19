@@ -43960,4 +43960,163 @@ ORDER BY completed_at DESC;
 
 **pytest 추가 TC**: `test_ship_complete_records_close_reason_and_closed_by` / `test_ship_complete_keeps_force_closed_false_with_closed_by_set`
 
+---
+
+# Sprint 69 — FEAT-PIQI-COMPLETE-OWNER-LOCK-20260519
+
+> **Sprint ID**: `FEAT-PIQI-COMPLETE-OWNER-LOCK-20260519`
+> **작성일**: 2026-05-19 KST
+> **작성자**: Claude Code (Opus Lead)
+> **우선순위**: 🟡 MEDIUM (PI/QI 완료 권한 정합 + 검색 편의)
+> **상태**: 📝 설계 — Codex 라운드 1 대기
+> **예정 버전**: OPS v2.18.0 (MINOR — 권한 변경 + 신규 endpoint + 화면)
+> **연관**: AXIS-VIEW Sprint 48 (PI/QI 종료 버튼 — VIEW part)
+
+---
+
+## 📑 영역 1 — 배경 & 목적
+
+PI/QI는 GST 사내 검사 공정. 작업자별 M/M(man-hour) 디테일 분석은 불필요하고 **진행률 + CT(소요시간)**만 필요.
+
+문제 (사용자 catch): 현재 `complete_work()`는 GST 작업자끼리 cross-worker 완료를 허용 — worker1이 시작한 PI/QI를 worker2가 완료하면 `work_start_log`(worker1) ↔ `work_completion_log`(worker2) 불일치 → worker1 미완료로 판정돼 task가 안 닫힘 → **진행률이 안 오름**.
+
+→ 결정 (Twin파파):
+1. **PI/QI는 task를 시작한 본인만 완료** (cross-worker 차단)
+2. 불가피 시 — **admin/manager가 종료 시각 다이얼로그로 정상 완료** (`force_closed=FALSE`, completed_at 지정 — SI ship-complete와 동일 성격)
+3. SI 마무리공정 화면 상단에 **O/N·S/N 검색 칸** (장기 대기 설비 많음)
+
+---
+
+## 📑 영역 2 — 작업 분해
+
+| 구분 | 작업 | repo |
+|---|---|---|
+| **BE-1** | `complete_work()` PI/QI cross-worker 차단 | OPS backend |
+| **BE-2** | admin/manager 정상완료 endpoint (`completed_at` 지정) | OPS backend |
+| **FE-A** | OPS PI/QI 화면 카드 — admin/manager 종료 버튼 | OPS frontend |
+| **FE-B** | OPS `gst_products_screen` 상단 O/N·S/N 검색 칸 | OPS frontend |
+| **VIEW** | VIEW PI/QI 종료 버튼 (admin/manager, 시각 지정) | AXIS-VIEW Sprint 48 |
+
+---
+
+## 📑 영역 3 — BE-1: PI/QI cross-worker 차단
+
+`task_service.py complete_work()` L536~549 — GST 작업자 간 cross-worker 완료 허용 분기.
+
+→ PI/QI 카테고리는 cross 불허:
+```python
+if not _worker_has_started_task(task.id, worker_id):
+    # PI/QI: task 시작한 본인만 완료 (cross-worker 차단)
+    if task.task_category in ('PI', 'QI'):
+        return {'error': 'FORBIDDEN',
+                'message': 'PI/QI 검사는 작업을 시작한 본인만 완료할 수 있습니다.'}, 403
+    # 기존 GST cross 분기 (MECH/ELEC/TMS/SI 유지)
+    ...
+```
+- SI/MECH/ELEC/TMS는 현행 유지 (SI는 ship-complete가 backfill 처리)
+
+## 📑 영역 4 — BE-2: admin 정상완료 endpoint
+
+신규 `POST /api/app/work/admin-complete`:
+```
+body: { serial_number, task_category(PI|QI), completed_at?(옵션) }
+권한: @jwt_required + @manager_or_admin_required
+처리:
+  1. serial_number + task_category 의 미완료 applicable task 조회
+  2. PI/QI task = NORMAL/FINAL (PI_LNG_UTIL·PI_CHAMBER / QI_INSPECTION) — task_seed 확인
+  3. 각 미완료 task 완료 — completed_at 지정, force_closed=FALSE
+     · 멀티작업자: orphan work_completion_log backfill (ship-complete 영역 10 M-Q4 패턴)
+  4. completed_at 검증 (force-close 패턴 — 미래/started 이전 차단)
+  5. audit: close_reason='ADMIN_COMPLETE', closed_by=실행 관리자, force_closed=FALSE
+  6. update_process_completion(serial, category, True)
+응답: { serial_number, task_category, completed_tasks, completed_at, already_completed }
+```
+- SI ship-complete(`shipment_service.py`)와 동일 성격 — 신규 `admin_complete_service.py` 또는 shipment_service 일반화 (Codex 검토)
+- PI/QI는 SI보다 단순 (SINGLE_ACTION 없음, NORMAL only)
+
+## 📑 영역 5 — FE-A: OPS PI/QI 화면 종료 버튼
+
+`gst_products_screen.dart` — PI/QI 카테고리 카드에 admin/manager 전용 종료 버튼:
+- `[종료]` 버튼 → 종료 시각 다이얼로그 (기본 now, date/time 수정 가능) → `admin-complete` 호출
+- 일반 작업자에겐 미노출 (`canShip` 류 권한 게이트)
+- `[내 작업 완료]`는 PI/QI에도 노출 (본인만 — 영역 3 cross 차단으로 BE가 비소유자 403)
+
+## 📑 영역 6 — FE-B: SI 화면 검색 칸
+
+`gst_products_screen` 상단에 검색 입력:
+- O/N(`sales_order`) + S/N(`serial_number`) 부분 매칭 필터
+- `_products` 클라이언트 필터 (기존 데이터 내 검색)
+- SI 장기 대기 설비 대응 — PI/QI/SI 3화면 공용 적용 (공용 화면)
+
+## 📑 영역 7 — 구현 전 확인
+
+- `complete_work()` cross 분기 정확 위치 (L536~549) + SI 영향 0 확인
+- PI/QI task 멀티작업자 가능 여부 → backfill 필요성
+- admin-complete: shipment_service 일반화 vs 신규 파일 (Codex)
+- `gst.py` PI/QI 카드 — S/N당 task 여러 개(PI_CHAMBER+PI_LNG_UTIL) → 종료 버튼 단위 (공정 전체 vs task)
+
+## 📑 영역 8 — 회귀 영향
+
+- BE-1: PI/QI만 cross 차단 — SI/MECH/ELEC/TMS 현행 유지
+- BE-2: 신규 endpoint — 기존 complete/ship-complete 영향 0
+- FE: 카드 버튼 + 검색 칸 additive
+- migration 불필요
+
+## 📑 영역 9 — 구현 체크리스트
+
+- [ ] 영역 7 확인 (cross 위치 / PI/QI 멀티작업자 / 카드 단위)
+- [ ] BE-1 complete_work PI/QI cross 차단 + pytest
+- [ ] BE-2 admin-complete endpoint + pytest
+- [ ] FE-A OPS PI/QI 종료 버튼 + 다이얼로그
+- [ ] FE-B 검색 칸
+- [ ] Codex 교차검증
+- [ ] OPS v2.18.0 release
+
+## 🔗 관련 문서
+
+- AXIS-VIEW `DESIGN_FIX_SPRINT.md` Sprint 48 — VIEW PI/QI 종료 버튼
+- 연관: v2.17.0 ship-complete (SI) — admin 정상완료 패턴 선례
+
+---
+
+## 📑 영역 10 — Codex 교차검증 반영 (2026-05-19, 1라운드 — BE)
+
+> Codex 1라운드 M=10 / A=4 / N=0. 핵심 리스크 — `admin-complete`가 `complete_work()`를 우회하므로 relay/완료 연쇄가 자동 재현 안 됨 → category 전수 처리로 해소.
+
+### Q1 [A] — BE-1 cross 차단 위치 정확
+
+`complete_work()` L536~549 `if not _worker_has_started_task(...)` 분기에 PI/QI 차단 삽입 — 시작자 본인은 `_worker_has_started_task=True`라 이 분기 미진입(정상 완료 경로 영향 0). SI/MECH/ELEC/TMS 현행 유지. 추가 변경 불요.
+
+### M-Q2 — admin-complete = 신규 오케스트레이션 함수
+
+`ship_complete()` 직접 재사용 불가 (SI_FINISHING/SI_SHIPMENT 하드코딩 + `complete_single_action` 분기).
+- **재사용 헬퍼**: `_parse_completed_at` / `_backfill_orphan_completion_logs` / `_set_ship_audit`
+- **신규**: `admin_complete()` — category 파라미터, PI/QI는 NORMAL task만(SINGLE_ACTION 분기 없음), audit `close_reason='ADMIN_COMPLETE'`
+→ `shipment_service.py`에 `admin_complete()` 추가 (헬퍼 공유) — 신규 파일 대신 같은 서비스에 (출하/관리자완료 모두 "admin 정상완료" 계열).
+
+### M-Q4 — category 단위 미완료 task 전체 처리
+
+PI/QI 멀티작업자 가능 (`start_work()` 카테고리 제한 없음). PI = `PI_LNG_UTIL` + `PI_CHAMBER` 2 task / QI = `QI_INSPECTION` 1 task.
+→ admin-complete는 `get_incomplete_tasks(serial, category)`로 **미완료 applicable task 전수** 처리. 완료된 건 skip. 멀티작업자 task는 orphan `work_completion_log` backfill.
+
+### M-Q5 — completed_at task 단위 개별 검증
+
+PI 2 task의 `started_at`이 다를 수 있음 → 카테고리 단일 lower bound 불가. **닫는 task 각각** `completed_at >= task.started_at` 개별 검사, 불가 task 있으면 fail-fast(400). `completion_status` 'PI'/'QI' → `pi_completed`/`qi_completed` 매핑 정합 확인됨.
+
+### M-Q6 — 멱등성
+
+- 모두 완료 → `400` 아닌 `200 + already_completed=true`
+- 일부 완료 → 미완료만 처리, 기존 `completed_at` 보존
+- 이미 `work_completion_log` 있는 worker는 double-insert 방지(skip)
+
+### A-Q3 — relay/완료 연쇄
+
+admin-complete는 `complete_work()` 우회 → `_trigger_second_close`/relay/orphan 알림을 안 탐. 단 — admin-complete가 **category 미완료 task를 전수 처리**하므로 잔존 미완료 task가 0 → relay auto-close·orphan 알림이 애초에 불필요. `update_process_completion(serial, category, True)` 갱신만으로 충분. (relay 트리거는 "미완료 task가 남았을 때" 필요한 것 — 전수 처리 시 무의미)
+
+### M-Q7 — pytest TC (영역 9 갱신)
+
+Must 10건: cross 차단 PI / cross 차단 QI / admin-complete PI 성공(pi_completed·close_reason·force_closed=FALSE) / QI 성공 / partial 멱등(미완료만+기존 보존) / all-done 멱등(200 already_completed) / completed_at 미래 차단 / started_at 이전 차단 / 멀티작업자 backfill+worker_count / **PI 위임 제품(DRAGON/GAIA — `pi_capable_mech_partners`) admin-complete → applicable PI task 전수 완료 + `pi_completed=True` 정합** (regression — Twin파파 catch).
+
+→ M=10 + A=4 반영. **설계 확정 (GO).** 구현 진입 시 영역 10 = 단일 기준.
+
 

@@ -52,3 +52,37 @@ def ship_complete_route() -> Tuple[Any, int]:
         completed_at_raw=completed_at_raw,
     )
     return jsonify(response), status_code
+
+
+@work_bp.route("/work/admin-complete", methods=["POST"])
+@jwt_required
+@manager_or_admin_required
+def admin_complete_route() -> Tuple[Any, int]:
+    """PI/QI 공정 admin/manager 정상 완료 (Sprint 69 — FEAT-PIQI-COMPLETE-OWNER-LOCK).
+
+    PI/QI 검사는 시작한 본인만 완료(complete_work cross 차단). 불가피 시
+    admin/manager 가 종료 시각을 지정해 해당 공정 미완료 task 전수 정상 완료.
+
+    Request Body: { serial_number, task_category('PI'|'QI'), completed_at?(옵션 ISO8601) }
+    Response 200: { serial_number, task_category, completed_tasks, completed_at, already_completed }
+    Response 400: INVALID_REQUEST | INVALID_CATEGORY | INVALID_COMPLETED_AT* | TASK_NOT_STARTED
+    Response 404: TASK_NOT_FOUND
+    """
+    data = request.get_json() or {}
+    serial_number = data.get('serial_number')
+    task_category = data.get('task_category')
+    if not serial_number or not isinstance(serial_number, str):
+        return jsonify({'error': 'INVALID_REQUEST',
+                        'message': 'serial_number 가 필요합니다.'}), 400
+    if task_category not in ('PI', 'QI'):
+        return jsonify({'error': 'INVALID_REQUEST',
+                        'message': 'task_category 는 PI 또는 QI 여야 합니다.'}), 400
+
+    worker = get_current_worker()
+    response, status_code = shipment_service.admin_complete(
+        serial_number=serial_number,
+        task_category=task_category,
+        admin_worker_id=worker.id,
+        completed_at_raw=data.get('completed_at'),
+    )
+    return jsonify(response), status_code

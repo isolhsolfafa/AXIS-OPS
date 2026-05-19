@@ -534,7 +534,14 @@ class TaskService:
         # 이 작업자가 work_start_log에 시작 기록이 있는지 확인
         # (task.worker_id는 최초 시작자만 가리키므로, 2번째+ 작업자는 별도 체크)
         if not _worker_has_started_task(task.id, worker_id):
-            # Sprint 11: GST 작업자 간 cross-worker 완료 허용
+            # Sprint 69: PI/QI 검사는 task 시작한 본인만 완료 — cross-worker 차단
+            # (불가피 시 admin/manager 의 admin-complete endpoint 로 정상 종료)
+            if task.task_category in ('PI', 'QI'):
+                return {
+                    'error': 'FORBIDDEN',
+                    'message': 'PI/QI 검사는 작업을 시작한 본인만 완료할 수 있습니다.'
+                }, 403
+            # Sprint 11: GST 작업자 간 cross-worker 완료 허용 (MECH/ELEC/TMS/SI)
             from app.models.worker import get_worker_by_id as _get_worker_by_id
             current_worker = _get_worker_by_id(worker_id)
             gst_cross_allowed = False
