@@ -1,7 +1,39 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-19 KST (✅ v2.18.2 — DRAGON DUAL MECH 체크리스트 완료판정 P0 fix. qr_doc_id 컨벤션 혼재(INLET `-L`/`-R` vs SINGLE) → 옵션 D로 `DOC_{S/N}` SINGLE 통일. `check_mech_completion` DUAL 분기 제거. Codex M=2(TC 보강). pytest 12 신규 + 회귀 131 GREEN.)
+> 마지막 업데이트: 2026-05-20 KST (✅ v2.18.3 — config.py Railway DB fallback 제거 + GCP migration 준비 100% 완료 후 비용 협의로 hold. GCP standby — 모든 자원 stopped, 월 ~$20 burn. Railway prod 운영 그대로 + Auto Deploys ON 복원. **재오픈은 [GCP_MIGRATION_STANDBY.md](./GCP_MIGRATION_STANDBY.md) 만 보면 30분 안에 cutover 가능**)
+
+---
+
+## 📌 2026-05-20 KST — GCP migration standby + v2.18.3
+
+### 핵심
+
+- **Railway prod 운영 중** (사용자 150명, Auto Deploys **ON 복원**)
+- **GCP 모든 자원 STOPPED** — Cloud SQL `activation=NEVER`, Cloud Run `min=0`
+- **재오픈 컨텍스트**: [`GCP_MIGRATION_STANDBY.md`](./GCP_MIGRATION_STANDBY.md) — 30분 안에 cutover 가능
+- **현재 burn rate**: ~$0.6/일 (Cloud SQL storage만), free trial $300 으로 500일+ 안전
+
+### 트리거
+
+- Railway 장애 재발 시 → 즉시 재오픈
+- 비용 협의 완료 + cutover 결정 시 → 재오픈
+- Free trial 만료 (~2026-06-19) 전 → 결정 시점
+
+### 작업 trail
+
+| commit | 내용 |
+|--------|------|
+| `affea54` | backend/Dockerfile 신규 (Cloud Run 빌드) |
+| `9b43e66` | CLAUDE.md Codex 채널 정정 (brew → npm) |
+| `3fb98cd` | v2.18.3 config.py Railway DB fallback 제거 |
+
+### GCP 자산 (재오픈 시 그대로)
+
+- Cloud SQL `g-axis-core` (PG 18, db-perf-optimized-N-2 다운사이즈됨, Enterprise Plus, ZONAL, 백업+PITR 활성화)
+- Cloud Run `axis-core-api` URL `https://axis-core-api-239127335594.asia-northeast3.run.app`
+- 환경변수 12개 등록됨 (DATABASE_URL / JWT / SMTP / SENTRY_DSN / DB_POOL_*)
+- 운영 데이터 dump 이력 — 재오픈 시 최신 dump 다시 받아야 함
 
 ---
 
