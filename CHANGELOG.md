@@ -6,6 +6,29 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.18.3] - 2026-05-20 — SEC-CONFIG-DATABASE-URL-FALLBACK-REMOVED (GCP migration 준비)
+
+> GCP migration 중 발견: Cloud Run 첫 부팅 시 env DATABASE_URL 누락 → `config.py` 의 하드코딩 fallback (Railway DB URL with 평문 비밀번호) 사용 → 의도치 않게 Cloud Run 이 Railway DB 에 연결되던 catch. 같은 사고 재발 방지 + GitHub 평문 비밀번호 제거.
+
+### 변경
+
+| 파일 | 내용 |
+|------|-----|
+| `backend/app/config.py` | `DATABASE_URL` 하드코딩 Railway fallback 제거 → `os.getenv(default="")` + `RuntimeError` fail-fast |
+
+### 동작
+
+- env `DATABASE_URL` 미설정 시 BE boot 즉시 실패 + 명확한 에러 메시지
+- 테스트: `conftest.py` 가 `TEST_DATABASE_URL` → `DATABASE_URL` 으로 import 전 매핑 (영향 0)
+- 운영(Cloud Run/Railway): env 변수 등록 필수 (이미 등록됨)
+
+### 검증
+
+- pytest `test_v2_18_2_mech_qr_doc_id_unify` 7/7 GREEN (import + Config 클래스 로딩 정상)
+- 보안: GitHub history의 평문 Railway 비밀번호 제거 (단 git history 영구 기록은 별도, cutover 후 Railway 비밀번호 회전 권고)
+
+---
+
 ## [2.18.2] - 2026-05-19 — FIX-MECH-CHECKLIST-QR-DOC-ID-SINGLE-UNIFY: DRAGON DUAL MECH 체크리스트 완료판정 (P0)
 
 > BACKLOG `BUG-MECH-CHECKLIST-DUAL-MODEL-QR-DOC-ID-MISMATCH` (🔴 P0). DRAGON DUAL 모델 MECH 체크리스트가 영원히 100% 안 되던 버그 — qr_doc_id 저장 컨벤션 혼재(INLET `-L`/`-R` vs 나머지 SINGLE)가 원인. 옵션 D 채택: qr_doc_id를 모델 무관 `DOC_{S/N}` SINGLE로 통일.

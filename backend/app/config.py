@@ -17,11 +17,17 @@ class Config:
     """기본 설정 — 모든 값은 .env에서 읽고 기본값 fallback"""
 
     # --- 데이터베이스 ---
-    # Staging DB (Railway) — 운영은 .env에서 반드시 덮어쓸 것
-    DATABASE_URL: str = os.getenv(
-        "DATABASE_URL",
-        "postgresql://postgres:aemQKKvZhddWGlLUsAghiWAlzFkoWugL@maglev.proxy.rlwy.net:38813/railway"
-    )
+    # v2.18.3 (2026-05-20, GCP migration): hardcoded Railway DB URL fallback 제거.
+    # 사고: Cloud Run 첫 부팅 시 env DATABASE_URL 누락 → fallback 으로 Railway DB 에
+    # 의도치 않게 연결되던 catch (2026-05-20 cutover 준비 중 발견).
+    # 현재: env 필수 — Cloud Run/Railway 환경변수 등록 또는 backend/.env 파일 필수.
+    # 테스트: conftest.py 가 TEST_DATABASE_URL → DATABASE_URL 으로 import 전 셋팅.
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "")
+    if not DATABASE_URL:
+        raise RuntimeError(
+            "DATABASE_URL 환경변수 미설정 — Cloud Run/Railway env 등록 필수. "
+            "테스트는 TEST_DATABASE_URL 셋팅 후 conftest.py 가 자동 매핑."
+        )
 
     # --- JWT ---
     JWT_SECRET_KEY: str = os.getenv(
