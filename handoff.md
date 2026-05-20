@@ -28,6 +28,18 @@
 | `9b43e66` | CLAUDE.md Codex 채널 정정 (brew → npm) |
 | `3fb98cd` | v2.18.3 config.py Railway DB fallback 제거 |
 
+### 추가 정리 (Sentry 폭주 차단, 2026-05-20)
+
+GCP standby 후에도 Cloud Run min=0 instance가 cron/cold-start로 가끔 깨어나 Cloud SQL (STOPPED) 연결 실패 → Sentry 100+ event 폭주. 즉시 차단:
+
+- **Cloud Run service `axis-core-api` 삭제** (`gcloud run services delete`)
+- **Cloud Build trigger 삭제** (`rmgpgab-axis-core-api-...`) — GitHub push 자동 빌드 차단
+- **Artifact Registry 이미지 보존** (`cloud-run-source-deploy`) — 재오픈 시 재사용 가능
+
+→ Sentry 0건 즉시 회복 + Cloud SQL STOPPED 유지 (storage만 ~$0.6/일)
+
+재오픈 시 Cloud Run service 재생성 절차 — `GCP_MIGRATION_STANDBY.md` Section 4 Step 2 갱신됨.
+
 ### GCP 자산 (재오픈 시 그대로)
 
 - Cloud SQL `g-axis-core` (PG 18, db-perf-optimized-N-2 다운사이즈됨, Enterprise Plus, ZONAL, 백업+PITR 활성화)

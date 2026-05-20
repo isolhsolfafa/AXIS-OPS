@@ -12,7 +12,9 @@
 | **Railway BE + DB** | ✅ 운영 중 (prod, 사용자 150명) | Auto Deploys **ON 복원** (2026-05-20 stop 후 재활성화) |
 | **Netlify FE** | ✅ Railway URL 가리킴 | `https://gaxis-ops.co.kr` |
 | **GCP Cloud SQL** | ⏸️ **STOPPED** (activation policy=NEVER) | data + schema + 운영 데이터 dump 보존 |
-| **GCP Cloud Run** | ⏸️ **min_instances=0** (idle) | revision 00007-4md, env 12개 적용 |
+| **GCP Cloud Run** | 🗑️ **DELETED** (2026-05-20 Sentry 폭주 차단) | service 자체 삭제 — 재오픈 시 재생성 |
+| **GCP Cloud Build trigger** | 🗑️ **DELETED** (2026-05-20) | GitHub push 자동 빌드 차단 — 재오픈 시 재생성 |
+| **GCP Artifact Registry** | ✅ 이미지 보존 (`cloud-run-source-deploy`) | 재오픈 시 push 안 해도 됨 (이미지 재사용 가능) |
 
 **hold 이유**: GCP 운영 비용 (Cloud SQL Enterprise Plus ~$300/월 다운사이즈 후) Railway 대비 10배+ 증가 → 비용 협의 후 재개 결정.
 
@@ -39,13 +41,10 @@
 | **DB 이름** | `axis-core` | |
 | **DB 사용자** | `axis_core_app` | |
 | **DB 비밀번호** | (Secret Manager로 migration 권장. 평문 기록 X) | 현재 Cloud Run env 평문 — 추후 회전 |
-| **Cloud Run 서비스** | `axis-core-api` | asia-northeast3 |
-| **Cloud Run URL** | `https://axis-core-api-239127335594.asia-northeast3.run.app` | |
-| **Cloud Run 메모리/CPU** | 2 GiB / 1 vCPU | CPU 항상 할당, 시작 부스트 ON |
-| **Cloud Run concurrency** | 40 | |
-| **Cloud Run max_instances** | 10 | (APScheduler 중복 fire 잠재 — advisory lock 별 sprint) |
-| **Cloud Run min_instances** | **0** (현재 standby) — 재오픈 시 1로 복원 | |
-| **Cloud Build trigger** | GitHub `isolhsolfafa/AXIS-OPS` main 브랜치 자동 빌드 | `backend/Dockerfile` 경로 |
+| **Cloud Run 서비스** | `axis-core-api` (🗑️ 삭제됨, 재오픈 시 재생성) | asia-northeast3 |
+| **Cloud Run URL (이전)** | `https://axis-core-api-239127335594.asia-northeast3.run.app` | 재생성 시 같은 이름 → 같은 URL 가능성 높음 (project number 239127335594 고정) |
+| **Cloud Run 권장 설정** | 2 GiB / 1 vCPU / CPU 항상 할당 / 시작 부스트 ON / concurrency 40 / min=1 / max=1 | 재오픈 시 재적용 |
+| **Cloud Build trigger** | GitHub `isolhsolfafa/AXIS-OPS` main 브랜치 자동 빌드 (🗑️ 삭제됨, 재오픈 시 재생성) | `backend/Dockerfile` 경로 |
 | **Artifact Registry 이미지** | `asia-northeast3-docker.pkg.dev/g-axis-prod/cloud-run-source-deploy/axis-ops/axis-core-api` | |
 
 ---
@@ -85,15 +84,33 @@ gcloud sql instances patch g-axis-core --activation-policy=ALWAYS
 gcloud sql instances describe g-axis-core --format="value(state)"
 ```
 
-### Step 2: Cloud Run 활성화 (~1분)
+### Step 2: Cloud Run service 재생성 (~5분, 2026-05-20 service 삭제됨)
 
-```bash
-gcloud run services update axis-core-api \
-  --region=asia-northeast3 \
-  --min-instances=1
+Cloud Build trigger도 함께 삭제됐으므로 GCP 콘솔에서 재생성:
 
-# 또는 첫 요청 시 cold start로 자동 시작 (필요시)
 ```
+GCP 콘솔 → Cloud Run → "서비스 만들기"
+  - 소스 저장소에서 지속적 배포 선택
+  - GitHub repo: isolhsolfafa/AXIS-OPS / branch: ^main$
+  - 빌드 유형: Dockerfile / 소스 위치: /backend/Dockerfile
+  - 서비스 이름: axis-core-api / 리전: asia-northeast3
+  - 인증: 공개 액세스 허용
+  - 자동 확장: min=1, max=1 (또는 2)
+  - 컨테이너: 메모리 2 GiB / CPU 1 / 시작 부스트 ON / CPU 항상 할당
+  - Cloud SQL 연결: g-axis-prod:asia-northeast3:g-axis-core 추가
+  - 환경변수 12개 등록 (Section 3 참조) — DATABASE_URL typo (공백) 주의
+  - "만들기" → Cloud Build 자동 실행 + 첫 revision 배포
+
+또는 Artifact Registry에 이미지 보존돼 있으므로:
+gcloud run deploy axis-core-api \
+  --image=asia-northeast3-docker.pkg.dev/g-axis-prod/cloud-run-source-deploy/axis-ops/axis-core-api:latest \
+  --region=asia-northeast3 \
+  --add-cloudsql-instances=g-axis-prod:asia-northeast3:g-axis-core \
+  --memory=2Gi --cpu=1 --min-instances=1 --max-instances=1 \
+  --set-env-vars="DATABASE_URL=...,JWT_SECRET_KEY=...,..."
+```
+
+→ Cloud Run URL 새로 생성됨. project number `239127335594` 고정이므로 **같은 이름으로 만들면 URL 동일할 가능성 높음**: `https://axis-core-api-239127335594.asia-northeast3.run.app`
 
 ### Step 3: Cloud SQL DB 초기화 + Railway 최신 dump → restore (~10분)
 
