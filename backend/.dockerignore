@@ -1,0 +1,32 @@
+# Cloud Build context = backend/ — 따라서 이 파일도 backend/ 안에 위치
+# 빌드 컨테이너에 불필요한 파일 제외
+
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# 로컬 환경 / 비밀
+.env*
+*.env
+
+# 빌드 산출물
+build/
+dist/
+*.egg-info/
+
+# 로그
+*.log
+
+# OS
+.DS_Store
+
+# Railway 잔재 (Cloud Run 무관, 컨테이너에 포함될 필요 없음)
+Procfile
+runtime.txt
+
+# IDE
+.vscode/
+.idea/
