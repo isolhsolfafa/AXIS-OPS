@@ -75,8 +75,16 @@ def _count_shipped(conn, start, end, basis: str) -> int:
             (start, end)
         )
     elif basis == 'best':
-        # v2.4 신규: reality 경계 = actual_ship_date 있는 전체 / 주간 귀속 = SI_SHIPMENT 우선
-        # 해석 A (si ⊆ actual) — Pre-deploy Gate ③ 0건 검증 완료 (2026-04-28).
+        # v2.4 (2026-04-28) reality 경계 = actual_ship_date / 주간 귀속 = SI_SHIPMENT 우선
+        # 해석 A (si ⊆ actual) — 배포 시점 0건 검증 완료.
+        #
+        # v2.18.4 (#70, 2026-05-21) 엑셀 게이트 제거 — SI 공정 5-19 시행 후 app SI 데이터 유입 시작
+        # 기존 의도(설계): "app 출하완료 + 엑셀 actual 중복 제거 합집합" (app 100% 주력)
+        # 기존 코드 실제: `WHERE p.actual_ship_date IS NOT NULL` 엑셀 게이트 → app-only 출하 누락
+        # 정정: 합집합 OR — COUNT(DISTINCT p.serial_number) 가 중복 자동 제거,
+        #       COALESCE(DATE(t.completed_at), p.actual_ship_date) 가 app 우선 날짜 귀속.
+        # 영향: 현재 갭 0건 (운영자 동시 입력 중) — 응답값 즉시 변경 0,
+        #       SI 정착 후 app-only 출하 발생 시 자동 정확 카운트.
         cur.execute(
             """SELECT COUNT(DISTINCT p.serial_number) AS cnt
                FROM plan.product_info p
@@ -85,7 +93,7 @@ def _count_shipped(conn, start, end, basis: str) -> int:
                 AND t.task_id       = 'SI_SHIPMENT'
                 AND t.completed_at  IS NOT NULL
                 AND COALESCE(t.force_closed, FALSE) = FALSE
-               WHERE p.actual_ship_date IS NOT NULL
+               WHERE (p.actual_ship_date IS NOT NULL OR t.completed_at IS NOT NULL)
                  AND COALESCE(DATE(t.completed_at), p.actual_ship_date) >= %s
                  AND COALESCE(DATE(t.completed_at), p.actual_ship_date) <  %s""",
             (start, end)

@@ -6,6 +6,36 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.18.4] - 2026-05-21 — #70 출하 KPI `best` 분기 엑셀 게이트 제거
+
+> AXIS-VIEW `OPS_API_REQUESTS.md` #70 — SI 공정 5-19 시행 후 app SI 데이터 유입 시작 → `best` 토글 엑셀 게이트(WHERE actual_ship_date IS NOT NULL)가 app-only 출하 누락 → 합집합(OR) 으로 정정. 출하이력 페이지(`FEAT-SHIPMENT-HISTORY-PAGE`, 6월 초 예정) 선행 의존성 해소.
+
+### 변경
+
+| 파일 | 내용 |
+|------|-----|
+| `backend/app/routes/factory.py` | `_count_shipped()` basis='best' 분기 `WHERE` 절 1줄 — `p.actual_ship_date IS NOT NULL` 단독 → `(p.actual_ship_date IS NOT NULL OR t.completed_at IS NOT NULL)` 합집합. `COUNT(DISTINCT p.serial_number)` 가 중복 자동 제거 + `COALESCE(DATE(t.completed_at), p.actual_ship_date)` app 우선 날짜 귀속 |
+| `tests/backend/test_factory_kpi.py` | `TestFactoryKpiV24Amendment` 에 #70 TC 2개 추가 (소스 검증 + smoke) |
+
+### 영향
+
+- 응답값 즉시 변경: **0** (현재 갭 0건 — 운영자 동시 입력 중)
+- 미래 데이터: SI 정착 후 app-only 출하 발생 시 자동 정확 카운트
+- FE 변경 0 (`shipped_best` 자동 반영)
+- 회귀 위험 0
+
+### 검증
+
+- pytest `test_fk_70_count_shipped_best_removes_excel_gate` PASS — 소스 검증 (단독 게이트 제거 + OR 합집합 포함)
+- 기존 `TestFactoryKpiV24Amendment` 3 TC + `TestWeeklyKpi`/`TestMonthlyDetail` 회귀
+
+### 연관
+
+- VIEW `BACKLOG.md` `FEAT-SHIPMENT-HISTORY-PAGE` 착수 트리거 해소
+- v2.4 (2026-04-28) 배포 시점 가정 "해석 A: si ⊆ actual" 가 SI 시행으로 무너진 후속 정정
+
+---
+
 ## [2.18.3] - 2026-05-20 — SEC-CONFIG-DATABASE-URL-FALLBACK-REMOVED (GCP migration 준비)
 
 > GCP migration 중 발견: Cloud Run 첫 부팅 시 env DATABASE_URL 누락 → `config.py` 의 하드코딩 fallback (Railway DB URL with 평문 비밀번호) 사용 → 의도치 않게 Cloud Run 이 Railway DB 에 연결되던 catch. 같은 사고 재발 방지 + GitHub 평문 비밀번호 제거.

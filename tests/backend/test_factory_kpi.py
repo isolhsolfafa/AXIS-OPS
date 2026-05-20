@@ -500,3 +500,49 @@ class TestFactoryKpiV24Amendment:
 
         with pytest.raises(ValueError, match=r"plan.*actual.*best"):
             _count_shipped(db_conn, start, end, 'invalid_xyz')
+
+    def test_fk_70_count_shipped_best_removes_excel_gate(self):
+        """v2.18.4 (#70): basis='best' SQL 에서 'actual_ship_date IS NOT NULL' 엑셀 게이트 제거 확인.
+
+        배경: 기존 코드는 `WHERE p.actual_ship_date IS NOT NULL` 단독 → app-only 출하 누락.
+        정정: `WHERE (p.actual_ship_date IS NOT NULL OR t.completed_at IS NOT NULL)` 합집합.
+
+        검증: factory.py 소스에서 SQL 패턴 확인 (mock-based 회귀 가드).
+        """
+        import inspect
+        from app.routes import factory
+
+        src = inspect.getsource(factory._count_shipped)
+        # OR 조건 합집합 포함 확인 (괄호 + OR 패턴)
+        assert "p.actual_ship_date IS NOT NULL OR t.completed_at IS NOT NULL" in src, (
+            "v2.18.4 #70: basis='best' SQL 에 OR 합집합 조건 포함 필수"
+        )
+        # 단독 엑셀 게이트 (`WHERE p.actual_ship_date IS NOT NULL` 단독, OR 없는 형태) 제거 확인
+        # 즉 'best' 분기 안에서 단독 게이트 패턴이 남으면 안 됨
+        # (다른 분기 actual 에는 단독 패턴 존재 OK 이므로 source 전체 검색은 안 함, basis='best' 영역만)
+        best_block_start = src.find("elif basis == 'best':")
+        best_block_end = src.find("else:", best_block_start)
+        best_block = src[best_block_start:best_block_end]
+        # best 분기 안에서는 OR 합집합만 있어야 함 (단독 게이트 X)
+        # 단독 게이트 = "WHERE p.actual_ship_date IS NOT NULL\n" 패턴 (개행 또는 공백 후 AND 없이)
+        assert "WHERE p.actual_ship_date IS NOT NULL\n" not in best_block, (
+            "v2.18.4 #70: basis='best' 영역에 단독 엑셀 게이트 남아있으면 안 됨"
+        )
+
+    def test_fk_70_count_shipped_best_smoke_with_app_only(self, db_conn, seed_test_data):
+        """v2.18.4 (#70): basis='best' 호출 자체가 정상 동작 (SQL syntax + 결과 int >= 0).
+
+        실제 데이터 검증은 prod 데이터 누적 후 갭 쿼리 (배포 전후 비교) 로 진행.
+        본 TC 는 SQL 변경 후 syntax error / column reference error 회귀 가드.
+        """
+        from app.routes.factory import _count_shipped
+
+        if db_conn is None:
+            pytest.skip("DB not available")
+
+        now = datetime.now(KST)
+        start = now - timedelta(days=365)
+        end = now + timedelta(days=1)
+
+        result = _count_shipped(db_conn, start, end, 'best')
+        assert isinstance(result, int) and result >= 0
