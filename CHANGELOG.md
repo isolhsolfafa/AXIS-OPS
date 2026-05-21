@@ -6,6 +6,39 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.18.7] - 2026-05-21 — HOTFIX-10 후면 카메라 강제 (셀카 fallback 차단)
+
+> 사용자 catch (5-21, v2.18.6 직후): "카메라 방향이 현재 셀카인데 전환하는 버튼을 돌려주던지 방향 변경해줘". 모바일에서 1차 시도 `facingMode: 'environment'` 가 hint 일 뿐이라 iOS Safari 등 일부 환경에서 OS 가 무시 → user 카메라로 silent fallback → 셀카로 보임. 명판 QR 인식이 본 목적이라 후면 강제 필수.
+
+### 변경
+
+| 파일 | 내용 |
+|------|-----|
+| `frontend/lib/services/qr_scanner_web.dart` | (1) `_buildScannerConstraints()` — `facingMode: 'environment'` 일 때 `{exact: 'environment'}` 강제. user 영역은 hint(string) 유지. (2) 3차 cameraId fallback 영역 카메라 list label 매칭 추가 — 'back' / 'rear' / 'environment' / '후면' 포함 카메라 우선 선택, 없으면 cameras[0] fallback (~13 LOC) |
+| `backend/version.py` | 2.18.6 → 2.18.7 |
+| `frontend/lib/utils/app_version.dart` | 2.18.6 → 2.18.7 |
+| `BACKLOG.md` | `BUG-42-CAMERA-SWITCH-BUTTON-DEFERRED` 신규 등록 (별 sprint, qr_scan_screen.dart 절대 불변 영역 해소 필요) |
+
+### 동작
+
+- **모바일 후면 카메라 있음** (iPhone/Android): `{exact: 'environment'}` → 후면 강제 성공
+- **모바일 후면 카메라 없음** (예외 케이스): exact OverconstrainedError → 2차 user 시도 → 전면 카메라
+- **데스크톱/MacBook** (후면 없음): 1차 exact fail → 2차 user 시도 → 노트북 전면 카메라 정상 동작
+- **3차 fallback**: cameraList 영역 'back/rear/후면' label 매칭 → 안전망 (1·2차 모두 fail 시)
+
+### 절대 불변 영역 (CLAUDE.md L1134-1142)
+
+- 프레임 / 뷰파인더 / qrbox:200 / CSS / DOM 변경 0
+- `qr_scan_screen.dart` 위젯 배치 변경 0 (UI 전환 버튼은 별 sprint)
+
+### 검증
+
+- flutter build web --release GREEN (12.6s)
+- LOC 533 → 551 (+18, 🟡 경고 영역 유지)
+- 실기기 manual QA 재위탁 (Twin파파)
+
+---
+
 ## [2.18.6] - 2026-05-21 — HOTFIX-09 cameraIdOrConfig 1-key 위반 fix
 
 > v2.18.5 배포 직후 사용자 실기기 catch (5분 이내): `'cameraIdOrConfig' object should have exactly 1 key, if passed as an object, found 4 keys`. html5-qrcode@2.3.8 의 `start(cameraIdOrConfig, config, ...)` 1번째 인자는 **정확히 1 key 객체만 허용**. v2.18.5 의 `_buildScannerConstraints()` 가 facingMode + width + height + advanced 4 keys 반환 → 3차 시도 모두 reject → "사용 가능한 카메라를 찾을 수 없습니다" 에러. Codex 라운드 1 에서 놓친 라이브러리 spec.

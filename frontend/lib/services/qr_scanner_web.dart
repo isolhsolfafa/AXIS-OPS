@@ -312,7 +312,12 @@ dynamic _buildScannerConstraints({String? facingMode, String? cameraId}) {
   if (cameraId != null) {
     base['deviceId'] = {'exact': cameraId};
   } else if (facingMode != null) {
-    base['facingMode'] = facingMode;
+    // HOTFIX-10 (v2.18.7): facingMode hint 영역 OS 무시 catch (iOS Safari 등).
+    // environment 영역 {exact:...} 강제 — 모바일은 후면 카메라 강제, 데스크톱은 fail → user 자동 fallback.
+    // user 영역은 hint(string) 유지 — fallback 영역에서 카메라 없을 시 OverconstrainedError 막기 위해.
+    base['facingMode'] = facingMode == 'environment'
+        ? {'exact': 'environment'}
+        : facingMode;
   }
   return js_util.jsify(base);
 }
@@ -458,12 +463,25 @@ Future<bool> startQrScanner({
       debugPrint('[QrScannerWeb] user camera failed: $e');
     }
 
-    // 3차 시도: 사용 가능한 첫 번째 카메라 ID
+    // 3차 시도: 사용 가능한 카메라 ID — HOTFIX-10 (v2.18.7) 후면 카메라 label 우선 매칭
     try {
       final camerasPromise = js_util.callMethod(html5QrcodeClass, 'getCameras', []);
       final cameras = await js_util.promiseToFuture(camerasPromise) as List<dynamic>;
       if (cameras.isNotEmpty) {
-        final cameraId = js_util.getProperty(cameras[0] as Object, 'id') as String;
+        // 후면 카메라(label 영역 'back'/'rear'/'environment'/'후면') 우선 매칭 → 없으면 cameras[0]
+        String cameraId = js_util.getProperty(cameras[0] as Object, 'id') as String;
+        for (final c in cameras) {
+          final rawLabel = js_util.getProperty(c as Object, 'label');
+          final label = (rawLabel is String ? rawLabel : '').toLowerCase();
+          if (label.contains('back') ||
+              label.contains('rear') ||
+              label.contains('environment') ||
+              label.contains('후면')) {
+            cameraId = js_util.getProperty(c, 'id') as String;
+            debugPrint('[QrScannerWeb] Back camera matched by label: $label');
+            break;
+          }
+        }
         _scanner = js_util.callConstructor(html5QrcodeClass, [divId]);
         // HOTFIX BUG-42 (v2.18.5): cameraId fallback도 deviceId+constraints 통일 (Codex Q2 M)
         final idConstraints = _buildScannerConstraints(cameraId: cameraId);
