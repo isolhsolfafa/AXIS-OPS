@@ -442,9 +442,53 @@ Future<bool> startQrScanner({
       // QR 미인식은 정상 상태 — 무시
     });
 
-    // 1차 시도 (HOTFIX-11 v2.18.8): cameras list 영역 후면 label 매칭 → deviceId 명시
-    // facingMode hint/exact 영역 OS reject 가능성 우회. 가장 신뢰성 있는 후면 강제.
+    // 0차 시도 (HOTFIX-12 v2.18.9): getUserMedia({video:{facingMode:'environment'}}) 직접 호출
+    // → 받은 stream 의 videoTrack settings.deviceId 추출 → html5-qrcode 영역 명시.
+    // getCameras() 영역 label 영역 권한 발급 전에는 빈 문자열 가능성 catch (Privacy spec).
+    // iOS Safari + Android Chrome 모두 지원하는 가장 신뢰성 있는 환경 카메라 강제 방식.
     try {
+      final mediaDevices = js_util.getProperty(html.window.navigator, 'mediaDevices');
+      if (mediaDevices != null) {
+        final umConstraints = js_util.jsify({
+          'video': {'facingMode': 'environment'},
+        });
+        final streamPromise = js_util.callMethod(mediaDevices, 'getUserMedia', [umConstraints]);
+        final stream = await js_util.promiseToFuture(streamPromise);
+        final tracks = js_util.callMethod(stream, 'getVideoTracks', []) as List<dynamic>;
+        String? envDeviceId;
+        if (tracks.isNotEmpty) {
+          final track = tracks[0];
+          try {
+            final settings = js_util.callMethod(track as Object, 'getSettings', []);
+            final rawId = js_util.getProperty(settings, 'deviceId');
+            envDeviceId = rawId is String && rawId.isNotEmpty ? rawId : null;
+          } catch (_) {}
+          // stream 즉시 정리 — html5-qrcode 가 자체 stream 생성하므로 충돌 방지
+          js_util.callMethod(track as Object, 'stop', []);
+        }
+        if (envDeviceId != null) {
+          final idConstraints = _buildScannerConstraints(cameraId: envDeviceId);
+          final promise = js_util.callMethod(
+            _scanner!,
+            'start',
+            [idConstraints, config, successCallback, errorCallback],
+          );
+          await js_util.promiseToFuture(promise);
+          debugPrint('[QrScannerWeb] Started with environment camera (getUserMedia deviceId: $envDeviceId)');
+          await Future.delayed(const Duration(milliseconds: 300));
+          _forceSquareAfterCameraStart();
+          return true;
+        }
+        debugPrint('[QrScannerWeb] getUserMedia env: no deviceId extracted');
+      }
+    } catch (e) {
+      debugPrint('[QrScannerWeb] getUserMedia env failed: $e');
+    }
+
+    // 1차 시도 (HOTFIX-11 v2.18.8): cameras list 영역 후면 label 매칭 → deviceId 명시
+    // facingMode hint/exact 영역 OS reject 가능성 우회. getUserMedia 0차 실패 시 fallback.
+    try {
+      _scanner = js_util.callConstructor(html5QrcodeClass, [divId]);
       final camerasPromise = js_util.callMethod(html5QrcodeClass, 'getCameras', []);
       final cameras = await js_util.promiseToFuture(camerasPromise) as List<dynamic>;
       final backCameraId = _findBackCameraId(cameras);
