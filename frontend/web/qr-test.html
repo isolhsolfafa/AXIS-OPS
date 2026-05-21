@@ -164,6 +164,33 @@
     <span class="badge badge-exp">v2.18.11</span>
   </label></div>
 
+  <hr style="margin: 12px 0; border: none; border-top: 1px solid #d1d1d6;" />
+
+  <div class="opt"><label>
+    <input type="checkbox" id="opt-fallback-chain" />
+    <strong>4-tier fallback chain (v2.18.13 운영 패턴)</strong>
+    <span class="badge badge-base">v2.18.13</span>
+  </label></div>
+  <div style="font-size: 11px; color: #6e6e73; margin-left: 24px;">
+    1차: facingMode + width + height + advanced<br />
+    2차 (실패 시): advanced 제거<br />
+    3차 (실패 시): width/height 제거<br />
+    4차 (실패 시): baseline (videoConstraints 없음)
+  </div>
+
+  <div class="opt"><label>
+    <input type="checkbox" id="opt-force-fail-1" />
+    <strong>1차 강제 실패 (2차로 넘어가는지 검증)</strong>
+  </label></div>
+  <div class="opt"><label>
+    <input type="checkbox" id="opt-force-fail-12" />
+    <strong>1차+2차 강제 실패 (3차로 넘어가는지 검증)</strong>
+  </label></div>
+  <div class="opt"><label>
+    <input type="checkbox" id="opt-force-fail-123" />
+    <strong>1차+2차+3차 강제 실패 (4차 baseline 까지 검증)</strong>
+  </label></div>
+
   <div style="margin-top: 12px;">
     <button class="btn-start" onclick="startScanner()">Start</button>
     <button class="btn-stop" onclick="stopScanner()">Stop</button>
@@ -227,7 +254,76 @@
       getUserMedia0thExact: document.getElementById('opt-getUserMedia-0th-exact').checked,
       camerasLabel: document.getElementById('opt-cameras-label').checked,
       permissionEnv: document.getElementById('opt-permission-env').checked,
+      fallbackChain: document.getElementById('opt-fallback-chain').checked,
+      forceFail1: document.getElementById('opt-force-fail-1').checked,
+      forceFail12: document.getElementById('opt-force-fail-12').checked,
+      forceFail123: document.getElementById('opt-force-fail-123').checked,
     };
+  }
+
+  // ---- v2.18.13 4-tier fallback chain (운영 패턴) ----
+  async function startWithFallbackChain(scanner, successCb, errorCb, o) {
+    const tiers = [
+      {
+        name: '1차 (full)',
+        config: {
+          fps: 10, qrbox: 200,
+          videoConstraints: {
+            facingMode: 'environment',
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            advanced: [{ focusMode: 'continuous' }],
+          },
+        },
+      },
+      {
+        name: '2차 (advanced 제거)',
+        config: {
+          fps: 10, qrbox: 200,
+          videoConstraints: {
+            facingMode: 'environment',
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
+        },
+      },
+      {
+        name: '3차 (해상도 제거)',
+        config: {
+          fps: 10, qrbox: 200,
+          videoConstraints: { facingMode: 'environment' },
+        },
+      },
+      {
+        name: '4차 (baseline)',
+        config: { fps: 10, qrbox: 200 },
+      },
+    ];
+
+    for (let i = 0; i < tiers.length; i++) {
+      const tier = tiers[i];
+      // 강제 실패 시뮬레이션
+      if ((o.forceFail1 && i === 0) ||
+          (o.forceFail12 && i <= 1) ||
+          (o.forceFail123 && i <= 2)) {
+        warn(`[QrTest] ${tier.name} 강제 실패 (시뮬레이션)`);
+        continue;
+      }
+      try {
+        log(`[QrTest] ${tier.name} 시도: ${JSON.stringify(tier.config)}`);
+        const cameraIdOrConfig = { facingMode: 'environment' };
+        // 4차는 baseline → 새 scanner 인스턴스 필요한 경우 처리
+        if (i > 0) {
+          scanner = new Html5Qrcode(scanner.elementId || 'qr-scanner-dom-div');
+        }
+        await scanner.start(cameraIdOrConfig, tier.config, successCb, errorCb);
+        log(`[QrTest] ★ Started with ${tier.name}`);
+        return { success: true, tier: tier.name, scanner: scanner };
+      } catch (e) {
+        warn(`[QrTest] ${tier.name} 실패: ${e.message || e}`);
+      }
+    }
+    return { success: false, tier: null, scanner: scanner };
   }
 
   // ---- 운영 ensureScannerDiv() 와 동일 (단 테스트 환경은 inline 배치) ----
@@ -385,6 +481,39 @@
     const errorCallback = (errorMessage, error) => {
       // QR 미인식은 정상
     };
+
+    // ---- v2.18.13 4-tier fallback chain 모드 (우선 적용) ----
+    if (o.fallbackChain) {
+      log('[QrTest] === v2.18.13 4-tier fallback chain 모드 ===');
+      const result = await startWithFallbackChain(scanner, successCallback, errorCallback, o);
+      if (result.success) {
+        scanner = result.scanner;
+        setTimeout(forceSquareAfterCameraStart, 300);
+        started = true;
+        diagSet('status', `실행 중 (${result.tier})`);
+        // 진단 패널 영역 stream 정보 추출 시도
+        try {
+          const videos = document.querySelectorAll('#qr-scanner-dom-div video');
+          if (videos.length > 0 && videos[0].srcObject) {
+            const tracks = videos[0].srcObject.getVideoTracks();
+            if (tracks.length > 0) {
+              const settings = tracks[0].getSettings();
+              diagSet('label', tracks[0].label || '-');
+              diagSet('facing', settings.facingMode || '-');
+              diagSet('deviceId', settings.deviceId ? settings.deviceId.slice(0, 16) + '...' : '-');
+              log(`[QrTest] stream actual: facing=${settings.facingMode}, label=${tracks[0].label}, w=${settings.width}, h=${settings.height}`);
+            }
+          }
+        } catch (e) {
+          warn(`[QrTest] stream 진단 추출 실패: ${e.message}`);
+        }
+        return;
+      } else {
+        diagSet('status', '4-tier fallback chain 모두 실패');
+        err('[QrTest] 4-tier fallback chain 모두 실패');
+        return;
+      }
+    }
 
     const config = buildConfig(o);
     log(`[QrTest] config: ${JSON.stringify(config)}`);
