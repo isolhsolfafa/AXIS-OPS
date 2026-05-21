@@ -199,7 +199,7 @@
   </div>
 
   <div class="opt">
-    <strong>해상도:</strong><br />
+    <strong>해상도:</strong> <span style="font-size: 11px; color: #6e6e73;">(해상도 선택 시 facingMode 'environment' 자동 추가 — 후면 강제)</span><br />
     <label><input type="radio" name="resolution" value="1920x1080" /> 1920×1080 (FHD)</label><br />
     <label><input type="radio" name="resolution" value="1280x720" /> 1280×720 (HD)</label><br />
     <label><input type="radio" name="resolution" value="640x480" /> 640×480 (SD)</label><br />
@@ -221,10 +221,10 @@
     <select id="opt-qrbox">
       <option value="100">100</option>
       <option value="150">150</option>
-      <option value="200" selected>200 (default)</option>
-      <option value="250">250</option>
-      <option value="300">300</option>
+      <option value="180">180</option>
+      <option value="200" selected>200 (default, 컨테이너 240px 안전 max)</option>
     </select>
+    <span style="font-size: 11px; color: #6e6e73;">— 컨테이너 240px 초과 시 자동 cap</span>
   </div>
 
   <div class="opt" style="margin-top: 4px;">
@@ -557,8 +557,12 @@
   }
 
   function buildConfig(o) {
-    // Phase 1 — fps / qrbox 영역 사용자 선택 우선
-    const config = { fps: o.fps || 10, qrbox: o.qrbox || 200 };
+    // Phase 1 — fps / qrbox 사용자 선택 우선. qrbox 컨테이너(240px) 보다 크면 max 200 cap
+    const safeQrbox = Math.min(o.qrbox || 200, 200);
+    const config = { fps: o.fps || 10, qrbox: safeQrbox };
+    if (o.qrbox && o.qrbox > 200) {
+      warn(`[QrTest] qrbox ${o.qrbox} → 컨테이너 240px 초과 → 200 으로 cap`);
+    }
     // Phase 1 — 해상도 선택 (Phase 1 옵션 우선, 기존 옵션 1 영역 보조)
     let resWidth = null, resHeight = null;
     if (o.resolution && o.resolution !== 'default') {
@@ -569,12 +573,12 @@
       resWidth = 1920;
       resHeight = 1080;
     }
-    // videoConstraints 영역 조립
+    // videoConstraints 조립 — videoConstraints 키 존재 시 facingMode 자동 'environment' (safe default)
+    // 이유: html5-qrcode 2.3.8 영역 videoConstraints 키 있으면 cameraIdOrConfig.facingMode 무시 → facingMode 없으면 전면 카메라 발급
     if (resWidth || o.videoConstraintsFocus || o.vcFacingMode) {
       const vc = {};
-      if (o.vcFacingMode) {
-        vc.facingMode = 'environment';
-      }
+      // safe default: 해상도/advanced 추가 시 자동으로 facingMode 'environment' 포함
+      vc.facingMode = 'environment';
       if (resWidth) {
         vc.width = { ideal: resWidth };
         vc.height = { ideal: resHeight };
