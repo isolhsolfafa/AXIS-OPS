@@ -302,6 +302,53 @@ void updateScannerDivPosition({
     ..transform = '';
 }
 
+/// BUG-42 v2.18.16 — 카메라 start 성공 후 zoom 자동 적용.
+/// qr-test.html 사용자 검증 catch: videoConstraints 사용 시 디코더 방해 → 인식 NG.
+/// applyConstraints({advanced:[{zoom:...}]}) 만 사용 (videoConstraints 우회) → 디코더 정상 + 명판 확대.
+///
+/// 동작:
+/// - videos[0].srcObject 의 videoTrack 1개 추출
+/// - getCapabilities().zoom 확인 (미지원 → silent skip)
+/// - min/max clamp 후 applyConstraints
+/// - 실패 시 silent skip (try-catch)
+Future<void> _applyZoomIfSupported(num targetZoom) async {
+  if (_scannerDiv == null) return;
+  try {
+    final videos = _scannerDiv!.querySelectorAll('video');
+    if (videos.isEmpty) return;
+    final video = videos[0] as Object;
+    final srcObject = js_util.getProperty(video, 'srcObject');
+    if (srcObject == null) return;
+    final tracks = js_util.callMethod(srcObject as Object, 'getVideoTracks', []) as List<dynamic>;
+    if (tracks.isEmpty) return;
+    final track = tracks[0] as Object;
+    final caps = js_util.callMethod(track, 'getCapabilities', []);
+    if (caps == null) {
+      debugPrint('[QrScannerWeb] getCapabilities 미지원 (silent skip)');
+      return;
+    }
+    final zoomCap = js_util.getProperty(caps, 'zoom');
+    if (zoomCap == null) {
+      debugPrint('[QrScannerWeb] zoom capability 미지원 (silent skip)');
+      return;
+    }
+    final zoomMin = (js_util.getProperty(zoomCap, 'min') as num?) ?? 1.0;
+    final zoomMax = (js_util.getProperty(zoomCap, 'max') as num?) ?? 1.0;
+    final target = targetZoom.clamp(zoomMin, zoomMax);
+    final applyPromise = js_util.callMethod(track, 'applyConstraints', [
+      js_util.jsify({
+        'advanced': [
+          {'zoom': target},
+        ],
+      }),
+    ]);
+    await js_util.promiseToFuture(applyPromise);
+    debugPrint('[QrScannerWeb] zoom 적용: ${target}x (range $zoomMin-$zoomMax)');
+  } catch (e) {
+    debugPrint('[QrScannerWeb] zoom 적용 실패 (silent): $e');
+  }
+}
+
 /// QR 스캐너 시작 (웹 구현 — DOM 직접 생성 방식)
 ///
 /// 전략:
@@ -410,6 +457,8 @@ Future<bool> startQrScanner({
       // ★ 11차: 카메라 시작 후 약간의 딜레이 뒤 강제 정사각형 적용
       await Future.delayed(const Duration(milliseconds: 300));
       _forceSquareAfterCameraStart();
+      // BUG-42 v2.18.16 — zoom 2.0x 자동 적용 (fire-and-forget, silent skip 미지원 시)
+      Future.delayed(const Duration(milliseconds: 200), () => _applyZoomIfSupported(2.0));
       return true;
     } catch (e) {
       debugPrint('[QrScannerWeb] environment camera failed: $e');
@@ -428,6 +477,7 @@ Future<bool> startQrScanner({
       debugPrint('[QrScannerWeb] Started with user camera');
       await Future.delayed(const Duration(milliseconds: 300));
       _forceSquareAfterCameraStart();
+      Future.delayed(const Duration(milliseconds: 200), () => _applyZoomIfSupported(2.0));
       return true;
     } catch (e) {
       debugPrint('[QrScannerWeb] user camera failed: $e');
@@ -449,6 +499,7 @@ Future<bool> startQrScanner({
         debugPrint('[QrScannerWeb] Started with camera ID: $cameraId');
         await Future.delayed(const Duration(milliseconds: 300));
         _forceSquareAfterCameraStart();
+        Future.delayed(const Duration(milliseconds: 200), () => _applyZoomIfSupported(2.0));
         return true;
       }
     } catch (e) {

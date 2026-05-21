@@ -6,6 +6,68 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.18.16] - 2026-05-21 — BUG-42 fix: zoom 2.0x 자동 적용 (videoConstraints 우회)
+
+> qr-test.html 사용자 검증 catch (Step ⑤~⑧ 모두 GREEN): videoConstraints 사용 시 ZXing 디코더 방해 → 인식 NG. 그러나 `applyConstraints({advanced:[{zoom}]})` 만 사용 (videoConstraints 우회) 시 디코더 정상 + 명판 확대 모두 달성. 사용자 옵션 B 결정 (qrbox 200 현행 유지 + zoom 2.0x 자동).
+
+### 변경
+
+| 파일 | 내용 |
+|------|-----|
+| `frontend/lib/services/qr_scanner_web.dart` | `_applyZoomIfSupported(num targetZoom)` helper 신규 (+47 LOC) + 카메라 start 3곳 (env/user/cameraId) 성공 후 fire-and-forget 호출 (+3 LOC). 200ms 추가 delay 후 호출 (stream settled 보장) |
+| `backend/version.py` | 2.18.15 → 2.18.16 |
+| `frontend/lib/utils/app_version.dart` | 2.18.15 → 2.18.16 |
+
+### 동작
+
+1. 카메라 start 성공
+2. `_forceSquareAfterCameraStart()` (기존)
+3. 200ms 대기 후 `_applyZoomIfSupported(2.0)` 호출:
+   - `videos[0].srcObject.getVideoTracks()[0]` 추출
+   - `getCapabilities().zoom` 확인
+   - 미지원 → silent skip + debug log
+   - 지원 → `min/max clamp` 후 `applyConstraints({advanced:[{zoom:2.0}]})`
+4. 실패 시 silent skip (try-catch)
+
+### 변경 안 한 부분
+
+- `videoConstraints` 사용 안 함 (디코더 방해 회피)
+- `cameraIdOrConfig = {facingMode:'environment'}` 그대로 (v2.18.4 baseline 유지)
+- qrbox 200 현행 유지 (UI 변경 0)
+- DOM / CSS / MutationObserver / _forceSquareAfterCameraStart 절대 불변
+
+### 영향 추정 (정량 측정은 실기기 catch 필수)
+
+- 명판 작은 QR 인식: 거의 0% → 약 70~85% (zoom 2배 효과 추정)
+- 스티커 QR (큰 QR): 100% → 약 60~80% ⚠️ regression 가능 (zoom 시 화면 일부 잘림 → 사용자가 멀리 비춰야 함)
+- 디코더 정상 (videoConstraints 영향 0)
+- 후면 카메라 정상 (v2.18.4 동작 그대로)
+
+### LOC
+
+- 파일 506 → 557 (+51, 🟡 경고 영역 유지)
+- `startQrScanner()` 함수 158 → 161 (🔴 한도 초과 유지) — REFACTOR sprint MEDIUM 등록 상태
+
+### 누적 trail (BUG-42 시리즈)
+
+- v2.18.5~v2.18.11: 11번 hotfix → 셀카 catch
+- v2.18.12: 1차 ROLLBACK
+- v2.18.13/14: 4-tier/3-tier fallback chain → 실기기 인식 NG
+- v2.18.15: 2차 ROLLBACK + qr-test.html Phase 1+2 옵션 추가
+- v2.18.16: 사용자 qr-test.html 검증 후 zoom 만 적용 (videoConstraints 우회) — 13번 시도 후 도달한 최종 fix
+
+### 실기기 manual QA — 사용자 위탁
+
+| # | 항목 | 검증 |
+|---|---|---|
+| 1 | 후면 카메라 (regression) | v2.18.4 와 동일 |
+| 2 | 스티커 QR (regression) | 인식률 catch — zoom 2.0x 영향 |
+| 3 | **명판 작은 QR** ⭐ BUG-42 본 목적 | 인식 성공률 catch |
+| 4 | 콘솔 로그 `zoom 적용: 2.0x` | 적용 성공 확인 |
+| 5 | Desktop Chrome (zoom 미지원 시 silent skip) | 에러 없음 |
+
+---
+
 ## [2.18.15] - 2026-05-21 — ROLLBACK 2차: v2.18.13/14 fallback chain 회귀 → v2.18.4 baseline 복귀
 
 > v2.18.13 (4-tier) → v2.18.14 (3-tier, advanced 제거) 시도 후 실기기 catch: 1차 tier (해상도 1920×1080 + facingMode environment) 영역 QR 인식 NG (코너 초록색 변화 없음). 강제실패 토글로 2차/3차 fallback 진입 시에만 인식 OK. 운영 코드에서 1차 우선 시도가 fallback chain 으로 자동 회귀 안 됨. 누적 시도 비용 vs 효과 trade-off → ROLLBACK 결정.

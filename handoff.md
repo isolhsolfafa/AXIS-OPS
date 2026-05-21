@@ -3117,10 +3117,10 @@ Codex 3차 Q3 A 해소용 실측:
 
 ## 현재 버전
 
-- **OPS BE**: v2.18.15 (2026-05-21, ROLLBACK 2차 — version bump only)
-- **OPS FE (Flutter PWA)**: v2.18.15 (2026-05-21, qr_scanner_web.dart v2.18.4 baseline 복귀)
-- **최근 release**: ROLLBACK 2차 (v2.18.15) — v2.18.13(4-tier)+v2.18.14(3-tier) fallback chain 시도 후 실기기 catch: 1차 tier(해상도 1920) QR 인식 NG. baseline 복귀. **누적 trail**: 13번 시도 후 baseline 회귀. BUG-42 🔴 OPEN + 7 별 sprint (TASK3-AUTO-ZOOM / CAMERA-SWITCH-BUTTON / REFACTOR-FUNCTION-SPLIT / TEST-QR-LIB-CONSTRAINT-PREFLIGHT / TOOL-ERUDA-DEV-CONSOLE / QR-SCANNER-RETRY-CLEANUP / QR-SCANNER-ERROR-CLASSIFICATION)
-- **이전 release**: v2.18.12 (ROLLBACK 1차) → v2.18.13 (4-tier chain) → v2.18.14 (advanced 제거) → v2.18.15 (baseline 복귀) — 사용자 catch "카메라 방향 셀카" — `environment` hint 영역 OS 무시 → `{exact:'environment'}` 강제 + 3차 fallback 영역 'back/rear/후면' label 매칭 안전망. 데스크톱 자동 user fallback. flutter build web GREEN. **별 sprint**: BUG-42-CAMERA-SWITCH-BUTTON-DEFERRED 등록 (전환 버튼 UI). **실기기 manual QA 재위탁**
+- **OPS BE**: v2.18.16 (2026-05-21, BUG-42 fix — version bump only)
+- **OPS FE (Flutter PWA)**: v2.18.16 (2026-05-21, qr_scanner_web.dart zoom 2.0x 자동 적용)
+- **최근 release**: v2.18.16 BUG-42 fix — qr-test.html 사용자 검증 catch (videoConstraints 사용 = 디코더 방해 / applyConstraints zoom 만 사용 = OK). `_applyZoomIfSupported` helper + 3곳 fire-and-forget 호출. cameraIdOrConfig + qrbox 200 + DOM/CSS baseline 유지. 실기기 QA 위탁
+- **이전 release trail**: v2.18.5~v2.18.11 (11번 hotfix 셀카) → v2.18.12 (1차 ROLLBACK) → v2.18.13/14 (4-tier/3-tier 인식 NG) → v2.18.15 (2차 ROLLBACK + qr-test.html Phase 1+2) → v2.18.16 (zoom 만 사용 최종 fix) — 사용자 catch "카메라 방향 셀카" — `environment` hint 영역 OS 무시 → `{exact:'environment'}` 강제 + 3차 fallback 영역 'back/rear/후면' label 매칭 안전망. 데스크톱 자동 user fallback. flutter build web GREEN. **별 sprint**: BUG-42-CAMERA-SWITCH-BUTTON-DEFERRED 등록 (전환 버튼 UI). **실기기 manual QA 재위탁**
 - **최근 release 이력 (5-19 ~ 5-21)**: v2.18.7 (HOTFIX-10 후면 강제), v2.18.6 (HOTFIX-09 1-key fix), v2.18.5 (BUG-42 명판 QR Task 2), v2.18.4 (#70 출하 KPI best 합집합), v2.18.3 (GCP migration HOLD + DATABASE_URL fallback 제거), v2.18.2 (DRAGON DUAL MECH 체크리스트 P0), v2.18.1 (PI/QI 다이얼로그 하드코딩 fix), v2.18.0 (Sprint 69 PI/QI 권한 잠금 + admin_complete)
 - **상세 trail**: 5-19 이전 release/Sprint 이력은 `PROGRESS.md` 최상위 "선행 release" + `CHANGELOG.md` 참조 (4-22 ~ 5-19 영역 handoff 갱신 누락분 보강)
 
