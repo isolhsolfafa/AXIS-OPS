@@ -6,6 +6,48 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.18.15] - 2026-05-21 — ROLLBACK 2차: v2.18.13/14 fallback chain 회귀 → v2.18.4 baseline 복귀
+
+> v2.18.13 (4-tier) → v2.18.14 (3-tier, advanced 제거) 시도 후 실기기 catch: 1차 tier (해상도 1920×1080 + facingMode environment) 영역 QR 인식 NG (코너 초록색 변화 없음). 강제실패 토글로 2차/3차 fallback 진입 시에만 인식 OK. 운영 코드에서 1차 우선 시도가 fallback chain 으로 자동 회귀 안 됨. 누적 시도 비용 vs 효과 trade-off → ROLLBACK 결정.
+
+### 변경
+
+| 파일 | 내용 |
+|------|-----|
+| `frontend/lib/services/qr_scanner_web.dart` | `git checkout 8a2233f -- ...` → v2.18.4 baseline 복귀 (506 LOC). `_buildFallbackTiers()` helper + 4-tier/3-tier chain 모두 제거. 단순 `facingMode:'environment'` hint + user/cameraId fallback 만 |
+| `backend/version.py` | 2.18.14 → 2.18.15 |
+| `frontend/lib/utils/app_version.dart` | 2.18.14 → 2.18.15 |
+| `BACKLOG.md` | BUG-42 🔴 OPEN 유지 + 별 sprint 5개 보존 (Task3-AUTO-ZOOM / CAMERA-SWITCH-BUTTON / REFACTOR-FUNCTION-SPLIT / TEST-QR-LIB-CONSTRAINT-PREFLIGHT / TOOL-ERUDA-DEV-CONSOLE) + QR-SCANNER-RETRY-CLEANUP / QR-SCANNER-ERROR-CLASSIFICATION (Codex 라운드 2 권고) 보존 |
+
+### 영향
+
+- ✅ 카메라 동작 v2.18.4 = v2.18.12 와 동일 (후면 카메라 정상)
+- ✅ 스티커 QR 인식 정상
+- ⚠️ 명판 소형 QR 인식 개선 효과 0 (BUG-42 별 sprint 로 이관)
+- ✅ `qr-test.html` 보존 (향후 재시도 시 검증 도구)
+- ✅ Codex 라운드 1+2 trail / 학습 기록 / BACKLOG 별 sprint 보존
+
+### BUG-42 재시도 조건 (향후)
+
+- 실기기 디버깅 환경 갖춘 시점에 재시도 (Mac 원격 디버깅 + Eruda 도입 후)
+- qr-test.html 영역 minimal change 단위로 단계별 검증
+- 운영 코드 1차 시도에서 OverconstrainedError 가 아닌 "디코더 인식 실패" 도 fallback 트리거하도록 설계 변경
+- BUG-42 본 진단: 1920×1080 자체가 디코더 부담 가능성 → 실기기 + 실시간 검증 환경 필수
+
+### 누적 trail
+
+- v2.18.5~v2.18.11: 11번 hotfix → 셀카 catch → v2.18.12 1차 ROLLBACK
+- v2.18.12 → qr-test.html + Codex 라운드 1 root cause 확정
+- v2.18.13/14: 4-tier/3-tier fallback chain → 실기기 인식 NG → v2.18.15 2차 ROLLBACK
+
+→ 총 13번 시도 후 baseline 으로 회귀. 학습: 외부 라이브러리(html5-qrcode) constraint 동작 + 실기기 디코더 동작은 source 분석 + 실시간 catch 환경 없이는 신뢰 불가.
+
+---
+
+## [2.18.14] - 2026-05-21 — focusMode advanced 제거 (ROLLED BACK in v2.18.15)
+
+> v2.18.13 catch: 4-tier 1차(full) QR 인식 NG / 2차 fallback OK → advanced focusMode 가 ZXing 디코더 방해 추정 → 1차 advanced 제거 (3-tier chain). 실기기 catch: 1차(해상도 1920) 영역 QR 인식 NG 잔존. v2.18.15 ROLLBACK 에 포함.
+
 ## [2.18.13] - 2026-05-21 — BUG-42 재시도 (4-tier fallback chain, Codex 라운드 1+2 합의)
 
 > v2.18.12 ROLLBACK + qr-test.html 검증 + Codex 라운드 1 (M=4/A=2/N=1) 합의 + 라운드 2 (M=0/A=5/N=3) 합의 후 운영 적용. 사용자 실기기 (iPhone 14/15 Pro) 4-tier 시뮬레이션 모두 GREEN catch.

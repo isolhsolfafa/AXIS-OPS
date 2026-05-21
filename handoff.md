@@ -3117,10 +3117,10 @@ Codex 3차 Q3 A 해소용 실측:
 
 ## 현재 버전
 
-- **OPS BE**: v2.18.12 (2026-05-21, ROLLBACK — version bump only)
-- **OPS FE (Flutter PWA)**: v2.18.12 (2026-05-21, qr_scanner_web.dart v2.18.4 상태로 복귀)
-- **최근 release**: ROLLBACK (v2.18.12) — v2.18.5~v2.18.11 11번 BUG-42 hotfix 시리즈 모두 롤백. 실기기 catch: 콘솔 후면 표시 + 실제 셀카 = html5-qrcode 와 우리 변경 stream 충돌. `git checkout 8a2233f -- qr_scanner_web.dart` 단순 복귀 (506 LOC). BUG-42 🔴 OPEN reopen
-- **이전 release 시리즈 (v2.18.7)**: HOTFIX-10 후면 카메라 강제 — 사용자 catch "카메라 방향 셀카" — `environment` hint 영역 OS 무시 → `{exact:'environment'}` 강제 + 3차 fallback 영역 'back/rear/후면' label 매칭 안전망. 데스크톱 자동 user fallback. flutter build web GREEN. **별 sprint**: BUG-42-CAMERA-SWITCH-BUTTON-DEFERRED 등록 (전환 버튼 UI). **실기기 manual QA 재위탁**
+- **OPS BE**: v2.18.15 (2026-05-21, ROLLBACK 2차 — version bump only)
+- **OPS FE (Flutter PWA)**: v2.18.15 (2026-05-21, qr_scanner_web.dart v2.18.4 baseline 복귀)
+- **최근 release**: ROLLBACK 2차 (v2.18.15) — v2.18.13(4-tier)+v2.18.14(3-tier) fallback chain 시도 후 실기기 catch: 1차 tier(해상도 1920) QR 인식 NG. baseline 복귀. **누적 trail**: 13번 시도 후 baseline 회귀. BUG-42 🔴 OPEN + 7 별 sprint (TASK3-AUTO-ZOOM / CAMERA-SWITCH-BUTTON / REFACTOR-FUNCTION-SPLIT / TEST-QR-LIB-CONSTRAINT-PREFLIGHT / TOOL-ERUDA-DEV-CONSOLE / QR-SCANNER-RETRY-CLEANUP / QR-SCANNER-ERROR-CLASSIFICATION)
+- **이전 release**: v2.18.12 (ROLLBACK 1차) → v2.18.13 (4-tier chain) → v2.18.14 (advanced 제거) → v2.18.15 (baseline 복귀) — 사용자 catch "카메라 방향 셀카" — `environment` hint 영역 OS 무시 → `{exact:'environment'}` 강제 + 3차 fallback 영역 'back/rear/후면' label 매칭 안전망. 데스크톱 자동 user fallback. flutter build web GREEN. **별 sprint**: BUG-42-CAMERA-SWITCH-BUTTON-DEFERRED 등록 (전환 버튼 UI). **실기기 manual QA 재위탁**
 - **최근 release 이력 (5-19 ~ 5-21)**: v2.18.7 (HOTFIX-10 후면 강제), v2.18.6 (HOTFIX-09 1-key fix), v2.18.5 (BUG-42 명판 QR Task 2), v2.18.4 (#70 출하 KPI best 합집합), v2.18.3 (GCP migration HOLD + DATABASE_URL fallback 제거), v2.18.2 (DRAGON DUAL MECH 체크리스트 P0), v2.18.1 (PI/QI 다이얼로그 하드코딩 fix), v2.18.0 (Sprint 69 PI/QI 권한 잠금 + admin_complete)
 - **상세 trail**: 5-19 이전 release/Sprint 이력은 `PROGRESS.md` 최상위 "선행 release" + `CHANGELOG.md` 참조 (4-22 ~ 5-19 영역 handoff 갱신 누락분 보강)
 

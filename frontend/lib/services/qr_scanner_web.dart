@@ -302,49 +302,6 @@ void updateScannerDivPosition({
     ..transform = '';
 }
 
-/// BUG-42 v2.18.14 — 3-tier fallback chain (focusMode advanced 제거).
-/// 사용자 실기기 catch (v2.18.13 운영 후): 1차 full 영역 `advanced:[{focusMode:'continuous'}]`
-/// 영역 ZXing 디코더 방해 (재포커싱 중 frame 흐릿함 → 인식 NG).
-/// 2차 (advanced 제거, 해상도 유지) 부터는 인식 정상. → 1차 advanced 제거.
-///
-/// 해상도 1920×1080 은 유지 — 명판 QR 픽셀 셀 수 확보 효과 + 디코더 방해 없음.
-///
-/// Codex 라운드 1 M-Q2 권고 — html5-qrcode 2.3.8 `videoConstraints` 키 자체가
-/// `cameraIdOrConfig.facingMode` hint 를 무시하는 라이브러리 동작 영역
-/// videoConstraints 안에 facingMode 명시 + 단계별 제약 완화로 OverconstrainedError 회피.
-///
-/// 1차: facingMode + width/height (해상도) — 명판 QR 최적
-/// 2차 (실패 시): 해상도 제거 → facingMode 만
-/// 3차 (실패 시): baseline (videoConstraints 자체 없음, v2.18.4 동일)
-List<Map<String, dynamic>> _buildFallbackTiers() {
-  return [
-    {
-      'name': '1차 (해상도)',
-      'config': {
-        'fps': 10,
-        'qrbox': 200,
-        'videoConstraints': {
-          'facingMode': 'environment',
-          'width': {'ideal': 1920},
-          'height': {'ideal': 1080},
-        },
-      },
-    },
-    {
-      'name': '2차 (해상도 제거)',
-      'config': {
-        'fps': 10,
-        'qrbox': 200,
-        'videoConstraints': {'facingMode': 'environment'},
-      },
-    },
-    {
-      'name': '3차 (baseline)',
-      'config': {'fps': 10, 'qrbox': 200},
-    },
-  ];
-}
-
 /// QR 스캐너 시작 (웹 구현 — DOM 직접 생성 방식)
 ///
 /// 전략:
@@ -440,32 +397,22 @@ Future<bool> startQrScanner({
       // QR 미인식은 정상 상태 — 무시
     });
 
-    // BUG-42 v2.18.13 — 4-tier fallback chain (Codex 라운드 1 M-Q2 권고)
-    // facingMode hint 가 videoConstraints 키에 흡수되어 무시되는 라이브러리 동작 우회.
-    // videoConstraints 안에 facingMode 명시 + 단계별 제약 완화.
-    final tiers = _buildFallbackTiers();
-    for (var i = 0; i < tiers.length; i++) {
-      final tier = tiers[i];
-      // 매 시도마다 새 scanner 인스턴스 (이전 실패한 상태 영역 영영)
-      if (i > 0) {
-        _scanner = js_util.callConstructor(html5QrcodeClass, [divId]);
-      }
-      try {
-        final envConstraints = js_util.jsify({'facingMode': 'environment'});
-        final tierConfig = js_util.jsify(tier['config'] as Object);
-        final promise = js_util.callMethod(
-          _scanner!,
-          'start',
-          [envConstraints, tierConfig, successCallback, errorCallback],
-        );
-        await js_util.promiseToFuture(promise);
-        debugPrint('[QrScannerWeb] Started with ${tier['name']}');
-        await Future.delayed(const Duration(milliseconds: 300));
-        _forceSquareAfterCameraStart();
-        return true;
-      } catch (e) {
-        debugPrint('[QrScannerWeb] ${tier['name']} failed: $e');
-      }
+    // 1차 시도: 후면 카메라 (모바일)
+    try {
+      final envConstraints = js_util.jsify({'facingMode': 'environment'});
+      final promise = js_util.callMethod(
+        _scanner!,
+        'start',
+        [envConstraints, config, successCallback, errorCallback],
+      );
+      await js_util.promiseToFuture(promise);
+      debugPrint('[QrScannerWeb] Started with environment camera');
+      // ★ 11차: 카메라 시작 후 약간의 딜레이 뒤 강제 정사각형 적용
+      await Future.delayed(const Duration(milliseconds: 300));
+      _forceSquareAfterCameraStart();
+      return true;
+    } catch (e) {
+      debugPrint('[QrScannerWeb] environment camera failed: $e');
     }
 
     // 2차 시도: 전면 카메라 (데스크톱/MacBook)
