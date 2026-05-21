@@ -191,6 +191,56 @@
     <strong>1차+2차+3차 강제 실패 (4차 baseline 까지 검증)</strong>
   </label></div>
 
+  <hr style="margin: 12px 0; border: none; border-top: 1px solid #d1d1d6;" />
+
+  <h2 style="margin-top: 0;">진단/개선 옵션 (Phase 1)</h2>
+  <div style="font-size: 11px; color: #6e6e73; margin-bottom: 8px;">
+    BUG-42 명판 QR 인식 catch — 옵션 변경 → Start → 인식 catch
+  </div>
+
+  <div class="opt">
+    <strong>해상도:</strong><br />
+    <label><input type="radio" name="resolution" value="1920x1080" /> 1920×1080 (FHD)</label><br />
+    <label><input type="radio" name="resolution" value="1280x720" /> 1280×720 (HD)</label><br />
+    <label><input type="radio" name="resolution" value="640x480" /> 640×480 (SD)</label><br />
+    <label><input type="radio" name="resolution" value="default" checked /> OS default (constraint 없음)</label>
+  </div>
+
+  <div class="opt" style="margin-top: 8px;">
+    <strong>fps:</strong>
+    <select id="opt-fps">
+      <option value="5">5</option>
+      <option value="10" selected>10 (default)</option>
+      <option value="15">15</option>
+      <option value="30">30</option>
+    </select>
+  </div>
+
+  <div class="opt" style="margin-top: 4px;">
+    <strong>qrbox:</strong>
+    <select id="opt-qrbox">
+      <option value="100">100</option>
+      <option value="150">150</option>
+      <option value="200" selected>200 (default)</option>
+      <option value="250">250</option>
+      <option value="300">300</option>
+    </select>
+  </div>
+
+  <div class="opt" style="margin-top: 4px;">
+    <strong>카메라 zoom (start 후 자동 적용):</strong><br />
+    <input type="range" id="opt-zoom" min="1.0" max="3.0" step="0.1" value="1.0" style="width: 200px;" />
+    <span id="opt-zoom-val">1.0x</span>
+  </div>
+
+  <div class="opt" style="margin-top: 8px;">
+    <strong>focusMode (start 후 자동 적용):</strong><br />
+    <label><input type="radio" name="focusMode" value="none" checked /> 없음 (default)</label>
+    <label style="margin-left: 8px;"><input type="radio" name="focusMode" value="continuous" /> continuous</label>
+    <label style="margin-left: 8px;"><input type="radio" name="focusMode" value="single-shot" /> single-shot</label>
+    <label style="margin-left: 8px;"><input type="radio" name="focusMode" value="manual" /> manual</label>
+  </div>
+
   <div style="margin-top: 12px;">
     <button class="btn-start" onclick="startScanner()">Start</button>
     <button class="btn-stop" onclick="stopScanner()">Stop</button>
@@ -210,6 +260,13 @@
     <div class="diag-row">actual facing: <span id="diag-facing">-</span></div>
     <div class="diag-row">deviceId: <span id="diag-deviceId">-</span></div>
     <div class="diag-row">cameras count: <span id="diag-cameras-count">-</span></div>
+    <div class="diag-row">actual width × height: <span id="diag-actual-res">-</span></div>
+    <div class="diag-row">actual frameRate: <span id="diag-actual-fps">-</span></div>
+    <div class="diag-row">capabilities (zoom): <span id="diag-cap-zoom">-</span></div>
+    <div class="diag-row">capabilities (focusMode): <span id="diag-cap-focus">-</span></div>
+    <div class="diag-row">QR 검출 시도: <span id="diag-scan-attempts">0</span> 회</div>
+    <div class="diag-row">QR 검출 성공: <span id="diag-scan-success" style="color: #ffcc00;">0</span> 회</div>
+    <div class="diag-row">마지막 frame: <span id="diag-last-frame">-</span></div>
   </div>
 </div>
 
@@ -243,8 +300,15 @@
     document.getElementById('diag-' + id).textContent = val;
   }
 
+  // ---- zoom slider 값 표시 ----
+  document.getElementById('opt-zoom').addEventListener('input', (e) => {
+    document.getElementById('opt-zoom-val').textContent = e.target.value + 'x';
+  });
+
   // ---- 옵션 읽기 ----
   function opts() {
+    const resolution = document.querySelector('input[name="resolution"]:checked').value;
+    const focusMode = document.querySelector('input[name="focusMode"]:checked').value;
     return {
       videoConstraintsSize: document.getElementById('opt-videoConstraints-size').checked,
       videoConstraintsFocus: document.getElementById('opt-videoConstraints-focus').checked,
@@ -258,7 +322,76 @@
       forceFail1: document.getElementById('opt-force-fail-1').checked,
       forceFail12: document.getElementById('opt-force-fail-12').checked,
       forceFail123: document.getElementById('opt-force-fail-123').checked,
+      // Phase 1
+      resolution: resolution,
+      fps: parseInt(document.getElementById('opt-fps').value, 10),
+      qrbox: parseInt(document.getElementById('opt-qrbox').value, 10),
+      zoom: parseFloat(document.getElementById('opt-zoom').value),
+      focusMode: focusMode,
     };
+  }
+
+  // ---- 카메라 시작 후 actual settings + capabilities + zoom/focusMode 적용 ----
+  let scanStats = { attempts: 0, success: 0 };
+  function resetScanStats() {
+    scanStats.attempts = 0;
+    scanStats.success = 0;
+    diagSet('scan-attempts', '0');
+    document.getElementById('diag-scan-success').textContent = '0';
+    diagSet('last-frame', '-');
+  }
+
+  async function applyPostStartSettings(o) {
+    try {
+      const videos = document.querySelectorAll('#qr-scanner-dom-div video');
+      if (videos.length === 0 || !videos[0].srcObject) return;
+      const tracks = videos[0].srcObject.getVideoTracks();
+      if (tracks.length === 0) return;
+      const track = tracks[0];
+      // actual settings
+      const settings = track.getSettings();
+      diagSet('label', track.label || '-');
+      diagSet('facing', settings.facingMode || '-');
+      diagSet('deviceId', settings.deviceId ? settings.deviceId.slice(0, 16) + '...' : '-');
+      diagSet('actual-res', `${settings.width || '?'} × ${settings.height || '?'}`);
+      diagSet('actual-fps', settings.frameRate || '-');
+      log(`[QrTest] actual settings: ${JSON.stringify({facing:settings.facingMode, w:settings.width, h:settings.height, fps:settings.frameRate})}`);
+      // capabilities
+      let caps = {};
+      try {
+        caps = track.getCapabilities();
+        const zoomRange = caps.zoom ? `${caps.zoom.min}-${caps.zoom.max} step ${caps.zoom.step || '?'}` : '미지원';
+        diagSet('cap-zoom', zoomRange);
+        const focusModes = caps.focusMode ? caps.focusMode.join(', ') : '미지원';
+        diagSet('cap-focus', focusModes);
+        log(`[QrTest] capabilities: zoom=${JSON.stringify(caps.zoom)}, focusMode=${JSON.stringify(caps.focusMode)}`);
+      } catch (e) {
+        log(`[QrTest] getCapabilities 미지원: ${e.message}`);
+      }
+      // zoom 적용
+      if (o.zoom && o.zoom > 1.0 && caps.zoom) {
+        const target = Math.min(Math.max(o.zoom, caps.zoom.min), caps.zoom.max);
+        try {
+          await track.applyConstraints({ advanced: [{ zoom: target }] });
+          log(`[QrTest] zoom 적용: ${target}x`);
+        } catch (e) {
+          warn(`[QrTest] zoom 적용 실패: ${e.message}`);
+        }
+      }
+      // focusMode 적용
+      if (o.focusMode && o.focusMode !== 'none' && caps.focusMode && caps.focusMode.includes(o.focusMode)) {
+        try {
+          await track.applyConstraints({ advanced: [{ focusMode: o.focusMode }] });
+          log(`[QrTest] focusMode 적용: ${o.focusMode}`);
+        } catch (e) {
+          warn(`[QrTest] focusMode 적용 실패: ${e.message}`);
+        }
+      } else if (o.focusMode && o.focusMode !== 'none') {
+        warn(`[QrTest] focusMode '${o.focusMode}' 미지원 (caps: ${caps.focusMode})`);
+      }
+    } catch (e) {
+      warn(`[QrTest] applyPostStartSettings 실패: ${e.message}`);
+    }
   }
 
   // ---- v2.18.13 4-tier fallback chain (운영 패턴) ----
@@ -424,16 +557,27 @@
   }
 
   function buildConfig(o) {
-    const config = { fps: 10, qrbox: 200 };
-    if (o.videoConstraintsSize || o.videoConstraintsFocus || o.vcFacingMode) {
+    // Phase 1 — fps / qrbox 영역 사용자 선택 우선
+    const config = { fps: o.fps || 10, qrbox: o.qrbox || 200 };
+    // Phase 1 — 해상도 선택 (Phase 1 옵션 우선, 기존 옵션 1 영역 보조)
+    let resWidth = null, resHeight = null;
+    if (o.resolution && o.resolution !== 'default') {
+      const parts = o.resolution.split('x');
+      resWidth = parseInt(parts[0], 10);
+      resHeight = parseInt(parts[1], 10);
+    } else if (o.videoConstraintsSize) {
+      resWidth = 1920;
+      resHeight = 1080;
+    }
+    // videoConstraints 영역 조립
+    if (resWidth || o.videoConstraintsFocus || o.vcFacingMode) {
       const vc = {};
       if (o.vcFacingMode) {
-        // 패턴 A: videoConstraints 안에 facingMode 명시 — 후면 강제 + 해상도/포커스
         vc.facingMode = 'environment';
       }
-      if (o.videoConstraintsSize) {
-        vc.width = { ideal: 1920 };
-        vc.height = { ideal: 1080 };
+      if (resWidth) {
+        vc.width = { ideal: resWidth };
+        vc.height = { ideal: resHeight };
       }
       if (o.videoConstraintsFocus) {
         vc.advanced = [{ focusMode: 'continuous' }];
@@ -476,10 +620,16 @@
     scanner = new Html5Qrcode(divId);
 
     const successCallback = (decodedText, result) => {
+      scanStats.success++;
+      document.getElementById('diag-scan-success').textContent = scanStats.success;
+      diagSet('last-frame', new Date().toTimeString().slice(0, 8) + ' ★ DETECTED');
       log(`[QrTest] ★ QR DETECTED: ${decodedText}`);
     };
     const errorCallback = (errorMessage, error) => {
-      // QR 미인식은 정상
+      // QR 미인식 = 디코더 활성 신호. 카운터 + 마지막 frame 업데이트
+      scanStats.attempts++;
+      diagSet('scan-attempts', scanStats.attempts);
+      diagSet('last-frame', new Date().toTimeString().slice(0, 8));
     };
 
     // ---- v2.18.13 4-tier fallback chain 모드 (우선 적용) ----
@@ -489,6 +639,8 @@
       if (result.success) {
         scanner = result.scanner;
         setTimeout(forceSquareAfterCameraStart, 300);
+      setTimeout(() => applyPostStartSettings(o), 600);
+        setTimeout(() => applyPostStartSettings(o), 600);
         started = true;
         diagSet('status', `실행 중 (${result.tier})`);
         // 진단 패널 영역 stream 정보 추출 시도
@@ -550,6 +702,8 @@
           await scanner.start(idConfig, config, successCallback, errorCallback);
           log('[QrTest] Started with 0차 getUserMedia deviceId ★');
           setTimeout(forceSquareAfterCameraStart, 300);
+      setTimeout(() => applyPostStartSettings(o), 600);
+        setTimeout(() => applyPostStartSettings(o), 600);
           started = true;
           diagSet('status', '실행 중 (0차)');
           return;
@@ -581,6 +735,8 @@
           await scanner.start(idConfig, config, successCallback, errorCallback);
           log('[QrTest] Started with 1차 cameras label match ★');
           setTimeout(forceSquareAfterCameraStart, 300);
+      setTimeout(() => applyPostStartSettings(o), 600);
+        setTimeout(() => applyPostStartSettings(o), 600);
           started = true;
           diagSet('status', '실행 중 (1차)');
           diagSet('deviceId', backCameraId.slice(0, 16) + '...');
@@ -600,6 +756,7 @@
       await scanner.start(envConfig, config, successCallback, errorCallback);
       log(`[QrTest] Started with environment camera (${o.facingModeExact ? 'exact' : 'hint'}) ★`);
       setTimeout(forceSquareAfterCameraStart, 300);
+      setTimeout(() => applyPostStartSettings(o), 600);
       started = true;
       diagSet('status', `실행 중 (2차 environment ${o.facingModeExact ? 'exact' : 'hint'})`);
       return;
@@ -615,6 +772,7 @@
       await scanner.start(userConfig, config, successCallback, errorCallback);
       log('[QrTest] Started with user camera ★');
       setTimeout(forceSquareAfterCameraStart, 300);
+      setTimeout(() => applyPostStartSettings(o), 600);
       started = true;
       diagSet('status', '실행 중 (3차 user)');
       return;
@@ -630,6 +788,8 @@
         await scanner.start(cameras[0].id, config, successCallback, errorCallback);
         log(`[QrTest] Started with cameras[0]: ${cameras[0].label} ★`);
         setTimeout(forceSquareAfterCameraStart, 300);
+      setTimeout(() => applyPostStartSettings(o), 600);
+        setTimeout(() => applyPostStartSettings(o), 600);
         started = true;
         diagSet('status', `실행 중 (4차 cameras[0]: ${cameras[0].label})`);
         return;
