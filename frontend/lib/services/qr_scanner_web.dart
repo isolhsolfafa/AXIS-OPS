@@ -302,34 +302,24 @@ void updateScannerDivPosition({
     ..transform = '';
 }
 
-/// BUG-42 v2.18.13 — 4-tier fallback chain.
+/// BUG-42 v2.18.14 — 3-tier fallback chain (focusMode advanced 제거).
+/// 사용자 실기기 catch (v2.18.13 운영 후): 1차 full 영역 `advanced:[{focusMode:'continuous'}]`
+/// 영역 ZXing 디코더 방해 (재포커싱 중 frame 흐릿함 → 인식 NG).
+/// 2차 (advanced 제거, 해상도 유지) 부터는 인식 정상. → 1차 advanced 제거.
+///
+/// 해상도 1920×1080 은 유지 — 명판 QR 픽셀 셀 수 확보 효과 + 디코더 방해 없음.
+///
 /// Codex 라운드 1 M-Q2 권고 — html5-qrcode 2.3.8 `videoConstraints` 키 자체가
-/// `cameraIdOrConfig.facingMode` hint 를 무시하는 라이브러리 동작 catch.
+/// `cameraIdOrConfig.facingMode` hint 를 무시하는 라이브러리 동작 영역
 /// videoConstraints 안에 facingMode 명시 + 단계별 제약 완화로 OverconstrainedError 회피.
 ///
-/// 1차: full (facingMode + width/height + advanced focusMode) — 명판 QR 최적
-/// 2차 (실패 시): advanced 제거 (focusMode 미지원 환경)
-/// 3차 (실패 시): 해상도 제거 (해상도 미지원 환경)
-/// 4차 (실패 시): baseline (videoConstraints 자체 없음, v2.18.4 동일)
+/// 1차: facingMode + width/height (해상도) — 명판 QR 최적
+/// 2차 (실패 시): 해상도 제거 → facingMode 만
+/// 3차 (실패 시): baseline (videoConstraints 자체 없음, v2.18.4 동일)
 List<Map<String, dynamic>> _buildFallbackTiers() {
   return [
     {
-      'name': '1차 (full)',
-      'config': {
-        'fps': 10,
-        'qrbox': 200,
-        'videoConstraints': {
-          'facingMode': 'environment',
-          'width': {'ideal': 1920},
-          'height': {'ideal': 1080},
-          'advanced': [
-            {'focusMode': 'continuous'},
-          ],
-        },
-      },
-    },
-    {
-      'name': '2차 (advanced 제거)',
+      'name': '1차 (해상도)',
       'config': {
         'fps': 10,
         'qrbox': 200,
@@ -341,7 +331,7 @@ List<Map<String, dynamic>> _buildFallbackTiers() {
       },
     },
     {
-      'name': '3차 (해상도 제거)',
+      'name': '2차 (해상도 제거)',
       'config': {
         'fps': 10,
         'qrbox': 200,
@@ -349,7 +339,7 @@ List<Map<String, dynamic>> _buildFallbackTiers() {
       },
     },
     {
-      'name': '4차 (baseline)',
+      'name': '3차 (baseline)',
       'config': {'fps': 10, 'qrbox': 200},
     },
   ];
