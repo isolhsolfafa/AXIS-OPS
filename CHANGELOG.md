@@ -6,6 +6,45 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.18.12] - 2026-05-21 — ROLLBACK qr_scanner_web.dart v2.18.4 상태로 복귀
+
+> v2.18.5 ~ v2.18.11 (11번 BUG-42 hotfix 시리즈) 모두 롤백. 실기기 catch: 콘솔 로그는 후면 카메라(`label=후면 듀얼 와이드 카메라`)로 표시되는데 실제 화면에는 전면 카메라(셀카)가 보이는 라이브러리 충돌 — `getUserMedia` 직접 호출 + `videoConstraints` 추가 + `{exact:'environment'}` 등 변경이 html5-qrcode 내부 stream 과 충돌 추정. 11번 누적 변경 후 디버깅 비용 > 복귀 비용 판단.
+
+### 변경
+
+| 파일 | 내용 |
+|------|-----|
+| `frontend/lib/services/qr_scanner_web.dart` | `git checkout 8a2233f -- ...` v2.18.4 상태 복귀 (506 LOC). 단순 `facingMode: 'environment'` / `facingMode: 'user'` hint 만 사용 |
+| `backend/version.py` | 2.18.11 → 2.18.12 |
+| `frontend/lib/utils/app_version.dart` | 2.18.11 → 2.18.12 |
+| `BACKLOG.md` | BUG-42 → 🔴 OPEN reopen. `BUG-42-TASK3-AUTO-ZOOM-DEFERRED` / `BUG-42-CAMERA-SWITCH-BUTTON-DEFERRED` / `REFACTOR-QR-SCANNER-WEB-FUNCTION-SPLIT` 보존 |
+
+### 롤백 대상 (v2.18.5 ~ v2.18.11)
+
+- v2.18.5 (BUG-42 Task 2: 해상도 1920×1080 + focusMode continuous)
+- v2.18.6 (HOTFIX-09 cameraIdOrConfig 1-key fix)
+- v2.18.7 (HOTFIX-10 facingMode exact)
+- v2.18.8 (HOTFIX-11 cameras label 매칭 1차 승격)
+- v2.18.9 (HOTFIX-12 getUserMedia 직접 호출 0차)
+- v2.18.10 (HOTFIX-13 exact + facingMode 검증)
+- v2.18.11 (HOTFIX-14 권한 발급 시점 environment hint)
+
+→ 위 7개 release qr_scanner_web.dart 변경분만 롤백. CHANGELOG/CLAUDE.md/PROGRESS.md 진행 기록은 trail 로 보존.
+
+### 영향
+
+- ✅ 카메라 동작 v2.18.4 (BUG-42 hotfix 시작 전) 상태로 복귀 — 후면 카메라 정상 작동 기대
+- ⚠️ 명판 소형 QR 인식 개선 다시 OPEN — 실제 iPhone 환경에서 정밀 진단 후 재시도 필요
+- ✅ 다른 모든 변경 (백엔드, 다른 화면) 보존
+
+### 향후 재시도 조건
+
+- 실제 iPhone Safari + Mac 원격 디버깅 또는 Eruda in-app 콘솔로 정확한 진단
+- 라이브러리 충돌 없는 minimal change 우선
+- 단일 변경마다 즉시 실기기 검증 후 다음 단계
+
+---
+
 ## [2.18.7] - 2026-05-21 — HOTFIX-10 후면 카메라 강제 (셀카 fallback 차단)
 
 > 사용자 catch (5-21, v2.18.6 직후): "카메라 방향이 현재 셀카인데 전환하는 버튼을 돌려주던지 방향 변경해줘". 모바일에서 1차 시도 `facingMode: 'environment'` 가 hint 일 뿐이라 iOS Safari 등 일부 환경에서 OS 가 무시 → user 카메라로 silent fallback → 셀카로 보임. 명판 QR 인식이 본 목적이라 후면 강제 필수.

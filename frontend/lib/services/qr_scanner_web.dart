@@ -263,28 +263,14 @@ void showScannerDiv() {
 /// 카메라 권한을 먼저 요청 (브라우저 팝업이 보이는 상태에서)
 /// 권한 획득 후 stream을 즉시 중지하고 true 반환
 Future<bool> _requestCameraPermission() async {
-  // HOTFIX-14 (v2.18.11): iOS Safari PWA 영역 권한 발급 시점에 후면 카메라 명시 → enumerate
-  // 영역 후면 카메라 노출 유도. cameras=1 (전면만 노출) catch 우회.
-  // 1차 시도: {facingMode:'environment'} hint — 후면 카메라 권한 발급 → enumerate 영역 후면 보임
-  // 2차 fallback: {video:true} — 후면 없는 환경 (데스크톱 등)
   try {
     final mediaDevices = html.window.navigator.mediaDevices;
     if (mediaDevices == null) return false;
 
-    try {
-      final envStream = await mediaDevices.getUserMedia({
-        'video': {'facingMode': 'environment'},
-      });
-      envStream.getTracks().forEach((track) => track.stop());
-      debugPrint('[QrScannerWeb] Camera permission granted (environment hint)');
-      return true;
-    } catch (envError) {
-      debugPrint('[QrScannerWeb] environment permission failed: $envError → fallback to any video');
-    }
-
     final stream = await mediaDevices.getUserMedia({'video': true});
     stream.getTracks().forEach((track) => track.stop());
-    debugPrint('[QrScannerWeb] Camera permission granted (any video)');
+
+    debugPrint('[QrScannerWeb] Camera permission granted');
     return true;
   } catch (e) {
     debugPrint('[QrScannerWeb] Camera permission denied: $e');
@@ -314,41 +300,6 @@ void updateScannerDivPosition({
     ..height = '${height}px'
     ..right = '' // right 제거
     ..transform = '';
-}
-
-/// HOTFIX-09 (v2.18.6): html5-qrcode `cameraIdOrConfig` 1-key 객체 spec 정합.
-/// - v2.18.5 catch: width/height/advanced 를 cameraIdOrConfig 에 같이 넣으면
-///   라이브러리가 `'cameraIdOrConfig' object should have exactly 1 key` 로 reject.
-/// - 해결: cameraIdOrConfig = facingMode 또는 deviceId **단일 key** 만.
-///   해상도/focusMode 영역은 `__qrScanConfig.videoConstraints` 로 분리 (configScript 참조).
-dynamic _buildScannerConstraints({String? facingMode, String? cameraId}) {
-  final base = <String, dynamic>{};
-  if (cameraId != null) {
-    base['deviceId'] = {'exact': cameraId};
-  } else if (facingMode != null) {
-    // HOTFIX-11 (v2.18.8): facingMode 영역 string hint 만 사용.
-    // exact 영역(v2.18.7) 은 iOS Safari 등 일부 환경에서 reject 가능 → 후면 강제 효과 0.
-    // 후면 카메라 강제는 cameras list 영역 label 매칭(1차 시도)으로 우선 처리.
-    base['facingMode'] = facingMode;
-  }
-  return js_util.jsify(base);
-}
-
-/// HOTFIX-11 (v2.18.8): cameras list 영역 후면 카메라 deviceId 매칭 (1차 시도용).
-/// facingMode hint/exact 영역 OS reject 가능성 우회 — 가장 신뢰성 있는 후면 강제.
-/// 'back'/'rear'/'environment'/'후면' label 포함 카메라 우선 매칭, 없으면 null 반환.
-String? _findBackCameraId(List<dynamic> cameras) {
-  for (final c in cameras) {
-    final rawLabel = js_util.getProperty(c as Object, 'label');
-    final label = (rawLabel is String ? rawLabel : '').toLowerCase();
-    if (label.contains('back') ||
-        label.contains('rear') ||
-        label.contains('environment') ||
-        label.contains('후면')) {
-      return js_util.getProperty(c, 'id') as String;
-    }
-  }
-  return null;
 }
 
 /// QR 스캐너 시작 (웹 구현 — DOM 직접 생성 방식)
@@ -422,21 +373,11 @@ Future<bool> startQrScanner({
     // ★ 10차 수정: qrbox를 integer로 변경 — 컨테이너가 정사각형이므로 숫자값이 자동으로 정사각형 스캔 영역 생성
     // 9차 실패 이력: qrbox callback이 정사각형 크기를 반환해도 컨테이너가 landscape이면 뷰파인더가 가로로 늘어남
     // 해결책: 컨테이너를 정사각형으로 만들고 qrbox도 integer로 지정
-    // HOTFIX-09 (v2.18.6): BUG-42 명판 QR 인식률 개선 — videoConstraints 영역으로 분리.
-    // html5-qrcode `cameraIdOrConfig` 는 1-key 객체만 허용 → 해상도/focusMode 는 config.videoConstraints 에.
-    // - width/height ideal 1920×1080 → 명판 작은 QR 픽셀 셀 수 확보
-    // - focusMode: continuous → 명판 접사 시 자동 재포커스 (사용자 직관 catch)
-    // - 미지원 환경(iOS Safari 등)은 MediaTrackConstraints spec상 unknown advanced 무시 → 안전 폴백
     final configScript = html.ScriptElement()
       ..text = '''
         window.__qrScanConfig = {
           fps: 10,
-          qrbox: 200,
-          videoConstraints: {
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-            advanced: [{ focusMode: 'continuous' }]
-          }
+          qrbox: 200
         };
         console.log("[QrScannerWeb] config.qrbox type=" + typeof window.__qrScanConfig.qrbox + " value=" + window.__qrScanConfig.qrbox);
       ''';
@@ -456,96 +397,17 @@ Future<bool> startQrScanner({
       // QR 미인식은 정상 상태 — 무시
     });
 
-    // 0차 시도 (HOTFIX-13 v2.18.10): getUserMedia({video:{facingMode:{exact:'environment'}}})
-    // exact 영역 강제 — iOS Safari 영역 hint 무시 catch 차단. 후면 없으면 즉시 throw → fallback.
-    // 추가 안전망: settings.facingMode 영역 actual 'user' 영역 거부 + fallback (OS 가 exact 무시 시).
-    // settings.deviceId 영역 추출 → html5-qrcode 영역 명시.
+    // 1차 시도: 후면 카메라 (모바일)
     try {
-      final mediaDevices = js_util.getProperty(html.window.navigator, 'mediaDevices');
-      if (mediaDevices != null) {
-        final umConstraints = js_util.jsify({
-          'video': {
-            'facingMode': {'exact': 'environment'},
-          },
-        });
-        final streamPromise = js_util.callMethod(mediaDevices, 'getUserMedia', [umConstraints]);
-        final stream = await js_util.promiseToFuture(streamPromise);
-        final tracks = js_util.callMethod(stream, 'getVideoTracks', []) as List<dynamic>;
-        String? envDeviceId;
-        String? actualFacing;
-        String? trackLabel;
-        if (tracks.isNotEmpty) {
-          final track = tracks[0];
-          try {
-            final settings = js_util.callMethod(track as Object, 'getSettings', []);
-            final rawId = js_util.getProperty(settings, 'deviceId');
-            envDeviceId = rawId is String && rawId.isNotEmpty ? rawId : null;
-            final rawFacing = js_util.getProperty(settings, 'facingMode');
-            actualFacing = rawFacing is String ? rawFacing : null;
-            final rawLabel = js_util.getProperty(track, 'label');
-            trackLabel = rawLabel is String ? rawLabel : null;
-          } catch (_) {}
-          // stream 즉시 정리 — html5-qrcode 가 자체 stream 생성하므로 충돌 방지
-          js_util.callMethod(track as Object, 'stop', []);
-        }
-        debugPrint('[QrScannerWeb] getUserMedia env actual: facing=$actualFacing, label=$trackLabel, deviceId=$envDeviceId');
-        // 안전망: OS 가 exact 무시하고 user 발급 시 거부
-        if (actualFacing == 'user') {
-          debugPrint('[QrScannerWeb] getUserMedia env REJECTED: actual user camera (OS ignored exact)');
-        } else if (envDeviceId != null) {
-          final idConstraints = _buildScannerConstraints(cameraId: envDeviceId);
-          final promise = js_util.callMethod(
-            _scanner!,
-            'start',
-            [idConstraints, config, successCallback, errorCallback],
-          );
-          await js_util.promiseToFuture(promise);
-          debugPrint('[QrScannerWeb] Started with environment camera (getUserMedia exact)');
-          await Future.delayed(const Duration(milliseconds: 300));
-          _forceSquareAfterCameraStart();
-          return true;
-        }
-      }
-    } catch (e) {
-      debugPrint('[QrScannerWeb] getUserMedia env exact failed: $e');
-    }
-
-    // 1차 시도 (HOTFIX-11 v2.18.8): cameras list 영역 후면 label 매칭 → deviceId 명시
-    // facingMode hint/exact 영역 OS reject 가능성 우회. getUserMedia 0차 실패 시 fallback.
-    try {
-      _scanner = js_util.callConstructor(html5QrcodeClass, [divId]);
-      final camerasPromise = js_util.callMethod(html5QrcodeClass, 'getCameras', []);
-      final cameras = await js_util.promiseToFuture(camerasPromise) as List<dynamic>;
-      final backCameraId = _findBackCameraId(cameras);
-      if (backCameraId != null) {
-        final idConstraints = _buildScannerConstraints(cameraId: backCameraId);
-        final promise = js_util.callMethod(
-          _scanner!,
-          'start',
-          [idConstraints, config, successCallback, errorCallback],
-        );
-        await js_util.promiseToFuture(promise);
-        debugPrint('[QrScannerWeb] Started with back camera by label match');
-        await Future.delayed(const Duration(milliseconds: 300));
-        _forceSquareAfterCameraStart();
-        return true;
-      }
-      debugPrint('[QrScannerWeb] No back camera label matched (cameras=${cameras.length})');
-    } catch (e) {
-      debugPrint('[QrScannerWeb] back camera by label failed: $e');
-    }
-
-    // 2차 시도: facingMode environment (string hint)
-    try {
-      _scanner = js_util.callConstructor(html5QrcodeClass, [divId]);
-      final envConstraints = _buildScannerConstraints(facingMode: 'environment');
+      final envConstraints = js_util.jsify({'facingMode': 'environment'});
       final promise = js_util.callMethod(
         _scanner!,
         'start',
         [envConstraints, config, successCallback, errorCallback],
       );
       await js_util.promiseToFuture(promise);
-      debugPrint('[QrScannerWeb] Started with environment camera (hint)');
+      debugPrint('[QrScannerWeb] Started with environment camera');
+      // ★ 11차: 카메라 시작 후 약간의 딜레이 뒤 강제 정사각형 적용
       await Future.delayed(const Duration(milliseconds: 300));
       _forceSquareAfterCameraStart();
       return true;
@@ -556,7 +418,7 @@ Future<bool> startQrScanner({
     // 2차 시도: 전면 카메라 (데스크톱/MacBook)
     try {
       _scanner = js_util.callConstructor(html5QrcodeClass, [divId]);
-      final userConstraints = _buildScannerConstraints(facingMode: 'user');
+      final userConstraints = js_util.jsify({'facingMode': 'user'});
       final promise = js_util.callMethod(
         _scanner!,
         'start',
@@ -571,32 +433,17 @@ Future<bool> startQrScanner({
       debugPrint('[QrScannerWeb] user camera failed: $e');
     }
 
-    // 3차 시도: 사용 가능한 카메라 ID — HOTFIX-10 (v2.18.7) 후면 카메라 label 우선 매칭
+    // 3차 시도: 사용 가능한 첫 번째 카메라 ID
     try {
       final camerasPromise = js_util.callMethod(html5QrcodeClass, 'getCameras', []);
       final cameras = await js_util.promiseToFuture(camerasPromise) as List<dynamic>;
       if (cameras.isNotEmpty) {
-        // 후면 카메라(label 영역 'back'/'rear'/'environment'/'후면') 우선 매칭 → 없으면 cameras[0]
-        String cameraId = js_util.getProperty(cameras[0] as Object, 'id') as String;
-        for (final c in cameras) {
-          final rawLabel = js_util.getProperty(c as Object, 'label');
-          final label = (rawLabel is String ? rawLabel : '').toLowerCase();
-          if (label.contains('back') ||
-              label.contains('rear') ||
-              label.contains('environment') ||
-              label.contains('후면')) {
-            cameraId = js_util.getProperty(c, 'id') as String;
-            debugPrint('[QrScannerWeb] Back camera matched by label: $label');
-            break;
-          }
-        }
+        final cameraId = js_util.getProperty(cameras[0] as Object, 'id') as String;
         _scanner = js_util.callConstructor(html5QrcodeClass, [divId]);
-        // HOTFIX BUG-42 (v2.18.5): cameraId fallback도 deviceId+constraints 통일 (Codex Q2 M)
-        final idConstraints = _buildScannerConstraints(cameraId: cameraId);
         final promise = js_util.callMethod(
           _scanner!,
           'start',
-          [idConstraints, config, successCallback, errorCallback],
+          [cameraId, config, successCallback, errorCallback],
         );
         await js_util.promiseToFuture(promise);
         debugPrint('[QrScannerWeb] Started with camera ID: $cameraId');
