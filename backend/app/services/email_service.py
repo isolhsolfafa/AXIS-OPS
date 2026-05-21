@@ -62,6 +62,11 @@ def _send_email(to_email: str, subject: str, html_body: str) -> bool:
     except smtplib.SMTPAuthenticationError:
         logger.error("SMTP authentication failed — SMTP_USER/SMTP_PASSWORD 설정을 확인하세요.")
         return False
+    except smtplib.SMTPRecipientsRefused as e:
+        # v2.18.17 — 수신 메일 주소 거부 (550 Unknown user 등) = 잘못된 admin 이메일 등록
+        # Sentry 잡음 방지 — WARNING 강등. 실제 admin 이메일 정정은 DB 점검 필요
+        logger.warning(f"SMTP recipient refused: to={to_email}, detail={e.recipients}")
+        return False
     except smtplib.SMTPException as e:
         logger.error(f"SMTP error while sending to {to_email}: {e}")
         return False

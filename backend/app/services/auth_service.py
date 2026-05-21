@@ -430,6 +430,10 @@ class AuthService:
                 "SMTP_USER/SMTP_PASSWORD 설정을 확인하세요."
             )
             return False
+        except smtplib.SMTPRecipientsRefused as e:
+            # v2.18.17 — 수신자 거부 (잘못된 사용자 이메일) → WARNING 강등 (Sentry 잡음 회피)
+            logger.warning(f"SMTP recipient refused: to={to_email}, detail={e.recipients}")
+            return False
         except smtplib.SMTPException as e:
             logger.error(f"SMTP error while sending to {to_email}: {e}")
             return False
@@ -983,6 +987,10 @@ class AuthService:
                 "SMTP authentication failed — "
                 "SMTP_USER/SMTP_PASSWORD 설정을 확인하세요."
             )
+            return False
+        except smtplib.SMTPRecipientsRefused as e:
+            # v2.18.17 — 수신자 거부 (잘못된 사용자 이메일) → WARNING 강등 (Sentry 잡음 회피)
+            logger.warning(f"SMTP recipient refused: to={to_email}, detail={e.recipients}")
             return False
         except smtplib.SMTPException as e:
             logger.error(f"SMTP error while sending to {to_email}: {e}")

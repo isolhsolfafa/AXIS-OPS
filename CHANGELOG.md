@@ -6,6 +6,51 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.18.17] - 2026-05-22 — Sentry 잡음 2건 fix (WebSocket Broken pipe + SMTP Recipients refused)
+
+> 사용자 catch (2026-05-22): Sentry ERROR 영역 정상 동작 catch 2건 잡힘 — WebSocket client disconnection + SMTP admin 이메일 거부. v2.10.13 (FIX-WEBSOCKET-STOPITERATION-SENTRY-NOISE) 패턴 정합.
+
+### 변경
+
+| 파일 | 내용 |
+|------|-----|
+| `backend/app/websocket/events.py` L183 | `except Exception` 단일 → `(BrokenPipeError, ConnectionResetError, ConnectionAbortedError)` 분기 + logger.info 강등 / 기타 Exception logger.error (exc_info=True) 유지 |
+| `backend/app/services/email_service.py` L62 | `SMTPRecipientsRefused` 분기 추가 — `to_email` + `e.recipients` 로깅, logger.warning 강등 |
+| `backend/app/services/auth_service.py` L427+L981 (2곳) | 동일 `SMTPRecipientsRefused` 분기 추가 (replace_all) |
+| `backend/version.py` | 2.18.16 → 2.18.17 |
+| `frontend/lib/utils/app_version.dart` | 2.18.16 → 2.18.17 |
+
+### Sentry 영향
+
+| 변경 전 | 변경 후 |
+|---|---|
+| `WS handler error: ws_id=..., error=[Errno 32] Broken pipe` ERROR | `WS client disconnected: ws_id=..., reason=BrokenPipeError` INFO (Sentry 미발송) |
+| `SMTP error while sending to {admin}: 550 Unknown user` ERROR | `SMTP recipient refused: to={admin}, detail=...` WARNING (Sentry 미발송) |
+| 진짜 ERROR | 그대로 ERROR + exc_info=True (Sentry 발송 + stack trace 포함) |
+
+### 운영 catch — admin 이메일 점검 부탁
+
+`SMTP 550 Unknown user` = `workers.email WHERE is_admin=true` 중 잘못된 이메일 존재. KT Biz Office SMTP 영역 외부 도메인 거부 또는 퇴사자 이메일 잔존 가능성. 운영 SQL 점검:
+
+```sql
+SELECT id, name, email FROM workers WHERE is_admin = true AND email IS NOT NULL;
+```
+
+### 누적 trail — Sentry 잡음 회피 패턴
+
+- v2.10.13: flask-sock WSGI StopIteration → drop (sentry_before_send hook)
+- v2.10.14: db_pool fallback → logger.warning 강등
+- v2.18.17 (현재): WebSocket Broken pipe + SMTP Recipients refused → INFO/WARNING 강등
+
+진짜 ERROR 추적성 보존하면서 잡음만 제거.
+
+### LOC
+
+- BE 3 파일 변경: +~15 LOC (분기 추가)
+- FE: version bump 만
+
+---
+
 ## [2.18.16] - 2026-05-21 — BUG-42 fix: zoom 2.0x 자동 적용 (videoConstraints 우회)
 
 > qr-test.html 사용자 검증 catch (Step ⑤~⑧ 모두 GREEN): videoConstraints 사용 시 ZXing 디코더 방해 → 인식 NG. 그러나 `applyConstraints({advanced:[{zoom}]})` 만 사용 (videoConstraints 우회) 시 디코더 정상 + 명판 확대 모두 달성. 사용자 옵션 B 결정 (qrbox 200 현행 유지 + zoom 2.0x 자동).

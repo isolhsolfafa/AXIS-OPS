@@ -180,8 +180,13 @@ def ws_handler(ws):
                 except Exception:
                     break
 
+    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
+        # v2.18.17 — client 측 정상 disconnection (browser tab 닫음 / 네트워크 끊김 / PWA background)
+        # Sentry 잡음 방지 — INFO 로 강등 (LoggingIntegration default event_level=ERROR 미발송)
+        logger.info(f"WS client disconnected: ws_id={ws_id}, reason={type(e).__name__}")
     except Exception as e:
-        logger.error(f"WS handler error: ws_id={ws_id}, error={e}")
+        # 기타 Exception 만 ERROR — 진짜 catch 추적성 보존
+        logger.error(f"WS handler error: ws_id={ws_id}, error={e}", exc_info=True)
     finally:
         registry.unregister(ws_id)
 
