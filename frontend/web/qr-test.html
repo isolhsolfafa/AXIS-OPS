@@ -129,6 +129,12 @@
   </label></div>
 
   <div class="opt"><label>
+    <input type="checkbox" id="opt-vc-facingMode" />
+    <strong>videoConstraints 안에 facingMode:'environment' 명시</strong>
+    <span class="badge badge-base">패턴 A</span>
+  </label></div>
+
+  <div class="opt"><label>
     <input type="checkbox" id="opt-facingMode-exact" />
     <strong>facingMode {exact: 'environment'}</strong> (off=hint)
     <span class="badge badge-exp">v2.18.7</span>
@@ -215,6 +221,7 @@
     return {
       videoConstraintsSize: document.getElementById('opt-videoConstraints-size').checked,
       videoConstraintsFocus: document.getElementById('opt-videoConstraints-focus').checked,
+      vcFacingMode: document.getElementById('opt-vc-facingMode').checked,
       facingModeExact: document.getElementById('opt-facingMode-exact').checked,
       getUserMedia0th: document.getElementById('opt-getUserMedia-0th').checked,
       getUserMedia0thExact: document.getElementById('opt-getUserMedia-0th-exact').checked,
@@ -322,8 +329,12 @@
 
   function buildConfig(o) {
     const config = { fps: 10, qrbox: 200 };
-    if (o.videoConstraintsSize || o.videoConstraintsFocus) {
+    if (o.videoConstraintsSize || o.videoConstraintsFocus || o.vcFacingMode) {
       const vc = {};
+      if (o.vcFacingMode) {
+        // 패턴 A: videoConstraints 안에 facingMode 명시 — 후면 강제 + 해상도/포커스
+        vc.facingMode = 'environment';
+      }
       if (o.videoConstraintsSize) {
         vc.width = { ideal: 1920 };
         vc.height = { ideal: 1080 };
