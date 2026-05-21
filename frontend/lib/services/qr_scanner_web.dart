@@ -263,14 +263,28 @@ void showScannerDiv() {
 /// 카메라 권한을 먼저 요청 (브라우저 팝업이 보이는 상태에서)
 /// 권한 획득 후 stream을 즉시 중지하고 true 반환
 Future<bool> _requestCameraPermission() async {
+  // HOTFIX-14 (v2.18.11): iOS Safari PWA 영역 권한 발급 시점에 후면 카메라 명시 → enumerate
+  // 영역 후면 카메라 노출 유도. cameras=1 (전면만 노출) catch 우회.
+  // 1차 시도: {facingMode:'environment'} hint — 후면 카메라 권한 발급 → enumerate 영역 후면 보임
+  // 2차 fallback: {video:true} — 후면 없는 환경 (데스크톱 등)
   try {
     final mediaDevices = html.window.navigator.mediaDevices;
     if (mediaDevices == null) return false;
 
+    try {
+      final envStream = await mediaDevices.getUserMedia({
+        'video': {'facingMode': 'environment'},
+      });
+      envStream.getTracks().forEach((track) => track.stop());
+      debugPrint('[QrScannerWeb] Camera permission granted (environment hint)');
+      return true;
+    } catch (envError) {
+      debugPrint('[QrScannerWeb] environment permission failed: $envError → fallback to any video');
+    }
+
     final stream = await mediaDevices.getUserMedia({'video': true});
     stream.getTracks().forEach((track) => track.stop());
-
-    debugPrint('[QrScannerWeb] Camera permission granted');
+    debugPrint('[QrScannerWeb] Camera permission granted (any video)');
     return true;
   } catch (e) {
     debugPrint('[QrScannerWeb] Camera permission denied: $e');
