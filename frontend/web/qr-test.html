@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>QR Scanner 검증 페이지 (운영 1:1 복제)</title>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    margin: 0; padding: 12px;
+    background: #f5f5f7;
+    color: #1d1d1f;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+  h1 { font-size: 17px; margin: 0 0 8px 0; }
+  h2 { font-size: 14px; margin: 14px 0 6px 0; color: #555; }
+  .panel {
+    background: #fff;
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  .opt { margin: 4px 0; }
+  .opt label { cursor: pointer; user-select: none; }
+  .opt input[type="checkbox"], .opt input[type="radio"] {
+    width: 18px; height: 18px; vertical-align: middle; margin-right: 6px;
+  }
+  .opt-group { margin-left: 18px; padding-left: 8px; border-left: 2px solid #e5e5e7; }
+  .badge {
+    display: inline-block;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    margin-left: 4px;
+    color: #fff;
+  }
+  .badge-base { background: #34c759; }
+  .badge-exp { background: #ff9500; }
+  button {
+    font-size: 14px;
+    padding: 10px 16px;
+    margin: 4px 4px 4px 0;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  .btn-start { background: #007aff; color: #fff; }
+  .btn-stop { background: #ff3b30; color: #fff; }
+  .btn-reset { background: #8e8e93; color: #fff; }
+  /* 운영 환경과 동일 — qr_scanner_web.dart _injectScannerCss() 와 1:1 */
+  #qr-scanner-dom-div {
+    overflow: hidden !important;
+    aspect-ratio: 1 / 1 !important;
+  }
+  #qr-scanner-dom-div video {
+    object-fit: cover !important;
+    width: 100% !important;
+    height: 100% !important;
+  }
+  #qr-scanner-dom-div img {
+    object-fit: cover !important;
+  }
+  [id*="shaded"], [id*="region"] {
+    overflow: visible !important;
+  }
+  .scanner-placeholder {
+    width: 240px;
+    height: 240px;
+    margin: 12px auto;
+    background: #d1d1d6;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #6e6e73;
+    font-size: 12px;
+  }
+  .diag {
+    background: #1d1d1f;
+    color: #34c759;
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-family: 'SF Mono', Menlo, monospace;
+    font-size: 11px;
+    word-break: break-all;
+  }
+  .diag-row { margin: 2px 0; }
+  .console {
+    background: #000;
+    color: #00ff00;
+    padding: 8px;
+    border-radius: 6px;
+    font-family: 'SF Mono', Menlo, monospace;
+    font-size: 10px;
+    max-height: 200px;
+    overflow-y: auto;
+    word-break: break-all;
+  }
+  .console-line { margin: 1px 0; }
+  .console-err { color: #ff6b6b; }
+  .console-warn { color: #ffd93d; }
+</style>
+</head>
+<body>
+
+<h1>QR Scanner 검증 (운영 1:1 복제)</h1>
+<div style="font-size: 11px; color: #6e6e73; margin-bottom: 10px;">
+  baseline = v2.18.4 (정상, 후면 카메라) — 옵션 ON 시 v2.18.5~v2.18.11 변경 추가
+</div>
+
+<div class="panel">
+  <h2>옵션 토글</h2>
+
+  <div class="opt"><label>
+    <input type="checkbox" id="opt-videoConstraints-size" />
+    <strong>videoConstraints.width 1920 + height 1080</strong>
+    <span class="badge badge-exp">v2.18.5</span>
+  </label></div>
+
+  <div class="opt"><label>
+    <input type="checkbox" id="opt-videoConstraints-focus" />
+    <strong>videoConstraints.advanced focusMode: continuous</strong>
+    <span class="badge badge-exp">v2.18.5</span>
+  </label></div>
+
+  <div class="opt"><label>
+    <input type="checkbox" id="opt-facingMode-exact" />
+    <strong>facingMode {exact: 'environment'}</strong> (off=hint)
+    <span class="badge badge-exp">v2.18.7</span>
+  </label></div>
+
+  <div class="opt"><label>
+    <input type="checkbox" id="opt-getUserMedia-0th" />
+    <strong>getUserMedia 0차 시도 (직접 호출 + deviceId 추출)</strong>
+    <span class="badge badge-exp">v2.18.9</span>
+  </label></div>
+
+  <div class="opt"><label>
+    <input type="checkbox" id="opt-getUserMedia-0th-exact" />
+    <strong>↑ getUserMedia 0차에서 {exact:'environment'} 사용</strong>
+    <span class="badge badge-exp">v2.18.10</span>
+  </label></div>
+
+  <div class="opt"><label>
+    <input type="checkbox" id="opt-cameras-label" />
+    <strong>cameras list 'back/rear/후면' label 매칭 시도</strong>
+    <span class="badge badge-exp">v2.18.8</span>
+  </label></div>
+
+  <div class="opt"><label>
+    <input type="checkbox" id="opt-permission-env" />
+    <strong>_requestCameraPermission 영역 {facingMode:'environment'} 명시</strong>
+    <span class="badge badge-exp">v2.18.11</span>
+  </label></div>
+
+  <div style="margin-top: 12px;">
+    <button class="btn-start" onclick="startScanner()">Start</button>
+    <button class="btn-stop" onclick="stopScanner()">Stop</button>
+    <button class="btn-reset" onclick="resetAll()">Reset</button>
+  </div>
+</div>
+
+<div id="scanner-area">
+  <div class="scanner-placeholder">스캐너 영역 (Start 누르면 표시)</div>
+</div>
+
+<div class="panel">
+  <h2>진단 패널</h2>
+  <div class="diag">
+    <div class="diag-row">상태: <span id="diag-status">대기 중</span></div>
+    <div class="diag-row">카메라 label: <span id="diag-label">-</span></div>
+    <div class="diag-row">actual facing: <span id="diag-facing">-</span></div>
+    <div class="diag-row">deviceId: <span id="diag-deviceId">-</span></div>
+    <div class="diag-row">cameras count: <span id="diag-cameras-count">-</span></div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>콘솔 로그 (실시간)</h2>
+  <div class="console" id="console-output"></div>
+</div>
+
+<script>
+  // ============================================
+  // 운영 qr_scanner_web.dart 506 LOC 와 1:1 복제 + 옵션 토글 layer
+  // ============================================
+
+  // ---- 콘솔 캡처 (in-page 로그) ----
+  const consoleEl = document.getElementById('console-output');
+  function appendLog(msg, level) {
+    const line = document.createElement('div');
+    line.className = 'console-line ' + (level === 'error' ? 'console-err' : level === 'warn' ? 'console-warn' : '');
+    const time = new Date().toTimeString().slice(0, 8);
+    line.textContent = `[${time}] ${msg}`;
+    consoleEl.appendChild(line);
+    consoleEl.scrollTop = consoleEl.scrollHeight;
+  }
+  function log(msg) { appendLog(msg, 'info'); console.log(msg); }
+  function warn(msg) { appendLog(msg, 'warn'); console.warn(msg); }
+  function err(msg) { appendLog(msg, 'error'); console.error(msg); }
+  window.addEventListener('error', (e) => err('window.onerror: ' + e.message));
+
+  // ---- 진단 패널 갱신 ----
+  function diagSet(id, val) {
+    document.getElementById('diag-' + id).textContent = val;
+  }
+
+  // ---- 옵션 읽기 ----
+  function opts() {
+    return {
+      videoConstraintsSize: document.getElementById('opt-videoConstraints-size').checked,
+      videoConstraintsFocus: document.getElementById('opt-videoConstraints-focus').checked,
+      facingModeExact: document.getElementById('opt-facingMode-exact').checked,
+      getUserMedia0th: document.getElementById('opt-getUserMedia-0th').checked,
+      getUserMedia0thExact: document.getElementById('opt-getUserMedia-0th-exact').checked,
+      camerasLabel: document.getElementById('opt-cameras-label').checked,
+      permissionEnv: document.getElementById('opt-permission-env').checked,
+    };
+  }
+
+  // ---- 운영 ensureScannerDiv() 와 동일 ----
+  function ensureScannerDiv() {
+    const divId = 'qr-scanner-dom-div';
+    let div = document.getElementById(divId);
+    if (!div) {
+      div = document.createElement('div');
+      div.id = divId;
+      document.body.appendChild(div);
+    }
+    // 운영과 동일 — position:fixed, 240×240 중앙
+    const viewportWidth = window.innerWidth;
+    const left = Math.max(0, (viewportWidth - 240) / 2);
+    Object.assign(div.style, {
+      position: 'fixed',
+      zIndex: '9999',
+      backgroundColor: '#000000',
+      overflow: 'hidden',
+      borderRadius: '12px',
+      left: left + 'px',
+      top: '300px',
+      width: '240px',
+      height: '240px',
+      right: '',
+      transform: '',
+    });
+    log(`[QrTest] ensureScannerDiv: left=${left}px, top=300px, 240x240`);
+    return divId;
+  }
+
+  // ---- 운영 _forceSquareAfterCameraStart() 와 동일 ----
+  let squareObserver = null;
+  function forceSquareAfterCameraStart() {
+    const div = document.getElementById('qr-scanner-dom-div');
+    if (!div) return;
+    const savedWidth = 240;
+    Object.assign(div.style, {
+      width: savedWidth + 'px',
+      height: savedWidth + 'px',
+      maxHeight: savedWidth + 'px',
+    });
+    const videos = div.querySelectorAll('video');
+    videos.forEach(v => {
+      Object.assign(v.style, {
+        objectFit: 'cover',
+        width: '100%',
+        height: '100%',
+      });
+    });
+    const children = div.children;
+    for (const child of children) {
+      if (!(child instanceof HTMLDivElement)) continue;
+      if (child.id && (child.id.includes('shaded') || child.id.includes('region'))) continue;
+      if (!child.querySelector('video')) continue;
+      Object.assign(child.style, {
+        width: '100%',
+        height: savedWidth + 'px',
+        maxHeight: savedWidth + 'px',
+        overflow: 'hidden',
+      });
+    }
+    if (squareObserver) squareObserver.disconnect();
+    squareObserver = new MutationObserver((mutations) => {
+      if (!div) return;
+      const expectedHeight = savedWidth + 'px';
+      if (div.style.height !== expectedHeight) {
+        div.style.height = expectedHeight;
+        div.style.maxHeight = expectedHeight;
+        const vids = div.querySelectorAll('video');
+        vids.forEach(v => {
+          Object.assign(v.style, { objectFit: 'cover', width: '100%', height: '100%' });
+        });
+        log('[QrTest] MutationObserver re-applied square');
+      }
+    });
+    squareObserver.observe(div, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
+    log('[QrTest] forceSquare applied + MutationObserver active');
+  }
+
+  // ---- 권한 발급 (옵션: environment hint 명시) ----
+  async function requestCameraPermission(permissionEnv) {
+    try {
+      if (!navigator.mediaDevices) return false;
+      const constraints = permissionEnv
+        ? { video: { facingMode: 'environment' } }
+        : { video: true };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      stream.getTracks().forEach(t => t.stop());
+      log(`[QrTest] Camera permission granted (${permissionEnv ? 'environment hint' : 'any video'})`);
+      return true;
+    } catch (e) {
+      err(`[QrTest] Camera permission denied: ${e.message || e}`);
+      return false;
+    }
+  }
+
+  // ---- 스캐너 인스턴스 ----
+  let scanner = null;
+  let started = false;
+
+  function buildCameraIdOrConfig(facingMode, cameraId, facingModeExact) {
+    if (cameraId) return { deviceId: { exact: cameraId } };
+    if (facingModeExact) return { facingMode: { exact: facingMode } };
+    return { facingMode: facingMode };
+  }
+
+  function buildConfig(o) {
+    const config = { fps: 10, qrbox: 200 };
+    if (o.videoConstraintsSize || o.videoConstraintsFocus) {
+      const vc = {};
+      if (o.videoConstraintsSize) {
+        vc.width = { ideal: 1920 };
+        vc.height = { ideal: 1080 };
+      }
+      if (o.videoConstraintsFocus) {
+        vc.advanced = [{ focusMode: 'continuous' }];
+      }
+      config.videoConstraints = vc;
+    }
+    return config;
+  }
+
+  async function startScanner() {
+    if (started) {
+      warn('이미 시작됨. Stop 후 다시 시도하세요.');
+      return;
+    }
+    diagSet('status', '시작 중...');
+    diagSet('label', '-');
+    diagSet('facing', '-');
+    diagSet('deviceId', '-');
+    diagSet('cameras-count', '-');
+
+    const o = opts();
+    log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    log(`[QrTest] Options: ${JSON.stringify(o)}`);
+
+    // 1. 권한 발급
+    const hasPermission = await requestCameraPermission(o.permissionEnv);
+    if (!hasPermission) {
+      diagSet('status', '권한 거부됨');
+      return;
+    }
+
+    // 2. DOM 생성
+    const divId = ensureScannerDiv();
+
+    if (typeof Html5Qrcode === 'undefined') {
+      err('Html5Qrcode 라이브러리 미로드');
+      return;
+    }
+
+    scanner = new Html5Qrcode(divId);
+
+    const successCallback = (decodedText, result) => {
+      log(`[QrTest] ★ QR DETECTED: ${decodedText}`);
+    };
+    const errorCallback = (errorMessage, error) => {
+      // QR 미인식은 정상
+    };
+
+    const config = buildConfig(o);
+    log(`[QrTest] config: ${JSON.stringify(config)}`);
+
+    // ---- 0차 시도 (옵션): getUserMedia 직접 호출 ----
+    if (o.getUserMedia0th) {
+      try {
+        const facingHint = o.getUserMedia0thExact
+          ? { exact: 'environment' }
+          : 'environment';
+        const umConstraints = { video: { facingMode: facingHint } };
+        log(`[QrTest] 0차 getUserMedia: ${JSON.stringify(umConstraints)}`);
+        const stream = await navigator.mediaDevices.getUserMedia(umConstraints);
+        const tracks = stream.getVideoTracks();
+        let envDeviceId = null;
+        let actualFacing = null;
+        let trackLabel = null;
+        if (tracks.length > 0) {
+          const track = tracks[0];
+          const settings = track.getSettings();
+          envDeviceId = settings.deviceId || null;
+          actualFacing = settings.facingMode || null;
+          trackLabel = track.label || null;
+          track.stop();
+        }
+        log(`[QrTest] 0차 getUserMedia actual: facing=${actualFacing}, label=${trackLabel}, deviceId=${envDeviceId}`);
+        diagSet('label', trackLabel || '-');
+        diagSet('facing', actualFacing || '-');
+        diagSet('deviceId', envDeviceId ? envDeviceId.slice(0, 16) + '...' : '-');
+        if (actualFacing === 'user') {
+          warn('[QrTest] 0차: actual user camera (OS ignored hint) → reject');
+        } else if (envDeviceId) {
+          const idConfig = { deviceId: { exact: envDeviceId } };
+          await scanner.start(idConfig, config, successCallback, errorCallback);
+          log('[QrTest] Started with 0차 getUserMedia deviceId ★');
+          setTimeout(forceSquareAfterCameraStart, 300);
+          started = true;
+          diagSet('status', '실행 중 (0차)');
+          return;
+        }
+      } catch (e) {
+        warn(`[QrTest] 0차 getUserMedia failed: ${e.message || e}`);
+      }
+    }
+
+    // ---- 1차 시도 (옵션): cameras list label 매칭 ----
+    if (o.camerasLabel) {
+      try {
+        const cameras = await Html5Qrcode.getCameras();
+        log(`[QrTest] 1차 cameras count: ${cameras.length}`);
+        diagSet('cameras-count', cameras.length);
+        cameras.forEach((c, i) => log(`[QrTest]   cam[${i}] label='${c.label}' id='${c.id.slice(0,16)}...'`));
+        let backCameraId = null;
+        for (const c of cameras) {
+          const label = (c.label || '').toLowerCase();
+          if (label.includes('back') || label.includes('rear') ||
+              label.includes('environment') || label.includes('후면')) {
+            backCameraId = c.id;
+            log(`[QrTest] Back camera matched: ${c.label}`);
+            break;
+          }
+        }
+        if (backCameraId) {
+          const idConfig = { deviceId: { exact: backCameraId } };
+          await scanner.start(idConfig, config, successCallback, errorCallback);
+          log('[QrTest] Started with 1차 cameras label match ★');
+          setTimeout(forceSquareAfterCameraStart, 300);
+          started = true;
+          diagSet('status', '실행 중 (1차)');
+          diagSet('deviceId', backCameraId.slice(0, 16) + '...');
+          return;
+        } else {
+          log('[QrTest] No back camera label matched');
+        }
+      } catch (e) {
+        warn(`[QrTest] 1차 cameras label failed: ${e.message || e}`);
+      }
+    }
+
+    // ---- 2차 시도: facingMode environment (hint or exact) ----
+    try {
+      const envConfig = buildCameraIdOrConfig('environment', null, o.facingModeExact);
+      log(`[QrTest] 2차 environment: ${JSON.stringify(envConfig)}`);
+      await scanner.start(envConfig, config, successCallback, errorCallback);
+      log(`[QrTest] Started with environment camera (${o.facingModeExact ? 'exact' : 'hint'}) ★`);
+      setTimeout(forceSquareAfterCameraStart, 300);
+      started = true;
+      diagSet('status', `실행 중 (2차 environment ${o.facingModeExact ? 'exact' : 'hint'})`);
+      return;
+    } catch (e) {
+      warn(`[QrTest] 2차 environment failed: ${e.message || e}`);
+    }
+
+    // ---- 3차 시도: facingMode user (hint) ----
+    try {
+      scanner = new Html5Qrcode(divId);
+      const userConfig = { facingMode: 'user' };
+      log(`[QrTest] 3차 user`);
+      await scanner.start(userConfig, config, successCallback, errorCallback);
+      log('[QrTest] Started with user camera ★');
+      setTimeout(forceSquareAfterCameraStart, 300);
+      started = true;
+      diagSet('status', '실행 중 (3차 user)');
+      return;
+    } catch (e) {
+      warn(`[QrTest] 3차 user failed: ${e.message || e}`);
+    }
+
+    // ---- 4차 시도: cameras[0] ----
+    try {
+      const cameras = await Html5Qrcode.getCameras();
+      if (cameras.length > 0) {
+        scanner = new Html5Qrcode(divId);
+        await scanner.start(cameras[0].id, config, successCallback, errorCallback);
+        log(`[QrTest] Started with cameras[0]: ${cameras[0].label} ★`);
+        setTimeout(forceSquareAfterCameraStart, 300);
+        started = true;
+        diagSet('status', `실행 중 (4차 cameras[0]: ${cameras[0].label})`);
+        return;
+      }
+    } catch (e) {
+      err(`[QrTest] 4차 cameras[0] failed: ${e.message || e}`);
+    }
+
+    diagSet('status', '모든 시도 실패');
+    err('[QrTest] 사용 가능한 카메라를 찾을 수 없습니다');
+  }
+
+  async function stopScanner() {
+    if (squareObserver) {
+      squareObserver.disconnect();
+      squareObserver = null;
+    }
+    if (scanner && started) {
+      try {
+        await scanner.stop();
+        log('[QrTest] Stopped');
+      } catch (e) {
+        warn(`[QrTest] Stop failed: ${e.message || e}`);
+      }
+    }
+    started = false;
+    diagSet('status', '정지됨');
+    const div = document.getElementById('qr-scanner-dom-div');
+    if (div) div.remove();
+  }
+
+  async function resetAll() {
+    await stopScanner();
+    document.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false);
+    consoleEl.innerHTML = '';
+    diagSet('status', '대기 중');
+    diagSet('label', '-');
+    diagSet('facing', '-');
+    diagSet('deviceId', '-');
+    diagSet('cameras-count', '-');
+    log('[QrTest] Reset complete');
+  }
+
+  log('[QrTest] Page loaded. v2.18.4 baseline + toggle layer');
+</script>
+</body>
+</html>
