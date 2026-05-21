@@ -6,6 +6,43 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.18.5] - 2026-05-21 — HOTFIX BUG-42 명판 소형 QR 인식률 개선 (Task 2)
+
+> 사용자 운영 catch (2026-05-21): "자동 포커싱이 안 되는 거 같다". OPS PWA 스캐너(html5-qrcode@2.3.8)가 제품 명판(metal nameplate)의 소형 QR 미인식 — iOS/Android 기본 카메라 앱은 정상 인식. 카메라 OS 레벨 setting 누락(해상도/포커스/줌)으로 디코더 인식 임계 미달.
+
+### 변경
+
+| 파일 | 내용 |
+|------|-----|
+| `frontend/lib/services/qr_scanner_web.dart` | `_buildScannerConstraints({facingMode, cameraId})` helper 신규 (+18 LOC, DRY 정합) + 3곳 호출 통일 — L424 env / L443 user / L466 cameraId fallback. `width:{ideal:1920}, height:{ideal:1080}, advanced:[{focusMode:'continuous'}]` + cameraId 영역 `{deviceId:{exact:cameraId}}` 변환. 본체 LOC 506 → 530 (+24, 🟡 경고 영역 유지 / `startQrScanner()` 함수 158줄 변화 0 — helper 분리로 호출 1줄씩 동일). |
+| `backend/version.py` | 2.18.4 → 2.18.5, BUILD_DATE 2026-05-21 |
+| `frontend/lib/utils/app_version.dart` | 2.18.2 → 2.18.5 (BE/FE 버전 동기화) |
+| `BACKLOG.md` | BUG-42 close + Task 1 (skip, no-op) / Task 3 (자동줌, BACKLOG 이관) trail + `REFACTOR-QR-SCANNER-WEB-FUNCTION-SPLIT` 등록 |
+
+### 영향
+
+- 명판 작은 QR: 해상도 1920×1080 (640×480 → 6배 픽셀) + 자동 재포커스 → 디코더 인식 임계 충족 기대
+- 스티커 QR: object-fit cover + MutationObserver 영역 영향 없이 동작 (해상도 ↑ 만)
+- iOS Safari: advanced unknown constraint 자동 무시 (MediaTrackConstraints spec) — 안전 폴백
+- 프레임/뷰파인더/qrbox:200/CSS/DOM 절대 불변 (Codex Q6 M 합의)
+
+### Codex 라운드 1 trail
+
+- Q1 M: 옵션 C' (Task 2 우선) — Task 1 의 experimentalFeatures 가 잘못된 config 객체에 위치 (Html5QrcodeCameraScanConfig vs Html5QrcodeFullConfig) + 2.3.8 default 이미 true → no-op
+- Q2 M: cameraId fallback 도 `{deviceId:{exact:...}}` + constraints 통일 — 반영
+- Q3 M: iOS Safari BarcodeDetector 효과 0 전제 + advanced unknown constraint 자동 무시 활용
+- Q4 A: Task 3 자동 줌 BACKLOG 이관 (스티커 QR 역효과 + UI 불변 제약 충돌)
+- Q5 M: 실기기 manual QA 필수 — flutter_test 영역 자동화 불가 (web platform 의존성)
+- Q6 M: 절대 불변 영역(_forceSquareAfterCameraStart + MutationObserver) 침범 0, 실기기 회귀 확인 필수
+- Q7 N: FE only 1 파일, 자동 이관 불필요 — 사용자 자발 위임
+
+### 검증
+
+- flutter build web --release GREEN (12.6s)
+- 실기기 manual QA (사용자 위탁): 명판 + 스티커 + Chrome Desktop + Android Chrome (BACKLOG.md L1207-1211)
+
+---
+
 ## [2.18.4] - 2026-05-21 — #70 출하 KPI `best` 분기 엑셀 게이트 제거
 
 > AXIS-VIEW `OPS_API_REQUESTS.md` #70 — SI 공정 5-19 시행 후 app SI 데이터 유입 시작 → `best` 토글 엑셀 게이트(WHERE actual_ship_date IS NOT NULL)가 app-only 출하 누락 → 합집합(OR) 으로 정정. 출하이력 페이지(`FEAT-SHIPMENT-HISTORY-PAGE`, 6월 초 예정) 선행 의존성 해소.

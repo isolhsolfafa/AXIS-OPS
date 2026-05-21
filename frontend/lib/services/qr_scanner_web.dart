@@ -302,6 +302,28 @@ void updateScannerDivPosition({
     ..transform = '';
 }
 
+/// HOTFIX BUG-42 (v2.18.5): 명판 소형 QR 인식률 개선용 카메라 OS 레벨 setting.
+/// - width/height ideal 1920×1080 → 명판 작은 QR 픽셀 셀 수 확보
+/// - focusMode continuous → 명판 접사 시 자동 재포커스 (사용자 직관 catch)
+/// - facingMode (env/user) 또는 deviceId (cameraId fallback) 분기 통일
+/// 미지원 환경(iOS Safari 등)은 MediaTrackConstraints spec상 unknown advanced 무시 → 안전 폴백.
+/// Codex 라운드 1 합의 (M=4) 반영: 3곳 통일 + iOS 안전 폴백 + Task1/3 보류.
+dynamic _buildScannerConstraints({String? facingMode, String? cameraId}) {
+  final base = <String, dynamic>{
+    'width': {'ideal': 1920},
+    'height': {'ideal': 1080},
+    'advanced': [
+      {'focusMode': 'continuous'},
+    ],
+  };
+  if (cameraId != null) {
+    base['deviceId'] = {'exact': cameraId};
+  } else if (facingMode != null) {
+    base['facingMode'] = facingMode;
+  }
+  return js_util.jsify(base);
+}
+
 /// QR 스캐너 시작 (웹 구현 — DOM 직접 생성 방식)
 ///
 /// 전략:
@@ -399,7 +421,7 @@ Future<bool> startQrScanner({
 
     // 1차 시도: 후면 카메라 (모바일)
     try {
-      final envConstraints = js_util.jsify({'facingMode': 'environment'});
+      final envConstraints = _buildScannerConstraints(facingMode: 'environment');
       final promise = js_util.callMethod(
         _scanner!,
         'start',
@@ -418,7 +440,7 @@ Future<bool> startQrScanner({
     // 2차 시도: 전면 카메라 (데스크톱/MacBook)
     try {
       _scanner = js_util.callConstructor(html5QrcodeClass, [divId]);
-      final userConstraints = js_util.jsify({'facingMode': 'user'});
+      final userConstraints = _buildScannerConstraints(facingMode: 'user');
       final promise = js_util.callMethod(
         _scanner!,
         'start',
@@ -440,10 +462,12 @@ Future<bool> startQrScanner({
       if (cameras.isNotEmpty) {
         final cameraId = js_util.getProperty(cameras[0] as Object, 'id') as String;
         _scanner = js_util.callConstructor(html5QrcodeClass, [divId]);
+        // HOTFIX BUG-42 (v2.18.5): cameraId fallback도 deviceId+constraints 통일 (Codex Q2 M)
+        final idConstraints = _buildScannerConstraints(cameraId: cameraId);
         final promise = js_util.callMethod(
           _scanner!,
           'start',
-          [cameraId, config, successCallback, errorCallback],
+          [idConstraints, config, successCallback, errorCallback],
         );
         await js_util.promiseToFuture(promise);
         debugPrint('[QrScannerWeb] Started with camera ID: $cameraId');
