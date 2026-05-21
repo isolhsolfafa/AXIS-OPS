@@ -44198,4 +44198,367 @@ DRAGON DUAL 모델 MECH 체크리스트가 영원히 100% 안 됨 → SELF_INSPE
 - ②단계 자동 이관 체크리스트: BE/FE 2 파일 + pytest + VIEW 검증 → 3+ 파일 touch + 클린 코어 인접(체크리스트 완료판정 = finalize 트리거) → 자동 이관.
 - 검증 요청: (Q1) `check_mech_completion` DUAL 분기 제거 시 호출자 영향 — `check_mech_completion_all` / `upsert_mech_check` / checklist.py route / production.py / task_service close 게이트 전수. (Q2) `_resolve_active_master_ids` 가 qr_doc_id 무관하게 INLET master 포함하는지. (Q3) OPS FE `_qrDocIdForItem` 단순화 후 INLET 8항목 재진입 hydrate 정상 — BE 읽기 SINGLE 과 정합. (Q4) TM 미변경 보장 확인. (Q5) pytest TC 매트릭스 충분성.
 
+---
+
+# Sprint 71 (FEAT-MANAGER-DASHBOARD-AUTO-CLOSE-20260521)
+
+> Manager 대시보드 — 자동 마감 작업 분석 + 협력사별 종료 누락 추적. 사용자가 직접 mockup 2장 그려놓은 concept (2026-05-13 등록 → 2026-05-21 sprint 착수).
+> 안정화 단계 + Sprint 41-D 도입 효과 정량 측정 + `/partner/evaluation` (평가지수) 페이지 raw data 동시 확보.
+
+## 1. 배경 + 동기
+
+- Sprint 41-D Relay First Final Logic (v2.15.0~v2.15.16) 도입 후 — `_trigger_first_close` / `_trigger_second_close` / `_try_elec_close` / `_try_mech_close` 가 작업자 종료 누락 task 를 자동 마감 중
+- 운영 데이터 누적 1주+ — Sprint 41-D 이전 (수동 마감 위주) vs 이후 (자동 마감 도입) 정량 비교 가능 시점
+- 사용자 측 **관리자 일일 활용** 요구 — "어느 협력사가 종료 누락 가장 많나" + "어느 task 가 자주 미종료로 자동 마감되나" 추적
+- 협력사 평가지수 (`/partner/evaluation`) 페이지 진행 시 본 dashboard 의 raw data 직접 재사용
+
+## 2. 화면 mockup (2026-05-13 사용자 그림 — ASCII)
+
+### 화면 ① 월간 통계 대시보드
+```
+강제 종료 작업 분석
+2026-05-11 (월간)               [엑셀] [필터▼]
+
+[ 자동 마감 ]    [ 수동 마감 ]
+    47건             5건
+▶ 직전월 0건   ▶ 직전월 90건
+   +47 ⚠️         -85 ✅ (94% ↓)
+
+[상세 분포] (자동 마감 47건)
+
+트리거 원인
+  ELEC IF_2 시작        32건 (68%)
+  MECH TANK_DOCKING     15건 (32%)
+
+마감 대상 task
+  판넬 작업        14건 ⚠️ 50%↑ 평균 대비
+  배선 포설        8건
+  IF_1            6건
+  케비넷 준비      5건
+  gas1/util1      6건
+  ... (8개 task)
+
+협력사 분포
+  BAT 18건 ⚠️ (전체 38%)
+  FNI 10건
+  P&S 9건
+  C&A 6건
+  TMS 4건
+```
+
+### 화면 ② 자동 마감 상세 카드 (오늘 발생 건)
+```
+오늘 자동 마감 (2026-05-11) — 3건
+
+🎯 14:23 — GAIA-LE-2026-001 (BAT)
+  마감 task: 판넬 작업, 배선 포설 (2건)
+  트리거: ELEC IF_2 시작
+  트리거 작업자: 김XX (BAT)
+  원래 작업자: 박YY (BAT) — 종료 누락
+  마감 사유: AUTO_CLOSED_BY_FIRST_FINAL_TRIGGER
+  작업 시간: 4h 12m (정상 범위)
+  [작업 상세] [복원]
+
+🎯 11:45 — DRAGON-2026-007 (FNI)
+  마감 task: gas1 (1건)
+  트리거: MECH TANK_DOCKING
+  ⚠️ 작업 시간: 9h 23m (duration_validator 경고)
+  [작업 상세] [복원]
+```
+
+## 3. 자동 vs 수동 마감 구분 기준 (★ 가장 중요한 catch)
+
+v2.15.16 후 `force_closed=FALSE` 일괄 통일됐으므로 **`force_closed` 로는 자동/수동 구분 불가**.
+
+`close_reason` LIKE 패턴 으로 식별:
+
+| close_reason 패턴 | 분류 | trigger 종류 |
+|---|---|---|
+| `AUTO_CLOSED_BY_FIRST_FINAL_TRIGGER:*` | **자동** | Sprint 41-D FIRST close (TANK_DOCKING / IF_2 시작) |
+| `AUTO_CLOSED_BY_SECOND_FINAL_TRIGGER:*` | **자동** | Sprint 41-D SECOND close (SELF_INSPECTION / IF_2+INSPECTION 완료) |
+| `MANUAL_FORCE_CLOSE` | **수동** | manager force-close API |
+| `SHIP_COMPLETE` | **자동(출하)** | Sprint 68 출하 완료 |
+| `ADMIN_COMPLETE` | **자동(관리자)** | Sprint 69 admin-complete |
+| 그 외 / NULL | **자연 close** | 작업자 본인 완료 |
+
+→ 본 dashboard 의 "자동 마감" = `close_reason LIKE 'AUTO_CLOSED_BY_%'` (Sprint 41-D 트리거 자동 마감만)
+
+⚠️ **AUDIT_TRAIL_GUIDE.md 정합 검증 필수** — 5-22 POST-REVIEW deadline 정리 시 본 sprint 분류 규칙 같이 명문화.
+
+## 4. BE API 명세 (신규 2개)
+
+### API 1: `GET /api/admin/dashboard/auto-close-summary`
+
+```
+Query Params:
+  period: today | week | month | quarter  (default: month)
+  partner: (optional) company filter (예: BAT)
+  reference_date: (optional, YYYY-MM-DD) — period 기준일 (default: 오늘)
+
+Response 200:
+{
+  "period": "2026-05",  # 또는 "2026-05-21" / "2026-W21" / "2026-Q2"
+  "auto_closed": {
+    "count": 47,
+    "prev_period_count": 0,
+    "delta": "+47",
+    "trend": "increased"  # increased | decreased | stable
+  },
+  "manual_closed": {
+    "count": 5,
+    "prev_period_count": 90,
+    "delta": "-85",
+    "improvement_pct": 94
+  },
+  "trigger_distribution": [
+    {
+      "trigger_task_id": "IF_2",
+      "trigger_name": "ELEC IF_2 시작",
+      "count": 32,
+      "pct": 68.0
+    },
+    ...
+  ],
+  "task_distribution": [
+    {
+      "task_id": "PANEL_WORK",
+      "task_name": "판넬 작업",
+      "count": 14,
+      "avg_compare_pct": 50.0,
+      "alert": "above_avg"  # 평균 대비 50%↑ 시 alert
+    },
+    ...
+  ],
+  "partner_distribution": [
+    {
+      "company": "BAT",
+      "count": 18,
+      "pct": 38.0,
+      "alert": true  # 전체 30%↑ 시 alert
+    },
+    ...
+  ]
+}
+
+권한: @admin_required OR @manager_or_admin_required (협력사 evaluation 데이터)
+```
+
+### API 2: `GET /api/admin/dashboard/auto-close-details`
+
+```
+Query Params:
+  period: today | week | month  (default: today)
+  partner: (optional) company filter
+  trigger_task_id: (optional) e.g., IF_2 / TANK_DOCKING
+  page: (default: 1)
+  per_page: (default: 20)
+
+Response 200:
+{
+  "items": [
+    {
+      "task_detail_id": 12345,
+      "closed_at": "2026-05-11T14:23:00+09:00",
+      "serial_number": "GAIA-LE-2026-001",
+      "model": "GAIA-LE",
+      "sales_order": "ON-12345",
+      "company": "BAT",
+      "closed_tasks": [
+        {"task_id": "PANEL_WORK", "task_name": "판넬 작업"},
+        {"task_id": "WIRING", "task_name": "배선 포설"}
+      ],
+      "task_count": 2,
+      "trigger": {
+        "task_id": "IF_2",
+        "task_name": "ELEC IF_2 시작",
+        "worker_id": 123,
+        "worker_name": "김XX",
+        "company": "BAT"
+      },
+      "original_workers": [
+        {
+          "worker_id": 456,
+          "worker_name": "박YY",
+          "company": "BAT",
+          "status": "종료 누락"
+        }
+      ],
+      "close_reason": "AUTO_CLOSED_BY_FIRST_FINAL_TRIGGER:IF_2",
+      "duration_minutes": 252,
+      "elapsed_minutes": 252,
+      "duration_status": "normal",
+      "duration_validator_alerts": []
+    },
+    ...
+  ],
+  "total": 47,
+  "page": 1,
+  "per_page": 20,
+  "total_pages": 3
+}
+
+권한: @admin_required OR @manager_or_admin_required
+```
+
+### 복원 API — 기존 재사용
+
+이미 존재: `PUT /api/admin/tasks/{id}/reactivate` (Sprint 41-A v2.3.0, v2.15.20 force_closed 4컬럼 리셋 정합 완료)
+→ Manager Dashboard "[복원]" 버튼이 이 endpoint 호출. 신규 endpoint 불필요.
+
+## 5. DB 쿼리 핵심
+
+```sql
+-- 자동 마감 식별 (Summary API)
+SELECT
+  -- 자동 마감 count
+  SUM(CASE WHEN close_reason LIKE 'AUTO_CLOSED_BY_%' THEN 1 ELSE 0 END) AS auto_closed,
+  -- 수동 마감 count
+  SUM(CASE WHEN close_reason = 'MANUAL_FORCE_CLOSE' THEN 1 ELSE 0 END) AS manual_closed
+FROM app_task_details
+WHERE completed_at BETWEEN :start AND :end;
+
+-- 트리거 원인 분포 (close_reason 의 prefix 뒤 task_id 추출)
+SELECT
+  SUBSTRING(close_reason FROM ':(\w+)$') AS trigger_task_id,
+  COUNT(*) AS cnt
+FROM app_task_details
+WHERE close_reason LIKE 'AUTO_CLOSED_BY_%'
+  AND completed_at BETWEEN :start AND :end
+GROUP BY 1
+ORDER BY cnt DESC;
+
+-- 마감 대상 task 분포 + 평균 대비
+WITH avg_per_task AS (
+  SELECT task_id, AVG(daily_count) AS avg_daily
+  FROM ... -- 평균 산정 로직 (별 검토)
+)
+SELECT
+  t.task_id, t.task_name, COUNT(*) AS cnt,
+  ROUND((COUNT(*) / NULLIF(a.avg_daily, 0) - 1) * 100, 1) AS avg_compare_pct
+FROM app_task_details t
+LEFT JOIN avg_per_task a ON a.task_id = t.task_id
+WHERE close_reason LIKE 'AUTO_CLOSED_BY_%'
+  AND completed_at BETWEEN :start AND :end
+GROUP BY t.task_id, t.task_name, a.avg_daily
+ORDER BY cnt DESC;
+
+-- 협력사 분포 (★ Q3 사용자 결정 2026-05-21: 원래 협력사 = 종료 누락 worker 의 회사)
+-- 의도: "BAT 18건" = BAT 작업자가 task 종료 누락한 인스턴스 18건
+-- 데이터 흐름:
+--   work_start_log 에 시작 기록 있고
+--   work_completion_log 에 종료 기록 없는 worker 가 "종료 누락 worker"
+-- 같은 task 에 2명의 다른 회사 worker 가 누락하면 양쪽 회사 모두 +1 (작업자 단위 카운트)
+SELECT w.company, COUNT(*) AS cnt
+FROM app_task_details t
+JOIN work_start_log wsl ON wsl.task_id = t.id
+JOIN workers w ON w.id = wsl.worker_id
+LEFT JOIN work_completion_log wcl
+  ON wcl.task_id = wsl.task_id AND wcl.worker_id = wsl.worker_id
+WHERE t.close_reason LIKE 'AUTO_CLOSED_BY_%'
+  AND t.completed_at BETWEEN :start AND :end
+  AND wcl.id IS NULL  -- 종료 누락 worker 만 (시작은 했는데 완료 record 없음)
+GROUP BY w.company
+ORDER BY cnt DESC;
+
+-- 참고: t.closed_by 는 트리거 작업자 (다음 공정 시작한 사람) — 본 분포에서는 미사용
+-- 트리거 작업자는 상세 카드 (Details API) trigger.company 에서만 표시
+
+-- 상세 카드 (Details API)
+SELECT
+  t.id, t.completed_at, t.serial_number, t.close_reason,
+  t.duration_minutes, t.elapsed_minutes,
+  p.model, p.sales_order,
+  w_trigger.id AS trigger_worker_id,
+  w_trigger.name AS trigger_worker_name,
+  w_trigger.company AS trigger_company,
+  -- original_workers: work_start_log 에서 시작했지만 completion 없는 worker
+  (SELECT json_agg(json_build_object(
+      'worker_id', wsl.worker_id,
+      'worker_name', w_orig.name,
+      'company', w_orig.company
+    ))
+   FROM work_start_log wsl
+   LEFT JOIN workers w_orig ON w_orig.id = wsl.worker_id
+   LEFT JOIN work_completion_log wcl
+     ON wcl.task_id = wsl.task_id AND wcl.worker_id = wsl.worker_id
+   WHERE wsl.task_id = t.id AND wcl.id IS NULL
+  ) AS original_workers
+FROM app_task_details t
+LEFT JOIN plan.product_info p ON p.serial_number = t.serial_number
+LEFT JOIN workers w_trigger ON w_trigger.id = t.closed_by
+WHERE t.close_reason LIKE 'AUTO_CLOSED_BY_%'
+  AND t.completed_at BETWEEN :start AND :end
+ORDER BY t.completed_at DESC
+LIMIT :per_page OFFSET :offset;
+```
+
+⚠️ **N+1 방지** — `original_workers` 서브쿼리 또는 LATERAL JOIN 으로 1 query 처리. pytest 부하 측정 필수.
+
+## 6. 평균 대비 산정 로직 (사용자 결정 필요)
+
+"50%↑ 평균 대비" 의 평균 기준이 무엇인가?
+
+**옵션 A** — 같은 task_id 의 일평균 (지난 30일 기준)
+**옵션 B** — 같은 task_id 의 월평균 (지난 3개월 기준)
+**옵션 C** — 같은 task_id 의 전체 누적 평균 (전 운영 기간)
+
+→ **권고 A** — 최근 변화 반영 (Sprint 41-D 도입 후 데이터만 사용 → 지난 30일).
+
+## 7. 변경 범위 + 추정
+
+| 영역 | 파일 / 작업 | 추정 |
+|------|------|------|
+| **BE** `routes/dashboard.py` (신규) | API 2개 + Blueprint 등록 | ~250 LoC, 4h |
+| **BE** `services/dashboard_service.py` (신규) | 집계 로직 + N+1 방지 | ~200 LoC, 4h |
+| **BE** `app/__init__.py` | Blueprint import 추가 (1 line) | 5분 |
+| **AUDIT_TRAIL_GUIDE.md** 갱신 | close_reason 분류 명문화 | 30분 |
+| **pytest** `test_manager_dashboard.py` (신규) | 20+ TC (분류 / 트리거 / 협력사 / 상세) | 5h |
+| **Codex 라운드 1** | 분류 규칙 + N+1 + 권한 + pytest 커버리지 | 1h |
+| **VIEW FE** (별 repo, 별 sprint) | 새 페이지 + 차트 + 필터 + [복원] 버튼 | ~3일 (VIEW 세션 담당) |
+
+**OPS 측 총 추정**: BE 8h + pytest 5h + AUDIT_TRAIL 0.5h + Codex 1h = **약 1.5~2일** (5/22 ~ 5/26 사이)
+
+## 8. 회귀 위험
+
+- **신규 sprint** — 기존 코드 무영향 ✓
+- 분류 규칙 (`close_reason` LIKE) — v2.15.16 force_closed=FALSE 통일 후 가설 검증 필요 (AUDIT_TRAIL_GUIDE 정합)
+- 권한 — `@admin_required` 또는 `@manager_or_admin_required` 둘 다 검토 (협력사 자기 데이터만 vs 전체)
+- N+1 query — original_workers 서브쿼리 성능 측정 필수
+
+## 9. 선행 의존성
+
+- ✅ Sprint 41-D 시리즈 (v2.15.0~v2.15.16) prod 배포 완료
+- ✅ v2.15.16 force_closed=FALSE 통일 (1주+ 운영 데이터 누적)
+- ⏳ AUDIT_TRAIL_GUIDE.md 갱신 (POST-REVIEW deadline 5-22) — Sprint 71 진행 중 동시 처리 가능
+
+## 10. Codex 검증 요청 영역
+
+- Q1: close_reason LIKE 패턴 으로 자동/수동 구분 — v2.15.16 후 분류 규칙 정합? 누락 패턴?
+- Q2: original_workers 서브쿼리 N+1 방지 + 100건 페이지네이션 성능
+- Q3: 평균 대비 산정 옵션 A/B/C 권고
+- Q4: 권한 (admin_required vs manager_or_admin_required) + 협력사 manager 자기 회사 데이터만 보이도록 필터
+- Q5: pytest TC 매트릭스 충분성 (20+ TC)
+- Q6: AUDIT_TRAIL_GUIDE.md 정합 — close_reason 분류 명문화 시기
+- Q7: 트리거 작업자 vs 원래 작업자 회사 구분 (트리거 = ELEC 협력사, 원래 = MECH 협력사 동시 발생 case)
+
+→ Codex 라운드 1 위임 시 본 7 Q 포함.
+
+## 11. Codex 라운드 1 결정 trail (2026-05-21)
+
+| Q | Codex 라벨 | 결정 / 반영 |
+|---|---|---|
+| Q1 | A | `AUTO_CLOSED_BY_%` 만 사용 (Sprint 41-D scope). `AUTO_CLOSED_LEGACY` 는 v2.15.16 후 발생 0 (`task_service.py L843 레거시 루프 제거 trail`) — 본 sprint 제외 |
+| Q2 | A | LATERAL JOIN 권고 반영 (original_workers + duration spike check). 평균 산정 = 옵션 A (지난 30일 일평균) 채택. manager 권한 = 자기 회사 데이터만 필터 (`@manager_or_admin_required` + WHERE company filter) |
+| **Q3** | **A → 사용자 결정 (2026-05-21)** | **"원래 협력사" = 종료 누락 worker 의 회사**. partner_distribution 쿼리 변경: `t.closed_by JOIN workers` (트리거 작업자) → `work_start_log + LEFT JOIN work_completion_log WHERE wcl.id IS NULL` (종료 누락 worker 만). 같은 task 에 2명 다른 회사 누락 시 양쪽 회사 모두 +1 (작업자 단위 카운트) |
+| Q4 | M | `AUDIT_TRAIL_GUIDE.md` 5-22 deadline POST-REVIEW-AUDIT-TRAIL-CONSISTENCY 와 본 sprint **동시 진행** — close_reason 분류 명문화 같이 |
+| Q5 | A | pytest TC 추가 3건: (a) `close_reason IS NULL` 자연 close 분류 / (b) SHIP_COMPLETE + ADMIN_COMPLETE auto-close KPI 제외 검증 / (c) manager 권한 자기 회사 데이터만 노출 |
+| Q6 | M | API spec freeze 후 VIEW FE 진입 (워크플로우 표준) |
+| Q7 | M | 충돌 컨트롤 셋: `task_detail.py` (auto_close_relay_task / reactivate_task) + `task_service.py` (trigger functions) + `checklist_service.py` (_try_*_close) + `admin.py` (force-close route). **본 sprint 는 신규 dashboard 영역이라 위 파일 touch 0 — 충돌 위험 0** |
+
+### 핵심 결정 정합 (5-21 update)
+- Q3 partner_distribution 쿼리 = work_start_log 기반 (§ 5 DB 쿼리 핵심 정정 완료)
+- AUTO_CLOSED_LEGACY 제외 = Sprint 41-D scope 명확화
+- AUDIT_TRAIL_GUIDE.md 동시 갱신 = 5-22 deadline 단일 처리
+
+
 
