@@ -302,20 +302,13 @@ void updateScannerDivPosition({
     ..transform = '';
 }
 
-/// HOTFIX BUG-42 (v2.18.5): 명판 소형 QR 인식률 개선용 카메라 OS 레벨 setting.
-/// - width/height ideal 1920×1080 → 명판 작은 QR 픽셀 셀 수 확보
-/// - focusMode continuous → 명판 접사 시 자동 재포커스 (사용자 직관 catch)
-/// - facingMode (env/user) 또는 deviceId (cameraId fallback) 분기 통일
-/// 미지원 환경(iOS Safari 등)은 MediaTrackConstraints spec상 unknown advanced 무시 → 안전 폴백.
-/// Codex 라운드 1 합의 (M=4) 반영: 3곳 통일 + iOS 안전 폴백 + Task1/3 보류.
+/// HOTFIX-09 (v2.18.6): html5-qrcode `cameraIdOrConfig` 1-key 객체 spec 정합.
+/// - v2.18.5 catch: width/height/advanced 를 cameraIdOrConfig 에 같이 넣으면
+///   라이브러리가 `'cameraIdOrConfig' object should have exactly 1 key` 로 reject.
+/// - 해결: cameraIdOrConfig = facingMode 또는 deviceId **단일 key** 만.
+///   해상도/focusMode 영역은 `__qrScanConfig.videoConstraints` 로 분리 (configScript 참조).
 dynamic _buildScannerConstraints({String? facingMode, String? cameraId}) {
-  final base = <String, dynamic>{
-    'width': {'ideal': 1920},
-    'height': {'ideal': 1080},
-    'advanced': [
-      {'focusMode': 'continuous'},
-    ],
-  };
+  final base = <String, dynamic>{};
   if (cameraId != null) {
     base['deviceId'] = {'exact': cameraId};
   } else if (facingMode != null) {
@@ -395,11 +388,21 @@ Future<bool> startQrScanner({
     // ★ 10차 수정: qrbox를 integer로 변경 — 컨테이너가 정사각형이므로 숫자값이 자동으로 정사각형 스캔 영역 생성
     // 9차 실패 이력: qrbox callback이 정사각형 크기를 반환해도 컨테이너가 landscape이면 뷰파인더가 가로로 늘어남
     // 해결책: 컨테이너를 정사각형으로 만들고 qrbox도 integer로 지정
+    // HOTFIX-09 (v2.18.6): BUG-42 명판 QR 인식률 개선 — videoConstraints 영역으로 분리.
+    // html5-qrcode `cameraIdOrConfig` 는 1-key 객체만 허용 → 해상도/focusMode 는 config.videoConstraints 에.
+    // - width/height ideal 1920×1080 → 명판 작은 QR 픽셀 셀 수 확보
+    // - focusMode: continuous → 명판 접사 시 자동 재포커스 (사용자 직관 catch)
+    // - 미지원 환경(iOS Safari 등)은 MediaTrackConstraints spec상 unknown advanced 무시 → 안전 폴백
     final configScript = html.ScriptElement()
       ..text = '''
         window.__qrScanConfig = {
           fps: 10,
-          qrbox: 200
+          qrbox: 200,
+          videoConstraints: {
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            advanced: [{ focusMode: 'continuous' }]
+          }
         };
         console.log("[QrScannerWeb] config.qrbox type=" + typeof window.__qrScanConfig.qrbox + " value=" + window.__qrScanConfig.qrbox);
       ''';

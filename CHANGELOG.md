@@ -6,6 +6,36 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.18.6] - 2026-05-21 — HOTFIX-09 cameraIdOrConfig 1-key 위반 fix
+
+> v2.18.5 배포 직후 사용자 실기기 catch (5분 이내): `'cameraIdOrConfig' object should have exactly 1 key, if passed as an object, found 4 keys`. html5-qrcode@2.3.8 의 `start(cameraIdOrConfig, config, ...)` 1번째 인자는 **정확히 1 key 객체만 허용**. v2.18.5 의 `_buildScannerConstraints()` 가 facingMode + width + height + advanced 4 keys 반환 → 3차 시도 모두 reject → "사용 가능한 카메라를 찾을 수 없습니다" 에러. Codex 라운드 1 에서 놓친 라이브러리 spec.
+
+### 변경
+
+| 파일 | 내용 |
+|------|-----|
+| `frontend/lib/services/qr_scanner_web.dart` | (1) `_buildScannerConstraints({facingMode, cameraId})` — 1 key 객체만 반환하도록 단순화 (width/height/advanced 제거). (2) `__qrScanConfig` JS 객체에 `videoConstraints: { width:{ideal:1920}, height:{ideal:1080}, advanced:[{focusMode:'continuous'}] }` 영역 추가 — Html5QrcodeCameraScanConfig 공식 spec 영역 |
+| `backend/version.py` | 2.18.5 → 2.18.6 |
+| `frontend/lib/utils/app_version.dart` | 2.18.5 → 2.18.6 |
+
+### 영향
+
+- 카메라 시작: env/user/cameraId 3 시도 모두 정상 성공 기대
+- 해상도/포커스: v2.18.5 의도와 동일 (위치만 cameraIdOrConfig → config.videoConstraints 이동)
+- 프레임/뷰파인더/qrbox/CSS 절대 불변
+
+### Codex 라운드 1 (v2.18.5) 놓친 catch
+
+- html5-qrcode `cameraIdOrConfig` spec 영역 1-key 제약 미확인
+- 5 Q 검증 영역 라이브러리 spec 영역 명시적 검토 부재 — 향후 외부 라이브러리 사용 영역 spec 확인 절차 권고 (별 sprint advisory)
+
+### 검증
+
+- flutter build web --release GREEN (12.7s)
+- 실기기 manual QA 재진행 위탁 (Twin파파)
+
+---
+
 ## [2.18.5] - 2026-05-21 — HOTFIX BUG-42 명판 소형 QR 인식률 개선 (Task 2)
 
 > 사용자 운영 catch (2026-05-21): "자동 포커싱이 안 되는 거 같다". OPS PWA 스캐너(html5-qrcode@2.3.8)가 제품 명판(metal nameplate)의 소형 QR 미인식 — iOS/Android 기본 카메라 앱은 정상 인식. 카메라 OS 레벨 setting 누락(해상도/포커스/줌)으로 디코더 인식 임계 미달.

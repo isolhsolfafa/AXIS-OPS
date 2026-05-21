@@ -3117,10 +3117,11 @@ Codex 3차 Q3 A 해소용 실측:
 
 ## 현재 버전
 
-- **OPS BE**: v2.9.11 (2026-04-22, 4 HOTFIX 통합 PATCH)
-- **OPS FE (Flutter PWA)**: v2.9.11 (version 파일만 bump, OPS FE 코드 변경 0 — Netlify 배포 skip)
-- **최근 Sprint**: HOTFIX-ALERT-SCHEDULER-DELIVERY-20260422 (scheduler 3곳 target_worker_id 표준 패턴 + 배치 dedupe) — ✅ 완료 (2026-04-22)
-- **최근 완료 Sprint**: HOTFIX-ALERT-SCHEDULER-DELIVERY, HOTFIX-SCHEDULER-DUP, HOTFIX-ALERT-SCHEMA-RESTORE, HOTFIX-SCHEDULER-PHASE1.5, FIX-25 v4, FIX-24, HOTFIX-04, HOTFIX-05, HOTFIX-03, HOTFIX-02, BUG-45, 61-BE-B, 61-BE, BUG-43/44, HOTFIX-01, 60-BE, 59-BE, 58-BE
+- **OPS BE**: v2.18.6 (2026-05-21, HOTFIX-09 — version bump only)
+- **OPS FE (Flutter PWA)**: v2.18.6 (2026-05-21, qr_scanner_web.dart cameraIdOrConfig 1-key fix)
+- **최근 release**: HOTFIX-09 (v2.18.6) — v2.18.5 배포 직후 사용자 실기기 catch: `cameraIdOrConfig should have exactly 1 key, found 4 keys` (html5-qrcode spec). helper 1-key 객체만 반환 + `__qrScanConfig.videoConstraints` 로 해상도/focusMode 이동. flutter build web GREEN. **실기기 manual QA 재위탁**
+- **최근 release 이력 (5-19 ~ 5-21)**: v2.18.6 (HOTFIX-09 1-key fix), v2.18.5 (BUG-42 명판 QR Task 2), v2.18.4 (#70 출하 KPI best 합집합), v2.18.3 (GCP migration HOLD + DATABASE_URL fallback 제거), v2.18.2 (DRAGON DUAL MECH 체크리스트 P0), v2.18.1 (PI/QI 다이얼로그 하드코딩 fix), v2.18.0 (Sprint 69 PI/QI 권한 잠금 + admin_complete)
+- **상세 trail**: 5-19 이전 release/Sprint 이력은 `PROGRESS.md` 최상위 "선행 release" + `CHANGELOG.md` 참조 (4-22 ~ 5-19 영역 handoff 갱신 누락분 보강)
 
 ### 🗓 v2.9.11 포함 HOTFIX 이력 (SHA 별도 기록 — Codex A7 지적 반영)
 
