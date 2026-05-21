@@ -220,11 +220,11 @@
     <strong>qrbox:</strong>
     <select id="opt-qrbox">
       <option value="100">100</option>
-      <option value="150">150</option>
+      <option value="120">120</option>
+      <option value="150" selected>150 (default, 코너 마커 안전)</option>
       <option value="180">180</option>
-      <option value="200" selected>200 (default, 컨테이너 240px 안전 max)</option>
+      <option value="200">200 (컨테이너 240px 영역 영역 코너 마커 잘림 가능)</option>
     </select>
-    <span style="font-size: 11px; color: #6e6e73;">— 컨테이너 240px 초과 시 자동 cap</span>
   </div>
 
   <div class="opt" style="margin-top: 4px;">
@@ -467,16 +467,22 @@
     const div = document.createElement('div');
     div.id = divId;
     placeholder.appendChild(div);
+    // placeholder 영역 padding 추가 — 코너 마커 외부 노출 허용 (overflow visible 외곽)
+    Object.assign(placeholder.style, {
+      padding: '30px 0',
+      overflow: 'visible',
+    });
     Object.assign(div.style, {
       width: '240px',
       height: '240px',
       margin: '12px auto',
       backgroundColor: '#000000',
-      overflow: 'hidden',
+      // overflow:hidden 제거 — qrbox 코너 마커 영역 외부 표시 허용
+      overflow: 'visible',
       borderRadius: '12px',
-      position: 'relative', // inline 영역 — 페이지 스크롤 영역 영영 영영
+      position: 'relative',
     });
-    log(`[QrTest] ensureScannerDiv: 240x240 inline (page flow)`);
+    log(`[QrTest] ensureScannerDiv: 240x240 inline (overflow visible — 코너 마커 외부 노출)`);
     return divId;
   }
 
