@@ -223,32 +223,24 @@
     };
   }
 
-  // ---- 운영 ensureScannerDiv() 와 동일 ----
+  // ---- 운영 ensureScannerDiv() 와 동일 (단 테스트 환경은 inline 배치) ----
   function ensureScannerDiv() {
     const divId = 'qr-scanner-dom-div';
-    let div = document.getElementById(divId);
-    if (!div) {
-      div = document.createElement('div');
-      div.id = divId;
-      document.body.appendChild(div);
-    }
-    // 운영과 동일 — position:fixed, 240×240 중앙
-    const viewportWidth = window.innerWidth;
-    const left = Math.max(0, (viewportWidth - 240) / 2);
+    const placeholder = document.getElementById('scanner-area');
+    placeholder.innerHTML = ''; // 기존 placeholder 영역 제거
+    const div = document.createElement('div');
+    div.id = divId;
+    placeholder.appendChild(div);
     Object.assign(div.style, {
-      position: 'fixed',
-      zIndex: '9999',
+      width: '240px',
+      height: '240px',
+      margin: '12px auto',
       backgroundColor: '#000000',
       overflow: 'hidden',
       borderRadius: '12px',
-      left: left + 'px',
-      top: '300px',
-      width: '240px',
-      height: '240px',
-      right: '',
-      transform: '',
+      position: 'relative', // inline 영역 — 페이지 스크롤 영역 영영 영영
     });
-    log(`[QrTest] ensureScannerDiv: left=${left}px, top=300px, 240x240`);
+    log(`[QrTest] ensureScannerDiv: 240x240 inline (page flow)`);
     return divId;
   }
 
@@ -525,8 +517,10 @@
     }
     started = false;
     diagSet('status', '정지됨');
-    const div = document.getElementById('qr-scanner-dom-div');
-    if (div) div.remove();
+    const placeholder = document.getElementById('scanner-area');
+    if (placeholder) {
+      placeholder.innerHTML = '<div class="scanner-placeholder">스캐너 영역 (Start 누르면 표시)</div>';
+    }
   }
 
   async function resetAll() {
