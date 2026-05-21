@@ -6,6 +6,62 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.18.13] - 2026-05-21 — BUG-42 재시도 (4-tier fallback chain, Codex 라운드 1+2 합의)
+
+> v2.18.12 ROLLBACK + qr-test.html 검증 + Codex 라운드 1 (M=4/A=2/N=1) 합의 + 라운드 2 (M=0/A=5/N=3) 합의 후 운영 적용. 사용자 실기기 (iPhone 14/15 Pro) 4-tier 시뮬레이션 모두 GREEN catch.
+
+### 변경
+
+| 파일 | 내용 |
+|------|-----|
+| `frontend/lib/services/qr_scanner_web.dart` | `_buildFallbackTiers()` helper 신규 (+58 LOC) + `startQrScanner()` 1차 시도 영역 4-tier chain 으로 교체 (+17 LOC). 기존 user/cameraId fallback 그대로 유지 |
+| `backend/version.py` | 2.18.12 → 2.18.13 |
+| `frontend/lib/utils/app_version.dart` | 2.18.12 → 2.18.13 |
+| `BACKLOG.md` | REFACTOR-QR-SCANNER-WEB-FUNCTION-SPLIT LOW → MEDIUM 격상 (Codex 라운드 2 A-Q7) + 신규 2개 등록 (QR-SCANNER-RETRY-CLEANUP / QR-SCANNER-ERROR-CLASSIFICATION) + TEST-QR-LIB-CONSTRAINT-PREFLIGHT 영역 QA 8항목 evidence 추가 |
+
+### 4-tier fallback chain
+
+| Tier | Config | 효과 |
+|---|---|---|
+| 1차 (full) | `{fps:10, qrbox:200, videoConstraints:{facingMode:'environment', width:{ideal:1920}, height:{ideal:1080}, advanced:[{focusMode:'continuous'}]}}` | 후면 + 고해상도 + 자동 포커스 (명판 QR 최적) |
+| 2차 (advanced 제거) | 위에서 `advanced` 제거 | focusMode 미지원 환경 |
+| 3차 (해상도 제거) | `{videoConstraints:{facingMode:'environment'}}` | 해상도 미지원 환경 |
+| 4차 (baseline) | `{fps:10, qrbox:200}` (videoConstraints 없음) | v2.18.4 동일 — OverconstrainedError 최종 회피 |
+
+### Root Cause 재확정
+
+html5-qrcode 2.3.8 source: `areVideoConstraintsEnabled ? internalConfig.videoConstraints : createVideoConstraints(cameraIdOrConfig)` — `videoConstraints` 키 존재 시 `cameraIdOrConfig.facingMode` hint 무시. videoConstraints 안에 facingMode 명시 필수.
+
+### Codex trail
+
+- **라운드 1** (2026-05-21): M=4 (Root Cause / 안전 패턴 / fallback chain / QA 8항목) + A=2 (TEST-PREFLIGHT / Eruda) + N=1 (ROLLBACK 정합)
+- **라운드 2** (2026-05-21): M=0 + A=5 (RETRY-CLEANUP / ERROR-CLASSIFICATION / 함수 분할 격상 / preflight evidence 추가 / 기타) + N=3
+- **DEPLOY_SAFE: CONDITIONAL** — 4-tier chain 자체 must-fix 없음
+
+### 영향
+
+- 1차 성공 시: 후면 카메라 + 해상도 1920×1080 + 자동 포커스 → 명판 QR 인식률 개선 기대
+- 1~4차 모두 OverconstrainedError 시: 기존 user / cameraId[0] fallback 자동 진입 (v2.18.4 동일)
+- 프레임 / 뷰파인더 / qrbox / CSS / MutationObserver / DOM 절대 불변
+
+### 실기기 manual QA — 사용자 위탁 (Codex 권고 8항목)
+
+- (1) iPhone Safari 후면 화면 육안 확인
+- (2) `getRunningTrackSettings()` 로그 catch
+- (3) 명판 QR 3거리 (10cm / 15cm / 20cm) 인식 테스트
+- (4) 스티커 QR 정상 인식 regression
+- (5) Stop → 재Start 시 카메라 방향 유지
+- (6) 권한 최초 허용 / 이미 허용 / 거부 후 복구
+- (7) Android Chrome 후면 + 인식률
+- (8) Desktop Chrome OverconstrainedError 없이 fallback
+
+### LOC 영향
+
+- 파일 506 → 569 (+63, 🟡 경고 유지)
+- `startQrScanner()` 158 → 175 (🔴 절대 한도 100 초과 유지) → REFACTOR sprint MEDIUM 격상
+
+---
+
 ## [2.18.12] - 2026-05-21 — ROLLBACK qr_scanner_web.dart v2.18.4 상태로 복귀
 
 > v2.18.5 ~ v2.18.11 (11번 BUG-42 hotfix 시리즈) 모두 롤백. 실기기 catch: 콘솔 로그는 후면 카메라(`label=후면 듀얼 와이드 카메라`)로 표시되는데 실제 화면에는 전면 카메라(셀카)가 보이는 라이브러리 충돌 — `getUserMedia` 직접 호출 + `videoConstraints` 추가 + `{exact:'environment'}` 등 변경이 html5-qrcode 내부 stream 과 충돌 추정. 11번 누적 변경 후 디버깅 비용 > 복귀 비용 판단.
