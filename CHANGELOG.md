@@ -43,7 +43,55 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 - 라이브러리 충돌 없는 minimal change 우선
 - 단일 변경마다 즉시 실기기 검증 후 다음 단계
 
+### Post-mortem — qr-test.html 검증 + Codex 라운드 1 결과 (2026-05-21)
+
+**테스트 페이지 (`frontend/web/qr-test.html`)** 작성 — 운영 1:1 복제 + 옵션 토글 7개. 사용자 실기기 (iPhone) 토글 매트릭스 catch:
+
+| 토글 조합 | 결과 |
+|---|---|
+| 모두 OFF (v2.18.4 baseline) | 후면 ✅ |
+| videoConstraints.width/height (옵션 1) 단독 | 셀카 ❌ |
+| videoConstraints.advanced.focusMode (옵션 2) 단독 | 셀카 ❌ |
+| 옵션 1 + 2 같이 | 셀카 ❌ |
+| **videoConstraints.facingMode:'environment' 명시 (패턴 A) 단독** | **후면 ✅** |
+| 패턴 A + 옵션 1 | 후면 ✅ |
+| 패턴 A + 옵션 2 | 후면 ✅ |
+| 패턴 A + 옵션 1 + 옵션 2 | 후면 ✅ + 해상도/포커스 적용 |
+
+**Root Cause 확정** (Codex 라운드 1 M-Q1 확정):
+- html5-qrcode 2.3.8 source: `areVideoConstraintsEnabled ? internalConfig.videoConstraints : createVideoConstraints(cameraIdOrConfig)`
+- `config.videoConstraints` 키 존재 시 `cameraIdOrConfig` 의 facingMode hint 를 통째로 무시
+- videoConstraints 안에 facingMode 없으면 OS default (대개 전면) 발급
+
+**v2.18.13 재시도 안전 패턴 (Codex M-Q2 권고 4단계 fallback chain)**:
+```
+1차: {facingMode:'environment', width:{ideal:1920}, height:{ideal:1080}, advanced:[{focusMode:'continuous'}]}
+2차 (실패 시): advanced 제거
+3차 (실패 시): 해상도 제거 → {facingMode:'environment'}
+4차 (실패 시): v2.18.4 baseline (cameraIdOrConfig 만)
+```
+
+**향후 재발 방지 (Codex A-Q5/Q6)**:
+- `TEST-QR-LIB-CONSTRAINT-PREFLIGHT` BACKLOG 등록 — 외부 라이브러리 사용 사전 검증 체크리스트
+- `TOOL-ERUDA-DEV-CONSOLE` BACKLOG 등록 — 모바일 실기기 콘솔 catch 도구
+
 ---
+
+## [2.18.11] - 2026-05-21 — HOTFIX-14 권한 발급 시점 environment hint (ROLLED BACK in v2.18.12)
+
+> 사용자 catch: 모든 시도 후 셀카 잔존. `_requestCameraPermission()` 영역 `{video:true}` → `{video:{facingMode:'environment'}}` 1차 권한 발급 → enumerate 후면 노출 유도. 의도와 달리 실제 화면 셀카 (라이브러리 catch). v2.18.12 ROLLBACK 에 포함.
+
+## [2.18.10] - 2026-05-21 — HOTFIX-13 getUserMedia exact + facingMode 검증 (ROLLED BACK in v2.18.12)
+
+> `{facingMode:{exact:'environment'}}` 강제 + `settings.facingMode` 검증 (actual 'user' 발급 시 reject). 의도와 달리 실제 화면 셀카 (라이브러리 catch). v2.18.12 ROLLBACK 에 포함.
+
+## [2.18.9] - 2026-05-21 — HOTFIX-12 getUserMedia 직접 호출 0차 시도 (ROLLED BACK in v2.18.12)
+
+> `getUserMedia({video:{facingMode:'environment'}})` 직접 호출 → stream videoTrack `settings.deviceId` 추출 → html5-qrcode 명시. 5-tier fallback chain (0차 + 4차). 의도와 달리 실제 화면 셀카 (라이브러리 catch). v2.18.12 ROLLBACK 에 포함.
+
+## [2.18.8] - 2026-05-21 — HOTFIX-11 cameras label 매칭 1차 승격 (ROLLED BACK in v2.18.12)
+
+> `_findBackCameraId()` helper 신규 + cameras list 영역 'back/rear/environment/후면' label 매칭 → deviceId 명시 시도를 1차로 승격. facingMode hint/exact 우회. 의도와 달리 실제 화면 셀카 (라이브러리 catch). v2.18.12 ROLLBACK 에 포함.
 
 ## [2.18.7] - 2026-05-21 — HOTFIX-10 후면 카메라 강제 (셀카 fallback 차단)
 

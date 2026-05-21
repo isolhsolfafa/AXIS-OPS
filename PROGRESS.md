@@ -3,7 +3,7 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: **v2.18.12 (ROLLBACK qr_scanner_web.dart v2.18.4 상태로 복귀, 2026-05-21)** — FE 1 파일 / v2.18.5~v2.18.11 (11번 BUG-42 hotfix 시리즈) 모두 롤백. 실기기 catch: 콘솔 로그 후면 카메라 표시되는데 실제 화면 셀카 — html5-qrcode 와 우리 변경 stream 충돌 추정. `git checkout 8a2233f -- qr_scanner_web.dart` 로 v2.18.4 상태 복귀 (506 LOC, 단순 facingMode hint). BUG-42 🔴 OPEN reopen. **향후 재시도**: 실제 iPhone + Mac 원격 디버깅 또는 Eruda 환경 확보 + minimal change 마다 즉시 실기기 검증
+> **현재 버전**: **v2.18.12 (ROLLBACK + qr-test.html 검증 + Codex 라운드 1, 2026-05-21)** — FE 1 파일 / v2.18.5~v2.18.11 (11번 BUG-42 hotfix 시리즈) 모두 롤백. `git checkout 8a2233f -- qr_scanner_web.dart` 506 LOC. **테스트 페이지 신규** (`frontend/web/qr-test.html`): 운영 1:1 복제 + 옵션 토글 7개 → 사용자 실기기 매트릭스 catch — 옵션 1/2 단독 ON 셀카 / 패턴 A (videoConstraints 안 facingMode 명시) 후면 ✅. **Root Cause 확정** (Codex 라운드 1 M-Q1): html5-qrcode 2.3.8 `areVideoConstraintsEnabled ? internalConfig.videoConstraints : createVideoConstraints(cameraIdOrConfig)` → videoConstraints 키 존재 시 cameraIdOrConfig.facingMode 무시. **Codex 권고**: 4단계 fallback chain (M-Q2) + 실기기 QA 8항목 (M-Q4) + TEST-QR-LIB-CONSTRAINT-PREFLIGHT / TOOL-ERUDA-DEV-CONSOLE BACKLOG 등록 (A-Q5/Q6). **v2.18.13 재시도 준비 완료**. BUG-42 🔴 OPEN + 5개 별 sprint
 > **선행 release**: v2.18.11 (HOTFIX-14 권한 발급 시점 environment hint, 2026-05-21, ROLLED BACK) — `_requestCameraPermission()` 영역 1차 `{video:{facingMode:'environment'}}` 권한 발급 → enumerate 후면 노출 유도. v2.18.12 에서 롤백
 > **선행 release**: v2.18.10 (HOTFIX-13 getUserMedia exact + facingMode 검증, ROLLED BACK)
 > **선행 release**: v2.18.9 (HOTFIX-12 getUserMedia 직접 호출 0차, ROLLED BACK)
