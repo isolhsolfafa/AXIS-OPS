@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../main.dart';  // v2.18.26: AuthGate 강제 진입용
 import '../../providers/auth_provider.dart';
 import '../../utils/validators.dart';
 import '../../utils/design_system.dart';
@@ -43,16 +44,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     if (!mounted) return;
 
     if (success) {
-      // v2.18.25 — 로그인 성공 안내 SnackBar (화면 전환 안 될 경우 새로고침 안내)
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('로그인 성공! 화면이 전환되지 않으면 새로고침 (Cmd+Shift+R) 해주세요.'),
-          duration: Duration(seconds: 4),
-          backgroundColor: Color(0xFF16A34A),
-        ),
+      // v2.18.26 — PWA 모바일 새로고침 어려움 catch — AuthGate 강제 푸시
+      // popUntil 은 first route 가 LoginScreen 자체이면 작동 안 함
+      // pushAndRemoveUntil 로 stack 완전 정리 + AuthGate 재진입
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const AuthGate()),
+        (route) => false,
       );
-      // 로그인 성공 시 AuthGate가 자동으로 홈 화면으로 전환
-      Navigator.of(context).popUntil((route) => route.isFirst);
     } else {
       // 에러 코드 분기
       final errorMsg = ref.read(authProvider).errorMessage ?? '';
