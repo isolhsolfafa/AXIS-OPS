@@ -3,7 +3,10 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: **v2.18.24 (ApprovalPendingScreen 승인 후 자동 홈 이동, 2026-05-22)** — FE 1 파일 / 사용자 catch: admin 승인 후 화면 전환 안 됨 → PWA 강제 새로고침 필요 / ref.listen(authProvider) 자동 감지 + manual check 안전망 이중. v2.18.20 ~ v2.18.24 영역 5개 release 통합 (승인 메일 + prefix 확장 + 안내 박스 + 매뉴얼 URL + 자동 홈 이동)
+> **현재 버전**: **v2.18.27 (매뉴얼 보안 통합 — OPS 상단 버튼 + axis-manual JWT 미들웨어, Codex 라운드 1 M=2/A=5 반영, 2026-05-22)** — OPS 2 + axis-manual 3 + AXIS-VIEW 1 파일 / 사용자 catch: "url 이 현재 전체공개라 누구나 볼수 있게 됬는데 이것도 보안이 필요한데" → OPS 홈 상단 `[📖 매뉴얼]` IconButton (token 첨부 새 탭) + axis-manual Netlify Edge Function JWT verify(HS256) + payload.type='access' 검증(refresh 차단) + Cookie Max-Age JWT exp 기준 동적 + 정적 자산 우회 축소(폰트/파비콘만) + VIEW Header.tsx token 첨부. axis-manual v1.4.0 (Edge Function 신규) + v1.5.0 (Admin Section B 2페이지). Codex 라운드 1: M=2/A=5 반영 + A=3 BACKLOG 권고
+> **선행 release**: v2.18.26 (로그인 후 AuthGate 강제 진입 pushAndRemoveUntil, 2026-05-22) — FE 1 파일 / LoginScreen 이 first route 일 때 popUntil 무동작 catch → pushAndRemoveUntil(MaterialPageRoute(builder: AuthGate), (route)=>false) 변경. Navigator 스택 정리 패턴
+> **선행 release**: v2.18.25 (로그인 성공 후 새로고침 안내 SnackBar, 2026-05-22) — FE 1 파일 / PWA 모바일 강제 새로고침 어려움 catch → 3초 후 화면 안 넘어가면 SnackBar 안내. v2.18.26 정식 fix 후 안전망 유지
+> **선행 release**: v2.18.24 (ApprovalPendingScreen 승인 후 자동 홈 이동, 2026-05-22) — FE 1 파일 / 사용자 catch: admin 승인 후 화면 전환 안 됨 → PWA 강제 새로고침 필요 / ref.listen(authProvider) 자동 감지 + manual check 안전망 이중
 > **선행 release**: v2.18.23 (가입 승인 메일에 매뉴얼 URL 추가, 2026-05-22) — BE 1 파일 / axis-manual.netlify.app
 > **선행 release**: v2.18.22 (가입 승인 메일 URL 정정 + 로그인 방법 안내 박스, 2026-05-22) — BE 1 파일 / 도메인 g-view → gaxis-ops.netlify.app + 메일 본문 🔑 로그인 박스
 > **선행 release**: v2.18.21 (안내 메일 도메인 변경 + login 안내 박스 + PIN 설정 위치, 2026-05-22) — BE 1 + FE 1 파일 / login_screen 안내 박스 + PIN 위치

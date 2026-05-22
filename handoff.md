@@ -1,7 +1,61 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-20 KST (✅ v2.18.3 — config.py Railway DB fallback 제거 + GCP migration 준비 100% 완료 후 비용 협의로 hold. GCP standby — 모든 자원 stopped, 월 ~$20 burn. Railway prod 운영 그대로 + Auto Deploys ON 복원. **재오픈은 [GCP_MIGRATION_STANDBY.md](./GCP_MIGRATION_STANDBY.md) 만 보면 30분 안에 cutover 가능**)
+> 마지막 업데이트: 2026-05-22 KST (✅ v2.18.27 — 매뉴얼 보안 통합. OPS 홈 상단 `[📖 매뉴얼]` 버튼 + axis-manual Netlify Edge Function JWT 미들웨어 (HS256 verify + access type 검증 + Cookie Max-Age JWT exp 동적). 3 repo 통합 release: OPS v2.18.27 / axis-manual v1.4.0 (미들웨어) + v1.5.0 (Admin Section B) / AXIS-VIEW Header.tsx token 첨부. Codex 라운드 1 M=2/A=5 반영 + A=3 BACKLOG 권고. **Netlify env `JWT_SECRET_KEY` 등록 + redeploy 완료**)
+
+---
+
+## 📌 2026-05-22 KST — v2.18.27 매뉴얼 보안 통합 + v2.18.4 ~ v2.18.26 누적
+
+### 핵심
+
+3 repo 통합 release (v2.18.27 매뉴얼 보안):
+- **OPS v2.18.27** — 홈 상단 `[📖 매뉴얼]` IconButton (token 첨부 새 탭) + notification_service 메일 본문 URL 제거 → 버튼 안내
+- **axis-manual v1.4.0** — Netlify Edge Function `auth.ts` (JWT verify + payload.type='access' + Cookie Max-Age 동적 + 정적 자산 우회 축소)
+- **axis-manual v1.5.0** — Admin Section B 2페이지 (checklist-management + qr-etl)
+- **AXIS-VIEW** — Header.tsx 매뉴얼 버튼 token 첨부
+
+운영 필수:
+- Netlify dashboard → axis-manual → Environment variables → `JWT_SECRET_KEY` 등록 (OPS BE Railway 와 동일 값) ✅ 완료
+- redeploy 실행 ✅ 완료
+
+### v2.18.4 ~ v2.18.26 누적 (5-21 ~ 5-22)
+
+| 버전 | 내용 |
+|------|------|
+| v2.18.26 | 로그인 후 AuthGate 강제 진입 — `pushAndRemoveUntil` (FE 1) |
+| v2.18.25 | 로그인 성공 후 새로고침 안내 SnackBar — PWA 모바일 catch (FE 1) |
+| v2.18.24 | ApprovalPendingScreen 승인 후 자동 홈 이동 — `ref.listen(authProvider)` (FE 1) |
+| v2.18.23 | 가입 승인 메일에 매뉴얼 URL 추가 (BE 1) |
+| v2.18.22 | 승인 메일 URL 정정 + 로그인 방법 안내 박스 (BE 1) |
+| v2.18.21 | 안내 메일 도메인 변경 + login 안내 박스 + PIN 설정 위치 (BE 1 + FE 1) |
+| v2.18.20 | 승인 메일 (notification_service.py 신규) + prefix 확장 + 안내 3가지, Codex 라운드 1 M=3 (BE 4 + FE 2 + 신규 1 + pytest 1) |
+| v2.18.19 | verify_email 카운트다운 3분 → 1분 (FE 2줄) |
+| v2.18.18 | 인증 메일 도메인 안내 + whitelist 검증 — gst-in/naver/gmail 3종 (BE 1 + FE 2) |
+| v2.18.17 | Sentry 잡음 fix — WebSocket Broken pipe + SMTP Recipients refused (BE 3) |
+| v2.18.16 | **BUG-42 fix — zoom 2.0x 자동 적용** (FE 1, videoConstraints 우회). 누적 trail 13번 시도 후 도달 |
+| v2.18.15 | ROLLBACK 2차 — v2.18.4 baseline 복귀 (qr_scanner_web.dart 506 LOC) |
+| v2.18.13 | BUG-42 재시도 — 4-tier fallback chain (ROLLED BACK in v2.18.15) |
+| v2.18.12 | ROLLBACK 1차 + qr-test.html 도입 + Codex 라운드 1 (root cause 확정) |
+| v2.18.5~11 | BUG-42 hotfix 11번 시리즈 (모두 ROLLED BACK, 셀카 catch) |
+| v2.18.4 | #70 출하 KPI `best` 분기 엑셀 게이트 제거 (BE 1) |
+
+### BUG-42 결과 (v2.18.16 1차 검증 GREEN)
+
+- 운영 코드 fix 완료 (zoom 2.0x 자동 적용, html5-qrcode `videoConstraints` 우회)
+- **실기기 명판 실측 대기** (2026-05-22 사용자 회사 현장)
+- BACKLOG 잔존: BUG-42-CAMERA-SWITCH-BUTTON-DEFERRED / TEST-QR-LIB-CONSTRAINT-PREFLIGHT / TOOL-ERUDA-DEV-CONSOLE / FEAT-QR-SCANNER-ADMIN-SETTINGS / REFACTOR-QR-SCANNER-WEB-FUNCTION-SPLIT
+
+### Codex 라운드 1 (v2.18.27) trail
+
+| Q | 라벨 | 처리 |
+|---|---|---|
+| M-Q1 OPS home_screen 인코딩·noopener | ✅ 반영 (`Uri.encodeQueryComponent` + `noopener,noreferrer`) |
+| M-Q3 정적 자산 우회 과대 | ✅ 반영 (`/assets/*` 우회 제거, 폰트/파비콘만) |
+| A-Q2 token type 검증 | ✅ 반영 (`payload.type === 'access'`) |
+| A-Q5 Cookie 만료 일치 | ✅ 반영 (Max-Age = JWT exp − now 동적) |
+| A-Q8 README 갱신 | ✅ 반영 (인증 미들웨어 섹션) |
+| A-Q4/Q6/Q7 운영성 advisory | 🟡 BACKLOG (별 sprint) |
 
 ---
 
