@@ -14,13 +14,26 @@ class ApprovalPendingScreen extends ConsumerWidget {
     await authNotifier.logout();
   }
 
-  Future<void> _handleRefresh(WidgetRef ref) async {
+  Future<void> _handleRefresh(BuildContext context, WidgetRef ref) async {
     final authNotifier = ref.read(authProvider.notifier);
     await authNotifier.refreshCurrentWorker();
+    // v2.18.24 — 새로고침 후 승인됐으면 즉시 홈 이동 (수동 안전망)
+    final worker = ref.read(authProvider).currentWorker;
+    if (worker?.approvalStatus == 'approved' && context.mounted) {
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    }
   }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // v2.18.24 — approval_status 'approved' 자동 감지 → 홈 이동
+    // (이전 catch: 새로고침으로 worker 갱신은 됐지만 화면 전환 안 됨, 강제 새로고침 필요)
+    ref.listen(authProvider, (prev, next) {
+      if (next.currentWorker?.approvalStatus == 'approved' && context.mounted) {
+        Navigator.of(context).popUntil((route) => route.isFirst);
+      }
+    });
+
     final authState = ref.watch(authProvider);
     final worker = authState.currentWorker;
 
@@ -56,7 +69,7 @@ class ApprovalPendingScreen extends ConsumerWidget {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh, color: GxColors.slate, size: 22),
-            onPressed: () => _handleRefresh(ref),
+            onPressed: () => _handleRefresh(context, ref),
             tooltip: '상태 새로고침',
           ),
         ],
@@ -68,7 +81,7 @@ class ApprovalPendingScreen extends ConsumerWidget {
       body: SafeArea(
         child: RefreshIndicator(
           color: GxColors.accent,
-          onRefresh: () => _handleRefresh(ref),
+          onRefresh: () => _handleRefresh(context, ref),
           child: SingleChildScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.all(20.0),
