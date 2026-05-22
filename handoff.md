@@ -3117,9 +3117,14 @@ Codex 3차 Q3 A 해소용 실측:
 
 ## 현재 버전
 
-- **OPS BE**: v2.18.20 (2026-05-22, 승인 메일 + prefix 확장 + notification_service.py 신규)
-- **OPS FE (Flutter PWA)**: v2.18.20 (2026-05-22, register SnackBar + login 안내 3가지)
-- **최근 release**: v2.18.20 — 가입 승인 환영 메일 / prefix 일반 사용자 확장 / register SnackBar / login 안내 3가지. Codex 라운드 1 M=3 반영 (HTML escape / admin.py thread 캡슐화 / pytest 신규). REFACTOR-ADMIN-SPLIT HIGH 등 BACKLOG 4건 등록
+- **OPS BE**: v2.18.24 (2026-05-22, ApprovalPendingScreen 승인 후 자동 홈 이동 — version bump only)
+- **OPS FE (Flutter PWA)**: v2.18.24 (2026-05-22, approval_pending_screen ref.listen 자동 navigation)
+- **최근 release (5건 묶음, 2026-05-22)**:
+  * v2.18.24 — ApprovalPendingScreen 승인 후 자동 홈 이동 (강제 새로고침 catch)
+  * v2.18.23 — 가입 승인 메일에 매뉴얼 URL (axis-manual.netlify.app)
+  * v2.18.22 — 가입 승인 메일 URL 정정 (gaxis-ops.netlify.app) + 메일 본문 🔑 로그인 박스
+  * v2.18.21 — 안내 메일 도메인 + login 안내 박스 + PIN 설정 위치 명시
+  * v2.18.20 — 승인 메일 + prefix 확장 + 안내 3가지 (Codex 라운드 1 M=3 반영)
 - **선행 release**: v2.18.19 카운트다운 1분 / v2.18.18 인증 메일 도메인 whitelist / v2.18.17 Sentry 잡음 fix
 - **선행 release**: v2.18.16 BUG-42 fix — qr-test.html 사용자 검증 catch (videoConstraints 사용 = 디코더 방해 / applyConstraints zoom 만 사용 = OK). `_applyZoomIfSupported` helper + 3곳 fire-and-forget 호출. cameraIdOrConfig + qrbox 200 + DOM/CSS baseline 유지. 실기기 QA 위탁
 - **이전 release trail**: v2.18.5~v2.18.11 (11번 hotfix 셀카) → v2.18.12 (1차 ROLLBACK) → v2.18.13/14 (4-tier/3-tier 인식 NG) → v2.18.15 (2차 ROLLBACK + qr-test.html Phase 1+2) → v2.18.16 (zoom 만 사용 최종 fix) — 사용자 catch "카메라 방향 셀카" — `environment` hint 영역 OS 무시 → `{exact:'environment'}` 강제 + 3차 fallback 영역 'back/rear/후면' label 매칭 안전망. 데스크톱 자동 user fallback. flutter build web GREEN. **별 sprint**: BUG-42-CAMERA-SWITCH-BUTTON-DEFERRED 등록 (전환 버튼 UI). **실기기 manual QA 재위탁**

@@ -6,6 +6,64 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.18.24] - 2026-05-22 — ApprovalPendingScreen 승인 후 자동 홈 이동 (강제 새로고침 catch)
+
+> 사용자 catch: 이메일 인증 후 ApprovalPendingScreen 진입 → admin 승인 후 로그인 시도 → 화면 전환 정상 안 됨 → PWA 강제 새로고침 해야 동작.
+
+### 변경
+
+| 파일 | 내용 |
+|------|-----|
+| `frontend/lib/screens/auth/approval_pending_screen.dart` | `ref.listen(authProvider)` 추가 — approval_status='approved' 변경 자동 감지 + Navigator.popUntil 자동 홈. `_handleRefresh(context, ref)` 영역 manual check 추가 (안전망 이중 catch) |
+
+### 원인 + 효과
+
+- 기존: 새로고침 → currentWorker 갱신 / 화면 transition 트리거 없음 → 사용자가 PWA 강제 새로고침 필요
+- 변경: ref.listen 자동 감지 + handleRefresh manual check 이중 안전망 → admin 승인 즉시 홈 이동
+
+회귀 위험 0 (additive).
+
+---
+
+## [2.18.23] - 2026-05-22 — 가입 승인 메일에 매뉴얼 URL 추가
+
+> 사용자 catch: 매뉴얼 URL https://axis-manual.netlify.app/ 안내 메일에 포함 부탁.
+
+### 변경
+
+| 파일 | 내용 |
+|------|-----|
+| `backend/app/services/notification_service.py` | HTML 템플릿 로그인 박스 하단에 📖 사용 매뉴얼 박스 추가 (axis-manual.netlify.app) |
+
+---
+
+## [2.18.22] - 2026-05-22 — 가입 승인 메일 URL 정정 + 로그인 방법 안내 박스 추가
+
+> 사용자 catch: ① URL 잘못 안내됨 (g-view.netlify.app → gaxis-ops.netlify.app) ② 가입 완료 안내 메일에도 로그인 방법 작성 부탁 (OPS login 화면 안내는 그대로 유지).
+
+### 변경
+
+| 파일 | 내용 |
+|------|-----|
+| `backend/app/services/notification_service.py` | "앱 열기" 링크 도메인 변경 + 본문 회색 박스 (🔑 로그인 방법 3가지 + PIN 설정 위치) |
+
+---
+
+## [2.18.21] - 2026-05-22 — 안내 메일 도메인 변경 + login 안내 박스 + PIN 설정 위치 명시
+
+> 사용자 catch: ① 가입 승인 메일 영역 링크 도메인 미완 (gaxis-ops.co.kr → g-view.netlify.app 임시) ② login 화면 안내 메시지 미인지 → Container 박스 + 🔑 이모지 강조 ③ PIN 설정 방법 안내 누락.
+
+### 변경
+
+| 파일 | 내용 |
+|------|-----|
+| `backend/app/services/notification_service.py` | HTML 영역 "앱 열기" 링크 도메인 정정 |
+| `frontend/lib/screens/auth/login_screen.dart` | 안내 박스 (mist 배경) + 🔑 로그인 방법 3가지 + PIN 설정 위치 안내 ("[프로필] → [PIN 설정]") |
+
+> 주: v2.18.22 영역 도메인 재정정 (g-view.netlify.app → gaxis-ops.netlify.app).
+
+---
+
 ## [2.18.20] - 2026-05-22 — 승인 메일 + prefix 확장 + 안내 3가지 (Codex 라운드 1 M=3 반영)
 
 > 사용자 catch 통합 fix: ① 가입 승인 시 사용자 환영 메일 발송 누락 catch ② 이메일 prefix 로그인 admin/test만 가능 (일반 사용자 불가) ③ register/login 안내 메시지 미흡. Codex 라운드 1 (M=3 / A=3 / N=2) 합의 후 적용.
