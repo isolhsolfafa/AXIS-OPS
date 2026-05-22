@@ -99,6 +99,14 @@ def _render_approval_html(name: str, role: str, company: str = None) -> str:
       <p style="margin:8px 0 0 0;font-size:11px;color:#888;">PIN 설정: 로그인 후 [프로필] → [PIN 설정]</p>
     </div>
 
+    <div style="background:#eef2ff;border-radius:8px;padding:14px 16px;margin:12px 0;font-size:13px;">
+      <p style="margin:0 0 6px 0;font-weight:600;color:#1d1d1f;">📖 사용 매뉴얼</p>
+      <p style="margin:0;color:#555;">자세한 사용법은 매뉴얼 페이지에서 확인하세요.</p>
+      <p style="margin:8px 0 0 0;">
+        <a href="https://axis-manual.netlify.app/" style="color:#4f46e5;text-decoration:underline;font-weight:500;">https://axis-manual.netlify.app/</a>
+      </p>
+    </div>
+
     <hr style="border:none;border-top:1px solid #e5e5e7;margin:24px 0;">
     <p style="font-size:11px;color:#888;">이 메일은 자동 발송되었습니다. 문의: dkkim1@gst-in.com</p>
   </div>
