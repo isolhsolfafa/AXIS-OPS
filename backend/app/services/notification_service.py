@@ -101,9 +101,9 @@ def _render_approval_html(name: str, role: str, company: str = None) -> str:
 
     <div style="background:#eef2ff;border-radius:8px;padding:14px 16px;margin:12px 0;font-size:13px;">
       <p style="margin:0 0 6px 0;font-weight:600;color:#1d1d1f;">📖 사용 매뉴얼</p>
-      <p style="margin:0;color:#555;">자세한 사용법은 매뉴얼 페이지에서 확인하세요.</p>
-      <p style="margin:8px 0 0 0;">
-        <a href="https://axis-manual.netlify.app/" style="color:#4f46e5;text-decoration:underline;font-weight:500;">https://axis-manual.netlify.app/</a>
+      <p style="margin:0;color:#555;line-height:1.6;">
+        앱 로그인 후 상단 <strong>[📖 매뉴얼]</strong> 버튼을 통해 접근 가능합니다.<br>
+        <span style="font-size:11px;color:#888;">보안상 직접 URL 접근은 차단되어 있습니다.</span>
       </p>
     </div>
 

@@ -13,6 +13,7 @@ import '../../widgets/break_time_end_popup.dart';
 import '../../widgets/update_dialog.dart';
 import '../../services/update_service.dart';
 import '../../services/notice_service.dart';
+import '../../services/auth_service.dart';  // v2.18.27: 매뉴얼 버튼 token 발급용
 
 /// 홈 화면 (메인 화면)
 ///
@@ -496,6 +497,27 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     }
   }
 
+  /// v2.18.27 — 매뉴얼 새 탭 열기 (token 포함, axis-manual Edge Function 인증 통과용)
+  /// Codex M-Q1 + A-Q7 반영: encodeURIComponent + noopener,noreferrer (VIEW 패턴 정합)
+  Future<void> _handleOpenManual(BuildContext context) async {
+    try {
+      final authService = AuthService();
+      final token = await authService.getToken();
+      const baseUrl = 'https://axis-manual.netlify.app/';
+      final url = (token != null && token.isNotEmpty)
+          ? '$baseUrl?token=${Uri.encodeQueryComponent(token)}'
+          : baseUrl;
+      // window.open 2번째 인자 _blank, 3번째 인자 windowFeatures (noopener,noreferrer)
+      html.window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('매뉴얼 열기 실패: $e')),
+        );
+      }
+    }
+  }
+
   Future<void> _handleLogout(BuildContext context, WidgetRef ref) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -581,6 +603,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           IconButton(
             icon: const Icon(Icons.settings_outlined, color: GxColors.slate, size: 22),
             onPressed: () => Navigator.pushNamed(context, '/profile'),
+            tooltip: '설정',
+          ),
+          // v2.18.27 — 매뉴얼 버튼 (설정 옆, token 포함 새 탭 열기)
+          IconButton(
+            icon: const Icon(Icons.menu_book_outlined, color: GxColors.slate, size: 22),
+            onPressed: () => _handleOpenManual(context),
+            tooltip: '매뉴얼',
           ),
           // 알림 버튼
           Stack(

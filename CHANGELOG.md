@@ -6,6 +6,106 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.18.27] - 2026-05-22 — 매뉴얼 보안 통합 (OPS 상단 버튼 + axis-manual JWT 미들웨어, Codex 라운드 1 M=2/A=8 반영)
+
+> 사용자 catch: "사용자 매뉴얼도 url 을 공유 하는것 보다 버튼을 만들어줘 / url 이 현재 전체공개라 누구나 볼수 있게 됬는데 이것도 보안이 필요한데". OPS 매뉴얼 접근 통합 fix.
+
+### 변경 (OPS 2 + axis-manual 3 + AXIS-VIEW 1)
+
+| 파일 | 내용 |
+|------|-----|
+| `frontend/lib/screens/home/home_screen.dart` | 상단 actions 영역 — 설정 옆에 `[📖 매뉴얼]` IconButton 추가. `_handleOpenManual()` — access token 추출 → `?token=` 쿼리로 axis-manual 새 탭. Codex M-Q1 반영: `Uri.encodeQueryComponent` + `noopener,noreferrer` |
+| `backend/app/services/notification_service.py` | 승인 메일 매뉴얼 박스 — 직접 URL 제거, "앱 로그인 후 [📖 매뉴얼] 버튼" 안내로 교체 (보안 일관성) |
+| `axis-manual/netlify/edge-functions/auth.ts` (신규) | Netlify Edge Function — JWT (HS256) verify 미들웨어. ① `?token=...` 또는 Cookie 에서 추출 ② `JWT_SECRET_KEY` env 로 verify ③ Codex A-Q2: `payload.type==='access'` 검증 (refresh 차단) ④ Codex A-Q5: Cookie Max-Age 를 JWT exp 기준 동적 계산 ⑤ Codex M-Q3: 정적 자산 우회 축소 (favicon/robots/폰트만 — VitePress JS chunk 노출 방지) ⑥ 인증 실패 시 안내 페이지 |
+| `axis-manual/netlify.toml` | `[[edge_functions]] path = "/*"` |
+| `axis-manual/README.md` | Codex A-Q8 — 인증 미들웨어 동작 + Netlify env `JWT_SECRET_KEY` 등록 절차 + 보안 정책 문서화 |
+| `AXIS-VIEW/app/src/components/layout/Header.tsx` | 매뉴얼 버튼 onClick — localStorage access token 추출 → `?token=` 첨부 (axis-manual 미들웨어 정합) |
+
+### 인증 흐름
+
+```
+1. OPS 홈 [📖 매뉴얼] 클릭
+   → const token = await AuthService.getToken()
+   → window.open('https://axis-manual.netlify.app/?token={JWT}', '_blank', 'noopener,noreferrer')
+
+2. Netlify Edge Function `auth.ts` 가로채기
+   → ?token=... 추출 → jwtVerify(HS256, JWT_SECRET_KEY)
+   → payload.type==='access' 검증
+   → HttpOnly Cookie 저장 (Max-Age = JWT exp - now)
+   → URL 토큰 제거 후 302 redirect
+
+3. 이후 모든 페이지/리소스 요청
+   → Cookie 자동 첨부 → Edge Function 자동 통과
+   → 토큰 만료 시 401 안내 페이지
+```
+
+### Codex 라운드 1 결과 (M=2 + A=8 + N=1)
+
+| Q | 라벨 | 상태 |
+|---|---|---|
+| M-Q1 token URL 인코딩·noopener | ✅ 반영 — `Uri.encodeQueryComponent` + `noopener,noreferrer` |
+| M-Q3 정적 자산 우회 과대 | ✅ 반영 — `/assets/*` 우회 제거. favicon/robots/폰트(woff/woff2/ttf/otf/eot)만 우회. VitePress JS chunk 정상 인증 경로 |
+| A-Q2 token type 검증 | ✅ 반영 — `payload.type !== 'access'` 시 401 |
+| A-Q5 Cookie 만료 일치 | ✅ 반영 — Cookie Max-Age = JWT exp - now (fallback 2시간) |
+| A-Q8 README 갱신 | ✅ 반영 — 인증 미들웨어 섹션 신규 |
+| A-Q4/Q6/Q7 운영성 advisory | 🟡 BACKLOG 권고 (관리자 안내·로깅·이메일 본문 정리) |
+
+### Netlify env 등록 (운영 필수)
+
+매뉴얼 사이트 Netlify dashboard → Environment variables:
+
+- `JWT_SECRET_KEY` = OPS BE Railway 의 `JWT_SECRET_KEY` 와 **동일 값**
+
+⚠️ 다른 값이면 모든 토큰 401. 등록 후 deploy 재실행 필요.
+
+### 회귀 위험
+
+- OPS FE: 신규 IconButton + 함수 (additive) — 회귀 0
+- BE: 메일 본문 박스 1개 변경 (URL 제거) — 기능 변경 0
+- axis-manual: 신규 Edge Function — 미인증 직접 접근 차단됨 (의도). Netlify env 미등록 시 500 + 콘솔 에러 (운영자 catch 용이)
+- AXIS-VIEW: localStorage token 추출 — token 없으면 base URL 그대로 (미들웨어가 401 안내)
+
+### 연관
+
+- v2.18.20 (notification_service.py 신규)
+- v2.18.23 (매뉴얼 URL 메일 추가 — 본 release 영역 메일 안내 박스 정정)
+- AXIS-VIEW v1.x (Header.tsx 매뉴얼 버튼 token 첨부)
+- axis-manual v1.2.0 (Edge Function 인증 미들웨어 도입)
+
+---
+
+## [2.18.26] - 2026-05-22 — 로그인 후 AuthGate 강제 진입 (pushAndRemoveUntil)
+
+> 사용자 catch: v2.18.25 fix 후에도 로그인 버튼 누르면 화면 안 넘어감. Dio response log 확인 시 token 발급 정상 → Navigator 스택 문제.
+
+### 변경
+
+| 파일 | 내용 |
+|------|-----|
+| `frontend/lib/screens/auth/login_screen.dart` | `popUntil((route) => route.isFirst)` → `pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const AuthGate()), (route) => false)` 변경 |
+
+### 원인
+
+LoginScreen 자체가 first route 일 때 `popUntil` 가 무동작 → AuthGate (인증 상태 라우터) 진입 불가. `pushAndRemoveUntil` 로 stack 전부 비우고 AuthGate 신규 push.
+
+회귀 위험 0 (Navigator 스택 정리 패턴).
+
+---
+
+## [2.18.25] - 2026-05-22 — 로그인 성공 후 화면 전환 안 될 시 새로고침 안내 SnackBar
+
+> 사용자 catch: v2.18.24 후에도 PWA 모바일 영역 가입 승인 후 첫 로그인 시 화면 전환 안 됨. 강제 새로고침 어려움 (PWA 모바일 = Cmd+Shift+R 불가).
+
+### 변경
+
+| 파일 | 내용 |
+|------|-----|
+| `frontend/lib/screens/auth/login_screen.dart` | 로그인 성공 후 3초 후 화면 안 넘어가면 SnackBar 안내 (앱 종료 후 재실행 권고) |
+
+> 주: v2.18.26 영역 `pushAndRemoveUntil` 정식 fix 로 본 안내 무용지물 (안전망 유지).
+
+---
+
 ## [2.18.24] - 2026-05-22 — ApprovalPendingScreen 승인 후 자동 홈 이동 (강제 새로고침 catch)
 
 > 사용자 catch: 이메일 인증 후 ApprovalPendingScreen 진입 → admin 승인 후 로그인 시도 → 화면 전환 정상 안 됨 → PWA 강제 새로고침 해야 동작.
