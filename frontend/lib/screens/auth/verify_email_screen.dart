@@ -27,9 +27,9 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
   final _formKey = GlobalKey<FormState>();
   final _codeController = TextEditingController();
 
-  // 타이머 관련
+  // 타이머 관련 (v2.18.19: 3분 → 1분 단축, BE rate limit 60초 동기화)
   Timer? _timer;
-  int _remainingSeconds = 180; // 3분 = 180초
+  int _remainingSeconds = 60; // 1분 = 60초
   bool _canResend = false;
   bool _isResending = false;
 
@@ -47,7 +47,7 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
   }
 
   void _startTimer() {
-    _remainingSeconds = 180;
+    _remainingSeconds = 60; // v2.18.19: 1분
     _canResend = false;
     _timer?.cancel();
 

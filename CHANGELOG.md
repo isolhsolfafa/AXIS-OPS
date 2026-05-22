@@ -6,6 +6,44 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.18.19] - 2026-05-22 — verify_email 카운트다운 3분 → 1분 (BE rate limit 60s 동기화)
+
+> 사용자 catch: 가입 인증 화면 재발송 대기 시간 3분이 김. BE rate limit 은 이미 60초인데 FE 카운트다운만 180초 (3분) 표시 — 비동기. FE 만 60 으로 단축.
+
+### 변경
+
+| 파일 | 내용 |
+|------|-----|
+| `frontend/lib/screens/auth/verify_email_screen.dart` L32 + L50 | `_remainingSeconds = 180` → `60` (2곳) |
+| `backend/version.py` | 2.18.18 → 2.18.19 |
+| `frontend/lib/utils/app_version.dart` | 2.18.18 → 2.18.19 |
+
+### 이미 구현되어 있던 항목 (사용자 catch 분석 후 확인)
+
+| 항목 | 상태 |
+|---|---|
+| login `EMAIL_NOT_VERIFIED` → verify_email 자동 redirect + email prefill | ✅ 기존 구현 (`login_screen.dart` L55-62) |
+| verify_email "인증 코드 다시 보내기" 버튼 | ✅ 기존 구현 (`verify_email_screen.dart` L434+) |
+| api_service 403 에러 코드 보존 | ✅ 기존 구현 (`api_service.dart` L249-252) |
+
+### 사용자 (kdkyu311) catch 분석
+
+```
+가입 → verify_email 화면 자동 진입 (자동 redirect 정상)
+사용자 인증 안 함 → 화면 나감
+로그인 시도 안 함 (또는 흐름 모름)
+비밀번호 찾기 → reset 코드 → 비밀번호 변경 (email_verified 그대로 false)
+사용자 인식: "메일 인증 했다" / 시스템 = 미완
+```
+
+→ 흐름 인식 catch + 운영 SQL 정리 필요.
+
+### 후속 BACKLOG 권고
+
+`FEAT-LOGIN-RESEND-VERIFICATION-LINK` — login 화면에 "이메일 인증 다시 받기" 명시 링크 추가 (회원가입 버튼 옆). 자동 redirect 외 사용자 명시적 진입 경로 확보.
+
+---
+
 ## [2.18.18] - 2026-05-22 — 인증 메일 도메인 안내 + whitelist 검증 (BE + FE)
 
 > 사용자 catch: 카카오/다음 메일로 가입 시 인증 메일 수신 안 됨. Railway 로그: `SMTP error while sending to kdkyu311@kakao.com: Connection unexpectedly closed` — KT Biz Office SMTP 영역 외부 도메인 차단 정책 (Connection 강제 끊김). CLAUDE.md L626 명시된 허용 도메인 (@gst-in.com / @naver.com / @gmail.com) 영역 코드 영역 미구현 catch — whitelist 강제 + UI 안내 동시 추가.
