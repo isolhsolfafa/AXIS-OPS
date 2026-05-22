@@ -87,7 +87,17 @@ def _render_approval_html(name: str, role: str, company: str = None) -> str:
     </div>
 
     <p style="margin-top:18px;">이제 G-AXIS OPS 앱에 로그인하여 작업을 시작할 수 있습니다.</p>
-    <p style="margin-top:12px;"><a href="https://g-view.netlify.app" style="display:inline-block;padding:10px 18px;background:#007aff;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">앱 열기</a></p>
+    <p style="margin-top:12px;"><a href="https://gaxis-ops.netlify.app" style="display:inline-block;padding:10px 18px;background:#007aff;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">앱 열기</a></p>
+
+    <div style="background:#f3f4f6;border-radius:8px;padding:14px 16px;margin:18px 0;font-size:13px;">
+      <p style="margin:0 0 8px 0;font-weight:600;color:#1d1d1f;">🔑 로그인 방법</p>
+      <ul style="margin:0;padding-left:18px;color:#555;line-height:1.7;">
+        <li>이메일 전체 (예: user@gst-in.com)</li>
+        <li>이메일 앞부분 (예: user)</li>
+        <li>PIN 4자리 (사전 등록 시)</li>
+      </ul>
+      <p style="margin:8px 0 0 0;font-size:11px;color:#888;">PIN 설정: 로그인 후 [프로필] → [PIN 설정]</p>
+    </div>
 
     <hr style="border:none;border-top:1px solid #e5e5e7;margin:24px 0;">
     <p style="font-size:11px;color:#888;">이 메일은 자동 발송되었습니다. 문의: dkkim1@gst-in.com</p>
