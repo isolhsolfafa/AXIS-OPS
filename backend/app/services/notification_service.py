@@ -87,7 +87,7 @@ def _render_approval_html(name: str, role: str, company: str = None) -> str:
     </div>
 
     <p style="margin-top:18px;">이제 G-AXIS OPS 앱에 로그인하여 작업을 시작할 수 있습니다.</p>
-    <p style="margin-top:12px;"><a href="https://gaxis-ops.co.kr" style="display:inline-block;padding:10px 18px;background:#007aff;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">앱 열기</a></p>
+    <p style="margin-top:12px;"><a href="https://g-view.netlify.app" style="display:inline-block;padding:10px 18px;background:#007aff;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">앱 열기</a></p>
 
     <hr style="border:none;border-top:1px solid #e5e5e7;margin:24px 0;">
     <p style="font-size:11px;color:#888;">이 메일은 자동 발송되었습니다. 문의: dkkim1@gst-in.com</p>

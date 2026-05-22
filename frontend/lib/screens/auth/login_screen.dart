@@ -160,15 +160,45 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         enabled: !authState.isLoading,
                       ),
                       const SizedBox(height: 4),
-                      // v2.18.20 — 로그인 가능 방법 3가지 안내 (이메일/prefix/PIN)
-                      const Text(
-                        '로그인: 이메일 전체 (예: user@gst-in.com) 또는\n'
-                        '이메일 앞부분 (예: user) 또는\n'
-                        'PIN 4자리 (프로필 사전 등록 시)',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: GxColors.steel,
-                          height: 1.5,
+                      // v2.18.21 — 로그인 방법 안내 + PIN 설정 위치
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: GxColors.mist.withValues(alpha: 0.3),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '🔑 로그인 방법',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: GxColors.charcoal,
+                              ),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              '• 이메일 전체 (예: user@gst-in.com)\n'
+                              '• 이메일 앞부분 (예: user)\n'
+                              '• PIN 4자리 (사전 등록 시)',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: GxColors.steel,
+                                height: 1.5,
+                              ),
+                            ),
+                            SizedBox(height: 6),
+                            Text(
+                              'PIN 설정: 로그인 후 [프로필] → [PIN 설정]',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: GxColors.silver,
+                                height: 1.4,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                       const SizedBox(height: 12),
