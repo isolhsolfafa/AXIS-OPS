@@ -359,6 +359,51 @@ def get_admin_by_email_prefix(prefix: str) -> Optional[Worker]:
             put_conn(conn)
 
 
+def get_worker_by_email_prefix(prefix: str) -> Optional[Worker]:
+    """
+    이메일 prefix 로 일반 사용자 포함 조회 (v2.18.20 신규).
+
+    v2.18.18 가입 허용 도메인 (@gst-in.com / @naver.com / @gmail.com) 3개에 한해
+    prefix + 도메인 후보 3개를 조회. 정확히 1명만 매칭 시 반환, 0명/2명+ → None.
+
+    Codex A-Q3 (v2.18.20): 모호 매칭 (2명+) 시 debug log 출력 — auth_service
+    login 에서 매칭 카운트 별도 catch 어려운 catch 회피.
+
+    - 'kdkyu311' 입력 → kdkyu311@gst-in.com / @naver.com / @gmail.com 중 1명 매칭
+    - 'dkkim1' 입력 → dkkim1@gst-in.com 매칭 (admin 포함 모든 사용자)
+    - 비밀번호 검증은 별도 (auth_service.login) 필수
+
+    Args:
+        prefix: 이메일 @ 앞부분 (예: 'dkkim1', 'kdkyu311')
+
+    Returns:
+        Worker 객체 (매칭 1명) / 없거나 2명+ 시 None
+    """
+    ALLOWED_DOMAINS = ['gst-in.com', 'naver.com', 'gmail.com']
+    candidates = [f"{prefix}@{d}" for d in ALLOWED_DOMAINS]
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT * FROM workers WHERE email = ANY(%s)",
+            (candidates,)
+        )
+        rows = cur.fetchall()
+        if len(rows) == 1:
+            return Worker.from_db_row(rows[0])
+        if len(rows) > 1:
+            logger.info(f"Prefix matched multiple workers (ambiguous): prefix={prefix}, count={len(rows)}")
+        return None
+    except PsycopgError as e:
+        logger.error(f"Failed to get worker by email prefix={prefix}: {e}")
+        return None
+    finally:
+        if conn:
+            put_conn(conn)
+
+
 def update_approval_status(worker_id: int, status: str) -> bool:
     """
     작업자 승인 상태 업데이트 (관리자 전용)

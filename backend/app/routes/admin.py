@@ -222,6 +222,15 @@ def approve_worker() -> Tuple[Dict[str, Any], int]:
         'target_worker_id': worker_id
     })
 
+    # v2.18.20 — 승인 시 사용자에게 환영 메일 발송 (best-effort, background)
+    # Codex M-Q4: thread 생성 로직은 notification_service 영역 캡슐화 (admin.py God File 정책 정합)
+    if approved:
+        from app.services.notification_service import send_approval_notification_async
+        send_approval_notification_async(
+            name=worker.name, email=worker.email, role=worker.role,
+            company=getattr(worker, 'company', None), worker_id=worker_id,
+        )
+
     logger.info(f"Worker approval updated: worker_id={worker_id}, status={status}, by_admin={g.worker_id}")
 
     return jsonify({

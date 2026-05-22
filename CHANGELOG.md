@@ -6,6 +6,55 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.18.20] - 2026-05-22 — 승인 메일 + prefix 확장 + 안내 3가지 (Codex 라운드 1 M=3 반영)
+
+> 사용자 catch 통합 fix: ① 가입 승인 시 사용자 환영 메일 발송 누락 catch ② 이메일 prefix 로그인 admin/test만 가능 (일반 사용자 불가) ③ register/login 안내 메시지 미흡. Codex 라운드 1 (M=3 / A=3 / N=2) 합의 후 적용.
+
+### 변경 (BE 4 + FE 2 + 신규 1 + pytest 1)
+
+| 파일 | 내용 |
+|------|-----|
+| `backend/app/services/notification_service.py` (신규, +138 LOC) | `send_approval_notification()` + `send_approval_notification_async()` (Codex M-Q4: thread 캡슐화) + `_render_approval_html()` (html.escape XSS 방지, Codex M-Q1) + `_send_smtp()` (email_service 패턴 정합) |
+| `backend/app/models/worker.py` | `get_worker_by_email_prefix(prefix)` 신규 (+42 LOC). v2.18.18 ALLOWED_DOMAINS 3개 후보 검색, 1명 매칭 시 반환, 2명+ → debug log 후 None (Codex A-Q3) |
+| `backend/app/services/auth_service.py` | login() chain 영역 일반 사용자 prefix 단계 신규 추가 (admin → user prefix → 이름 → 이메일). import 추가 |
+| `backend/app/routes/admin.py` | approve_worker() 영역 1줄 호출만 (thread 로직 service 이동, Codex M-Q4 정합). admin.py God File LOC +8 (정책 일부 완화 + REFACTOR-ADMIN-SPLIT BACKLOG HIGH 등록) |
+| `frontend/lib/screens/auth/register_screen.dart` | 가입 성공 SnackBar — "회원가입이 완료되었습니다. 이메일로 받은 인증 코드를 입력해주세요." |
+| `frontend/lib/screens/auth/login_screen.dart` | 안내 메시지 3가지 (이메일 전체 / prefix / PIN). 이름 로그인 코드 유지하되 안내 제외 |
+| `tests/backend/test_v2_18_20_prefix_login_and_approval.py` (신규) | 4개 TestClass — prefix 매칭 / login 확장 / XSS escape / async thread (Codex M-Q8 반영) |
+
+### Codex 라운드 1 결과
+
+| Q | 라벨 | 상태 |
+|---|---|---|
+| M-Q1 HTML escape | ✅ 반영 — `html.escape()` 적용 (name/role/company) |
+| M-Q4 admin.py God File | ✅ 반영 — `send_approval_notification_async()` 신규 helper 로 thread 로직 이동 (admin.py +8 LOC만) |
+| M-Q8 신규 경로 TC | ✅ 반영 — `test_v2_18_20_prefix_login_and_approval.py` 신규 |
+| A-Q2 도메인 하드코딩 중복 | 🟡 BACKLOG 권고 (worker.py / auth_service.py / validators.dart / CLAUDE.md 4중) |
+| A-Q3 모호 매칭 안내 | ✅ 반영 — debug log 추가 + 사용자 안내 메시지 별 sprint 권고 |
+| A-Q5 daemon thread 신뢰성 | 🟡 BACKLOG 권고 (outbox/job queue) |
+| N-Q6 SnackBar UX / N-Q7 회귀 | ✅ 안전 |
+
+### 동작 변경
+
+| 입력 | 매칭 |
+|---|---|
+| `dkkim1@gst-in.com` | 정확한 이메일 ✅ |
+| `dkkim1` | admin prefix (1차) ✅ |
+| `kdkyu311` | 일반 사용자 prefix (2차 신규) — `kdkyu311@naver.com` 등 매칭 ✅ |
+| `홍길동` (이름) | 이름 fallback (3차, 코드 유지) ✅ |
+| 동일 prefix 2명+ (모호) | 4차 fallback `get_worker_by_email(email)` — 사실상 매칭 X → `ACCOUNT_NOT_FOUND` |
+
+### 신규 BACKLOG 권고
+
+| sprint | 우선순위 | 의미 |
+|---|---|---|
+| `REFACTOR-ADMIN-SPLIT` | 🔴 HIGH | admin.py 2,568 LOC God File 분할 |
+| `FEAT-LOGIN-AMBIGUOUS-PREFIX-NOTICE` | 🟡 LOW | prefix 모호 매칭 시 "전체 이메일 입력 부탁" 메시지 분기 |
+| `REFACTOR-EMAIL-DOMAIN-CONSTANT` | 🟡 LOW | ALLOWED_DOMAINS 4중 중복 통합 |
+| `FEAT-APPROVAL-EMAIL-OUTBOX` | 🟡 LOW | daemon thread 유실 catch 대응 (outbox/job queue) |
+
+---
+
 ## [2.18.19] - 2026-05-22 — verify_email 카운트다운 3분 → 1분 (BE rate limit 60s 동기화)
 
 > 사용자 catch: 가입 인증 화면 재발송 대기 시간 3분이 김. BE rate limit 은 이미 60초인데 FE 카운트다운만 180초 (3분) 표시 — 비동기. FE 만 60 으로 단축.

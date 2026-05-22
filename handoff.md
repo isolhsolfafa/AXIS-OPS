@@ -3117,10 +3117,10 @@ Codex 3차 Q3 A 해소용 실측:
 
 ## 현재 버전
 
-- **OPS BE**: v2.18.18 (2026-05-22, 인증 메일 도메인 whitelist + 검증)
-- **OPS FE (Flutter PWA)**: v2.18.18 (2026-05-22, register_screen 안내 + validators 도메인 체크)
-- **최근 release**: v2.18.18 — KT Biz Office SMTP 외부 도메인 차단 catch / `ALLOWED_EMAIL_DOMAINS = {gst-in.com, naver.com, gmail.com}` BE+FE 동기화 + register 화면 안내 메시지 + 가입 차단
-- **선행 release**: v2.18.17 Sentry 잡음 fix — WebSocket BrokenPipeError → INFO + SMTPRecipientsRefused → WARNING. v2.10.13 패턴 정합
+- **OPS BE**: v2.18.20 (2026-05-22, 승인 메일 + prefix 확장 + notification_service.py 신규)
+- **OPS FE (Flutter PWA)**: v2.18.20 (2026-05-22, register SnackBar + login 안내 3가지)
+- **최근 release**: v2.18.20 — 가입 승인 환영 메일 / prefix 일반 사용자 확장 / register SnackBar / login 안내 3가지. Codex 라운드 1 M=3 반영 (HTML escape / admin.py thread 캡슐화 / pytest 신규). REFACTOR-ADMIN-SPLIT HIGH 등 BACKLOG 4건 등록
+- **선행 release**: v2.18.19 카운트다운 1분 / v2.18.18 인증 메일 도메인 whitelist / v2.18.17 Sentry 잡음 fix
 - **선행 release**: v2.18.16 BUG-42 fix — qr-test.html 사용자 검증 catch (videoConstraints 사용 = 디코더 방해 / applyConstraints zoom 만 사용 = OK). `_applyZoomIfSupported` helper + 3곳 fire-and-forget 호출. cameraIdOrConfig + qrbox 200 + DOM/CSS baseline 유지. 실기기 QA 위탁
 - **이전 release trail**: v2.18.5~v2.18.11 (11번 hotfix 셀카) → v2.18.12 (1차 ROLLBACK) → v2.18.13/14 (4-tier/3-tier 인식 NG) → v2.18.15 (2차 ROLLBACK + qr-test.html Phase 1+2) → v2.18.16 (zoom 만 사용 최종 fix) — 사용자 catch "카메라 방향 셀카" — `environment` hint 영역 OS 무시 → `{exact:'environment'}` 강제 + 3차 fallback 영역 'back/rear/후면' label 매칭 안전망. 데스크톱 자동 user fallback. flutter build web GREEN. **별 sprint**: BUG-42-CAMERA-SWITCH-BUTTON-DEFERRED 등록 (전환 버튼 UI). **실기기 manual QA 재위탁**
 - **최근 release 이력 (5-19 ~ 5-21)**: v2.18.7 (HOTFIX-10 후면 강제), v2.18.6 (HOTFIX-09 1-key fix), v2.18.5 (BUG-42 명판 QR Task 2), v2.18.4 (#70 출하 KPI best 합집합), v2.18.3 (GCP migration HOLD + DATABASE_URL fallback 제거), v2.18.2 (DRAGON DUAL MECH 체크리스트 P0), v2.18.1 (PI/QI 다이얼로그 하드코딩 fix), v2.18.0 (Sprint 69 PI/QI 권한 잠금 + admin_complete)

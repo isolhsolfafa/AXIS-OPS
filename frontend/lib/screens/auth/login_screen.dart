@@ -160,11 +160,15 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         enabled: !authState.isLoading,
                       ),
                       const SizedBox(height: 4),
+                      // v2.18.20 — 로그인 가능 방법 3가지 안내 (이메일/prefix/PIN)
                       const Text(
-                        'Admin은 이메일 앞부분만 입력 가능',
+                        '로그인: 이메일 전체 (예: user@gst-in.com) 또는\n'
+                        '이메일 앞부분 (예: user) 또는\n'
+                        'PIN 4자리 (프로필 사전 등록 시)',
                         style: TextStyle(
                           fontSize: 11,
                           color: GxColors.steel,
+                          height: 1.5,
                         ),
                       ),
                       const SizedBox(height: 12),

@@ -122,6 +122,14 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
     if (!mounted) return;
 
     if (success) {
+      // v2.18.20 — 가입 완료 안내 SnackBar 표시
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('회원가입이 완료되었습니다. 이메일로 받은 인증 코드를 입력해주세요.'),
+          duration: Duration(seconds: 3),
+          backgroundColor: Color(0xFF16A34A),
+        ),
+      );
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
           builder: (context) => VerifyEmailScreen(

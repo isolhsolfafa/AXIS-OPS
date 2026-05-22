@@ -26,6 +26,7 @@ from app.models.worker import (
     get_worker_by_email,
     get_worker_by_name,
     get_admin_by_email_prefix,
+    get_worker_by_email_prefix,
     update_email_verified,
     create_verification_code,
     create_password_reset_code,
@@ -585,15 +586,19 @@ class AuthService:
         Returns:
             (response dict with access_token + refresh_token, status code)
         """
-        # 사용자 조회 (@ 포함 → 이메일, 미포함 → admin prefix → 이름 → 이메일 fallback)
+        # 사용자 조회 (v2.18.20: prefix 일반 사용자까지 확장)
+        # @ 포함 → 이메일 정확 매칭
+        # @ 미포함 → admin prefix → 일반 사용자 prefix (3개 도메인 후보) → 이름 fallback
         if '@' in email:
             worker = get_worker_by_email(email)
         else:
             worker = get_admin_by_email_prefix(email)
             if worker is None:
-                worker = get_worker_by_name(email)  # 이름으로 조회
+                worker = get_worker_by_email_prefix(email)  # v2.18.20: 일반 사용자 prefix
             if worker is None:
-                worker = get_worker_by_email(email)  # fallback
+                worker = get_worker_by_name(email)  # 이름 fallback (코드 유지)
+            if worker is None:
+                worker = get_worker_by_email(email)  # 최종 fallback
 
         if worker is None:
             return {
