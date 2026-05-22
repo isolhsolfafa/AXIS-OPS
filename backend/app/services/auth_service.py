@@ -42,6 +42,10 @@ logger = logging.getLogger(__name__)
 # Sprint 6: MM→MECH, EE→ELEC 네이밍 변경
 VALID_ROLES = {'MECH', 'ELEC', 'TM', 'PI', 'QI', 'SI', 'PM'}
 
+# v2.18.18 — 인증 메일 발송 허용 도메인 (CLAUDE.md L626 명시 영역 코드 반영)
+# KT Biz Office SMTP 외부 도메인 차단 catch — kakao/daum/hanmail 등은 connection 끊김
+ALLOWED_EMAIL_DOMAINS = {'gst-in.com', 'naver.com', 'gmail.com'}
+
 # 회사 ↔ 역할 매핑 (회원가입 시 company↔role 검증용)
 COMPANY_ROLE_MAP: Dict[str, set] = {
     'FNI':    {'MECH'},
@@ -477,6 +481,20 @@ class AuthService:
             return {
                 'error': 'INVALID_ROLE',
                 'message': f"유효하지 않은 역할입니다. 가능한 역할: {', '.join(sorted(VALID_ROLES))}"
+            }, 400
+
+        # v2.18.18 — 이메일 도메인 whitelist 검증 (KT Biz Office SMTP 외부 도메인 차단 대응)
+        email_lower = (email or '').strip().lower()
+        if '@' not in email_lower:
+            return {
+                'error': 'INVALID_EMAIL_FORMAT',
+                'message': '올바른 이메일 형식이 아닙니다.'
+            }, 400
+        email_domain = email_lower.rsplit('@', 1)[1]
+        if email_domain not in ALLOWED_EMAIL_DOMAINS:
+            return {
+                'error': 'EMAIL_DOMAIN_NOT_ALLOWED',
+                'message': f"지원하지 않는 메일 도메인입니다. 사용 가능: {', '.join(sorted('@' + d for d in ALLOWED_EMAIL_DOMAINS))}"
             }, 400
 
         # company↔role 일치 검증 (company 입력 시)

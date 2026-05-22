@@ -238,7 +238,17 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                     validator: validateEmail,
                     enabled: !authState.isLoading,
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 4),
+                  // v2.18.18 — 지원 메일 도메인 안내 (KT Biz Office SMTP 외부 도메인 차단 catch)
+                  Text(
+                    '지원 메일: @gst-in.com, @naver.com, @gmail.com',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: GxColors.steel,
+                      height: 1.4,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
 
                   // 협력사 선택
                   _buildLabel('COMPANY'),

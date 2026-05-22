@@ -6,6 +6,43 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.18.18] - 2026-05-22 — 인증 메일 도메인 안내 + whitelist 검증 (BE + FE)
+
+> 사용자 catch: 카카오/다음 메일로 가입 시 인증 메일 수신 안 됨. Railway 로그: `SMTP error while sending to kdkyu311@kakao.com: Connection unexpectedly closed` — KT Biz Office SMTP 영역 외부 도메인 차단 정책 (Connection 강제 끊김). CLAUDE.md L626 명시된 허용 도메인 (@gst-in.com / @naver.com / @gmail.com) 영역 코드 영역 미구현 catch — whitelist 강제 + UI 안내 동시 추가.
+
+### 변경
+
+| 파일 | 내용 |
+|------|-----|
+| `backend/app/services/auth_service.py` L43+L475 | `ALLOWED_EMAIL_DOMAINS = {'gst-in.com', 'naver.com', 'gmail.com'}` 상수 + `register()` 영역 도메인 체크 (INVALID_EMAIL_FORMAT + EMAIL_DOMAIN_NOT_ALLOWED 분기) |
+| `frontend/lib/utils/validators.dart` | `allowedEmailDomains` 상수 + `validateEmail()` 영역 도메인 체크 추가 |
+| `frontend/lib/screens/auth/register_screen.dart` L240 | 이메일 필드 아래 안내 메시지: "지원 메일: @gst-in.com, @naver.com, @gmail.com" |
+| `backend/version.py` | 2.18.17 → 2.18.18 |
+| `frontend/lib/utils/app_version.dart` | 2.18.17 → 2.18.18 |
+
+### 동작
+
+| 입력 | FE 결과 | BE 결과 |
+|---|---|---|
+| `user@gst-in.com` / `@naver.com` / `@gmail.com` | ✅ 통과 | ✅ 통과 |
+| `user@kakao.com` / `@daum.net` / `@hanmail.net` | ❌ 빨간 글씨 "지원 메일: @gst-in.com, @naver.com, @gmail.com" + 가입 버튼 disabled | ❌ HTTP 400 `EMAIL_DOMAIN_NOT_ALLOWED` (보안 — FE 우회 차단) |
+
+### 영향
+
+- 카카오/다음/네이트/한메일 사용자 영역 가입 차단 (KT SMTP 정책 한계)
+- 운영 catch — 사용자에게 명확한 안내 + 가입 전 catch
+- Sentry 영역 SMTP Recipients refused / Connection unexpectedly closed 잡음 0건 기대
+
+### 향후 옵션 (BACKLOG 검토)
+
+| 옵션 | 의미 |
+|---|---|
+| 외부 SMTP 전환 (Gmail / SendGrid / Mailgun) | 모든 도메인 발송 가능 — 회사 정책 catch 필요 |
+| KT Biz Office 외부 도메인 정책 완화 요청 | 회사 IT 절차 |
+| ALLOWED_EMAIL_DOMAINS admin_settings 영역 동적 관리 | 운영팀이 직접 도메인 추가/제거 |
+
+---
+
 ## [2.18.17] - 2026-05-22 — Sentry 잡음 2건 fix (WebSocket Broken pipe + SMTP Recipients refused)
 
 > 사용자 catch (2026-05-22): Sentry ERROR 영역 정상 동작 catch 2건 잡힘 — WebSocket client disconnection + SMTP admin 이메일 거부. v2.10.13 (FIX-WEBSOCKET-STOPITERATION-SENTRY-NOISE) 패턴 정합.
