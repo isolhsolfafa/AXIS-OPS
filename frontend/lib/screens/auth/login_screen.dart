@@ -43,6 +43,14 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     if (!mounted) return;
 
     if (success) {
+      // v2.18.25 — 로그인 성공 안내 SnackBar (화면 전환 안 될 경우 새로고침 안내)
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('로그인 성공! 화면이 전환되지 않으면 새로고침 (Cmd+Shift+R) 해주세요.'),
+          duration: Duration(seconds: 4),
+          backgroundColor: Color(0xFF16A34A),
+        ),
+      );
       // 로그인 성공 시 AuthGate가 자동으로 홈 화면으로 전환
       Navigator.of(context).popUntil((route) => route.isFirst);
     } else {
