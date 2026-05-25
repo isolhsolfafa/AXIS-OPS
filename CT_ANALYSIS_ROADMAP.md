@@ -273,9 +273,55 @@ CT 분석 = `docs/concepts/G-AXIS VIEW(CT분석).html` mockup 존재 (이미 AXI
 
 ---
 
-## 10. 변경 이력
+## 11. 책임 분리 원칙 — App / View / Admin (2026-05-25 명문화 trail)
+
+> CLAUDE.md `📐 책임 분리 원칙` 섹션 명문화 후 본 문서에 trail 보존.
+
+### 원칙
+
+```
+App (OPS PWA)   = 모든 input / mutation 단일점 (모바일)
+View (AXIS-VIEW) = 모든 output / read-only (PC)
+Admin (PC)      = PC 적합 input 별 카테고리 — 예외 인정
+```
+
+### CT 분석 페이지 영역 정합
+
+- CT 분석 = View output 카테고리 (read-only) → mutation 0
+- 사용자가 CT 분석 보다가 "이 task / 작업자 / 협력사 catch" 시 → OPS PWA 진입 (별 sprint deep link)
+- Admin 영역 mutation (자재 마스터 / 공지 / 권한 / 체크리스트 master) 은 별 페이지 (VIEW admin 카테고리)
+- 표준 작업시간 / 가중치 / IQR 임계 조정은 admin_settings 영역 (별 Admin 페이지)
+
+### Sprint 75 (가칭) — VIEW input 라우트 점진 OPS 회귀
+
+| 기능 | OPS 동일 기능 | 회귀 우선순위 |
+|---|---|---|
+| Force-close | OPS admin_options_screen ✅ | 🟠 MEDIUM |
+| Reactivate | OPS + VIEW 양쪽 ✅ | 🟠 MEDIUM |
+| Ship-complete | OPS v2.17.1 ✅ | 🟡 LOW |
+| Admin-complete (PI/QI 종료) | OPS v2.18.0 ✅ | 🟡 LOW |
+| Worker 비활성화/재활성화 | OPS admin_options_screen 일부 ✅ | 🟡 LOW |
+
+→ ~6개월 점진. 즉시 제거 X (운영 매니저 익숙 + UX 영향). Sprint 71 진입 시점에 결정 X.
+
+### Sprint 71 적용 (v2 갱신, 5-25)
+
+- mockup ② `[작업 상세] [복원]` → `[작업 상세]` 만 (read-only drill-down)
+- 작업 상세 모달 = read-only
+- 매니저 복원 액션 필요 시 OPS PWA 진입 (별 sprint deep link 검토 후보)
+
+### CT 분석 페이지 진입 시점 적용 (추후)
+
+- 신규 페이지 = View output 카테고리
+- mutation hook (`useTaskReactivate` / `useForceClose` 등) import 0
+- 임계치 조정 (T1~T5) = admin_settings 페이지 (별 Admin 영역) 에서
+
+---
+
+## 12. 변경 이력
 
 | 날짜 | 내용 |
 |---|---|
 | 2026-05-22 | 초안 작성 — Sprint 71 (작업자 개선) ↔ Minitap (진입 카드) ↔ CT 분석 (M/M/APS/계획-실적 base) 위치 정정 후 인큐베이션 시작 |
 | 2026-05-22 | § 0.5 보강 — Sprint 71 자동 마감 분석 페이지의 4단계 사이클 (작업자 개선 → 시간 정합성 → 교육 → app update). 사용자 catch: "이부분을 더관리해서 시간에 대한 정합성을 올릴수 있게 교육 및 문제점을 분석해서 편의사항 개선 (app update)" |
+| 2026-05-25 | § 11 신규 — 책임 분리 원칙 (App / View / Admin 3 카테고리) trail. CLAUDE.md 명문화 완료. CT 분석 페이지 영역 정합 + Sprint 75 (가칭) VIEW input 점진 OPS 회귀 후보 등록. Sprint 71 적용 trail (`[복원]` 제거) |

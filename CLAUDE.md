@@ -682,6 +682,99 @@ ls backend/app/utils/ 2>/dev/null || echo "utils 없음 (필요 시 생성)"
 
 ---
 
+## 📐 책임 분리 원칙 — App / View / Admin (2026-05-25 명문화)
+
+> **배경**: VIEW Sprint 71 (자동 마감 분석 페이지) mockup 의 [복원] 버튼 catch trigger. VIEW 측에 input 라우트 (force-close / reactivate / ship-complete / admin-complete / worker 비활성화) 가 편의 명분으로 점점 늘어남 → 책임 영역 흐려짐. 사용자 catch (5-22 ~ 5-25) 후 명문화.
+
+### 3 카테고리 분리
+
+```
+App (OPS PWA)
+   = 모든 input / mutation 단일점
+   · 모바일 환경 적합
+   · 작업자 작업 — QR 스캔 / 작업 시작·완료 / 일시정지 / 체크리스트
+   · 매니저 mutation (편의 명분 시 제한적 허용) — 강제종료 / 재활성화 / 출하완료 / admin-complete
+   · OPS BE service layer (task_service / shipment_service / checklist_service 등) = mutation 단일점
+
+View (AXIS-VIEW)
+   = 모든 output / read-only
+   · PC 환경 적합
+   · 매니저 / GST 조회 — Manager Dashboard / S/N 상세뷰 / 공장 대시보드 / 분석 페이지
+   · 통계 / KPI / 차트 / drill-down / 보고서
+   · 원칙: mutation 0 (read-only)
+
+Admin (PC 환경 input)
+   = 별 카테고리 (예외 인정)
+   · PC 적합 mutation (모바일 부적합 = Excel 업로드 / 다중 행 편집 / 권한 관리 등)
+   · 위치: VIEW repo 내 admin 페이지에 둠 (현재 운영 패턴 유지)
+   · 권한: `@admin_required` 또는 `@manager_or_admin_required` 명시
+   · 예시: 자재 마스터 Excel 업로드 / 공지 작성·관리 / 권한 토글 / 체크리스트 master CRUD
+```
+
+### BE 측 = 이미 정합 (변경 0)
+
+OPS BE 가 mutation single source of truth. VIEW / OPS PWA 어느 곳에서 호출해도 동일 OPS BE route 처리:
+
+```
+[VIEW 매니저] 강제종료 클릭
+   ↓
+[OPS BE]   = mutation 처리 단일점 (audit log / WebSocket emit / DB write)
+   ↓
+[양쪽 broadcast]
+```
+
+→ 신규 input 추가 시 **신규 BE route 만들지 않음** → 기존 OPS BE route 호출. BE 측 네이밍·권한·audit·WebSocket 규칙 그대로 따름.
+
+### 향후 신규 sprint catch 규칙
+
+신규 mutation 추가 시 본 원칙 review 의무:
+
+```
+[신규 mutation 추가 영역?]
+   ├─ 작업자용 (모바일) → OPS PWA   ✅ 명확
+   ├─ 매니저 PC 빠른 처리 (편의) → 다음 catch 의무:
+   │   · OPS PWA 측 동일 기능 가능?
+   │   · "편의" 명분 명시?
+   │   · 점진 회귀 계획?
+   │   · 감사 trail 강화?
+   └─ Admin PC 영역 (Excel / 다중 행 등) → Admin 카테고리   ✅ 명확
+```
+
+→ "그냥 편하니까 VIEW 에 또 넣자" 패턴 자동 차단.
+
+### 기존 VIEW input 라우트 — 점진 OPS 회귀 후보
+
+현재 VIEW 에 존재하는 매니저 mutation 5종 (편의 명분으로 점진 누적):
+
+| 기능 | OPS 동일 기능 | 회귀 우선순위 |
+|---|---|---|
+| Force-close | OPS admin_options_screen ✅ | 🟠 MEDIUM |
+| Reactivate | OPS + VIEW 양쪽 ✅ | 🟠 MEDIUM |
+| Ship-complete | OPS v2.17.1 ✅ | 🟡 LOW |
+| Admin-complete (PI/QI 종료) | OPS v2.18.0 ✅ | 🟡 LOW |
+| Worker 비활성화/재활성화 | OPS admin_options_screen 일부 ✅ | 🟡 LOW |
+
+→ Sprint 75 (가칭) — VIEW input 점진 OPS 회귀 BACKLOG 등록. ~6개월 점진. 즉시 제거 X (운영 매니저 익숙 + UX 영향).
+
+### 실무 운영 가이드
+
+- **신규 input 라우트 추가 시**:
+  1. App / View / Admin 카테고리 판단
+  2. App → OPS PWA UI 추가 + BE route 신설/재사용
+  3. View → ⚠️ 본 원칙 review 의무. 편의 명분 명시 + 점진 회귀 계획
+  4. Admin → VIEW admin 페이지 추가 OK (예외 인정)
+- **WebSocket emit** = OPS BE 단일점 (REST API 와 별 layer, 양방향 broadcast 정합)
+- **Audit trail** = OPS BE `audit_log.py` 미들웨어 일괄 처리 (호출 출처 OPS PWA / VIEW 무관)
+
+### 업계 표준 정합
+
+본 원칙은 다음 패턴들의 GST 적용:
+- **CQRS** (Command Query Responsibility Segregation) — Command = App, Query = View
+- **SSoT** (Single Source of Truth) — OPS BE = mutation 단일점
+- **DDD** (Domain-Driven Design) — Read / Write Model 분리
+
+---
+
 ## 에이전트 팀 구성
 
 ### Agent 1: FE (Frontend — Flutter App)
