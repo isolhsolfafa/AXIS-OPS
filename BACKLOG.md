@@ -186,6 +186,7 @@
 | `BACKLOG-SPRINT75-VIEW-INPUT-OPS-REGRESSION-20260525` | VIEW input 5종 (force-close / reactivate / ship-complete / admin-complete / worker 비활성화) 점진 OPS 회귀 | 🟠 MEDIUM | ~6개월 점진 (CLAUDE.md 책임 분리 원칙 정합) |
 | `BACKLOG-CT-ANALYSIS-Q3-CONFIDENCE-20260526` | CT 분석 진입 시 confidence 임계 재조정 (30/100 → 50/200 검토) | 🟢 INFO (인큐베이션) | 운영 3~6개월+ 후 CT 분석 sprint |
 | `BACKLOG-CT-ANALYSIS-Q8-BATCH-SIGNATURE-20260526` | CT 분석 진입 시 statistics_service `compute_task_iqrs(list)` batch signature (N+1 회피) | 🟢 INFO (인큐베이션) | 운영 3~6개월+ 후 CT 분석 sprint |
+| `BACKLOG-SPRINT71-ALERT-THRESHOLD-REVIEW-20260526` | Sprint 71 v3.1 alert 임계 재검토 — task_distribution (50%↑) + partner_distribution (30%↑) 운영 데이터 누적 후 재조정 | 🟡 LOW | 운영 1~3개월 후 사용자 catch 보고 임계 재조정 (현재 mockup 기본값 채택, "standard 값 없음") |
 
 ---
 

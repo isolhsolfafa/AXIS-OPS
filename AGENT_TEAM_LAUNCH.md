@@ -44358,7 +44358,17 @@ Response 200:
     "count": 5,
     "prev_period_count": 90,
     "delta": "-85",
-    "improvement_pct": 94
+    "improvement_pct": 94      # null fallback (prev=0 시 — 결정 2)
+  },
+
+  # KPI 카드 3개 (v3.1 신규 — 사용자 결정 5 B, 5-26)
+  # 의도: manual 감소 = 자동화 효과만 오해 회피 → 합산 = 작업자 행동 진짜 신호
+  "total_missed_close": {
+    "count": 52,                # = auto_closed.count + manual_closed.count
+    "prev_period_count": 90,    # = auto_closed.prev + manual_closed.prev
+    "delta": "-38",             # = count - prev_period_count
+    "trend": "decreased",       # decreased = 좋은 신호 (총 종료 누락 감소)
+    "improvement_pct": 42       # ((90-52)/90)*100, null fallback (prev=0 시)
   },
 
   # 트리거 원인 분포 (close_reason prefix 후 task_id 추출)
@@ -44457,6 +44467,14 @@ def _assert_invariants(response: dict) -> None:
     ud_sum = sum(u['count'] for u in response.get('unstarted_task_distribution', []))
     if ud_sum != ac['unstarted_task_count']:
         issues.append(f"unstarted_task_distribution sum {ud_sum} != unstarted_task_count {ac['unstarted_task_count']}")
+
+    # v3.1 신규 (결정 5 B) — total_missed_close 합산 invariant
+    tm = response.get('total_missed_close', {})
+    if tm.get('count') != ac['count'] + response['manual_closed']['count']:
+        issues.append(
+            f"total_missed_close.count {tm.get('count')} != auto+manual "
+            f"{ac['count'] + response['manual_closed']['count']}"
+        )
 
     if issues:
         logger.error("[Sprint71] invariant violation: %s", "; ".join(issues), extra={'response': response})
@@ -44961,6 +44979,43 @@ ORDER BY count DESC;
    - V1 hourly 24행 backfill
    - manager partner filter (자기 회사만)
    - details pagination/filters
+
+### v3.1 갱신 (2026-05-26) — 사용자 결정 6건 반영
+
+사용자 catch (5-26) — KPI 카드 시각화 점검 결과 결정 6건:
+
+| 결정 | 영역 | 채택 |
+|---|---|---|
+| 1 | prev_period 비교 기간 | A — 직전 단위 (today→어제, week→지난주, ...) |
+| 2 | percent 0건 fallback | A — `null` 반환 (FE "−" 표시) |
+| 3 | trend 분기 임계 | A — 단순 양수/음수/0 |
+| 4 | auto trend 의미 양면성 | A — 그대로 표시 + 페이지 안내 텍스트 (운영 단계 명시) |
+| **5** | **manual 감소 오해 회피** | **B — 합산 카드 `total_missed_close` 신규 (KPI 3 카드)** |
+| 6 | manager partner filter | A — 단순 work_start_log 기반 |
+
+**v3.1 응답 schema 추가**:
+- `total_missed_close = { count, prev_period_count, delta, trend, improvement_pct }`
+- count = auto_closed.count + manual_closed.count
+- trend decreased = 좋은 신호 (총 종료 누락 감소 = 작업자 행동 진짜 개선)
+- invariant 1건 추가 (`total = auto + manual`)
+
+**FE 페이지 안내 텍스트** (결정 4 반영):
+> "Sprint 41-D 도입 1개월 차 — 자동 마감 증가는 정상 (시스템 작동 확인). 작업자 교육으로 **총 종료 누락** 점진 감소 목표."
+
+### v3.1 시각화 ② ~ ⑧ 결정 (alert 임계 기본값)
+
+사용자 catch (5-26) — "현재 standard 값 없기 때문에 기본안대로":
+
+| 시각화 | 결정 catch | 기본값 채택 |
+|---|---|---|
+| ② trigger_distribution | 정렬 / limit | count desc / 전체 표시 |
+| ③ task_distribution | **alert 임계 "평균 대비 N%↑"** | **50% (mockup 기본)** |
+| ④ partner_distribution | **alert 임계 "전체 N%↑"** | **30% (mockup 기본)** |
+| ⑤ hourly_distribution (V1) | 시간대 표시 형식 | FE 영역 (BE 무관) |
+| ⑥ partner_task_matrix (V6) | task_columns limit | 전체 표시 |
+| ⑧ auto-close-details | per_page 기본값 | 20 |
+
+→ **운영 데이터 누적 후 재검토 BACKLOG** — `BACKLOG-SPRINT71-ALERT-THRESHOLD-REVIEW-20260526`. 운영 1~3개월 후 사용자 catch 보고 임계 재조정.
 
 ### 후속 sprint trail (별 인큐베이션)
 
