@@ -45070,5 +45070,411 @@ ORDER BY count DESC;
 - **Sprint 75 (가칭)** — VIEW input 라우트 점진 OPS 회귀 (force-close / reactivate / ship-complete / admin-complete / worker 비활성화)
 - **Sprint 72/73/74 (가칭)** — 계획-실적 연계 / M/M 신뢰성 / 통계 모듈 분리 (`CT_ANALYSIS_ROADMAP.md` § 5)
 
+---
 
+# Sprint 76-BE (FEAT-SHIPMENT-HISTORY-BE-20260526)
 
+> 출하이력 페이지 BE — AXIS-VIEW Sprint 76 (mockup v1.51.1 prod 노출) 의 OPS BE part.
+> AXIS-VIEW `OPS_API_REQUESTS.md` #73 v2 명세 (Codex 라운드 1 완료, M=7 / A=2 + 사용자 결정 6건 5-26) 흡수 + OPS BE 시각 정밀화.
+
+## 1. 배경 + 동기
+
+- AXIS-VIEW 4단계 파이프라인 (생산현황 → 공장 대시보드 → 분석 → 출하이력) 의 **결과 검증 영역** = 출하이력
+- 데이터 본질: **S/N 1:1 매칭** (`plan.product_info`) + 기간 rate 집계 — Sprint 71 (자동 마감 분석) 보다 단순
+- 단일 best 정의 정합: 공장 대시보드 `factory.py _count_shipped(basis='best')` (OPS #70 v2.18.4) 와 동일 패턴 → **카운트 정합성 보장** (예: 공장 대시보드 164대 = 출하이력 KPI 164대)
+- 통계 복잡도 0 — CT 분석 / IQR / 모집단 분리 같은 영역 없음. 단순 SQL CTE + GROUP BY
+
+### 1.1 책임 분리 원칙 정합 (CLAUDE.md `📐 책임 분리 원칙` 5-25 명문화)
+
+본 페이지 = **View output** (read-only dashboard) — mutation 0:
+- 출하 처리 mutation 영역 0 — 모든 출하 완료 처리는 OPS PWA + 기존 VIEW `ship-complete` (Sprint 47/68) endpoint 활용
+- 본 sprint = 단순 출하 이력 조회 + 집계 read-only API 2개
+
+### 1.2 4단계 파이프라인 영역 본 sprint 위치
+
+```
+[1단계] 생산현황 — plan.product_info 변경이력 + S/N 진행률 (S/N detail panel)
+[2단계] 공장 대시보드 — _count_shipped(basis='best') + KPI + 월간 추이
+[3단계] 분석 — Sprint 71 자동 마감 분석 (작업자 개선)
+[4단계] 출하이력 ← 본 sprint — S/N 1:1 출하 결과 검증 + 지연 분석 + root_cause 추적
+```
+
+→ 4단계 = 1~3단계의 **결과 검증 영역**. 단순 read-only.
+
+## 2. API 명세 (신규 2개)
+
+### API #1: `GET /api/admin/shipment/summary`
+
+기간 입력 → KPI + 분포 통합 응답.
+
+**Query Params**:
+
+| 파라미터 | 타입 | 기본값 | 설명 |
+|---|---|---|---|
+| `period` | enum | `month` | `month` / `quarter` / `year` |
+| `reference_date` | YYYY-MM-DD (opt) | 오늘 | period 기준일 |
+| `partner` | string (opt) | — | 협력사 자기 회사 필터 (Sprint 72 연계, 본 sprint = GST only 라 무의미) |
+
+**권한**: `@jwt_required + @gst_or_admin_required` (Sprint 27 v1.7.4 표준)
+- 사용자 결정 7 (5-26): 출하이력 = **GST only** (협력사 차단)
+- VIEW 측 `App.tsx` `allowedRoles=['admin','gst']` 정정 (v1.51.x 동반 commit, OPS BE 영향 0)
+
+**응답 200**:
+
+```json
+{
+  "period": "2026-05",
+  "kpi": {
+    "plan_count": 178,
+    "shipped_count": 164,
+    "fulfillment_pct": 92.1,
+    "on_time_pct": 87.2,
+    "pending_count": 14,
+    "avg_delay_days": 0.4
+  },
+  "calendar": [
+    { "date": "2026-05-22", "plan": 11, "shipped": 11 }
+  ],
+  "by_customer": [
+    { "customer": "SEC", "plan": 68, "shipped": 65, "fulfillment_pct": 95.6, "on_time_pct": 90.8, "share_pct": 39.6 }
+  ],
+  "by_model": [
+    { "model": "GAIA-LE", "count": 52, "share_pct": 31.7, "avg_lead_time_days": 28.3 }
+  ],
+  "monthly_trend": [
+    { "month": "2025-12", "plan": 158, "shipped": 152 }
+  ],
+  "top_delayed": [
+    { "serial_number": "SWS-2026-014", "sales_order": "ON-25004", "model": "SWS", "customer": "IVO", "delay_days": 3, "root_cause": "IF_2 (전장) 종료 지연" }
+  ]
+}
+```
+
+### API #2: `GET /api/admin/shipment/details`
+
+S/N 단위 1:1 출하 이력 (페이지네이션 + 검색 + 필터).
+
+**Query Params**:
+
+| 파라미터 | 타입 | 기본값 | 설명 |
+|---|---|---|---|
+| `period` | enum | `month` | summary 동일 |
+| `reference_date` | YYYY-MM-DD (opt) | 오늘 | |
+| `date` | YYYY-MM-DD (opt) | — | 특정 일자 (캘린더 drill-down) |
+| `status` | enum (opt) | — | `shipped` / `pending` / `delayed` |
+| `partner` | string (opt) | — | 자기 회사 필터 (현재 무의미) |
+| `q` | string (opt) | — | O/N · S/N · 모델 · 고객사 LIKE |
+| `page` / `per_page` | int | 1 / 50 | |
+
+**권한**: `@jwt_required + @gst_or_admin_required` (#1 과 동일)
+
+**응답 200**:
+
+```json
+{
+  "items": [
+    {
+      "serial_number": "GAIA-LE-2026-001",
+      "sales_order": "ON-25001",
+      "model": "GAIA-LE",
+      "customer": "SEC",
+      "partner_mech": "BAT",
+      "partner_elec": "C&A",
+      "plan_date": "2026-05-22",
+      "actual_date": "2026-05-22",
+      "status": "shipped",
+      "source": "both",
+      "delay_days": 0
+    }
+  ],
+  "total": 178, "page": 1, "per_page": 50, "total_pages": 4
+}
+```
+
+### status 정의
+
+- `shipped` = `actual_date IS NOT NULL`
+- `pending` = `actual_date IS NULL AND plan_date >= today`
+- `delayed` = `actual_date IS NULL AND plan_date < today`
+
+### source 정의
+
+- `app` = SI `completed_at` 만 → OPS PWA 영역 처리
+- `excel` = `actual_ship_date` 만 → 엑셀 ETL 영역 적재
+- `both` = 둘 다 → 정상 운영 (app 우선)
+
+## 3. DB 쿼리 핵심 — best_ship CTE (Codex Q1 force_closed 정합)
+
+```sql
+WITH best_ship AS (
+  SELECT
+    p.serial_number,
+    p.sales_order,
+    p.product_code AS model,
+    p.customer,
+    p.mech_partner AS partner_mech,
+    p.elec_partner AS partner_elec,
+    p.ship_plan_date AS plan_date,
+    -- best: app SI_SHIPMENT (force_closed 제외) 우선, 없으면 엑셀 actual_ship_date
+    COALESCE(
+      (SELECT DATE(t.completed_at)
+       FROM app_task_details t
+       WHERE t.serial_number = p.serial_number
+         AND t.task_id = 'SI_SHIPMENT'
+         AND t.completed_at IS NOT NULL
+         AND COALESCE(t.force_closed, FALSE) = FALSE   -- ⚠️ Codex Q1: force_closed 제외
+       ORDER BY t.completed_at DESC LIMIT 1),
+      p.actual_ship_date
+    ) AS actual_date,
+    -- source 분류 (모든 SI EXISTS 에 force_closed=FALSE 추가)
+    CASE
+      WHEN EXISTS (SELECT 1 FROM app_task_details t
+                   WHERE t.serial_number = p.serial_number
+                     AND t.task_id = 'SI_SHIPMENT'
+                     AND t.completed_at IS NOT NULL
+                     AND COALESCE(t.force_closed, FALSE) = FALSE)
+       AND p.actual_ship_date IS NOT NULL THEN 'both'
+      WHEN EXISTS (SELECT 1 FROM app_task_details t
+                   WHERE t.serial_number = p.serial_number
+                     AND t.task_id = 'SI_SHIPMENT'
+                     AND t.completed_at IS NOT NULL
+                     AND COALESCE(t.force_closed, FALSE) = FALSE) THEN 'app'
+      WHEN p.actual_ship_date IS NOT NULL THEN 'excel'
+      ELSE NULL
+    END AS source
+  FROM plan.product_info p
+  WHERE p.ship_plan_date BETWEEN :start AND :end
+     OR p.actual_ship_date BETWEEN :start AND :end
+     OR EXISTS (
+       SELECT 1 FROM app_task_details t
+       WHERE t.serial_number = p.serial_number
+         AND t.task_id = 'SI_SHIPMENT'
+         AND COALESCE(t.force_closed, FALSE) = FALSE
+         AND DATE(t.completed_at) BETWEEN :start AND :end
+     )
+)
+SELECT * FROM best_ship;
+```
+
+→ **factory.py `_count_shipped(basis='best')` L64/L93 와 동일 패턴**. 두 영역 영역 SI 정의 (`SI_SHIPMENT` only, `SI_FINISHING` 제외) + force_closed=FALSE 일관.
+
+**Codex A1**: 중복 EXISTS 3개 → LATERAL JOIN 1회 평가 리팩토링 권장 (구현 시 결정).
+
+### 3.1 KPI 집계 (Codex Q2 + Q3 반영)
+
+```sql
+SELECT
+  COUNT(*) FILTER (WHERE plan_date BETWEEN :start AND :end) AS plan_count,
+  -- shipped_count: 기간 내 출하 완료
+  COUNT(*) FILTER (WHERE actual_date IS NOT NULL AND actual_date BETWEEN :start AND :end) AS shipped_count,
+  -- ⚠️ Q2: fulfillment_pct = 옵션 A (plan cohort) — 분자도 plan_date BETWEEN 한정
+  ROUND(100.0 * COUNT(*) FILTER (WHERE plan_date BETWEEN :start AND :end AND actual_date IS NOT NULL)
+              / NULLIF(COUNT(*) FILTER (WHERE plan_date BETWEEN :start AND :end), 0), 1) AS fulfillment_pct,
+  -- on_time: 출하 완료 중 조기/정시 비율
+  ROUND(100.0 * COUNT(*) FILTER (WHERE actual_date IS NOT NULL AND actual_date <= plan_date)
+              / NULLIF(COUNT(*) FILTER (WHERE actual_date IS NOT NULL), 0), 1) AS on_time_pct,
+  -- ⚠️ Q3: pending 안전망 — AND plan_date BETWEEN range
+  COUNT(*) FILTER (WHERE actual_date IS NULL
+                     AND plan_date >= CURRENT_DATE
+                     AND plan_date BETWEEN :start AND :end) AS pending_count,
+  ROUND(AVG(actual_date - plan_date)::numeric FILTER (WHERE actual_date IS NOT NULL), 1) AS avg_delay_days
+FROM best_ship;
+```
+
+**KPI 의미론**:
+- `plan_count` = 기간 내 계획 출하 수 (plan_date BETWEEN)
+- `shipped_count` = 기간 내 실제 출하 수 (actual_date BETWEEN, NULL 제외)
+- `fulfillment_pct` = "이번 달 계획 대비 실적 비율" — 옵션 A (사용자 결정 2)
+  - 분자: 기간 내 계획 + 실적 완료
+  - 분모: 기간 내 계획 총 수
+- `on_time_pct` = 출하 완료 중 조기/정시 비율
+- `pending_count` = 기간 내 미출하 + 계획일 도래 X (plan_date >= today)
+- `avg_delay_days` = 출하 완료 중 평균 지연일 (양수=지연, 음수=조기)
+
+### 3.2 캘린더 (Codex Q4 — 두 쿼리 분리 + BE merge)
+
+```sql
+-- Query 1: 계획 카운트 (날짜별)
+SELECT plan_date AS date, COUNT(*) AS plan
+FROM best_ship
+WHERE plan_date BETWEEN :start AND :end
+GROUP BY plan_date;
+
+-- Query 2: 실적 카운트 (날짜별)
+SELECT actual_date AS date, COUNT(*) AS shipped
+FROM best_ship
+WHERE actual_date BETWEEN :start AND :end
+GROUP BY actual_date;
+```
+
+→ BE 가 두 결과를 `date` 키로 OUTER JOIN merge → `[{ date, plan, shipped }]` 응답. **한 S/N 이 계획 5/22 + 실적 5/23 시 5/22 plan=1 / 5/23 shipped=1** (각 day 분리 카운트).
+
+### 3.3 Monthly Trend (Codex Q5 — current-month 포함 + plan/shipped 분리)
+
+```sql
+-- 6개월 범위: reference_date 의 month 포함 trailing 6개월
+-- 예: reference=2026-05-15 → 2025-12 ~ 2026-05 (6 months)
+
+-- Query 1: 월별 plan (plan_date month 기준)
+SELECT DATE_TRUNC('month', plan_date)::date AS month, COUNT(*) AS plan
+FROM plan.product_info
+WHERE plan_date >= (DATE_TRUNC('month', :ref_date) - INTERVAL '5 months')
+  AND plan_date <  (DATE_TRUNC('month', :ref_date) + INTERVAL '1 month')
+GROUP BY month;
+
+-- Query 2: 월별 shipped (best 합집합, actual_date month 기준)
+WITH best_ship_6mo AS ( /* §3 best_ship CTE 6개월 범위 확장 */ )
+SELECT DATE_TRUNC('month', actual_date)::date AS month, COUNT(*) AS shipped
+FROM best_ship_6mo
+WHERE actual_date IS NOT NULL
+GROUP BY month;
+```
+
+→ 분리 집계 (한 S/N 이 계획 4월 / 실적 5월 시 → 4월 month 의 plan +1, 5월 month 의 shipped +1).
+
+### 3.4 by_customer / by_model
+
+```sql
+-- by_customer
+SELECT customer,
+       COUNT(*) FILTER (WHERE plan_date BETWEEN :start AND :end) AS plan,
+       COUNT(*) FILTER (WHERE actual_date IS NOT NULL AND actual_date BETWEEN :start AND :end) AS shipped,
+       ROUND(100.0 * COUNT(*) FILTER (WHERE plan_date BETWEEN :start AND :end AND actual_date IS NOT NULL)
+                   / NULLIF(COUNT(*) FILTER (WHERE plan_date BETWEEN :start AND :end), 0), 1) AS fulfillment_pct,
+       ROUND(100.0 * COUNT(*) FILTER (WHERE actual_date IS NOT NULL AND actual_date <= plan_date)
+                   / NULLIF(COUNT(*) FILTER (WHERE actual_date IS NOT NULL), 0), 1) AS on_time_pct
+FROM best_ship
+GROUP BY customer
+ORDER BY plan DESC;
+```
+
+→ `share_pct` = BE 후처리 (`plan / SUM(plan) * 100`).
+
+`by_model` 패턴 유사. `avg_lead_time_days` = `AVG(actual_date - mech_start)` 또는 별 정의 (Sprint 76 mockup 결정).
+
+### 3.5 top_delayed.root_cause (Codex Q6 — v1 BE 도출 + FE 블러)
+
+```sql
+-- Top 5 지연 출하 (delay > 0)
+SELECT serial_number, sales_order, model, customer,
+       (actual_date - plan_date) AS delay_days
+FROM best_ship
+WHERE actual_date IS NOT NULL
+  AND plan_date IS NOT NULL
+  AND actual_date > plan_date
+ORDER BY delay_days DESC
+LIMIT 5;
+
+-- root_cause: 각 S/N 의 최근 자동 마감 task_id 도출
+-- (Sprint 71 BE 정식 오픈 전까지 FE 측 블러 처리)
+SELECT close_reason
+FROM app_task_details
+WHERE serial_number = :sn
+  AND close_reason LIKE 'AUTO_CLOSED_BY_%'
+ORDER BY completed_at DESC
+LIMIT 1;
+```
+
+**root_cause 변환** (BE 후처리):
+- `AUTO_CLOSED_BY_FIRST_FINAL_TRIGGER:IF_2` → `"IF_2 (전장) 종료 지연"`
+- `AUTO_CLOSED_BY_SECOND_FINAL_TRIGGER:SELF_INSPECTION` → `"SELF_INSPECTION (기구) 종료 지연"`
+- 없음 → `null` (FE 블러 처리)
+
+⚠️ **Sprint 71 BE 정식 오픈 전까지 FE 측 `DelayAnalysisCard` 블러 처리** (Codex Q6 + 사용자 결정 6) — VIEW v1.51.x 동반 commit.
+
+## 4. 영향 범위 + 추정
+
+| 영역 | 파일 / 작업 | LoC | 시간 |
+|---|---|---|---|
+| **BE** `routes/shipment.py` (신규) | API 2개 + Blueprint 등록 | ~250 | 3h |
+| **BE** `services/shipment_service.py` (신규) | best_ship CTE 헬퍼 + KPI 집계 + 캘린더 merge + monthly trend + by_customer / by_model / top_delayed + root_cause 변환 | ~280 | 4h |
+| **BE** `app/__init__.py` | Blueprint import 1줄 | 1줄 | 5분 |
+| **pytest** `test_shipment.py` (신규) | 15+ TC (best 합집합 / source / 기간 / rate / 캘린더 split / monthly window / status / delay_days / auth / partner filter / root_cause) | ~250 | 3h |
+| **Codex 라운드 2** (선택) | OPS BE 시각 추가 정밀화 (라운드 1 = VIEW 측 5-26 완료) | — | 30분 |
+
+**OPS 측 총 추정**: BE 7h + pytest 3h + Codex 0.5h = **약 1~1.5일** (5/27 ~ 5/28 사이)
+
+## 5. 회귀 위험
+
+- **신규 endpoint** — 기존 코드 무영향 ✓
+- best 합집합 = OPS #70 `_count_shipped(basis='best')` (v2.18.4) 와 **동일 패턴** → 검증된 SQL 재사용
+- `source` 분류 (app/excel/both) 는 신규 → pytest TC 필수
+- 도메인 정합 보장: 공장 대시보드 ↔ 출하이력 KPI 동일 숫자
+
+## 6. 선행 의존성
+
+- ✅ OPS #70 (best 게이트 제거, v2.18.4) prod 배포 완료
+- ✅ Sprint 68 (v2.17.0 ship-complete endpoint) prod 배포 완료
+- ✅ Sprint 47 (VIEW ship-complete 버튼) prod 배포 완료
+- ⏳ AXIS-VIEW Sprint 76 mockup (v1.51.1) → 정식 구현 진입 시점
+- ⚠️ Sprint 71 BE (자동 마감 분석) = 선택 — root_cause 미연동 시 FE 블러 처리로 우회
+
+## 7. Codex 검증 trail (라운드 1 — VIEW 측 5-26 완료)
+
+| Q | 라벨 | 결론 |
+|---|---|---|
+| Q1 force_closed 모든 SI EXISTS | M | ✅ 반영 (§3 best_ship CTE) |
+| Q2 fulfillment 분자 plan cohort | M + 사용자결정 | ✅ 반영 (옵션 A — §3.1 KPI 집계) |
+| Q3 pending 안전망 | M (A→격상) | ✅ 반영 (§3.1 `AND plan_date BETWEEN`) |
+| Q4 calendar 두 쿼리 분리 | M | ✅ 반영 (§3.2 BE merge) |
+| Q5 monthly current-month 포함 + 분리 | M + 사용자결정 | ✅ 반영 (§3.3) |
+| Q6 root_cause v1 BE + FE 블러 | M + 사용자결정 | ✅ 반영 (§3.5 + FE v1.51.x) |
+| Q7 권한 GST only | M | ✅ 반영 (§2 권한 + FE App.tsx 정정) |
+| A1 LATERAL JOIN | A | 🟡 구현 시 OPS 결정 |
+| A2 pending 안전망 | A → M | ✅ Q3 통합 |
+
+### OPS 측 Codex 라운드 2 (선택 — 본 sprint v1 freeze 후 위임)
+
+검증 영역:
+- best_ship CTE LATERAL JOIN 리팩토링 (A1) 적용 여부
+- monthly_trend best_ship_6mo CTE 확장 영역 N+1 검증
+- root_cause 변환 함수 (BE 후처리) signature
+- pytest 15+ TC 충분성
+
+## 8. 사용자 결정 trail (5-26 — VIEW 측 6건)
+
+| # | 결정 | 채택 |
+|---|---|---|
+| 1 | SI 정의 | `SI_SHIPMENT` only (마무리공정 `SI_FINISHING` 제외) — factory.py 정합 |
+| 2 | `fulfillment_pct` 정의 | 옵션 A — 분자도 plan cohort 한정 ("이번 달 계획 대비 실적") |
+| 3 | (Codex Q3 격상) | pending 안전망 `AND plan_date BETWEEN` |
+| 5-1 | monthly_trend window | current-month 포함 trailing 6개월 |
+| 5-2 | monthly plan/shipped | 분리 집계 (4월 plan 5월 shipped 각 분리) |
+| 6 | root_cause | v1 BE 도출 + FE 블러 (Sprint 71 BE 미배포 시) |
+| 7 | 권한 | GST only — 협력사 차단 (VIEW App.tsx 정정 동반) |
+
+## 9. pytest TC 매트릭스 (15+ TC)
+
+| 범주 | TC 예시 |
+|---|---|
+| best 합집합 | app only / excel only / both / null source 4 case |
+| force_closed 제외 | force_closed=TRUE SI 가 source/actual_date 영역 제외 |
+| KPI semantics | fulfillment 분자 plan cohort 한정 / shipped_count actual_date BETWEEN |
+| calendar split | plan 5/22 actual 5/23 S/N 두 day 분리 카운트 |
+| monthly window | current-month 포함 + trailing 6 + plan/shipped 분리 (4월 plan 5월 shipped) |
+| status 분류 | shipped / pending / delayed 3 case + pending 안전망 |
+| delay_days | 음수(조기) / 0(정상) / 양수(지연) |
+| auth 4-way | admin / GST manager / GST 작업자 / 협력사 manager 차단 |
+| partner filter lock | 협력사 manager 진입 시 차단 검증 |
+| root_cause | Sprint 71 close_reason 도출 + 미연동 시 NULL fallback |
+
+## 10. 진행 흐름
+
+```
+1. AGENT_TEAM_LAUNCH.md Sprint 76-BE 설계서 작성 ✅ (본 sprint, 5-26)
+2. (선택) Codex 라운드 2 — OPS BE 시각 추가 검증 (30분)
+3. BE 구현 진입:
+   - services/shipment_service.py (best_ship CTE 헬퍼 + 집계 + root_cause 변환)
+   - routes/shipment.py (API 2개 + Blueprint)
+   - app/__init__.py (Blueprint import)
+4. pytest 15+ TC GREEN (test_shipment.py 신규)
+5. Codex 라운드 3 (선택) — v1 구현 freeze 검증
+6. v2.18.28 release — version bump + CHANGELOG + commit + Railway 배포
+7. VIEW Sprint 76 FE 정식 구현 진입 (mockup → 실 데이터)
+```
+
+## 11. 후속 sprint trail
+
+- **Sprint 72/73 (가칭)** — 협력사 평가지수 페이지 (`/partner/evaluation`) 진입 시 본 sprint partner filter 활성화
+- **Sprint 71 BE** 정식 오픈 후 `top_delayed.root_cause` FE 블러 해제 (VIEW 측 별 patch)
+- **CT 분석 페이지** 진입 시 본 sprint avg_delay_days / on_time_pct base 데이터 재사용
