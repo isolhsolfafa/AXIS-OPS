@@ -45243,14 +45243,15 @@ WITH best_ship AS (
       ELSE NULL
     END AS source
   FROM plan.product_info p
-  WHERE p.ship_plan_date BETWEEN :start AND :end
-     OR p.actual_ship_date BETWEEN :start AND :end
+  WHERE (p.ship_plan_date >= :start AND p.ship_plan_date < :end_exclusive)
+     OR (p.actual_ship_date >= :start AND p.actual_ship_date < :end_exclusive)
      OR EXISTS (
        SELECT 1 FROM app_task_details t
        WHERE t.serial_number = p.serial_number
          AND t.task_id = 'SI_SHIPMENT'
          AND COALESCE(t.force_closed, FALSE) = FALSE
-         AND DATE(t.completed_at) BETWEEN :start AND :end
+         AND DATE(t.completed_at) >= :start
+         AND DATE(t.completed_at) <  :end_exclusive
      )
 )
 SELECT * FROM best_ship;
@@ -45278,27 +45279,33 @@ WHERE p.ship_plan_date >= :start
 ### 3.1 KPI 집계 (Codex Q2 + Q3 반영)
 
 ```sql
+-- v2 정정 (Codex Q5 M, v2.18.29 명세 갱신): 반개구간 (>= AND <) 사용
 SELECT
-  COUNT(*) FILTER (WHERE plan_date BETWEEN :start AND :end) AS plan_count,
+  COUNT(*) FILTER (WHERE plan_date >= :start AND plan_date < :end_exclusive) AS plan_count,
   -- shipped_count: 기간 내 출하 완료
-  COUNT(*) FILTER (WHERE actual_date IS NOT NULL AND actual_date BETWEEN :start AND :end) AS shipped_count,
-  -- ⚠️ Q2: fulfillment_pct = 옵션 A (plan cohort) — 분자도 plan_date BETWEEN 한정
-  ROUND(100.0 * COUNT(*) FILTER (WHERE plan_date BETWEEN :start AND :end AND actual_date IS NOT NULL)
-              / NULLIF(COUNT(*) FILTER (WHERE plan_date BETWEEN :start AND :end), 0), 1) AS fulfillment_pct,
+  COUNT(*) FILTER (WHERE actual_date IS NOT NULL
+                    AND actual_date >= :start AND actual_date < :end_exclusive) AS shipped_count,
+  -- ⚠️ Q2: fulfillment_pct = 옵션 A (plan cohort) — 분자도 plan_date 영역 한정
+  ROUND(100.0 * COUNT(*) FILTER (WHERE plan_date >= :start AND plan_date < :end_exclusive
+                                  AND actual_date IS NOT NULL)
+              / NULLIF(COUNT(*) FILTER (WHERE plan_date >= :start AND plan_date < :end_exclusive), 0), 1)
+                                                                                AS fulfillment_pct,
   -- on_time: 출하 완료 중 조기/정시 비율
   ROUND(100.0 * COUNT(*) FILTER (WHERE actual_date IS NOT NULL AND actual_date <= plan_date)
-              / NULLIF(COUNT(*) FILTER (WHERE actual_date IS NOT NULL), 0), 1) AS on_time_pct,
-  -- ⚠️ Q3: pending 안전망 — AND plan_date BETWEEN range
+              / NULLIF(COUNT(*) FILTER (WHERE actual_date IS NOT NULL), 0), 1)  AS on_time_pct,
+  -- ⚠️ Q3: pending 안전망 — AND plan_date 영역 range
   COUNT(*) FILTER (WHERE actual_date IS NULL
                      AND plan_date >= CURRENT_DATE
-                     AND plan_date BETWEEN :start AND :end) AS pending_count,
-  ROUND(AVG(actual_date - plan_date)::numeric FILTER (WHERE actual_date IS NOT NULL), 1) AS avg_delay_days
+                     AND plan_date >= :start AND plan_date < :end_exclusive)    AS pending_count,
+  -- v2 SQL fix (Codex Q5): AVG ... FILTER ... ::numeric 영역 cast 위치 정합
+  ROUND((AVG(actual_date - plan_date)
+         FILTER (WHERE actual_date IS NOT NULL))::numeric, 1)                   AS avg_delay_days
 FROM best_ship;
 ```
 
 **KPI 의미론**:
-- `plan_count` = 기간 내 계획 출하 수 (plan_date BETWEEN)
-- `shipped_count` = 기간 내 실제 출하 수 (actual_date BETWEEN, NULL 제외)
+- `plan_count` = 기간 내 계획 출하 수 (`plan_date` 반개구간)
+- `shipped_count` = 기간 내 실제 출하 수 (`actual_date` 반개구간, NULL 제외)
 - `fulfillment_pct` = "이번 달 계획 대비 실적 비율" — 옵션 A (사용자 결정 2)
   - 분자: 기간 내 계획 + 실적 완료
   - 분모: 기간 내 계획 총 수
@@ -45309,16 +45316,17 @@ FROM best_ship;
 ### 3.2 캘린더 (Codex Q4 — 두 쿼리 분리 + BE merge)
 
 ```sql
+-- v2 정정 (Codex Q5 M): 반개구간 사용
 -- Query 1: 계획 카운트 (날짜별)
 SELECT plan_date AS date, COUNT(*) AS plan
 FROM best_ship
-WHERE plan_date BETWEEN :start AND :end
+WHERE plan_date >= :start AND plan_date < :end_exclusive
 GROUP BY plan_date;
 
 -- Query 2: 실적 카운트 (날짜별)
 SELECT actual_date AS date, COUNT(*) AS shipped
 FROM best_ship
-WHERE actual_date BETWEEN :start AND :end
+WHERE actual_date >= :start AND actual_date < :end_exclusive
 GROUP BY actual_date;
 ```
 
@@ -45350,12 +45358,16 @@ GROUP BY month;
 ### 3.4 by_customer / by_model
 
 ```sql
+-- v2 정정 (Codex Q5 M): 반개구간 사용
 -- by_customer
 SELECT customer,
-       COUNT(*) FILTER (WHERE plan_date BETWEEN :start AND :end) AS plan,
-       COUNT(*) FILTER (WHERE actual_date IS NOT NULL AND actual_date BETWEEN :start AND :end) AS shipped,
-       ROUND(100.0 * COUNT(*) FILTER (WHERE plan_date BETWEEN :start AND :end AND actual_date IS NOT NULL)
-                   / NULLIF(COUNT(*) FILTER (WHERE plan_date BETWEEN :start AND :end), 0), 1) AS fulfillment_pct,
+       COUNT(*) FILTER (WHERE plan_date >= :start AND plan_date < :end_exclusive) AS plan,
+       COUNT(*) FILTER (WHERE actual_date IS NOT NULL
+                         AND actual_date >= :start AND actual_date < :end_exclusive) AS shipped,
+       ROUND(100.0 * COUNT(*) FILTER (WHERE plan_date >= :start AND plan_date < :end_exclusive
+                                       AND actual_date IS NOT NULL)
+                   / NULLIF(COUNT(*) FILTER (WHERE plan_date >= :start AND plan_date < :end_exclusive), 0), 1)
+                                                                              AS fulfillment_pct,
        ROUND(100.0 * COUNT(*) FILTER (WHERE actual_date IS NOT NULL AND actual_date <= plan_date)
                    / NULLIF(COUNT(*) FILTER (WHERE actual_date IS NOT NULL), 0), 1) AS on_time_pct
 FROM best_ship
@@ -45365,7 +45377,32 @@ ORDER BY plan DESC;
 
 → `share_pct` = BE 후처리 (`plan / SUM(plan) * 100`).
 
-`by_model` 패턴 유사. `avg_lead_time_days` = `AVG(actual_date - mech_start)` 또는 별 정의 (Sprint 76 mockup 결정).
+### 3.4.1 `by_model` (v2.18.29 옵션 C — P-v3 채택)
+
+```sql
+-- v2.18.29 (사용자 catch 5-26): by_customer 영역과 동일 패턴 — plan + shipped 분리 + P-v3 standard
+SELECT
+    b.model,
+    COUNT(*) FILTER (WHERE b.plan_date >= :start AND b.plan_date < :end_exclusive) AS plan,
+    COUNT(*) FILTER (WHERE b.actual_date IS NOT NULL
+                      AND b.actual_date >= :start AND b.actual_date < :end_exclusive) AS shipped,
+    -- P-v3 standard: 협력사 작업 lead (Plan ETL 기준, ship_plan_date 변동 영향 0)
+    ROUND((AVG(p.pi_start - LEAST(p.elec_start, p.mech_start))
+           FILTER (WHERE p.pi_start IS NOT NULL
+                    AND (p.elec_start IS NOT NULL OR p.mech_start IS NOT NULL)))::numeric, 1)
+                                                                              AS avg_lead_time_days
+FROM best_ship b
+JOIN plan.product_info p ON p.serial_number = b.serial_number
+WHERE b.model IS NOT NULL
+GROUP BY b.model
+ORDER BY plan DESC, b.model ASC;
+```
+
+⚠️ **avg_lead_time_days 정의 (사용자 결정 5-26)**:
+- 시작점 = `LEAST(elec_start, mech_start)` (운영 1352/1357 검증, elec_first 99.6%)
+- 끝점 = `pi_start` (협력사 작업 끝 = 검사 진입)
+- 데이터 source = Plan ETL standard (ship_plan_date 변동 영향 0)
+- 추후 OPS actual 영역 토글 옵션 인큐베이션 → `BACKLOG-SPRINT76-ACTUAL-LEAD-TIME-OPS-20260526`
 
 ### 3.5 top_delayed.root_cause (Codex Q6 — v1 BE 도출 + FE 블러)
 
