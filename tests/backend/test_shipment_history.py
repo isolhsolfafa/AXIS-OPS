@@ -255,6 +255,72 @@ class TestShipmentSummaryKPI:
         assert bc_plan == data['kpi']['plan_count']
         assert bc_shipped == data['kpi']['shipped_count']
 
+    def test_kpi_06_invariant_by_model_sum(self, client, create_test_admin,
+                                           get_admin_auth_token, seed_shipment_test_data):
+        """v2.18.29 옵션 C — by_model plan/shipped 합 = kpi 정합"""
+        admin = create_test_admin
+        token = get_admin_auth_token(admin['id'])
+        month_start = _today().replace(day=1)
+        seed_shipment_test_data([
+            {'sn': 'TEST-SHIP-76-K06A', 'plan_date': month_start,
+             'actual_ship_date': month_start + timedelta(days=1),
+             'customer': 'CUST', 'model': 'GAIA-LE'},
+            {'sn': 'TEST-SHIP-76-K06B', 'plan_date': month_start,
+             'customer': 'CUST', 'model': 'DRAGON'},
+        ])
+        resp = client.get(
+            f'/api/admin/shipment/summary?period=month&reference_date={_ref_date_string(month_start)}',
+            headers=_auth_header(token)
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        # by_model schema 검증 (v2.18.29 옵션 C — plan + shipped 분리 + avg_lead_time_days)
+        for m in data['by_model']:
+            assert 'plan' in m
+            assert 'shipped' in m
+            assert 'share_pct' in m
+            assert 'avg_lead_time_days' in m  # null 가능
+            # 기존 'count' 필드 제거 검증
+            assert 'count' not in m, "count 필드 제거 + plan/shipped 분리"
+        bm_plan = sum(m['plan'] for m in data['by_model'])
+        bm_shipped = sum(m['shipped'] for m in data['by_model'])
+        assert bm_plan == data['kpi']['plan_count']
+        assert bm_shipped == data['kpi']['shipped_count']
+
+    def test_kpi_07_by_model_avg_lead_time(self, client, create_test_admin,
+                                           get_admin_auth_token, seed_shipment_test_data, db_conn):
+        """v2.18.29 P-v3 — avg_lead_time_days = AVG(pi_start - LEAST(elec_start, mech_start))"""
+        admin = create_test_admin
+        token = get_admin_auth_token(admin['id'])
+        month_start = _today().replace(day=1)
+        # elec_start=4/1, mech_start=4/5, pi_start=4/29 → 28일
+        elec_d = month_start.replace(day=1)
+        mech_d = month_start.replace(day=5)
+        pi_d = month_start.replace(day=29)
+        seed_shipment_test_data([
+            {'sn': 'TEST-SHIP-76-K07', 'plan_date': month_start,
+             'customer': 'CUST', 'model': 'TEST-LEAD-MODEL'}
+        ])
+        # plan.product_info 영역 elec/mech/pi 추가 set
+        cur = db_conn.cursor()
+        cur.execute("""
+            UPDATE plan.product_info
+            SET elec_start = %s, mech_start = %s, pi_start = %s
+            WHERE serial_number = 'TEST-SHIP-76-K07'
+        """, (elec_d, mech_d, pi_d))
+        db_conn.commit()
+        cur.close()
+
+        resp = client.get(
+            f'/api/admin/shipment/summary?period=month&reference_date={_ref_date_string(month_start)}',
+            headers=_auth_header(token)
+        )
+        assert resp.status_code == 200
+        bm = [m for m in resp.get_json()['by_model'] if m['model'] == 'TEST-LEAD-MODEL']
+        assert len(bm) == 1
+        # pi_start (4/29) - LEAST(elec=4/1, mech=4/5) = pi - elec = 28일
+        assert bm[0]['avg_lead_time_days'] == 28.0
+
 
 # ==================== § 3. best_ship source 분류 (4 case) ====================
 

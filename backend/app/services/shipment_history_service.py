@@ -268,25 +268,45 @@ def _fetch_by_customer(cur, start: date, end: date) -> List[Dict[str, Any]]:
 
 
 def _fetch_by_model(cur, start: date, end: date) -> List[Dict[str, Any]]:
-    """by_model — 모델별 count + share."""
+    """by_model — 모델별 plan/shipped 분리 + avg_lead_time_days (Sprint 76-BE v2.18.29).
+
+    옵션 C — by_customer 영역과 동일 패턴 (plan + shipped 분리):
+    - plan = ship_plan_date 기준 (Master Plan ETL)
+    - shipped = best 패턴 (factory.py _count_shipped basis='best' 정합)
+    - share_pct = plan 기준 (by_customer 영역 정합)
+    - avg_lead_time_days = P-v3 standard (협력사 작업 lead, Plan ETL 기준)
+        AVG(pi_start - LEAST(elec_start, mech_start))
+        · 시작 = elec_start (실 운영 1352/1357 정합) + mech_first 예외 5건 catch
+        · 끝 = pi_start (협력사 작업 끝 = 검사 진입)
+        · ship_plan_date 변동 영향 0 (standard value)
+    """
     cte, params = _build_best_ship_cte(start, end)
     sql = cte + """
         SELECT
-            model,
-            COUNT(*) FILTER (WHERE plan_date >= %s AND plan_date < %s) AS plan_count
-        FROM best_ship
-        WHERE model IS NOT NULL
-        GROUP BY model
-        ORDER BY plan_count DESC, model ASC;
+            b.model,
+            COUNT(*) FILTER (WHERE b.plan_date >= %s AND b.plan_date < %s) AS plan_count,
+            COUNT(*) FILTER (WHERE b.actual_date IS NOT NULL
+                              AND b.actual_date >= %s AND b.actual_date < %s) AS shipped_count,
+            ROUND((AVG(p.pi_start - LEAST(p.elec_start, p.mech_start))
+                   FILTER (WHERE p.pi_start IS NOT NULL
+                            AND (p.elec_start IS NOT NULL OR p.mech_start IS NOT NULL)))::numeric, 1)
+                                                                              AS avg_lead_time_days
+        FROM best_ship b
+        JOIN plan.product_info p ON p.serial_number = b.serial_number
+        WHERE b.model IS NOT NULL
+        GROUP BY b.model
+        ORDER BY plan_count DESC, b.model ASC;
     """
-    cur.execute(sql, params + (start, end))
+    cur.execute(sql, params + (start, end, start, end))
     rows = cur.fetchall()
-    total = sum(int(r['plan_count'] or 0) for r in rows)
+    total_plan = sum(int(r['plan_count'] or 0) for r in rows)
     return [
         {
             'model': r['model'],
-            'count': int(r['plan_count'] or 0),
-            'share_pct': round(100.0 * int(r['plan_count'] or 0) / total, 1) if total > 0 else 0.0,
+            'plan': int(r['plan_count'] or 0),
+            'shipped': int(r['shipped_count'] or 0),
+            'share_pct': round(100.0 * int(r['plan_count'] or 0) / total_plan, 1) if total_plan > 0 else 0.0,
+            'avg_lead_time_days': float(r['avg_lead_time_days']) if r['avg_lead_time_days'] is not None else None,
         }
         for r in rows
     ]
@@ -455,6 +475,20 @@ def _assert_invariants(response: Dict[str, Any]) -> None:
     if bc_shipped_sum != kpi['shipped_count']:
         issues.append(
             f"by_customer shipped sum {bc_shipped_sum} != kpi.shipped_count {kpi['shipped_count']}"
+        )
+
+    # ④ by_model plan 합 = kpi.plan_count (v2.18.29 옵션 C 추가)
+    bm_plan_sum = sum(m['plan'] for m in response.get('by_model', []))
+    if bm_plan_sum != kpi['plan_count']:
+        issues.append(
+            f"by_model plan sum {bm_plan_sum} != kpi.plan_count {kpi['plan_count']}"
+        )
+
+    # ⑤ by_model shipped 합 = kpi.shipped_count (v2.18.29 옵션 C 추가)
+    bm_shipped_sum = sum(m['shipped'] for m in response.get('by_model', []))
+    if bm_shipped_sum != kpi['shipped_count']:
+        issues.append(
+            f"by_model shipped sum {bm_shipped_sum} != kpi.shipped_count {kpi['shipped_count']}"
         )
 
     if issues:

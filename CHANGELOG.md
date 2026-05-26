@@ -6,6 +6,72 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.18.29] - 2026-05-26 — Sprint 76-BE by_model 옵션 C 정정 + P-v3 avg_lead_time_days 추가
+
+> v2.18.28 운영 catch (사용자 5-26) — by_model 영역 base 일관성 정정 + lead time standard 추가.
+
+### 사용자 catch 정합
+
+1. **by_model 영역 일관성** — `by_customer` 영역 plan + shipped 분리인데 `by_model` 영역 plan 만 (count 단일) → base 다른 catch
+2. **공정 순서 정정** — `elec → TM → mech → mech+TM → mech+elec → pi` (운영 1352/1357 영역 elec_first 검증)
+3. **PI 일정 변동성** — pi_start 변동 가능하지만 standard value 의미상 현재 master plan 영역 그대로 OK
+4. **데이터 source** — Plan ETL (master plan) standard, 추후 OPS actual lead time 인큐베이션
+
+### 변경 (BE 1 + pytest +2 + version)
+
+| 파일 | 내용 |
+|------|-----|
+| `backend/app/services/shipment_history_service.py` `_fetch_by_model()` | 옵션 C 정정 — `{model, plan, shipped, share_pct, avg_lead_time_days}` (`count` 필드 제거 + `plan`/`shipped` 분리 + `avg_lead_time_days` P-v3 추가) |
+| `backend/app/services/shipment_history_service.py` `_assert_invariants()` | invariant +2 (`by_model.plan sum = kpi.plan_count` + `by_model.shipped sum = kpi.shipped_count`) — 총 5건 |
+| `tests/backend/test_shipment_history.py` | TC +2 (`test_kpi_06_invariant_by_model_sum` + `test_kpi_07_by_model_avg_lead_time`) — 29 → 31 TC |
+| `backend/version.py` + `app_version.dart` | 2.18.29 |
+
+### 핵심 catch
+
+- **옵션 C** — by_model 영역 `by_customer` 영역과 동일 패턴 (plan + shipped 분리, share_pct plan 기준)
+- **shipped 정의** — best 패턴 (factory.py `_count_shipped(basis='best')` 정합) = `actual_ship_date IS NOT NULL OR SI_SHIPMENT.completed_at IS NOT NULL` (force_closed=FALSE)
+- **P-v3 avg_lead_time_days** — Master Plan standard:
+  ```sql
+  AVG(pi_start - LEAST(elec_start, mech_start))
+  ```
+  · 시작 = elec_start (운영 1352/1357 검증, mech_first 5건 catch LEAST 안전망)
+  · 끝 = pi_start (협력사 작업 끝 = 검사 진입)
+  · ship_plan_date 변동 영향 0 (standard value, 모델별 비교 안정)
+- **invariant 5건** — calendar plan / by_customer plan + shipped / by_model plan + shipped → 실패 시 500 + Sentry
+
+### 응답 schema 변경 (breaking 0 — additive only)
+
+```diff
+"by_model": [
+  {
+    "model": "GAIA-LE",
+-   "count": 52,
++   "plan": 52,                  // ship_plan_date 기준 (Master Plan)
++   "shipped": 49,               // best 패턴 (app SI ∪ excel actual)
+    "share_pct": 31.7,           // plan 기준 (by_customer 와 동일)
++   "avg_lead_time_days": 28.0   // P-v3 협력사 lead standard
+  }
+]
+```
+
+⚠️ **breaking change 영역** — `count` → `plan` rename. VIEW 측 type 정정 동반 (정식 구현 진입 시).
+
+### pytest 결과
+
+- **31/31 PASS** (5분 7초, staging DB) — 신규 2 TC 포함 GREEN
+- 회귀 위험 0 (additive + rename)
+
+### BACKLOG 신규
+
+- `BACKLOG-SPRINT76-ACTUAL-LEAD-TIME-OPS-20260526` 🟢 INFO (인큐베이션) — 추후 OPS actual data 기반 lead time 산출 + **토글 옵션** (`?lead_time_basis=plan/actual`). 공장 대시보드 `?basis=plan/actual/best` 패턴 정합. 운영 3~6개월+ 후
+
+### 의존 관계
+
+- ✅ v2.18.28 Sprint 76-BE prod 배포 직후 ASAP
+- ⏳ AXIS-VIEW Sprint 76 FE — `count` → `plan` rename + `shipped` / `avg_lead_time_days` 신규 type 정정 (정식 구현 시)
+
+---
+
 ## [2.18.28] - 2026-05-26 — Sprint 76-BE 출하이력 페이지 BE 신규 (FEAT-SHIPMENT-HISTORY-BE)
 
 > AXIS-VIEW Sprint 76 (`/production/shipment`) mockup v1.51.1 의 OPS BE part. AXIS-VIEW `OPS_API_REQUESTS.md` #73 v2 명세 흡수 + Codex 2 라운드 (M=12 / A=4 / N=1 전수 close).
