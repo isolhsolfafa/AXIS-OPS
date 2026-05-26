@@ -1,7 +1,78 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-22 KST (✅ v2.18.27 — 매뉴얼 보안 통합. OPS 홈 상단 `[📖 매뉴얼]` 버튼 + axis-manual Netlify Edge Function JWT 미들웨어 (HS256 verify + access type 검증 + Cookie Max-Age JWT exp 동적). 3 repo 통합 release: OPS v2.18.27 / axis-manual v1.4.0 (미들웨어) + v1.5.0 (Admin Section B) / AXIS-VIEW Header.tsx token 첨부. Codex 라운드 1 M=2/A=5 반영 + A=3 BACKLOG 권고. **Netlify env `JWT_SECRET_KEY` 등록 + redeploy 완료**)
+> 마지막 업데이트: 2026-05-26 KST (✅ v2.18.29 — Sprint 76-BE 출하이력 페이지 BE freeze 완료. AXIS-VIEW Sprint 76 (#73) OPS BE part — API 2개 신규 (`/api/admin/shipment/summary` + `/details`, @gst_or_admin_required), best_ship CTE = factory.py _count_shipped(basis='best') 정합, by_model 옵션 C (plan + shipped 분리 + P-v3 협력사 lead AVG(pi_start - LEAST(elec_start, mech_start))), invariant 5건, pytest 31/31 GREEN. Codex 2 라운드 (VIEW M=7+A=2 + OPS BE M=5+A=2+N=1) + 본문 SQL BETWEEN → 반개구간 정정 (docs `8e4dd63`). 3 신규 BACKLOG (LATERAL JOIN / monthly CTE / actual lead time 토글 인큐베이션). KST 확인 완료 (DB session=Asia/Seoul). VIEW Sprint 76 FE 정식 구현 진입 OK)
+
+---
+
+## 📌 2026-05-26 KST — Sprint 76-BE 출하이력 페이지 BE 완료 (v2.18.28 + v2.18.29 + docs SQL 정정)
+
+### 핵심
+
+- **Sprint 76-BE freeze 완료** — AXIS-VIEW Sprint 76 (#73 v2) 의 OPS BE part
+- **신규 endpoint 2**: `GET /api/admin/shipment/summary` + `/api/admin/shipment/details`
+- **권한**: `@jwt_required + @gst_or_admin_required` (GST only, 협력사 차단)
+- **pytest 31/31 GREEN** (5분 7초, staging DB)
+- **Codex 2 라운드 전수 close**:
+  - 라운드 1 (VIEW 5-26): M=7 / A=2 / 사용자 결정 6건 — 전수 반영
+  - 라운드 2 (OPS BE 5-26): M=5 / A=2 / N=1 — M 5건 close + A 2건 BACKLOG
+
+### v2.18.28 + v2.18.29 변경 정리
+
+| 파일 | 영역 |
+|---|---|
+| `backend/app/services/shipment_history_service.py` (신규 ~530 LoC) | best_ship CTE + KPI + 캘린더 + monthly_trend + by_customer/model + top_delayed batch + format_root_cause + _assert_invariants 5건 |
+| `backend/app/routes/shipment_history.py` (신규 ~110 LoC) | API 2개 + Blueprint + 권한 + invalid param 검증 |
+| `backend/app/__init__.py` | Blueprint import + register (2줄) |
+| `tests/backend/test_shipment_history.py` (신규 ~570 LoC, 31 TC) | auth 4-way / KPI 7 / source 4 / status 4 / pagination 4 / monthly 2 / top_delayed 1 / format_root_cause 5 + TEST-SHIP-76-* fixture |
+| `backend/version.py` + `app_version.dart` | 2.18.29 |
+| `AGENT_TEAM_LAUNCH.md` Sprint 76-BE | 설계서 신규 + Codex 라운드 2 + v3.1 옵션 C + 명세 SQL 정정 |
+| `BACKLOG.md` | 3건 (LATERAL JOIN / monthly CTE / actual lead time 토글 인큐베이션) |
+| `CHANGELOG.md` | v2.18.28 + v2.18.29 entry |
+
+### 핵심 catch
+
+- **단일 best 정의 정합** — factory.py `_count_shipped(basis='best')` L88~99 와 동일 패턴 (공장 대시보드 ↔ 출하이력 카운트 동기화)
+- **반개구간 `>= AND <`** — 월말/월초 중복 회피 (Codex Q5 M)
+- **N+1 방지** — top_delayed 5건 batch (`WHERE serial_number = ANY(%s)`)
+- **invariant 5건** — calendar plan / by_customer plan+shipped / by_model plan+shipped → 실패 시 500 + Sentry capture
+- **by_model 옵션 C** — `count` → `plan` rename + `shipped` 신규 + `avg_lead_time_days` P-v3 (Plan ETL standard)
+- **P-v3 정의** — `AVG(pi_start - LEAST(elec_start, mech_start))` 운영 1352/1357 elec_first 검증
+- **KST 확인** — DB session timezone = `Asia/Seoul` (5-26 검증)
+
+### 사용자 결정 trail (5-26)
+
+| # | 결정 |
+|---|---|
+| 1 | SI = SI_SHIPMENT only (마무리공정 제외) — factory.py 정합 |
+| 2 | fulfillment_pct = 옵션 A (plan cohort) |
+| 5 | monthly_trend = current-month 포함 trailing 6 + plan/shipped 분리 집계 |
+| 6 | root_cause = v1 BE 도출 + FE 블러 (Sprint 71 BE 정식 오픈 후 활성화) |
+| 7 | 권한 = GST only (협력사 차단) |
+| v2.18.29 | by_model 옵션 C (plan + shipped 분리) + P-v3 avg_lead_time (Plan ETL standard) |
+
+### Codex 라운드 2 (OPS BE) close 5건
+
+- Q3 root_cause 함수 분리 + N+1 batch
+- Q4 pytest TC +5 (avg NULL / monthly zero-fill / page=2 / 필터 조합 / KST DATE)
+- Q5 반개구간 정합
+- Q6 권한 4-way 명세
+- Q8 invariant 정책
+- Q9 pytest fixture (TEST-SHIP-76-* teardown)
+
+### A=2 BACKLOG
+
+- `BACKLOG-SPRINT76-LATERAL-JOIN-20260526` (Q1)
+- `BACKLOG-SPRINT76-MONTHLY-CTE-UNIFY-20260526` (Q2)
+- `BACKLOG-SPRINT76-ACTUAL-LEAD-TIME-OPS-20260526` (v2.18.29 — 토글 옵션 인큐베이션)
+
+### 다음 작업
+
+- **VIEW Sprint 76 FE 정식 구현 진입 OK** (별 세션 / AXIS-VIEW repo)
+- VIEW type 정정 (count → plan rename + shipped / avg_lead_time_days 신규 + source/root_cause/avg_delay_days null 허용)
+- popover hook = details API `?date=X&per_page=50` 활용 (BE 작업 0)
+
+---
 
 ---
 
