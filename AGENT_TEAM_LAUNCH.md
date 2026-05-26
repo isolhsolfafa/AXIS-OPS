@@ -44410,7 +44410,7 @@ Response 200:
 권한: @manager_or_admin_required (협력사 manager = 자기 회사 데이터만, BE WHERE 필터)
 ```
 
-### 모집단 정합 (Codex Q7 분리 + Q6 grand_total 정합 강제)
+### 모집단 정합 (Codex Q7 분리 + Q6 grand_total 정합 강제 + Q-Freeze-3 운영 invariant 정책)
 
 **모집단 단위 분리** (Codex Q7 modify):
 - `auto_closed.count` = `started_task_count` + `unstarted_task_count` (task-row 모집단)
@@ -44423,7 +44423,69 @@ Response 200:
 - `partner_distribution[].count` 합 = `auto_closed.missed_worker_count` (41)
 - `hourly_distribution[].count` 합 = `auto_closed.count` (47) — 시간대는 미시작 포함
 - `unstarted_task_distribution[].count` 합 = `auto_closed.unstarted_task_count` (12)
-- → pytest assertion 의무 (5분포 합계 일치)
+
+**운영 invariant 정책** (Codex 라운드 3 Q-Freeze-3 M — 5-26):
+
+⚠️ `assert` 의사코드 사용 금지 (Python `-O` 시 비활성 위험 + 운영 throw 불명확). 운영 코드 = 명시적 invariant check:
+
+```python
+# services/dashboard_service.py
+def _assert_invariants(response: dict) -> None:
+    """Sprint 71 5분포 합계 정합 — 실패 시 500 + Sentry capture."""
+    ac = response['auto_closed']
+    issues = []
+
+    if ac['count'] != ac['started_task_count'] + ac['unstarted_task_count']:
+        issues.append(f"auto_closed.count {ac['count']} != started+unstarted {ac['started_task_count']+ac['unstarted_task_count']}")
+
+    td_sum = sum(t['count'] for t in response.get('task_distribution', []))
+    if td_sum != ac['started_task_count']:
+        issues.append(f"task_distribution sum {td_sum} != started_task_count {ac['started_task_count']}")
+
+    pd_sum = sum(p['count'] for p in response.get('partner_distribution', []))
+    if pd_sum != ac['missed_worker_count']:
+        issues.append(f"partner_distribution sum {pd_sum} != missed_worker_count {ac['missed_worker_count']}")
+
+    gt = response.get('partner_task_matrix', {}).get('grand_total', 0)
+    if gt != ac['started_task_count']:
+        issues.append(f"partner_task_matrix.grand_total {gt} != started_task_count {ac['started_task_count']}")
+
+    hd_sum = sum(h['count'] for h in response.get('hourly_distribution', []))
+    if hd_sum != ac['count']:
+        issues.append(f"hourly_distribution sum {hd_sum} != auto_closed.count {ac['count']}")
+
+    ud_sum = sum(u['count'] for u in response.get('unstarted_task_distribution', []))
+    if ud_sum != ac['unstarted_task_count']:
+        issues.append(f"unstarted_task_distribution sum {ud_sum} != unstarted_task_count {ac['unstarted_task_count']}")
+
+    if issues:
+        logger.error("[Sprint71] invariant violation: %s", "; ".join(issues), extra={'response': response})
+        sentry_sdk.capture_message(
+            "Sprint71 invariant violation",
+            level='error',
+            extras={'issues': issues, 'period': response.get('period')}
+        )
+        raise InvariantViolationError(issues)   # → routes/dashboard.py 가 500 반환
+```
+
+```python
+# routes/dashboard.py
+@dashboard_bp.route('/auto-close-summary', methods=['GET'])
+@jwt_required
+@manager_or_admin_required
+def get_auto_close_summary():
+    try:
+        response = build_auto_close_summary(...)
+        _assert_invariants(response)
+        return jsonify(response), 200
+    except InvariantViolationError as e:
+        return jsonify({'error': 'INVARIANT_VIOLATION', 'message': '데이터 정합 오류', 'detail': e.issues}), 500
+```
+
+**pytest TC 의무 (3건+, Codex Q-Freeze-3 M)**:
+1. 정상 응답 — 5분포 합계 정합 검증 통과
+2. 불일치 시 500 응답 (e.g., partner_task_matrix.grand_total 강제 조작 → invariant violation → 500)
+3. column_totals + task_distribution + started_task_count 동시 정합 (한 분포만 catch 회피)
 
 ### v3 인큐베이션 — V4 / outlier_workers / statistics_service
 
@@ -44865,14 +44927,40 @@ ORDER BY count DESC;
 
 ```
 1. AGENT_TEAM_LAUNCH.md Sprint 71 v3 갱신 ✅ (본 §12 trail)
-2. CT_ANALYSIS_ROADMAP.md § 12 → § 13 이전 영역 trail
-3. VIEW OPS_API_REQUESTS #71 v5 갱신 (V4/outlier 인큐베이션)
-4. BACKLOG.md A 6건 등록 (Q9 / Q10 / 추가 ①)
-5. AUDIT_TRAIL_GUIDE.md 갱신 (close_reason 분류, 5-22 deadline 잔존)
-6. (선택) Codex 라운드 3 — v3 freeze 검증 (간단, 30분)
+2. CT_ANALYSIS_ROADMAP.md § 12 이전 영역 trail ✅
+3. VIEW OPS_API_REQUESTS #71 v5 갱신 (V4/outlier 인큐베이션) ✅
+4. BACKLOG.md A 6건 등록 (Q9 / Q10 / 추가 ①) ✅
+5. AUDIT_TRAIL_GUIDE.md 갱신 (close_reason 분류, 5-22 deadline 잔존) ✅
+6. Codex 라운드 3 — v3 freeze 검증 ✅ HOLD M=3 → 5-26 처리
 7. BE 구현 진입 — routes/dashboard.py + services/dashboard_service.py
 8. pytest 25+ TC GREEN → freeze → VIEW FE 진입
 ```
+
+### Codex 라운드 3 결과 (2026-05-26) — v3 freeze HOLD → close 후 GO
+
+라운드 3 판정: M=3 / A=0 / N=2 — freeze HOLD.
+
+| Q | 라벨 | 처리 |
+|---|---|---|
+| Q-Freeze-1 옵션 X 적합성 | N | ✅ 정합 |
+| Q-Freeze-2 VIEW #71 v5 drift | **M** | ✅ 5-26 close — VIEW v5 응답 예시 + V4 인큐베이션 trail + 모집단 3분리 + grand_total 35 + §5 KPI 차이 표 갱신 |
+| Q-Freeze-3 invariant 운영 정책 | **M** | ✅ 5-26 close — `assert` 의사코드 → `_assert_invariants()` 함수 + `InvariantViolationError` raise → 500 + Sentry capture. pytest 3건+ 의무 (정상 / 500 응답 / 동시 정합) |
+| Q-Freeze-4 후속 trail 정합 | N | ✅ 정합 |
+| Q-Freeze-5 BE 구현 진입 | **M** | ✅ Q-Freeze-2 + Q-Freeze-3 close 후 GO |
+
+→ **v3 freeze 5-26 close 후 GO**. BE 구현 진입 가능.
+
+### BE 구현 우선순위 (Codex Q-Freeze-5 권고)
+
+1. `services/dashboard_service.py` 신규 — V1 hourly / V6 매트릭스 / KPI / trigger·task·partner·unstarted 산출 + `_assert_invariants()` invariant check
+2. `routes/dashboard.py` 신규 — API 2개 + Blueprint 등록 + `InvariantViolationError` 500 응답
+3. `pytest` `test_manager_dashboard.py` 신규 — 25+ TC. 우선순위:
+   - close_reason 분류 6패턴
+   - 모집단 합계 4종 정합
+   - V6 grand_total invariant
+   - V1 hourly 24행 backfill
+   - manager partner filter (자기 회사만)
+   - details pagination/filters
 
 ### 후속 sprint trail (별 인큐베이션)
 
