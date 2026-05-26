@@ -6,6 +6,63 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.18.28] - 2026-05-26 — Sprint 76-BE 출하이력 페이지 BE 신규 (FEAT-SHIPMENT-HISTORY-BE)
+
+> AXIS-VIEW Sprint 76 (`/production/shipment`) mockup v1.51.1 의 OPS BE part. AXIS-VIEW `OPS_API_REQUESTS.md` #73 v2 명세 흡수 + Codex 2 라운드 (M=12 / A=4 / N=1 전수 close).
+
+### 신규 endpoint 2개
+
+| HTTP | 경로 | 권한 | 설명 |
+|------|-----|------|------|
+| GET | `/api/admin/shipment/summary` | `@jwt_required + @gst_or_admin_required` | KPI 6 + 분포 6 + monthly_trend + top_delayed |
+| GET | `/api/admin/shipment/details` | 동일 | S/N 1:1 페이지네이션 + 필터 + 검색 |
+
+### 변경 (BE 3 파일 + 신규 1 + pytest 1 + version)
+
+| 파일 | 내용 |
+|------|-----|
+| `backend/app/services/shipment_history_service.py` (신규 ~500 LoC) | best_ship CTE + KPI + 캘린더 + monthly_trend + by_customer/model + top_delayed batch + `format_root_cause()` + `_assert_invariants()` |
+| `backend/app/routes/shipment_history.py` (신규 ~110 LoC) | API 2개 + Blueprint + 권한 + invalid param 검증 |
+| `backend/app/__init__.py` | Blueprint import + register (2줄) |
+| `tests/backend/test_shipment_history.py` (신규 ~520 LoC) | 29 TC (auth 4 + KPI 5 + source 4 + status 4 + pagination 4 + monthly 2 + top_delayed 1 + format_root_cause 5) + TEST-SHIP-76-* 전용 fixture |
+| `backend/version.py` + `frontend/.../app_version.dart` | 2.18.28 |
+
+### 핵심 catch
+
+- **단일 best 정의 정합** — factory.py `_count_shipped(basis='best')` L88~99 와 동일 패턴 (공장 대시보드 ↔ 출하이력 카운트 동기화)
+- **반개구간 `>= AND <`** (Codex Q5 M) — 월말/월초 중복 회피
+- **N+1 방지** — top_delayed 5건 batch 조회 `WHERE serial_number = ANY(%s)` (Codex Q3 M)
+- **invariant 3건** — calendar plan / by_customer plan / by_customer shipped 합계 정합 → 실패 시 500 + Sentry capture (Codex Q8 M)
+- **task_category DB 조회** — hardcoding X (Codex Q3 M)
+- **신규 파일 분리** — mutation `shipment_service.py` (v2.17.0) 와 read-only `shipment_history_service.py` 책임 분리 (Codex Q3 M)
+
+### Codex 검증 trail
+
+| 라운드 | 일자 | 결과 | 처리 |
+|---|---|---|---|
+| 1 (VIEW) | 5-26 | M=7 / A=2 + 사용자 결정 6건 | 전수 반영 (v2 명세) |
+| 2 (OPS BE) | 5-26 | M=5 / A=2 / N=1 | M 5건 close + A 2건 BACKLOG |
+
+### pytest 결과
+
+- **29/29 PASS** (4분 19초, staging DB) — 모든 TC GREEN
+- 회귀 위험 0 (신규 endpoint + 신규 파일, 기존 코드 영향 0)
+- 운영 데이터 보존 — TEST-SHIP-76-* 접두 S/N teardown 검증
+
+### A 2건 BACKLOG
+
+- `BACKLOG-SPRINT76-LATERAL-JOIN-20260526` (Q1) — best_ship CTE LATERAL JOIN 리팩토링
+- `BACKLOG-SPRINT76-MONTHLY-CTE-UNIFY-20260526` (Q2) — monthly_trend 단일 CTE derive
+
+### 의존 관계
+
+- ✅ OPS #70 (v2.18.4 best 게이트 제거) prod 배포 완료
+- ✅ Sprint 47/68 (ship-complete) prod 배포 완료
+- ⏳ AXIS-VIEW Sprint 76 FE (mockup → 실 데이터) — BE freeze 후 진입
+- 🟢 Sprint 71 BE 독립 (root_cause = close_reason literal 모델 레벨 보존)
+
+---
+
 ## [2.18.27] - 2026-05-22 — 매뉴얼 보안 통합 (OPS 상단 버튼 + axis-manual JWT 미들웨어, Codex 라운드 1 M=2/A=8 반영)
 
 > 사용자 catch: "사용자 매뉴얼도 url 을 공유 하는것 보다 버튼을 만들어줘 / url 이 현재 전체공개라 누구나 볼수 있게 됬는데 이것도 보안이 필요한데". OPS 매뉴얼 접근 통합 fix.
