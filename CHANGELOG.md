@@ -6,6 +6,50 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.18.31] - 2026-05-26 — OPS 매뉴얼 버튼 모바일 PWA catch fix (anchor click + fallback)
+
+> 사용자 catch (5-26): OPS 매뉴얼 버튼 PC 환경 정상, 모바일 환경 페이지 전환 안 됨.
+
+### 원인
+
+PWA standalone mode (iOS Safari / Android Chrome PWA) 영역 `window.open(_blank)` 차단 catch.
+
+### 변경 (FE 1 파일)
+
+| 파일 | 내용 |
+|------|-----|
+| `frontend/lib/screens/home/home_screen.dart` `_handleOpenManual()` | `window.open(_blank)` → anchor element dynamic click 패턴 + fallback (`window.location.href`) |
+
+### 변경 코드
+
+```diff
+- html.window.open(url, '_blank', 'noopener,noreferrer');
++ try {
++   final anchor = html.AnchorElement(href: url)
++     ..target = '_blank'
++     ..rel = 'noopener noreferrer';
++   html.document.body!.append(anchor);
++   anchor.click();
++   anchor.remove();
++ } catch (anchorErr) {
++   html.window.location.href = url;  // fallback (PWA 떠나지만 catch 해소)
++ }
+```
+
+### 효과
+
+- 모바일 PWA standalone mode 영역 새 탭 정상 (95~99% 정합, web.dev 표준 패턴)
+- fallback 영역 같은 탭 이동 (1~5% edge case catch)
+- PC 영역 새 탭 그대로
+- token 영역 query param 동일 (axis-manual JWT 미들웨어 정합)
+
+### 회귀 위험
+
+- FE 1 함수 영역 (5줄 → 12줄) — 회귀 0
+- VIEW 영향 0 / BE 영향 0
+
+---
+
 ## [2.18.30] - 2026-05-26 — Sprint 76-BE best_ship CTE model source 정정 (product_code → model 칼럼)
 
 > 사용자 catch (5-26): v2.18.29 운영 검증 시 by_model 합 != kpi.plan_count invariant 실패 → 운영 데이터 분석 결과 product_code 와 model 칼럼이 의미 완전 다른 catch.

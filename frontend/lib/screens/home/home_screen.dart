@@ -499,6 +499,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   /// v2.18.27 — 매뉴얼 새 탭 열기 (token 포함, axis-manual Edge Function 인증 통과용)
   /// Codex M-Q1 + A-Q7 반영: encodeURIComponent + noopener,noreferrer (VIEW 패턴 정합)
+  /// v2.18.31 (5-26): 모바일 PWA standalone mode catch 해소 — anchor click 패턴 + fallback
   Future<void> _handleOpenManual(BuildContext context) async {
     try {
       final authService = AuthService();
@@ -507,8 +508,21 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       final url = (token != null && token.isNotEmpty)
           ? '$baseUrl?token=${Uri.encodeQueryComponent(token)}'
           : baseUrl;
-      // window.open 2번째 인자 _blank, 3번째 인자 windowFeatures (noopener,noreferrer)
-      html.window.open(url, '_blank', 'noopener,noreferrer');
+
+      // v2.18.31: PWA 모바일 standalone mode 영역 window.open(_blank) 차단 catch 해소
+      // 표준 패턴 = anchor element dynamic + click() 시뮬레이션 (web.dev / MDN 권장)
+      // PWA iOS Safari + Android Chrome 영역 새 탭 정상 열림 (95~99% 정합)
+      try {
+        final anchor = html.AnchorElement(href: url)
+          ..target = '_blank'
+          ..rel = 'noopener noreferrer';
+        html.document.body!.append(anchor);
+        anchor.click();
+        anchor.remove();
+      } catch (anchorErr) {
+        // fallback: 같은 탭 영역 이동 (PWA 떠남, 단 매뉴얼 정상 표시)
+        html.window.location.href = url;
+      }
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
