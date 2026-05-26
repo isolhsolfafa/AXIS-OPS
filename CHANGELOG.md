@@ -6,6 +6,52 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.18.30] - 2026-05-26 — Sprint 76-BE best_ship CTE model source 정정 (product_code → model 칼럼)
+
+> 사용자 catch (5-26): v2.18.29 운영 검증 시 by_model 합 != kpi.plan_count invariant 실패 → 운영 데이터 분석 결과 product_code 와 model 칼럼이 의미 완전 다른 catch.
+
+### 운영 데이터 검증 (2026년 ship_plan 1199건)
+
+| 항목 | 결과 |
+|---|---|
+| product_code NOT NULL | 1194 |
+| model NOT NULL | 1199 (NOT NULL constraint) |
+| 두 칼럼 같은 값 | **0건** |
+| 두 칼럼 다른 값 | **1194건** |
+| product_code NULL | 5건 (TEST 데이터) |
+
+**의미 차이**:
+- `product_code` = 숫자 SKU (예: '41200152', '41100286')
+- `model` = 분류 이름 (예: 'GAIA-I DUAL', 'GAIA-LE', 'DRAGON')
+
+→ by_model 카드 매니저 직관 = 분류 이름 (model 칼럼). product_code 사용 시 숫자 SKU 노출 + NULL 5건 invariant 실패.
+
+### 변경 (BE 1줄)
+
+| 파일 | 변경 |
+|------|-----|
+| `backend/app/services/shipment_history_service.py` `_best_ship_sql_select()` | `p.product_code AS model` → `p.model AS model` |
+| `backend/version.py` + `app_version.dart` | 2.18.30 |
+
+### 효과
+
+- by_model 응답 `model` 필드 = "GAIA-I DUAL" 등 분류 이름 (매니저 직관 ↑)
+- TEST 5건 자동 해소 (model 칼럼 = 'GAIA' 채워짐, NOT NULL 정합)
+- invariant 자동 정합 (model NOT NULL constraint → NULL 제외 0건)
+- VIEW 측 변경 0 (응답 schema 유지)
+
+### pytest 결과
+
+- **31/31 PASS** (3분 43초, staging DB)
+- 회귀 위험 0 (BE 1줄 + 응답 schema 유지)
+
+### VIEW 측 영향 0
+
+- `model` 필드 type 변경 0 (`string` 그대로)
+- 단 표시값 변경 — `"GAIA-I DUAL"` 등 분류 이름 (이전 `product_code` 값 = 숫자 SKU)
+
+---
+
 ## [2.18.29] - 2026-05-26 — Sprint 76-BE by_model 옵션 C 정정 + P-v3 avg_lead_time_days 추가
 
 > v2.18.28 운영 catch (사용자 5-26) — by_model 영역 base 일관성 정정 + lead time standard 추가.

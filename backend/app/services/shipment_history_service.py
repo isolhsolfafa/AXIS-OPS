@@ -84,11 +84,16 @@ def _best_ship_sql_select() -> str:
 
     factory.py _count_shipped(basis='best') 와 동일 패턴.
     SI_SHIPMENT only + force_closed=FALSE (OPS #70 v2.18.4 정합).
+
+    v2.18.30 (사용자 catch 5-26): model source = `p.model` 칼럼 (분류 이름).
+    `product_code` 는 숫자 SKU (예: '41200152') — by_model 그룹핑에 부적합.
+    `model` 은 분류 이름 (예: 'GAIA-I DUAL') — 매니저 직관 + NOT NULL constraint 보장.
+    운영 2026 1199건 검증: product_code/model 다른 값 1194건 (의미 완전 분리).
     """
     return """
         p.serial_number,
         p.sales_order,
-        p.product_code AS model,
+        p.model AS model,
         p.customer,
         p.mech_partner AS partner_mech,
         p.elec_partner AS partner_elec,
