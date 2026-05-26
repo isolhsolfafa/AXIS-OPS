@@ -45210,7 +45210,7 @@ WITH best_ship AS (
   SELECT
     p.serial_number,
     p.sales_order,
-    p.product_code AS model,
+    p.model AS model,   -- v2.18.30 (5-26): product_code(숫자 SKU) → model(분류 이름) 정정. 운영 1199건 검증 — 두 칼럼 의미 완전 다름 (같은 값 0건, 다른 값 1194건). model NOT NULL constraint 정합.
     p.customer,
     p.mech_partner AS partner_mech,
     p.elec_partner AS partner_elec,

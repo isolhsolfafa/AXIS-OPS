@@ -1,7 +1,22 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-26 KST (✅ v2.18.29 — Sprint 76-BE 출하이력 페이지 BE freeze 완료. AXIS-VIEW Sprint 76 (#73) OPS BE part — API 2개 신규 (`/api/admin/shipment/summary` + `/details`, @gst_or_admin_required), best_ship CTE = factory.py _count_shipped(basis='best') 정합, by_model 옵션 C (plan + shipped 분리 + P-v3 협력사 lead AVG(pi_start - LEAST(elec_start, mech_start))), invariant 5건, pytest 31/31 GREEN. Codex 2 라운드 (VIEW M=7+A=2 + OPS BE M=5+A=2+N=1) + 본문 SQL BETWEEN → 반개구간 정정 (docs `8e4dd63`). 3 신규 BACKLOG (LATERAL JOIN / monthly CTE / actual lead time 토글 인큐베이션). KST 확인 완료 (DB session=Asia/Seoul). VIEW Sprint 76 FE 정식 구현 진입 OK)
+> 마지막 업데이트: 2026-05-26 KST (✅ v2.18.30 — Sprint 76-BE best_ship CTE model source 정정. v2.18.29 운영 검증 invariant 실패 후 1줄 fix: `p.product_code AS model` → `p.model AS model`. 운영 1199건 검증 — 두 칼럼 의미 완전 다름 (product_code=숫자 SKU '41200152' / model=분류 이름 'GAIA-I DUAL'). pytest 31/31 GREEN. VIEW type 변경 0. Sprint 76-BE freeze 완료. **선행: v2.18.29 by_model 옵션 C + P-v3 avg_lead_time + v2.18.28 출하이력 BE 신규 (Codex 2 라운드 전수 close + 본문 SQL 반개구간 정정 `8e4dd63`)**)
+
+---
+
+## 📌 2026-05-26 KST — Sprint 76-BE 출하이력 페이지 BE 완료 (v2.18.28 + v2.18.29 + v2.18.30 + docs SQL 정정)
+
+### v2.18.30 1줄 fix (5-26 운영 검증 직후)
+
+사용자 catch: v2.18.29 invariant `by_model.plan sum != kpi.plan_count` 실패. 운영 1199건 검증:
+
+| 칼럼 | 의미 | 예시 | NULL 처리 |
+|---|---|---|---|
+| `product_code` | 숫자 SKU | `41200152`, `41100286` | NOT NULL X (5건 NULL — TEST 데이터) |
+| `model` | 분류 이름 | `GAIA-I DUAL`, `GAIA-LE`, `DRAGON` | NOT NULL constraint (1199 / 1199) |
+
+→ `_best_ship_sql_select()` 영역 `p.product_code AS model` → `p.model AS model` 1줄 fix. TEST 5건 자동 해소 + 매니저 직관 ↑ + VIEW 영향 0 (응답 schema 유지). pytest 31/31 GREEN. commit `0c4b30c`.
 
 ---
 
