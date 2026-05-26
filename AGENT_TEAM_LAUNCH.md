@@ -44205,12 +44205,16 @@ DRAGON DUAL 모델 MECH 체크리스트가 영원히 100% 안 됨 → SELF_INSPE
 > Manager 대시보드 — 자동 마감 작업 분석 + 협력사별 종료 누락 추적. 사용자가 직접 mockup 2장 그려놓은 concept (2026-05-13 등록 → 2026-05-21 sprint 착수).
 > 안정화 단계 + Sprint 41-D 도입 효과 정량 측정 + `/partner/evaluation` (평가지수) 페이지 raw data 동시 확보.
 
-> **v2 갱신 (2026-05-25)** — 사용자 catch (5-22~5-25) 후 본 설계서 갱신:
-> - 4단계 사이클 시각 보강 (§1)
-> - VIEW v3 명세 흡수 (V1/V4/V6 + unstarted + outlier_workers) (§4/§5)
-> - 책임 분리 원칙 정합 — `[복원]` 영역 제거 (§4)
-> - statistics_service 분리 (§7)
-> - 4단계 사이클 + CT 분석 페이지 연계 trail 보존
+> **v3 갱신 (2026-05-26)** — 옵션 X 채택 (Codex 라운드 2 결과 + 사용자 catch 5-26):
+> - Sprint 71 = "작업자 개선" 1차 목표 deep 구현 가능 영역만 유지
+> - **V4 `duration_by_category` (IQR) + `outlier_workers[]` + `statistics_service.py` 분리 = 인큐베이션** (CT_ANALYSIS_ROADMAP.md 이전)
+>   · 사유: 운영 데이터 누적 1주~1개월 시 sample_size 부족 → confidence='low' 대부분 → insight 약함
+>   · 데이터 누적 3~6개월+ 시점에 CT 분석 진입 sprint 에서 재검토
+> - 유지: V1 hourly / V6 partner_task_matrix (단순 GROUP BY, IQR 무관) / KPI / trigger·task·partner·unstarted 분포 / 상세 카드
+> - Codex 라운드 2 M=4 → **M=2 (Q6 grand_total / Q7 모집단 분리) 만 modify** (Q4/Q5 = V4 영역 자동 해소)
+>
+> **v2 흔적 (2026-05-25)** — 4단계 사이클 시각 보강 (§1) + 책임 분리 원칙 정합 (§1.2, §4 `[복원]` 제거) + VIEW v3 명세 흡수. v3 에서 IQR 영역 일부 인큐베이션.
+>
 > 상세: `CT_ANALYSIS_ROADMAP.md`
 
 ## 1. 배경 + 동기
@@ -44328,7 +44332,7 @@ v2.15.16 후 `force_closed=FALSE` 일괄 통일됐으므로 **`force_closed` 로
 
 ### API 1: `GET /api/admin/dashboard/auto-close-summary`
 
-> **v2 갱신 (5-25)**: VIEW v3 명세 흡수 — V1 hourly / V4 duration_by_category (IQR) / V6 partner_task_matrix / unstarted_task_distribution + outlier_workers + started_count/unstarted_count 추가.
+> **v3 갱신 (5-26)**: V4 IQR / outlier_workers = 인큐베이션 (CT 분석 이전). Codex M=2 (Q6 grand_total / Q7 모집단 분리) 반영.
 
 ```
 Query Params:
@@ -44339,13 +44343,16 @@ Query Params:
 Response 200:
 {
   "period": "2026-05",
+
+  # KPI — 자동/수동 마감 카운트
   "auto_closed": {
-    "count": 47,
+    "count": 47,                       # close_reason LIKE 'AUTO_CLOSED_BY_%' 전체
+    "started_task_count": 35,          # work_start_log 있는 task 자동 마감 (Codex Q7 modify)
+    "missed_worker_count": 41,         # 종료 누락 worker 인스턴스 (한 task 에 2명 누락 시 2)
+    "unstarted_task_count": 12,        # 시작 자체 없는 task 자동 마감
     "prev_period_count": 0,
     "delta": "+47",
-    "trend": "increased",
-    "started_count": 35,        # work_start_log 있는 worker 의 자동 마감
-    "unstarted_count": 12       # 시작 자체 없는 task 자동 마감
+    "trend": "increased"
   },
   "manual_closed": {
     "count": 5,
@@ -44353,44 +44360,30 @@ Response 200:
     "delta": "-85",
     "improvement_pct": 94
   },
+
+  # 트리거 원인 분포 (close_reason prefix 후 task_id 추출)
   "trigger_distribution": [
     { "trigger_task_id": "IF_2", "trigger_name": "ELEC IF_2 시작", "count": 32, "pct": 68.0 }
   ],
+
+  # 마감 대상 task 분포 (task-row 모집단 = started_task_count)
   "task_distribution": [
     { "task_id": "PANEL_WORK", "task_name": "판넬 작업", "count": 14, "avg_compare_pct": 50.0, "alert": "above_avg" }
   ],
+
+  # 협력사 분포 (worker-miss 모집단 = missed_worker_count, Codex Q7 분리)
   "partner_distribution": [
     # work_start_log 기반 — 시작 후 종료 누락 worker 만 (Codex Q3 5-21 결정)
-    { "company": "BAT", "count": 18, "pct": 38.0, "alert": true }
+    # 같은 task 에 2명 다른 회사 누락 시 양쪽 +1 (worker 단위 카운트)
+    { "company": "BAT", "count": 18, "pct": 43.9, "alert": true }
   ],
 
-  # V1 — 시간대별 마감 발생 (24h backfill 강제)
+  # V1 — 시간대별 마감 발생 (24h backfill 강제, KST 변환)
   "hourly_distribution": [
     { "hour": 0, "count": 0 },
     { "hour": 11, "count": 6 },
     { "hour": 17, "count": 8 }
     # 24행 보장 (BE backfill)
-  ],
-
-  # V4 — IQR 기반 카테고리별 outlier 분포 (task_id 별 자체 IQR → 카테고리 합산)
-  "duration_by_category": {
-    "categories": [
-      { "category": "MECH", "normal_count": 7, "warning_count": 2, "critical_count": 1, "sample_size": 10, "confidence": "low" },
-      { "category": "ELEC", "normal_count": 6, "warning_count": 2, "critical_count": 0, "sample_size": 8,  "confidence": "low" },
-      { "category": "TM",   "normal_count": 4, "warning_count": 1, "critical_count": 0, "sample_size": 5,  "confidence": "low" }
-    ],
-    "total_sample_size": 35,         # = started_count
-    "overall_confidence": "low"      # low <30 / medium 30~100 / high 100+
-  },
-
-  # 1차 (작업자 개선) 액션 직결 — outlier 작업자 명시 (BE v2 신규)
-  "outlier_workers": [
-    {
-      "worker_id": 456, "worker_name": "박YY", "company": "BAT",
-      "task_id": "PANEL_WORK", "task_name": "판넬 작업",
-      "duration_minutes": 540,
-      "task_iqr": { "q1": 120, "q3": 240, "label": "critical" }
-    }
   ],
 
   # 미시작 자동 마감 task 분리 (Codex Q3 사용자 결정 — 옵션 C+D)
@@ -44399,30 +44392,57 @@ Response 200:
     { "task_id": "WIRING", "task_name": "배선", "count": 2 }
   ],
 
-  # V6 — 협력사 × task 누락 매트릭스
+  # V6 — 협력사 × task 매트릭스 (Codex Q6 canonical 정렬 + grand_total 정합 강제)
   "partner_task_matrix": {
     "task_columns": [
-      # ORDER BY task_name, task_id (결정적 정렬 — 호출간 안정)
+      # canonical 정렬 = ORDER BY task_name, task_id (호출 간 안정)
+      # counts[] 는 task_columns 순서로 (length 일치 강제)
       { "task_id": "PANEL_WORK", "task_name": "판넬" }
     ],
     "rows": [
-      # counts[] 는 task_columns 순서대로 (길이 일치)
       { "company": "BAT", "counts": [9, 5, 2, 2, 0, 0, 0, 0], "total": 18, "alert": true }
     ],
     "column_totals": [14, 8, 6, 5, 4, 4, 3, 3],   # = task_distribution[].count 정합
-    "grand_total": 47                              # = auto_closed.started_count 정합
+    "grand_total": 35                              # = auto_closed.started_task_count 정합 (Codex Q6 정정)
   }
 }
 
 권한: @manager_or_admin_required (협력사 manager = 자기 회사 데이터만, BE WHERE 필터)
 ```
 
-### 모집단 정합 (Codex Q8 사용자 결정)
+### 모집단 정합 (Codex Q7 분리 + Q6 grand_total 정합 강제)
 
-- `auto_closed.count` (47) = `started_count` (35) + `unstarted_count` (12)
-- `partner_distribution[].count` 합 = `task_distribution[].count` 합 = `partner_task_matrix.grand_total` = `duration_by_category.total_sample_size` = `started_count` (35) — **모두 work_start_log 기반 일치**
+**모집단 단위 분리** (Codex Q7 modify):
+- `auto_closed.count` = `started_task_count` + `unstarted_task_count` (task-row 모집단)
+- `missed_worker_count` = 종료 누락 worker 인스턴스 (worker-miss 모집단, 한 task 에 2명 누락 시 2)
+- task_distribution / partner_task_matrix / unstarted_task_distribution = **task-row 모집단**
+- partner_distribution = **worker-miss 모집단** (작업자 단위 카운트)
+
+**정합 보장** (Codex Q6 강제):
+- `task_distribution[].count` 합 = `partner_task_matrix.grand_total` = `auto_closed.started_task_count` (35)
+- `partner_distribution[].count` 합 = `auto_closed.missed_worker_count` (41)
 - `hourly_distribution[].count` 합 = `auto_closed.count` (47) — 시간대는 미시작 포함
-- `unstarted_task_distribution[].count` 합 = `unstarted_count` (12) — 별 영역
+- `unstarted_task_distribution[].count` 합 = `auto_closed.unstarted_task_count` (12)
+- → pytest assertion 의무 (5분포 합계 일치)
+
+### v3 인큐베이션 — V4 / outlier_workers / statistics_service
+
+**Sprint 71 v3 에서 제거** (CT 분석 영역 이전):
+- `duration_by_category` (V4 IQR)
+- `outlier_workers[]`
+- `statistics_service.py` 분리
+
+**사유** (사용자 catch 5-26):
+- 운영 데이터 누적 1주~1개월 → sample_size 부족 → confidence='low' 대부분 → insight 약함
+- V4 IQR / outlier 가 의미 있게 작동하려면 운영 데이터 3~6개월+ 필요
+- CT 분석 진입 sprint (인큐베이션) 시점에 재검토 의무
+
+**CT 분석 진입 시 재검토 의무** (CT_ANALYSIS_ROADMAP.md trail):
+- Codex Q3 confidence 임계 (30/100) 재조정
+- Codex Q4 IQR NULL fallback (`unknown_count` 추가)
+- Codex Q5 IQR SQL boundary (1.5×IQR warning / 3×IQR critical 재정의)
+- Codex Q8 statistics_service batch signature
+- 사용 사례 명확화 후 신규 Codex 라운드
 
 ### 책임 분리 원칙 정합 — `[복원]` 영역 제거 trail (5-25)
 
@@ -44601,120 +44621,102 @@ FROM hours h LEFT JOIN counts c USING (hour)
 ORDER BY h.hour;
 ```
 
-### 5.2 V4 — `duration_by_category` (task_id 별 자체 IQR + 카테고리 합산)
+### 5.2 ~ 5.3 V4 IQR + outlier_workers — v3 인큐베이션 (CT 분석 이전)
 
-**산출 단계 3 step**:
-1. **task_id 단위 IQR** — 지난 30일 운영 데이터로 각 task_id 의 `duration_minutes` Q1 / Q3 산출
-2. **instance 라벨링** — 현재 조회 기간 각 자동 마감 instance 를 자체 task IQR 과 비교 → normal / warning (1.5×IQR 밖) / critical (그 외)
-3. **카테고리 합산** — 모든 task instance 의 라벨 결과를 `task_category` 별 합산
+> **v3 (5-26)**: V4 `duration_by_category` IQR 산출 + `outlier_workers[]` = Sprint 71 에서 제거. CT_ANALYSIS_ROADMAP.md 이전.
+>
+> **사유**: 운영 데이터 누적 1주~1개월 시 sample_size 부족 → confidence='low' 대부분 → insight 약함. 데이터 누적 3~6개월+ 시점에 CT 분석 진입 sprint 에서 재진입.
+>
+> **재진입 시 검토 영역** (Codex 라운드 2 결과 보존):
+> - Q3 confidence 임계 (30/100) — 데이터 누적 후 재조정
+> - Q4 IQR NULL fallback — `unknown_count` 별 라벨 분리 + `total_sample_size` vs `labeled_sample_size` 분리
+> - Q5 IQR SQL boundary — 1.5×IQR = warning, 3×IQR = critical 재정의 (현재 v2 §5.2 SQL 오류 존재)
+> - Q8 `compute_task_iqrs(task_ids: list[str], ...)` batch signature (N+1 회피)
+>
+> **참조**: `CT_ANALYSIS_ROADMAP.md` § 11 + § 12
+
+### 5.4 V6 — `partner_task_matrix` (협력사 × task) — Codex Q6 정정 (v3)
+
+> **v3 modify** (Codex Q6 M): canonical 정렬 + grand_total = task_distribution[].count 정합 = `started_task_count` 강제.
+
+**모집단** = **task-row 모집단** (한 task 1회 카운트, 협력사 분기는 task 참여 worker 의 회사 — Codex Q7 분리).
+
+⚠️ 본 V6 = `task-row` 모집단 / `partner_distribution` = `worker-miss` 모집단. 두 분포 별 모집단 (Codex Q7 modify).
 
 ```sql
--- Step 1: task_id 별 IQR (지난 30일 — Codex Q3 결정 옵션 A)
-WITH task_iqr AS (
+-- V6: 협력사 × task_id 2D GROUP BY (task-row 모집단, distinct task)
+-- 한 task 에 2명 다른 회사 누락해도 task 1회만 카운트
+-- 협력사 분기 = task 의 work_start_log 중 첫 worker 의 company 또는 mech_partner/elec_partner 매핑
+WITH task_company AS (
+  -- task-row 모집단: 한 task 의 대표 company 결정
   SELECT
-    task_id,
-    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY duration_minutes) AS q1,
-    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY duration_minutes) AS q3,
-    COUNT(*) AS lookback_sample
-  FROM app_task_details
-  WHERE completed_at >= :end - INTERVAL '30 days'
-    AND completed_at < :end
-    AND duration_minutes IS NOT NULL
-    AND duration_minutes > 0  -- 미시작 제외
-  GROUP BY task_id
-),
--- Step 2: instance 라벨링 — 자체 task IQR 과 비교 (양쪽 outlier 동일 처리)
-labeled AS (
-  SELECT
-    t.id,
-    tc.category,
+    t.id AS task_id_row,
     t.task_id,
-    t.duration_minutes,
-    iqr.q1, iqr.q3,
-    (iqr.q3 - iqr.q1) AS iqr_range,
+    -- 협력사 결정 — task_category 기준 partner 매핑 (Sprint 41-D 정합)
     CASE
-      WHEN iqr.q1 IS NULL THEN 'normal'  -- IQR 산출 불가 task = normal 처리
-      WHEN t.duration_minutes BETWEEN iqr.q1 AND iqr.q3 THEN 'normal'
-      WHEN t.duration_minutes > iqr.q3 + 1.5 * (iqr.q3 - iqr.q1) THEN 'warning'
-      WHEN t.duration_minutes < iqr.q1 - 1.5 * (iqr.q1 - iqr.q1) THEN 'warning'
-      ELSE 'critical'
-    END AS label
+      WHEN t.task_category = 'MECH' THEN pi.mech_partner
+      WHEN t.task_category = 'ELEC' THEN pi.elec_partner
+      WHEN t.task_category = 'TM' THEN pi.module_outsourcing
+      ELSE NULL
+    END AS company
   FROM app_task_details t
-  LEFT JOIN task_iqr iqr ON iqr.task_id = t.task_id
-  -- task_category 결정 — task_id_to_category 매핑 (Sprint 41-D TASK_IDS 분리)
-  CROSS JOIN LATERAL (SELECT
-    CASE
-      WHEN t.task_id IN ('WASTE_GAS_LINE_1','UTIL_LINE_1','TANK_DOCKING','WASTE_GAS_LINE_2','UTIL_LINE_2','HEATING_JACKET','SELF_INSPECTION') THEN 'MECH'
-      WHEN t.task_id IN ('PANEL_WORK','CABINET_PREP','WIRING','IF_1','IF_2','INSPECTION') THEN 'ELEC'
-      WHEN t.task_id IN ('TANK_MODULE','PRESSURE_TEST') THEN 'TM'
-      WHEN t.task_id LIKE 'PI_%' THEN 'PI'
-      WHEN t.task_id LIKE 'QI_%' THEN 'QI'
-      WHEN t.task_id LIKE 'SI_%' THEN 'SI'
-      ELSE 'UNKNOWN'
-    END AS category
-  ) tc
+  JOIN work_start_log wsl ON wsl.task_id = t.id
+  LEFT JOIN plan.product_info pi ON pi.serial_number = t.serial_number
   WHERE t.close_reason LIKE 'AUTO_CLOSED_BY_%'
     AND t.completed_at BETWEEN :start AND :end
-    AND t.duration_minutes IS NOT NULL
-    AND t.duration_minutes > 0   -- started_count 모집단만 (미시작 제외)
+    AND EXISTS (
+      SELECT 1 FROM work_completion_log wcl
+      WHERE wcl.task_id = wsl.task_id AND wcl.worker_id = wsl.worker_id
+    ) IS NOT TRUE   -- 종료 누락 task 만
+  GROUP BY t.id, t.task_id, t.task_category, pi.mech_partner, pi.elec_partner, pi.module_outsourcing
 )
--- Step 3: 카테고리 합산
-SELECT
-  category,
-  SUM(CASE WHEN label='normal' THEN 1 ELSE 0 END) AS normal_count,
-  SUM(CASE WHEN label='warning' THEN 1 ELSE 0 END) AS warning_count,
-  SUM(CASE WHEN label='critical' THEN 1 ELSE 0 END) AS critical_count,
-  COUNT(*) AS sample_size
-FROM labeled
-GROUP BY category;
+SELECT company, task_id, COUNT(*) AS count
+FROM task_company
+WHERE company IS NOT NULL
+GROUP BY company, task_id
+ORDER BY company, task_id;
 ```
 
-→ `confidence` 계산: sample_size <30 = low / 30~100 = medium / 100+ = high. `total_sample_size` 와 `overall_confidence` 는 BE 가 후처리.
+**BE 후처리 — canonical 매트릭스 변환** (Codex Q6 M 강제):
 
-⚠️ **statistics_service.py 분리 권장** — `compute_task_iqr_labels()` 함수를 별 service 로 분리 → 향후 CT 분석 / 협력사 평가지수 / APS 진입 시 재사용 (CT_ANALYSIS_ROADMAP.md 의견 ①).
+1. **task_columns 정렬** = `ORDER BY task_name, task_id` (BE 가 task_id_to_name 매핑 후 정렬 — 호출 간 안정)
+2. **rows[].counts[]** = `task_columns` 순서로 length 일치 (빈 칸은 0)
+3. **column_totals[i]** = sum(rows[].counts[i])
+4. **grand_total** = sum(column_totals) = `task_distribution[].count` 합 = `auto_closed.started_task_count`
+5. **assertion** = pytest 시 4번 정합 강제 (Codex Q6 modify)
 
-### 5.3 outlier_workers — 1차 작업자 개선 직결 (v2 신규)
+```python
+# BE 후처리 의사코드
+def build_partner_task_matrix(rows_raw, task_id_to_name):
+    # 1. canonical task_columns
+    unique_tasks = sorted(set(r['task_id'] for r in rows_raw),
+                         key=lambda tid: (task_id_to_name[tid], tid))
+    task_columns = [{'task_id': tid, 'task_name': task_id_to_name[tid]} for tid in unique_tasks]
+    task_idx = {tid: i for i, tid in enumerate(unique_tasks)}
 
-```sql
--- V4 labeled CTE 영역 critical 만 worker join (top N)
-WITH labeled AS ( /* §5.2 동일 */ ),
-critical_instances AS (
-  SELECT id, task_id, duration_minutes, q1, q3 FROM labeled WHERE label = 'critical'
-)
-SELECT
-  wsl.worker_id, w.name AS worker_name, w.company,
-  ci.task_id, td.task_name AS task_name,
-  ci.duration_minutes,
-  ci.q1, ci.q3
-FROM critical_instances ci
-JOIN app_task_details td ON td.id = ci.id
-JOIN work_start_log wsl ON wsl.task_id = ci.id
-JOIN workers w ON w.id = wsl.worker_id
-LEFT JOIN work_completion_log wcl
-  ON wcl.task_id = wsl.task_id AND wcl.worker_id = wsl.worker_id
-WHERE wcl.id IS NULL   -- 종료 누락 worker 만
-ORDER BY ci.duration_minutes DESC
-LIMIT :outlier_limit;  -- default 10
+    # 2. company × task 매트릭스
+    by_company = defaultdict(lambda: [0] * len(unique_tasks))
+    for r in rows_raw:
+        by_company[r['company']][task_idx[r['task_id']]] = r['count']
+
+    # 3. rows[] + column_totals[]
+    rows = [
+        {'company': c, 'counts': counts, 'total': sum(counts),
+         'alert': sum(counts) / grand_total >= 0.3 if grand_total else False}
+        for c, counts in by_company.items()
+    ]
+    column_totals = [sum(counts[i] for _, counts in by_company.items())
+                     for i in range(len(unique_tasks))]
+    grand_total = sum(column_totals)
+
+    # 4. assertion (Codex Q6 M)
+    assert grand_total == auto_closed['started_task_count'], (
+        f"grand_total {grand_total} != started_task_count {auto_closed['started_task_count']}"
+    )
+
+    return {'task_columns': task_columns, 'rows': rows,
+            'column_totals': column_totals, 'grand_total': grand_total}
 ```
-
-### 5.4 V6 — `partner_task_matrix` (협력사 × task)
-
-```sql
--- 협력사 × task_id 2D GROUP BY (work_start_log 기반 — partner_distribution 정합)
-SELECT w.company, t.task_id, COUNT(*) AS count
-FROM app_task_details t
-JOIN work_start_log wsl ON wsl.task_id = t.id
-JOIN workers w ON w.id = wsl.worker_id
-LEFT JOIN work_completion_log wcl
-  ON wcl.task_id = wsl.task_id AND wcl.worker_id = wsl.worker_id
-WHERE t.close_reason LIKE 'AUTO_CLOSED_BY_%'
-  AND t.completed_at BETWEEN :start AND :end
-  AND wcl.id IS NULL
-GROUP BY w.company, t.task_id
-ORDER BY w.company, t.task_id;  -- 결정적 정렬
-```
-
-→ BE 가 `{task_columns[], rows[], column_totals[], grand_total}` 매트릭스로 변환. `task_columns` = `ORDER BY task_name, task_id` (호출 간 안정).
 
 ### 5.5 unstarted_task_distribution (미시작 자동 마감 task)
 
@@ -44742,18 +44744,21 @@ ORDER BY count DESC;
 
 → **권고 A** — 최근 변화 반영 (Sprint 41-D 도입 후 데이터만 사용 → 지난 30일).
 
-## 7. 변경 범위 + 추정 (v2 갱신 5-25)
+## 7. 변경 범위 + 추정 (v3 갱신 5-26 — V4/outlier/statistics_service 인큐베이션)
 
 | 영역 | 파일 / 작업 | 추정 |
 |------|------|------|
-| **BE** `routes/dashboard.py` (신규) | API 2개 + Blueprint 등록 | ~280 LoC, 5h |
-| **BE** `services/dashboard_service.py` (신규) | 집계 로직 + V1/V4/V6/unstarted/outlier_workers + N+1 방지 | ~350 LoC, 6h |
-| **BE** `services/statistics_service.py` (신규, v2) | `compute_task_iqr()` / `label_instances_by_iqr()` / `aggregate_by_category()` — CT 분석·평가지수·APS 재사용 base | ~150 LoC, 3h |
+| **BE** `routes/dashboard.py` (신규) | API 2개 + Blueprint 등록 | ~250 LoC, 4h |
+| **BE** `services/dashboard_service.py` (신규) | V1 hourly / V6 매트릭스 / KPI / trigger·task·partner·unstarted / 모집단 분리 + N+1 방지 | ~280 LoC, 5h |
 | **BE** `app/__init__.py` | Blueprint import 추가 (1 line) | 5분 |
-| **AUDIT_TRAIL_GUIDE.md** 갱신 | close_reason 분류 명문화 (5-22 deadline POST-REVIEW 동시 처리) | 30분 |
-| **pytest** `test_manager_dashboard.py` (신규) | 30+ TC — 분류 / V1 backfill / V4 IQR boundary / V6 매트릭스 / outlier / unstarted / 모집단 정합 / 권한 | 6h |
-| **pytest** `test_statistics_service.py` (신규, v2) | 10+ TC — IQR 산출 / sample_size confidence / outlier 라벨 / NULL 안전 | 2h |
-| **Codex 라운드 2** | v2 갱신본 — V4 IQR + N+1 + KST 변환 + 모집단 정합 + statistics_service 분리 검증 | 1.5h |
+| **AUDIT_TRAIL_GUIDE.md** 갱신 | close_reason 분류 명문화 (5-22 deadline POST-REVIEW 동시 처리) | 1h |
+| **pytest** `test_manager_dashboard.py` (신규) | 25+ TC — 분류 / V1 backfill / V6 매트릭스 (Q6 grand_total assertion) / 모집단 정합 (Q7 started_task_count vs missed_worker_count) / unstarted / 권한 | 5h |
+| **Codex 라운드 3** (별 검토) | v3 갱신본 freeze 후 위임 (간단 검증 — Q6/Q7 modify 정합) | 30분 |
+
+**v3 ↔ v2 차이**:
+- 제거: `services/statistics_service.py` (~150 LoC, 3h) + `test_statistics_service.py` (~10 TC, 2h) + V4 IQR 산출 로직 (5h+) + outlier_workers 산출 (1h+)
+- 단축: ~10h (옵션 X 효과)
+- 인큐베이션: V4 / outlier / statistics_service = CT 분석 진입 sprint 에서 신규
 | **VIEW FE** (별 repo, 별 sprint) | 새 페이지 + 차트 + 필터 + [복원] 버튼 | ~3일 (VIEW 세션 담당) |
 
 **OPS 측 총 추정**: BE 8h + pytest 5h + AUDIT_TRAIL 0.5h + Codex 1h = **약 1.5~2일** (5/22 ~ 5/26 사이)
@@ -44800,45 +44805,78 @@ ORDER BY count DESC;
 - AUTO_CLOSED_LEGACY 제외 = Sprint 41-D scope 명확화
 - AUDIT_TRAIL_GUIDE.md 동시 갱신 = 5-22 deadline 단일 처리
 
-## 12. v2 갱신 trail (2026-05-25) — Codex 라운드 2 위임 영역
+## 12. Codex 라운드 2 결과 (2026-05-26) + v3 옵션 X 채택 trail
 
-### 5-22 ~ 5-25 사용자 catch 흡수
+### Codex 라운드 2 판정 (M=4 / A=6 / N=2)
 
-1. **4단계 사이클 시각** — 작업자 개선 → 시간 정합성 → 교육 → app update (§ 1.1)
-2. **VIEW v3 명세 흡수** — V1 hourly / V4 IQR / V6 매트릭스 / unstarted + started_count/unstarted_count (§ 4)
-3. **outlier_workers 신규** — 1차 작업자 개선 직결 (§ 4, § 5.3)
-4. **책임 분리 원칙 정합** — `[복원]` 버튼 제거, read-only `[작업 상세]` 만 (§ 1.2, § 4)
-5. **statistics_service 분리** — CT 분석 / 평가지수 / APS 재사용 base (§ 7)
-6. **DB 쿼리 § 5.1~5.5 추가** — V1 backfill / V4 IQR / outlier_workers / V6 / unstarted
-
-### Codex 라운드 2 검증 영역 (BE-specific)
-
-| Q | 영역 | 검증 요청 |
+| Q | 라벨 | 판정 요약 |
 |---|---|---|
-| Q1 | V1 KST 변환 | `AT TIME ZONE 'Asia/Seoul'` 정합 — DST 영향 0, 운영 timezone 일관성 |
-| Q2 | V4 IQR 산출 기간 | 30일 vs 90일 — 본 sprint 30일 고정. admin_settings 동적은 별 sprint (CT 분석) |
-| Q3 | V4 sample_size confidence | 30/100 임계 적정성. 운영 데이터 1주~1개월 시 분포 |
-| Q4 | V4 IQR boundary case | `iqr.q1 IS NULL` (lookback 데이터 없는 task) 처리 — 'normal' fallback 안전? |
-| Q5 | V4 outlier 비대칭 | 양쪽 outlier 동일 critical — "너무 빠른 = 누락 의심" 별도 분류는 CT 분석 별 sprint |
-| Q6 | V6 결정적 정렬 | `ORDER BY task_name, task_id` — 호출 간 안정성 (rows[].counts 매핑 깨짐 방지) |
-| Q7 | 모집단 정합 | 5분포 합계 정합 검증 (started_count 35 vs 47 분리) |
-| Q8 | statistics_service 분리 | `compute_task_iqr_labels()` 함수 signature — CT 분석 재사용 시 변경 회피 |
-| Q9 | N+1 방지 | original_workers 서브쿼리 vs LATERAL JOIN — 100건 페이지 부하 측정 의무 |
-| Q10 | pytest 매트릭스 | 30+ TC 충분성 — V1 backfill / V4 boundary / V6 column 정합 / outlier / unstarted / 모집단 정합 / 권한 |
+| Q1 KST 변환 | **N** | `AT TIME ZONE 'Asia/Seoul'` 정합, KST DST 없음, 24h backfill 정합 |
+| Q2 IQR 30일 고정 | **N** | 30일 + confidence='low' 명시 안전. 90일 fallback 별 sprint |
+| Q3 confidence 임계 | A | 운영 1개월 후 재조정 BACKLOG |
+| Q4 IQR NULL fallback | **M** | 'normal' fallback 가산 catch → `unknown_count` 분리 + `labeled_sample_size` 별 필드 |
+| Q5 IQR SQL boundary | **M** | § 5.2 SQL 오류 — 1.5×IQR = warning / 3×IQR = critical 재정의 |
+| Q6 V6 grand_total 모순 | **M** | 예시 35 vs 47 자체 모순 + canonical 정렬 + grand_total = sum(column_totals) = started_task_count assertion |
+| Q7 모집단 단위 분리 | **M** | task-row vs worker-miss 분리 → `started_task_count` / `missed_worker_count` 별 필드 |
+| Q8 statistics_service signature | A | batch API `compute_task_iqrs(list)` 권장 BACKLOG |
+| Q9 Summary CTE derive + 부하 측정 | A | 공통 CTE derive + pytest <500ms 측정 BACKLOG |
+| Q10 pytest 매트릭스 보강 | A | IQR NULL ≠ normal / IQR=0 / 1.5·3×IQR boundary / 멀티작업자 / grand_total assertion / manager partner override |
+| 추가 ① endpoint 명 drift | A | OPS spec `PUT /tasks/{id}/reactivate` vs 실제 `POST /work/reactivate-task` BACKLOG |
+| 추가 ② lookback 문구 불일치 | A | BE 30일 고정 vs VIEW "30~90일" 명세 정합 BACKLOG |
+
+### v3 옵션 X 채택 (사용자 catch 5-26)
+
+> "ct분석은 현재 load된 데이터들로는 Insight까지 가기에는 deep한 영역" + "종료 누락 분석은 deep 구현 가능 단계"
+
+**Sprint 71 v3 = V4 IQR / outlier_workers / statistics_service 인큐베이션** (CT_ANALYSIS_ROADMAP.md 이전):
+- 사유: 운영 데이터 1주~1개월 → sample_size 부족 → confidence='low' 대부분 → insight 약함
+- 재진입: 데이터 누적 3~6개월+ 시점 CT 분석 sprint 에서 신규 Codex 라운드
+
+**Codex M=4 → M=2 자동 축소**:
+- Q4 (IQR NULL) + Q5 (IQR SQL) = V4 영역 자동 해소 (영역 자체 빠짐)
+- Q6 (V6 grand_total) + Q7 (모집단 분리) = v3 modify 반영
+
+**Codex A 8건 → 처리**:
+- Q3 / Q8 / 추가 ② = 자동 해소 (V4 영역)
+- Q9 / Q10 / 추가 ① = BACKLOG 등록
+
+### v3 modify 내용 (Codex M=2 반영)
+
+**Q6 modify** (§ 4 응답 schema + § 5.4 V6):
+- `grand_total` 예시 47 → 35 정정 (task-row 모집단 = started_task_count)
+- canonical 정렬 `ORDER BY task_name, task_id` 명시 + length 일치 강제
+- BE 후처리 의사코드 + assertion 강제 (§ 5.4)
+
+**Q7 modify** (§ 4 응답 schema + 모집단 정합 영역):
+- `auto_closed.count` (47) = `started_task_count` (35) + `unstarted_task_count` (12)
+- `missed_worker_count` (41) 별 필드 신규 (한 task 에 2명 누락 시 2)
+- task_distribution / partner_task_matrix / unstarted_task_distribution = task-row 모집단
+- partner_distribution = worker-miss 모집단
+- pytest 5분포 합계 assertion 의무
+
+### 전제조건 (사용자 5-26 catch)
+
+옵션 X 진행 전제 3건:
+1. CT 분석 진입 sprint 시점에 V4 / outlier / statistics_service 재검토 의무 (CT_ANALYSIS_ROADMAP.md trail)
+2. 데이터 누적 충분도 trigger — sample_size 30+ task 70%+ 또는 운영 3개월 중 빠른 것
+3. 재진입 시 Codex 라운드 신규 (현재 합의는 데이터 부족 시점 가설)
 
 ### 진행 흐름
 
 ```
-1. Codex 라운드 2 위임 (M / A / N 라벨)
-2. M 합의 → 본 설계서 v3 갱신
-3. AUDIT_TRAIL_GUIDE.md 갱신 (close_reason 분류 명문화)
-4. BE 구현 진입 — services/statistics_service.py 분리 우선, services/dashboard_service.py + routes/dashboard.py
-5. pytest 30+ TC GREEN 후 freeze → VIEW FE 진입
+1. AGENT_TEAM_LAUNCH.md Sprint 71 v3 갱신 ✅ (본 §12 trail)
+2. CT_ANALYSIS_ROADMAP.md § 12 → § 13 이전 영역 trail
+3. VIEW OPS_API_REQUESTS #71 v5 갱신 (V4/outlier 인큐베이션)
+4. BACKLOG.md A 6건 등록 (Q9 / Q10 / 추가 ①)
+5. AUDIT_TRAIL_GUIDE.md 갱신 (close_reason 분류, 5-22 deadline 잔존)
+6. (선택) Codex 라운드 3 — v3 freeze 검증 (간단, 30분)
+7. BE 구현 진입 — routes/dashboard.py + services/dashboard_service.py
+8. pytest 25+ TC GREEN → freeze → VIEW FE 진입
 ```
 
 ### 후속 sprint trail (별 인큐베이션)
 
-- **CT 분석 페이지** (Minitap detail view) — `CT_ANALYSIS_ROADMAP.md`
+- **CT 분석 페이지** (Minitap detail view) — `CT_ANALYSIS_ROADMAP.md` (V4 / outlier / statistics_service 이전 후)
 - **Sprint 75 (가칭)** — VIEW input 라우트 점진 OPS 회귀 (force-close / reactivate / ship-complete / admin-complete / worker 비활성화)
 - **Sprint 72/73/74 (가칭)** — 계획-실적 연계 / M/M 신뢰성 / 통계 모듈 분리 (`CT_ANALYSIS_ROADMAP.md` § 5)
 

@@ -318,10 +318,65 @@ Admin (PC)      = PC 적합 input 별 카테고리 — 예외 인정
 
 ---
 
-## 12. 변경 이력
+## 12. Sprint 71 v3 (5-26) — V4 / outlier_workers / statistics_service 이전 trail
+
+> Sprint 71 옵션 X 채택 — IQR 영역 인큐베이션 결정 trail.
+>
+> 사용자 catch (5-26): "ct분석은 현재 load된 데이터들로는 Insight까지 가기에는 deep한 영역이라 현재 설계는 목업정도로만 갖고 종료 누락 분석은 페이지는 현재 시점에도 충분히 deep하게 설계 구현이 가능한 단계"
+
+### 이전된 영역 (Sprint 71 v3 에서 제거)
+
+| 영역 | 상태 | 재진입 시 검토 |
+|---|---|---|
+| **V4 `duration_by_category` (IQR)** | 본 인큐베이션 | Codex Q4 (`unknown_count` 분리) + Q5 (1.5×IQR=warning / 3×IQR=critical 재정의) + Q3 (confidence 임계 재조정) |
+| **`outlier_workers[]`** | 본 인큐베이션 (V4 의존) | V4 와 동일 운명 |
+| **`statistics_service.py` 분리** | 본 인큐베이션 | Codex Q8 batch signature (`compute_task_iqrs(task_ids: list[str])` N+1 회피) |
+
+### 재진입 trigger (사용자 5-26 결정 전제조건)
+
+1. **데이터 누적 충분도** — sample_size 30+ 도달 task 70%+ 시점 또는 운영 3개월 시점 중 빠른 것
+2. **Codex 라운드 신규** — V4 IQR 설계 / sample confidence 임계 / statistics_service signature 재논의 (현재 합의는 데이터 부족 시점 가설 — 5-26 Codex 라운드 2 결과)
+3. **CT 분석 페이지 진입 sprint** = V4 / outlier / statistics_service 재검토 + 신규 분리 시점
+
+### Codex 라운드 2 (5-26) 결과 보존 — 재진입 시 참조
+
+```
+M=4 / A=6 / N=2
+
+[M — 재진입 시 modify 필요]
+Q4 — IQR NULL fallback (unknown_count + labeled_sample_size 분리)
+Q5 — IQR SQL boundary (1.5×IQR warning / 3×IQR critical 재정의 — § 5.2 SQL 오류 catch)
+Q6 — V6 grand_total 정합 (Sprint 71 v3 modify 완료, CT 분석 영역 무관)
+Q7 — 모집단 단위 분리 (Sprint 71 v3 modify 완료, CT 분석 영역 무관)
+
+[A — BACKLOG 후 재진입]
+Q3 — confidence 임계 (30/100 → 50/200 검토)
+Q8 — compute_task_iqrs(list) batch signature
+Q9 — Summary CTE derive + pytest 부하 측정 (Sprint 71 v3 영역)
+Q10 — pytest TC 보강 (Sprint 71 v3 영역 일부)
+추가 ① — endpoint 명 drift (Sprint 71 v3 영역)
+추가 ② — lookback 기간 문구 불일치 (CT 분석 영역)
+
+[N — 정합]
+Q1 — KST 변환 OK
+Q2 — 30일 고정 + confidence='low' 안전
+```
+
+→ 재진입 시 본 trail 영역 Codex 위임 prompt 에 첨부 (시간 단축).
+
+### Sprint 71 v3 → CT 분석 연결성
+
+- Sprint 71 v3 가 산출하는 raw data (V1 hourly / V6 매트릭스 / 모집단 분리) = CT 분석 진입 시 base 데이터
+- Sprint 71 운영 후 6개월+ 데이터 누적 → CT 분석 sprint 진입 → V4 IQR / outlier / statistics_service 신규 도입
+- 4단계 사이클 (§ 0.5) 의 2차 (시간 정합성) ↑ 가 CT 분석 input quality 자연 개선
+
+---
+
+## 13. 변경 이력
 
 | 날짜 | 내용 |
 |---|---|
 | 2026-05-22 | 초안 작성 — Sprint 71 (작업자 개선) ↔ Minitap (진입 카드) ↔ CT 분석 (M/M/APS/계획-실적 base) 위치 정정 후 인큐베이션 시작 |
 | 2026-05-22 | § 0.5 보강 — Sprint 71 자동 마감 분석 페이지의 4단계 사이클 (작업자 개선 → 시간 정합성 → 교육 → app update). 사용자 catch: "이부분을 더관리해서 시간에 대한 정합성을 올릴수 있게 교육 및 문제점을 분석해서 편의사항 개선 (app update)" |
 | 2026-05-25 | § 11 신규 — 책임 분리 원칙 (App / View / Admin 3 카테고리) trail. CLAUDE.md 명문화 완료. CT 분석 페이지 영역 정합 + Sprint 75 (가칭) VIEW input 점진 OPS 회귀 후보 등록. Sprint 71 적용 trail (`[복원]` 제거) |
+| 2026-05-26 | § 12 신규 — Sprint 71 v3 옵션 X 채택. V4 IQR / outlier_workers / statistics_service 이전 + Codex 라운드 2 결과 보존 + 재진입 trigger. 사용자 catch: "ct분석은 현재 load된 데이터들로는 Insight까지 가기에는 deep한 영역" |

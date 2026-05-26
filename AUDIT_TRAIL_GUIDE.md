@@ -25,23 +25,47 @@
 
 ---
 
-## 2. close_reason 라벨 정의
+## 2. close_reason 라벨 정의 (Sprint 71 분류 규칙 정합, 2026-05-26 갱신)
 
-| 라벨 | 발동 시점 | 영향 task | trigger 함수 |
-|------|---------|---------|------|
-| `AUTO_CLOSED_BY_FIRST_FINAL_TRIGGER:TANK_DOCKING` | TANK_DOCKING 시작 시점 | gas1/util1/HEATING_JACKET | `_trigger_first_close()` |
-| `AUTO_CLOSED_BY_FIRST_FINAL_TRIGGER:IF_2` | IF_2 시작 시점 | panel/cabinet/wiring/IF_1 | `_trigger_first_close()` |
-| `AUTO_CLOSED_BY_SECOND_FINAL_TRIGGER:SELF_INSPECTION` | SELF_INSPECTION 완료 시점 또는 체크리스트 100% PUT 시점 | gas2/util2 + SELF_INSPECTION 본인 | `_trigger_second_close()` / `_try_mech_close()` |
-| `AUTO_CLOSED_BY_SECOND_FINAL_TRIGGER:IF_2` | INSPECTION 완료 시점 또는 체크리스트 100% PUT 시점 | IF_2 본인 | `_trigger_second_close()` / `_try_elec_close()` |
-| `MANUAL_FORCE_CLOSE` | 관리자 수동 강제종료 | 임의 task | `/api/admin/tasks/{id}/force-close` |
-| `AUTO_CLOSED_LEGACY` | ⚠️ v2.15.13 이전 영역 fallback (LEGACY trail) | ⚠️ 정보 손실 | (이전 코드, 추적 어려움) |
+### 2.1 전체 라벨 매트릭스
 
-### 사용 안 하는 라벨
+| 라벨 | 발동 시점 | 영향 task | trigger 함수 | Sprint 71 분류 |
+|------|---------|---------|------|------|
+| `AUTO_CLOSED_BY_FIRST_FINAL_TRIGGER:TANK_DOCKING` | TANK_DOCKING 시작 시점 | gas1/util1/HEATING_JACKET | `_trigger_first_close()` | **자동 마감** ✅ |
+| `AUTO_CLOSED_BY_FIRST_FINAL_TRIGGER:IF_2` | IF_2 시작 시점 | panel/cabinet/wiring/IF_1 | `_trigger_first_close()` | **자동 마감** ✅ |
+| `AUTO_CLOSED_BY_SECOND_FINAL_TRIGGER:SELF_INSPECTION` | SELF_INSPECTION 완료 시점 또는 체크리스트 100% PUT 시점 | gas2/util2 + SELF_INSPECTION 본인 | `_trigger_second_close()` / `_try_mech_close()` | **자동 마감** ✅ |
+| `AUTO_CLOSED_BY_SECOND_FINAL_TRIGGER:IF_2` | INSPECTION 완료 시점 또는 체크리스트 100% PUT 시점 | IF_2 본인 | `_trigger_second_close()` / `_try_elec_close()` | **자동 마감** ✅ |
+| `MANUAL_FORCE_CLOSE` | 관리자 수동 강제종료 | 임의 task | `/api/admin/tasks/{id}/force-close` (v2.9.6 v2.15.20) | **수동 마감** ⚠️ |
+| `SHIP_COMPLETE` | 출하 완료 (v2.17.0 Sprint 68) | SI_FINISHING + SI_SHIPMENT | `shipment_service.ship_complete()` | 분류 제외 (정상 출하) |
+| `ADMIN_COMPLETE` | PI/QI admin 종료 (v2.18.0 Sprint 69) | PI/QI 카테고리 | `shipment_service.admin_complete()` | 분류 제외 (정상 관리자 완료) |
+| `NULL` (또는 없음) | 작업자 본인 완료 | 임의 task | `task_service.complete_work()` | 분류 제외 (자연 close) |
+| `AUTO_CLOSED_LEGACY` | ⚠️ v2.15.13 이전 fallback (LEGACY trail) | ⚠️ 정보 손실 | (이전 코드, 추적 어려움) | 별 분석 영역 (회귀 catch) |
+
+### 2.2 Sprint 71 분류 규칙
+
+`close_reason LIKE 'AUTO_CLOSED_BY_%'` = **자동 마감** (Sprint 41-D 트리거 한정).
+`close_reason = 'MANUAL_FORCE_CLOSE'` = **수동 마감**.
+나머지 (`SHIP_COMPLETE` / `ADMIN_COMPLETE` / `NULL` / `AUTO_CLOSED_LEGACY`) = **본 dashboard 분류 제외**.
+
+→ Sprint 71 (자동 마감 분석 페이지) BE 측 WHERE 절 정합:
+- KPI 카운트 (auto_closed.count) = `WHERE close_reason LIKE 'AUTO_CLOSED_BY_%'`
+- KPI 카운트 (manual_closed.count) = `WHERE close_reason = 'MANUAL_FORCE_CLOSE'`
+- 분류 제외 = 본 페이지 통계 영역 미포함
+
+⚠️ v2.15.16 후 `force_closed=FALSE` 일괄 통일됨 → **`force_closed` 만으로는 자동/수동 구분 불가**. `close_reason` LIKE 패턴 필수.
+
+### 2.3 사용 안 하는 라벨 — 회귀 catch 의무
 
 - `AUTO_CLOSED_LEGACY` = v2.15.16 이후 = 신규 발생 종료 확정.
   - v2.15.14 도입 시점 영역 — `_trigger_second_close()` 단일 경로 통일 의도.
   - **v2.15.16 (5-15) 최종 정리** — Sprint 41-B 레거시 루프 (`task_service.py` L843~L864) 영역 잔존 발견 → 제거 → `_trigger_second_close()` 단일 경로 확정.
-  - 1건+ 신규 발생 시 = 회귀 catch 필요.
+  - **1건+ 신규 발생 시 = 회귀 catch 필요** (회귀 catch SQL):
+    ```sql
+    SELECT id, serial_number, completed_at, close_reason
+    FROM app_task_details
+    WHERE close_reason = 'AUTO_CLOSED_LEGACY'
+      AND completed_at >= '2026-05-15';  -- v2.15.16 이후 신규
+    ```
 
 ---
 
@@ -258,6 +282,9 @@ ORDER BY id;
 
 | 버전 | 일자 | 변경 |
 |------|------|------|
+| **(문서 갱신)** | **2026-05-26** | § 2 close_reason 라벨 정의 갱신 — Sprint 68/69 신규 라벨 (`SHIP_COMPLETE` / `ADMIN_COMPLETE`) 추가 + § 2.2 Sprint 71 분류 규칙 명문화 (5-22 deadline POST-REVIEW-AUDIT-TRAIL-CONSISTENCY 정리) + § 2.3 `AUTO_CLOSED_LEGACY` 회귀 catch SQL 명시 |
+| v2.18.0 | 2026-05-19 | Sprint 69 `ADMIN_COMPLETE` 라벨 추가 (PI/QI admin 정상완료) |
+| v2.17.0 | 2026-05-19 | Sprint 68 `SHIP_COMPLETE` 라벨 추가 (출하 완료) |
 | **v2.15.14** | 2026-05-15 | 4 trigger 함수 영역 audit trail 통일 (close_reason + closed_by) — `_trigger_first_close`, `_trigger_second_close`, `_try_mech_close`, `_try_elec_close` 모두 동일 trail 형식. Codex 라운드 1 옵션 b 채택 |
 | v2.15.13 이전 | ~2026-05-14 | checklist 경로 = `AUTO_CLOSED_LEGACY` + closed_by NULL (정보 손실) / task_service 경로 = `AUTO_CLOSED_BY_*_TRIGGER:...` + closed_by worker_id |
 
@@ -265,8 +292,9 @@ ORDER BY id;
 
 ## 8. 관련 BACKLOG 영역
 
-- `POST-REVIEW-AUDIT-TRAIL-CONSISTENCY-20260515` — Advisory 6건 잔존 (pytest TC + 추가 정밀화)
+- `POST-REVIEW-AUDIT-TRAIL-CONSISTENCY-20260515` — ✅ **5-26 해소** (§ 2 close_reason 분류 명문화 + Sprint 71 분류 규칙 정합 — 본 문서 갱신으로 deadline 처리)
 - `BUG-SECOND-CLOSE-FORCE-CLOSED-FALSE-POSITIVE-20260514` — v2.15.14 완료
+- `BACKLOG-SPRINT71-*` — Sprint 71 v3 진입 시 분류 규칙 본 문서 참조 (close_reason LIKE 'AUTO_CLOSED_BY_%')
 
 ---
 

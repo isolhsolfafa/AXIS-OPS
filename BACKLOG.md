@@ -173,6 +173,22 @@
 
 ## 🔴 지금 진행 중 / 미해결
 
+### 📋 Sprint 71 v3 Codex 라운드 2 A 등록 (2026-05-26)
+
+> Sprint 71 v3 옵션 X 채택 후 Codex A 8건 → 3건 BACKLOG (3건은 V4 영역 자동 해소).
+> Trail: `AGENT_TEAM_LAUNCH.md` § 12 + `CT_ANALYSIS_ROADMAP.md` § 12
+
+| ID | 영역 | 라벨 | 처리 시점 |
+|---|---|---|---|
+| `BACKLOG-SPRINT71-Q9-CTE-DERIVE-20260526` | Summary API 6~8 query 공통 CTE derive + pytest <500ms 부하 측정 | 🟡 LOW | Sprint 71 v3 구현 진입 시 측정 |
+| `BACKLOG-SPRINT71-Q10-PYTEST-EDGE-20260526` | pytest TC 추가 — grand_total assertion 실패 case / manager partner override 무시 case | 🟡 LOW | Sprint 71 v3 pytest 매트릭스에 포함 (30+ TC) |
+| `BACKLOG-SPRINT71-ENDPOINT-REACTIVATE-DOC-20260526` | OPS spec endpoint 명 drift 정정 (`PUT /api/admin/tasks/{id}/reactivate` 표기 → `POST /api/app/work/reactivate-task` 실제) | 🟢 INFO | 문서만 — 코드 영향 0 |
+| `BACKLOG-SPRINT75-VIEW-INPUT-OPS-REGRESSION-20260525` | VIEW input 5종 (force-close / reactivate / ship-complete / admin-complete / worker 비활성화) 점진 OPS 회귀 | 🟠 MEDIUM | ~6개월 점진 (CLAUDE.md 책임 분리 원칙 정합) |
+| `BACKLOG-CT-ANALYSIS-Q3-CONFIDENCE-20260526` | CT 분석 진입 시 confidence 임계 재조정 (30/100 → 50/200 검토) | 🟢 INFO (인큐베이션) | 운영 3~6개월+ 후 CT 분석 sprint |
+| `BACKLOG-CT-ANALYSIS-Q8-BATCH-SIGNATURE-20260526` | CT 분석 진입 시 statistics_service `compute_task_iqrs(list)` batch signature (N+1 회피) | 🟢 INFO (인큐베이션) | 운영 3~6개월+ 후 CT 분석 sprint |
+
+---
+
 ### 🗺️ 우선순위 로드맵 (2026-04-22 확정 — 알람 장애 4 HOTFIX 완료 직후)
 
 > **컨텍스트**: 2026-04-17~22 알람 장애 4 HOTFIX (PHASE1.5 / SCHEMA-RESTORE / DUP / DELIVERY) 모두 VIEW + OPS(BE) Sprint 완료. 이 로드맵은 그 직후 "급한 순서" 기준.
