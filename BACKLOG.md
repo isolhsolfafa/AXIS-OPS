@@ -189,6 +189,8 @@
 | `BACKLOG-SPRINT71-ALERT-THRESHOLD-REVIEW-20260526` | Sprint 71 v3.1 alert 임계 재검토 — task_distribution (50%↑) + partner_distribution (30%↑) 운영 데이터 누적 후 재조정 | 🟡 LOW | 운영 1~3개월 후 사용자 catch 보고 임계 재조정 (현재 mockup 기본값 채택, "standard 값 없음") |
 | `BACKLOG-SPRINT71-FE-TREND-LABEL-MAPPING-20260526` | Sprint 71 v3.1 FE 카드별 색상/아이콘 매핑 (Codex 라운드 4 Q-R4-3 A) — auto trend "increased" = 양면성 (페이지 안내) / manual·total "decreased" = 좋은 신호 (녹색) | 🟡 LOW | VIEW FE 진입 시 (BE freeze 후) |
 | `BACKLOG-SPRINT71-PAGE-HINT-REVIEW-20260526` | Sprint 71 페이지 안내 텍스트 "Sprint 41-D 도입 1개월 차" 운영 단계 stale risk (Codex 라운드 4 Q-R4-6 A) | 🟡 LOW | 운영 3~6개월 후 안내 문구 재검토 (FE 하드코딩) |
+| `BACKLOG-SPRINT76-LATERAL-JOIN-20260526` | Sprint 76-BE best_ship CTE 중복 EXISTS 3개 → LATERAL JOIN 1회 평가 리팩토링 (Codex 라운드 2 Q1 A) | 🟡 LOW | 본 sprint 구현 중 적용 권장 (~150 S/N 규모 성능 영향 미미하지만 코드 단순화) |
+| `BACKLOG-SPRINT76-MONTHLY-CTE-UNIFY-20260526` | Sprint 76-BE monthly_trend 영역 단일 6개월 best_ship CTE + 1개월 derive (Codex 라운드 2 Q2 A) | 🟡 LOW | 운영 catch 후 검토 (현재 규모 출하 차단급 X) |
 
 ---
 

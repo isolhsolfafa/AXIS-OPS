@@ -45256,9 +45256,24 @@ WITH best_ship AS (
 SELECT * FROM best_ship;
 ```
 
-→ **factory.py `_count_shipped(basis='best')` L64/L93 와 동일 패턴**. 두 영역 영역 SI 정의 (`SI_SHIPMENT` only, `SI_FINISHING` 제외) + force_closed=FALSE 일관.
+→ **factory.py `_count_shipped(basis='best')` L88-99 와 동일 패턴**. 두 영역 영역 SI 정의 (`SI_SHIPMENT` only, `SI_FINISHING` 제외) + force_closed=FALSE 일관.
 
-**Codex A1**: 중복 EXISTS 3개 → LATERAL JOIN 1회 평가 리팩토링 권장 (구현 시 결정).
+⚠️ **Codex 라운드 2 Q5 M 정정 — 반개구간 (`>= AND <`) 사용 의무**:
+
+factory.py `_count_shipped` (L88~99) 영역 `>= start AND < end` 반개구간. 본 sprint 영역 `BETWEEN` 사용 시 월말/월초 중복 위험 (`2026-05-31` + `2026-06-01` 두 month 영역 동시 카운트 catch).
+
+```sql
+-- ❌ 위험: BETWEEN 영역 양 끝점 포함 (월말 중복)
+WHERE p.ship_plan_date BETWEEN :start AND :end
+
+-- ✅ 정합: 반개구간 (factory.py 정합)
+WHERE p.ship_plan_date >= :start
+  AND p.ship_plan_date < :end_exclusive   -- :end + INTERVAL '1 day' 또는 다음 month 1일
+```
+
+→ 본 설계서 모든 SQL 영역 `BETWEEN :start AND :end` → `>= :start AND < :end_exclusive` 일괄 정정. routes/shipment.py 영역 query params parsing 시 `end_exclusive = end + INTERVAL '1 day'` 변환.
+
+**Codex 라운드 2 Q1 A**: 중복 EXISTS 3개 → LATERAL JOIN 1회 평가 리팩토링 권장 (구현 시 결정). 본 sprint 영역 `BACKLOG-SPRINT76-LATERAL-JOIN-20260526` 등록.
 
 ### 3.1 KPI 집계 (Codex Q2 + Q3 반영)
 
@@ -45375,24 +45390,151 @@ ORDER BY completed_at DESC
 LIMIT 1;
 ```
 
-**root_cause 변환** (BE 후처리):
-- `AUTO_CLOSED_BY_FIRST_FINAL_TRIGGER:IF_2` → `"IF_2 (전장) 종료 지연"`
-- `AUTO_CLOSED_BY_SECOND_FINAL_TRIGGER:SELF_INSPECTION` → `"SELF_INSPECTION (기구) 종료 지연"`
-- 없음 → `null` (FE 블러 처리)
+**root_cause 변환** (BE 후처리, Codex 라운드 2 Q3 M 정정):
+
+⚠️ **신규 파일 분리 의무** — 기존 `services/shipment_service.py` (v2.17.0 Sprint 68 `ship-complete` mutation) 와 혼합 회피:
+- 본 sprint = **신규 `services/shipment_history_service.py`** (read-only 출하이력 조회)
+- mutation 영역 (ship-complete / admin-complete) = 기존 shipment_service.py 그대로 유지
+
+⚠️ **N+1 방지 — top_delayed 5건 batch 조회** (Codex Q3 M):
+```sql
+-- ❌ S/N 5회 개별 조회 (N+1)
+SELECT close_reason FROM app_task_details WHERE serial_number = :sn ORDER BY completed_at DESC LIMIT 1;
+
+-- ✅ batch 조회 1회 — ANY 또는 LATERAL
+SELECT t.serial_number, t.close_reason, t.task_category
+FROM app_task_details t
+WHERE t.serial_number = ANY(%s::text[])   -- top_delayed S/N 5건 배열
+  AND t.close_reason LIKE 'AUTO_CLOSED_BY_%'
+  AND t.completed_at = (
+    SELECT MAX(t2.completed_at)
+    FROM app_task_details t2
+    WHERE t2.serial_number = t.serial_number
+      AND t2.close_reason LIKE 'AUTO_CLOSED_BY_%'
+  );
+```
+
+→ 5 row 결과 → BE 가 S/N 기준 dict lookup 후 root_cause 변환.
+
+⚠️ **task_category DB 조회 (hardcoding X)** — Codex Q3 M:
+
+`app_task_details.task_category` 컬럼이 이미 존재 (Sprint 6 schema). hardcoding 영역 task_id → category 매핑 만들지 말고 DB 직접 조회.
+
+```python
+# services/shipment_history_service.py
+from typing import Optional
+
+# Sprint 41-D close_reason literal — task_detail.py L759~775 정합
+CATEGORY_KO = {
+    'MECH': '기구',
+    'ELEC': '전장',
+    'TM': '모듈',
+    'PI': 'PI',
+    'QI': 'QI',
+    'SI': 'SI',
+}
+
+def format_root_cause(close_reason: Optional[str], task_category: Optional[str]) -> Optional[str]:
+    """Sprint 71 close_reason → friendly root_cause 변환.
+
+    Args:
+        close_reason: 'AUTO_CLOSED_BY_FIRST_FINAL_TRIGGER:IF_2' 형식 또는 None
+        task_category: DB 조회 결과 'MECH' / 'ELEC' / 'TM' / 'PI' / 'QI' / 'SI'
+
+    Returns:
+        '<task_id> (<카테고리>) 종료 지연' 또는 None (FE 블러)
+    """
+    if not close_reason or not task_category:
+        return None
+
+    # 'AUTO_CLOSED_BY_FIRST_FINAL_TRIGGER:IF_2' → 'IF_2'
+    if ':' in close_reason:
+        task_id = close_reason.split(':', 1)[1]
+    else:
+        return None
+
+    category_ko = CATEGORY_KO.get(task_category, task_category)
+    return f"{task_id} ({category_ko}) 종료 지연"
+```
+
+→ task_category 영역 DB 조회 (top_delayed batch 쿼리 결과 활용). hardcoding 영역 매핑 0.
+
+**Sprint 71 의존 영역 (Codex Q7 N — 독립 동작 OK)**:
+- close_reason literal 영역 모델 레벨 보존 (`task_detail.py` L768~775 영역)
+- Sprint 71 BE 미배포 시에도 본 sprint 영역 정상 동작 — `app_task_details.close_reason` 직접 조회
+- Sprint 71 BE 정식 오픈 후에도 literal 포맷 유지 시 코드 변경 0
 
 ⚠️ **Sprint 71 BE 정식 오픈 전까지 FE 측 `DelayAnalysisCard` 블러 처리** (Codex Q6 + 사용자 결정 6) — VIEW v1.51.x 동반 commit.
 
-## 4. 영향 범위 + 추정
+## 4. 영향 범위 + 추정 (v2 갱신 — Codex 라운드 2 Q3/Q4 M 반영 5-26)
+
+⚠️ **신규 파일 명명 정정** (Codex Q3 M): 기존 `services/shipment_service.py` (v2.17.0 Sprint 68 `ship-complete` mutation) 와 혼합 회피 — read-only 조회 분리:
 
 | 영역 | 파일 / 작업 | LoC | 시간 |
 |---|---|---|---|
-| **BE** `routes/shipment.py` (신규) | API 2개 + Blueprint 등록 | ~250 | 3h |
-| **BE** `services/shipment_service.py` (신규) | best_ship CTE 헬퍼 + KPI 집계 + 캘린더 merge + monthly trend + by_customer / by_model / top_delayed + root_cause 변환 | ~280 | 4h |
+| **BE** `routes/shipment_history.py` (신규) | API 2개 + Blueprint 등록 (라우트 명 정정) | ~250 | 3h |
+| **BE** `services/shipment_history_service.py` (신규, Q3 M) | best_ship CTE 헬퍼 + KPI 집계 + 캘린더 merge + monthly trend + by_customer / by_model + top_delayed batch 조회 + `format_root_cause()` + `_assert_invariants()` | ~330 | 5h |
 | **BE** `app/__init__.py` | Blueprint import 1줄 | 1줄 | 5분 |
-| **pytest** `test_shipment.py` (신규) | 15+ TC (best 합집합 / source / 기간 / rate / 캘린더 split / monthly window / status / delay_days / auth / partner filter / root_cause) | ~250 | 3h |
-| **Codex 라운드 2** (선택) | OPS BE 시각 추가 정밀화 (라운드 1 = VIEW 측 5-26 완료) | — | 30분 |
+| **pytest** `test_shipment_history.py` (신규, Q4 M + Q9 M) | **20+ TC** (15 기존 + 5 신규 Q4) + 전용 fixture (`TEST-SHIP-76-*` S/N teardown) | ~320 | 4h |
+| **Codex 라운드 2** ✅ | OPS BE 시각 정밀화 — M=5 / A=2 / N=1 완료 | — | 완료 |
 
-**OPS 측 총 추정**: BE 7h + pytest 3h + Codex 0.5h = **약 1~1.5일** (5/27 ~ 5/28 사이)
+**OPS 측 총 추정 (v2)**: BE 8h + pytest 4h + Codex 0.5h = **약 1.5일** (5/27 ~ 5/28)
+
+### 4.1 invariant 정책 (Codex 라운드 2 Q8 M 반영)
+
+본 sprint 영역 invariant 3건 — Sprint 71 패턴 정합 (단, 선별):
+
+```python
+# services/shipment_history_service.py
+def _assert_invariants(response: dict) -> None:
+    """Sprint 76 출하이력 응답 정합 검증 — 실패 시 500 + Sentry."""
+    kpi = response['kpi']
+    issues = []
+
+    # ① calendar plan 합 = kpi.plan_count
+    cal_plan_sum = sum(d.get('plan', 0) for d in response.get('calendar', []))
+    if cal_plan_sum != kpi['plan_count']:
+        issues.append(f"calendar plan sum {cal_plan_sum} != kpi.plan_count {kpi['plan_count']}")
+
+    # ② by_customer plan 합 = kpi.plan_count
+    bc_plan_sum = sum(c['plan'] for c in response.get('by_customer', []))
+    if bc_plan_sum != kpi['plan_count']:
+        issues.append(f"by_customer plan sum {bc_plan_sum} != kpi.plan_count {kpi['plan_count']}")
+
+    # ③ by_customer shipped 합 = kpi.shipped_count
+    bc_shipped_sum = sum(c['shipped'] for c in response.get('by_customer', []))
+    if bc_shipped_sum != kpi['shipped_count']:
+        issues.append(f"by_customer shipped sum {bc_shipped_sum} != kpi.shipped_count {kpi['shipped_count']}")
+
+    if issues:
+        logger.error("[Sprint76] invariant violation: %s", "; ".join(issues), extra={'response': response})
+        sentry_sdk.capture_message("Sprint76 invariant violation", level='error',
+                                    extras={'issues': issues, 'period': response.get('period')})
+        raise InvariantViolationError(issues)
+```
+
+⚠️ **`shipped_count + pending_count <= plan_count` invariant 부적합** (Codex Q8 M catch):
+- `shipped_count` = `actual_date BETWEEN` cohort (출하 시점)
+- `plan_count` = `plan_date BETWEEN` cohort (계획 시점)
+- 두 cohort 영역 다른 기간 → "4월 계획 / 5월 실적" 가능 → 합계 invariant 무의미
+- 본 sprint = 위 3 invariant 만 적용
+
+### 4.2 권한 데코레이터 명세 (Codex 라운드 2 Q6 M 반영)
+
+`@jwt_required + @gst_or_admin_required` (Sprint 27 v1.7.4 표준):
+- `gst_or_admin_required` = `worker.company == 'GST' OR worker.is_admin` (jwt_auth.py L263~301)
+
+**4-way 영역 분기 명세**:
+
+| 사용자 | company | is_admin | 결과 |
+|---|---|---|---|
+| admin (예: dkkim1) | GST | TRUE | ✅ 200 |
+| GST manager | GST | FALSE | ✅ 200 |
+| GST 일반 작업자 (PI/QI/SI) | GST | FALSE | ✅ 200 |
+| 협력사 manager (예: BAT) | BAT | FALSE | ❌ 403 |
+| 무토큰 | — | — | ❌ 401 |
+
+⚠️ 기존 factory.py 영역 `view_access_required` (협력사 manager 허용) 와 다름 — 본 sprint 영역 별 검증 의무. pytest 4-way TC 정합.
 
 ## 5. 회귀 위험
 
@@ -45443,10 +45585,11 @@ LIMIT 1;
 | 6 | root_cause | v1 BE 도출 + FE 블러 (Sprint 71 BE 미배포 시) |
 | 7 | 권한 | GST only — 협력사 차단 (VIEW App.tsx 정정 동반) |
 
-## 9. pytest TC 매트릭스 (15+ TC)
+## 9. pytest TC 매트릭스 (20+ TC, v2 — Codex 라운드 2 Q4 M +5 추가)
 
 | 범주 | TC 예시 |
 |---|---|
+| **기존 (15)** | |
 | best 합집합 | app only / excel only / both / null source 4 case |
 | force_closed 제외 | force_closed=TRUE SI 가 source/actual_date 영역 제외 |
 | KPI semantics | fulfillment 분자 plan cohort 한정 / shipped_count actual_date BETWEEN |
@@ -45456,7 +45599,16 @@ LIMIT 1;
 | delay_days | 음수(조기) / 0(정상) / 양수(지연) |
 | auth 4-way | admin / GST manager / GST 작업자 / 협력사 manager 차단 |
 | partner filter lock | 협력사 manager 진입 시 차단 검증 |
-| root_cause | Sprint 71 close_reason 도출 + 미연동 시 NULL fallback |
+| root_cause | Sprint 71 close_reason 도출 + task_category batch 조회 + 미연동 시 NULL fallback |
+| **신규 (Codex Q4 M +5)** | |
+| avg_delay_days NULL | 출하 0건 시 `avg_delay_days = NULL` (FE "−" 표시) |
+| monthly_trend zero-fill | 6개월 영역 빈 month (예: 4월 plan=0, shipped=0) row 0 vs 명시 0? |
+| pagination | `page=2 / per_page=50 / total_pages` 정합 검증 |
+| 필터 조합 | `status=delayed + q="GAIA" + partner` 동시 필터링 |
+| DATE conversion | `completed_at` (timestamptz UTC) → KST `DATE()` 변환 정합 (월말 영역 catch) |
+| **invariant (Q8 M)** | |
+| invariant 정상 | calendar/by_customer plan/shipped 합 정합 |
+| invariant 실패 시 500 | 강제 조작 영역 InvariantViolationError → 500 |
 
 ## 10. 진행 흐름
 
@@ -45478,3 +45630,46 @@ LIMIT 1;
 - **Sprint 72/73 (가칭)** — 협력사 평가지수 페이지 (`/partner/evaluation`) 진입 시 본 sprint partner filter 활성화
 - **Sprint 71 BE** 정식 오픈 후 `top_delayed.root_cause` FE 블러 해제 (VIEW 측 별 patch)
 - **CT 분석 페이지** 진입 시 본 sprint avg_delay_days / on_time_pct base 데이터 재사용
+
+## 12. Codex 라운드 2 결과 (2026-05-26) — OPS BE 시각 정밀화
+
+라운드 2 판정: **M=5 / A=2 / N=1** — 본 sprint v2 freeze 완료.
+
+| Q | 라벨 | 처리 |
+|---|---|---|
+| Q1 LATERAL JOIN 최적화 | A | 🟡 BACKLOG `BACKLOG-SPRINT76-LATERAL-JOIN-20260526` — 구현 중 적용 권장 (성능 리스크 제한적, 정합성 핵심은 force_closed 유지) |
+| Q2 monthly_trend CTE 옵션 | A | 🟡 BACKLOG — 옵션 B (단일 6개월 CTE) 권장, 운영 catch 후 검토 |
+| **Q3 root_cause 함수 + N+1** | **M** | ✅ § 3.5 정정 — 신규 `shipment_history_service.py` 분리 (mutation `shipment_service.py` 와 분리) + `task_category` DB 조회 + `WHERE serial_number = ANY(%s)` batch 1회 |
+| **Q4 pytest TC +5** | **M** | ✅ § 9 정정 — 15+ → 20+ TC (avg_delay_days NULL / monthly zero-fill / page=2 / 필터 조합 / KST DATE 변환) |
+| **Q5 반개구간 정합** | **M** | ✅ § 3 정정 — `BETWEEN` → `>= AND <` (factory.py L88~99 정합, 월말 중복 위험 회피) |
+| **Q6 권한 4-way 명세** | **M** | ✅ § 4.2 정정 — `gst_or_admin_required` = `company='GST' OR is_admin` 명확 + GST PI/QI/SI 허용 / BAT manager 차단 |
+| Q7 Sprint 71 독립 동작 | N | ✅ 정합 — close_reason literal 모델 레벨 보존 (task_detail.py L768~775) |
+| **Q8 invariant 정책** | **M** | ✅ § 4.1 추가 — invariant 3건 (calendar plan / by_customer plan / by_customer shipped) + `shipped+pending<=plan` 부적합 명시 |
+| **Q9 pytest fixture** | **M** | ✅ § 4 정정 — TEST-SHIP-76-* 전용 fixture (plan.product_info + qr_registry 임시 row + teardown) |
+
+### v2 → v3 진행 흐름
+
+```
+1. AGENT_TEAM_LAUNCH.md Sprint 76-BE v2 갱신 ✅ (Codex M=5 close)
+2. BACKLOG A 2건 등록 (Q1 LATERAL JOIN / Q2 monthly_trend CTE)
+3. BE 구현 진입:
+   - services/shipment_history_service.py 신규 (best_ship CTE + 집계 + format_root_cause + _assert_invariants)
+   - routes/shipment_history.py 신규 (API 2개 + Blueprint)
+   - app/__init__.py 1줄
+4. pytest 20+ TC GREEN (test_shipment_history.py 신규)
+5. v2.18.28 release — version bump + CHANGELOG + commit + Railway 배포
+6. VIEW Sprint 76 FE 정식 구현 진입 (mockup → 실 데이터)
+```
+
+### Codex 라운드 2 추가 catch (Q5 catch 영역 — factory.py 반개구간)
+
+factory.py `_count_shipped(basis='best')` L88~99 영역:
+
+```sql
+WHERE (p.actual_ship_date IS NOT NULL OR t.completed_at IS NOT NULL)
+  AND (... DATE_TRUNC ... 영역 반개구간 영역)
+```
+
+→ 본 sprint 영역 `BETWEEN :start AND :end` 사용 시 `2026-05-31` + `2026-06-01` 두 month 영역 동시 카운트 catch. **반개구간 `>= :start AND < :end_exclusive` 일괄 적용 의무**.
+
+→ `routes/shipment_history.py` query params parsing 영역 `end_exclusive = end + INTERVAL '1 day'` 변환.
