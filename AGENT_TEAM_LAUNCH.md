@@ -44469,11 +44469,36 @@ def _assert_invariants(response: dict) -> None:
         issues.append(f"unstarted_task_distribution sum {ud_sum} != unstarted_task_count {ac['unstarted_task_count']}")
 
     # v3.1 신규 (결정 5 B) — total_missed_close 합산 invariant
+    # Codex 라운드 4 Q-R4-2 M close (5-26): 4 invariant 확장
     tm = response.get('total_missed_close', {})
-    if tm.get('count') != ac['count'] + response['manual_closed']['count']:
+    mc = response['manual_closed']
+
+    # ① count 합산
+    if tm.get('count') != ac['count'] + mc['count']:
         issues.append(
             f"total_missed_close.count {tm.get('count')} != auto+manual "
-            f"{ac['count'] + response['manual_closed']['count']}"
+            f"{ac['count'] + mc['count']}"
+        )
+
+    # ② prev_period_count 합산
+    if tm.get('prev_period_count') != ac['prev_period_count'] + mc['prev_period_count']:
+        issues.append(
+            f"total_missed_close.prev {tm.get('prev_period_count')} != auto.prev+manual.prev "
+            f"{ac['prev_period_count'] + mc['prev_period_count']}"
+        )
+
+    # ③ delta 정합 — 문자열 부호 포함 ("+38" / "-38" / "0")
+    expected_delta_int = tm.get('count', 0) - tm.get('prev_period_count', 0)
+    expected_delta_str = f"{expected_delta_int:+d}" if expected_delta_int != 0 else "0"
+    if tm.get('delta') != expected_delta_str:
+        issues.append(
+            f"total_missed_close.delta {tm.get('delta')} != expected {expected_delta_str}"
+        )
+
+    # ④ improvement_pct null fallback — prev=0 시 None 강제
+    if tm.get('prev_period_count') == 0 and tm.get('improvement_pct') is not None:
+        issues.append(
+            f"total_missed_close.improvement_pct must be None when prev=0, got {tm.get('improvement_pct')}"
         )
 
     if issues:
@@ -45016,6 +45041,28 @@ ORDER BY count DESC;
 | ⑧ auto-close-details | per_page 기본값 | 20 |
 
 → **운영 데이터 누적 후 재검토 BACKLOG** — `BACKLOG-SPRINT71-ALERT-THRESHOLD-REVIEW-20260526`. 운영 1~3개월 후 사용자 catch 보고 임계 재조정.
+
+### Codex 라운드 4 결과 (2026-05-26) — v3.1 freeze CONDITIONAL → close 후 GO
+
+라운드 4 판정: M=1 / A=3 / N=3 — freeze CONDITIONAL → close 후 OK.
+
+| Q | 라벨 | 처리 |
+|---|---|---|
+| Q-R4-1 total_missed_close 의미론 | N | ✅ 정합 |
+| **Q-R4-2** invariant 1건 → 4건 확장 | **M** | ✅ close — count + prev + delta + improvement_pct null fallback 4 invariant |
+| Q-R4-3 trend 라벨 의미 분기 | A | 🟡 BACKLOG — FE 카드별 색상/아이콘 매핑 (BE 메타 필드 X) |
+| Q-R4-4 prev_period 합산 정합 | N | ✅ 정합 (Q-R4-2 흡수) |
+| Q-R4-5 improvement_pct fallback | N | ✅ 정합 |
+| Q-R4-6 페이지 안내 텍스트 BE vs FE | A | 🟡 BACKLOG — FE 하드코딩 + 운영 3~6개월 후 안내 갱신 |
+| Q-R4-7 alert 임계 기본값 | A | ✅ 기존 `BACKLOG-SPRINT71-ALERT-THRESHOLD-REVIEW` 활용 |
+
+→ **v3.1 freeze 5-26 close 후 GO**. BE 구현 진입 가능.
+
+### A 3건 BACKLOG (라운드 4)
+
+- `BACKLOG-SPRINT71-FE-TREND-LABEL-MAPPING-20260526` — FE 카드별 색상/아이콘 매핑 (auto trend "increased" = 양면성 / manual·total "decreased" = 좋은 신호)
+- `BACKLOG-SPRINT71-PAGE-HINT-REVIEW-20260526` — 페이지 안내 텍스트 "Sprint 41-D 도입 1개월 차" 문구 운영 3~6개월 후 재검토
+- (기존) `BACKLOG-SPRINT71-ALERT-THRESHOLD-REVIEW-20260526` — alert 임계 재조정
 
 ### 후속 sprint trail (별 인큐베이션)
 

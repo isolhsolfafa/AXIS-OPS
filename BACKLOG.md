@@ -187,6 +187,8 @@
 | `BACKLOG-CT-ANALYSIS-Q3-CONFIDENCE-20260526` | CT 분석 진입 시 confidence 임계 재조정 (30/100 → 50/200 검토) | 🟢 INFO (인큐베이션) | 운영 3~6개월+ 후 CT 분석 sprint |
 | `BACKLOG-CT-ANALYSIS-Q8-BATCH-SIGNATURE-20260526` | CT 분석 진입 시 statistics_service `compute_task_iqrs(list)` batch signature (N+1 회피) | 🟢 INFO (인큐베이션) | 운영 3~6개월+ 후 CT 분석 sprint |
 | `BACKLOG-SPRINT71-ALERT-THRESHOLD-REVIEW-20260526` | Sprint 71 v3.1 alert 임계 재검토 — task_distribution (50%↑) + partner_distribution (30%↑) 운영 데이터 누적 후 재조정 | 🟡 LOW | 운영 1~3개월 후 사용자 catch 보고 임계 재조정 (현재 mockup 기본값 채택, "standard 값 없음") |
+| `BACKLOG-SPRINT71-FE-TREND-LABEL-MAPPING-20260526` | Sprint 71 v3.1 FE 카드별 색상/아이콘 매핑 (Codex 라운드 4 Q-R4-3 A) — auto trend "increased" = 양면성 (페이지 안내) / manual·total "decreased" = 좋은 신호 (녹색) | 🟡 LOW | VIEW FE 진입 시 (BE freeze 후) |
+| `BACKLOG-SPRINT71-PAGE-HINT-REVIEW-20260526` | Sprint 71 페이지 안내 텍스트 "Sprint 41-D 도입 1개월 차" 운영 단계 stale risk (Codex 라운드 4 Q-R4-6 A) | 🟡 LOW | 운영 3~6개월 후 안내 문구 재검토 (FE 하드코딩) |
 
 ---
 
