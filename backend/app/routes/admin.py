@@ -75,7 +75,7 @@ SETTING_KEYS: Dict[str, Dict[str, Any]] = {
     'elec_checklist_issue_alert':              {'type': 'bool', 'default': True,  'label': 'ELEC 체크리스트 ISSUE 알람'},
     # bool/int_list — Sprint 79 출하 미처리 알림 (07:30 KST cron)
     'shipment_alert_enabled':     {'type': 'bool',     'default': False, 'label': '출하 미처리 매일 알림 (07:30 KST)'},
-    'shipment_alert_recipients':  {'type': 'int_list', 'default': [],    'label': '출하 알림 추가 매니저 (worker_id list, admin 자동 포함)'},
+    'shipment_alert_recipients':  {'type': 'string_list', 'default': [],    'label': '출하 알림 추가 매니저 (이름 list, admin 자동 포함)'},
 }
 
 ALLOWED_KEYS = set(SETTING_KEYS.keys())

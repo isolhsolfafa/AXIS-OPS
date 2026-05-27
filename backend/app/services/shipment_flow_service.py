@@ -312,16 +312,17 @@ def get_overdue_shipments(yesterday: Optional[date] = None) -> List[Dict[str, An
 
 # ─── 4. 출하 알림 메일 대상 list catch ──────────────────────────────
 
-def get_overdue_alert_recipients(extra_worker_ids: List[int]) -> List[Dict[str, Any]]:
+def get_overdue_alert_recipients(extra_names: List[str]) -> List[Dict[str, Any]]:
     """출하 미처리 알림 메일 대상 list catch.
 
-    Codex Q5 M:
+    v2.19.8 (사용자 catch 5-28): worker_id list → worker name list 변경 (chip 영역 name display 정합).
     - is_admin=TRUE 무조건 catch (gmail 도메인 포함)
-    - extra_worker_ids = admin_settings.shipment_alert_recipients (worker_id list)
+    - extra_names = admin_settings.shipment_alert_recipients (worker name list — GST 매니저)
+    - 매칭 base: name = ANY(%s) AND company='GST' (동명이인 영역 모두 catch, 안전)
     - workers JOIN — approval_status='approved' AND is_active=TRUE AND email NOT NULL
 
     Args:
-        extra_worker_ids: admin_settings.shipment_alert_recipients (chip list)
+        extra_names: admin_settings.shipment_alert_recipients (chip list, name base)
 
     Returns:
         [{id, name, email}, ...] (중복 제거)
@@ -329,20 +330,18 @@ def get_overdue_alert_recipients(extra_worker_ids: List[int]) -> List[Dict[str, 
     conn = get_conn()
     try:
         cur = conn.cursor()
-        # is_admin 무조건 catch + extra_worker_ids 영역 OR 합집합
-        # approval_status + is_active + email 필터 (Codex Q5 M)
         cur.execute(
             """
             SELECT id, name, email
             FROM workers
-            WHERE (is_admin = TRUE OR id = ANY(%s))
+            WHERE (is_admin = TRUE OR (name = ANY(%s) AND company = 'GST'))
               AND approval_status = 'approved'
               AND is_active = TRUE
               AND email IS NOT NULL
               AND email <> ''
             ORDER BY id ASC
             """,
-            (extra_worker_ids or [],),
+            (extra_names or [],),
         )
         return [
             {'id': r['id'], 'name': r['name'], 'email': r['email']}

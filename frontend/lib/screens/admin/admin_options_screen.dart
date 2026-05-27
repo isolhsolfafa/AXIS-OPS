@@ -23,6 +23,8 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
   bool _phaseBlockEnabled = false;
   bool _locationQrRequired = true; // Location QR 필수 여부 (기본: true)
   bool _shipmentAlertEnabled = false; // Sprint 79 — 출하 미처리 매일 07:30 KST 알림
+  List<String> _shipmentAlertRecipients = []; // Sprint 79 v2.19.8 — GST 매니저 name list
+  List<String> _gstManagerNameOptions = []; // GST 매니저 name dropdown 영역
   bool _isLoadingSettings = false;
 
   // 알림 트리거 설정 (Sprint 54)
@@ -151,6 +153,7 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
     await Future.wait([
       _loadSettings(),
       _loadManagers(),
+      _loadGstManagerNames(),
       _loadPendingTasks(),
       _loadPendingWorkers(),
       _loadInactiveWorkers(),
@@ -279,6 +282,11 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
           _phaseBlockEnabled = response['phase_block_enabled'] as bool? ?? false;
           _locationQrRequired = response['location_qr_required'] as bool? ?? true;
           _shipmentAlertEnabled = response['shipment_alert_enabled'] as bool? ?? false;
+          // Sprint 79 v2.19.8 — recipients (GST 매니저 name list)
+          final rawRecipients = response['shipment_alert_recipients'];
+          if (rawRecipients is List) {
+            _shipmentAlertRecipients = rawRecipients.map((e) => e.toString()).toList();
+          }
           // 근무시간 설정도 같은 응답에서 파싱
           _autoPauseEnabled = response['auto_pause_enabled'] as bool? ?? false;
           _breakMorningStart = response['break_morning_start'] as String? ?? '10:00';
@@ -391,6 +399,7 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
           if (key == 'pi_capable_mech_partners') _piCapableMechPartners = value;
           if (key == 'pi_gst_override_lines') _piGstOverrideLines = value;
           if (key == 'pi_delegate_models') _piDelegateModels = value;
+          if (key == 'shipment_alert_recipients') _shipmentAlertRecipients = value;
         });
         _showSnack('설정이 저장되었습니다.', isError: false);
       }
@@ -424,6 +433,25 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
     } catch (e) {
       if (mounted) setState(() => _isLoadingManagers = false);
     }
+  }
+
+  // Sprint 79 v2.19.8: GST 매니저 name list catch (출하 알림 recipients chip 영역)
+  Future<void> _loadGstManagerNames() async {
+    try {
+      final apiService = ref.read(apiServiceProvider);
+      final response = await apiService.get('/admin/workers?company=GST&is_manager=true');
+      final workers = List<Map<String, dynamic>>.from(response['workers'] as List? ?? []);
+      if (mounted) {
+        setState(() {
+          _gstManagerNameOptions = workers
+              .map((w) => (w['name'] as String?) ?? '')
+              .where((n) => n.isNotEmpty)
+              .toSet()
+              .toList()
+            ..sort();
+        });
+      }
+    } catch (_) {/* silent fail — chip 영역 빈 dropdown */}
   }
 
   Future<void> _toggleManager(int workerId, bool isManager) async {
@@ -1000,10 +1028,21 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
                           // Sprint 79 — 출하 미처리 알림 (매일 07:30 KST)
                           _buildSettingToggle(
                             title: '출하 미처리 알림',
-                            subtitle: '매일 07:30 KST 어제 미처리 catch 메일 발송 (admin + GST manager @gst-in.com 자동)',
+                            subtitle: '매일 07:30 KST 어제 미처리 catch 메일 발송 (admin 자동 포함)',
                             value: _shipmentAlertEnabled,
                             onChanged: (v) => _updateSetting('shipment_alert_enabled', v),
                           ),
+                          // Sprint 79 v2.19.8 — 토글 ON 시 chip 카드 영역 표시 (GST 매니저 name 추가)
+                          if (_shipmentAlertEnabled) ...[
+                            const Divider(height: 1, color: GxColors.mist),
+                            _buildChipListSetting(
+                              title: '출하 알림 수신 매니저',
+                              subtitle: 'GST 매니저 이름 추가 시 해당 사람만 메일 발송 (admin 무관 자동 포함)',
+                              values: _shipmentAlertRecipients,
+                              allOptions: _gstManagerNameOptions,
+                              settingKey: 'shipment_alert_recipients',
+                            ),
+                          ],
                         ],
                       ),
               ),

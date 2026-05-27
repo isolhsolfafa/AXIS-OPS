@@ -1191,10 +1191,10 @@ def _alert_shipment_overdue():
             logger.info(f"[alert_shipment_overdue] {yesterday} 미처리 0건 → skip (spam 방지)")
             return
 
-        # 3. 메일 대상 list catch (admin + chip)
+        # 3. 메일 대상 list catch (admin + chip name list, v2.19.8)
         recipients_setting = get_setting('shipment_alert_recipients', [])
-        extra_worker_ids = recipients_setting if isinstance(recipients_setting, list) else []
-        recipients = get_overdue_alert_recipients(extra_worker_ids)
+        extra_names = recipients_setting if isinstance(recipients_setting, list) else []
+        recipients = get_overdue_alert_recipients(extra_names)
 
         if not recipients:
             logger.warning(
