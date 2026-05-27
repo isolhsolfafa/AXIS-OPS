@@ -1,6 +1,7 @@
-// Sprint 79 — 미종료 작업 분류 (메인 메뉴, admin only)
+// Sprint 79 — 미종료 작업 분류 (메인 메뉴)
 // 협력사별 + GST 공정별 그룹 catch
 // BE: /api/admin/tasks/pending/grouped
+// v2.19.7: PI/QI 카드 디자인 컨셉 정합 — Card(elevation 0 + grey border + BorderRadius 12)
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/auth_provider.dart';
@@ -53,8 +54,12 @@ class _PendingTasksGroupedScreenState
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFF9FAFB),
       appBar: AppBar(
         title: const Text('미종료 작업 (전체)'),
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        backgroundColor: Colors.white,
         actions: [
           IconButton(icon: const Icon(Icons.refresh), onPressed: _fetch),
         ],
@@ -65,25 +70,18 @@ class _PendingTasksGroupedScreenState
               onRefresh: _fetch,
               child: ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.symmetric(vertical: 8),
                 children: [
                   _buildHeader(),
                   const SizedBox(height: 16),
-                  _buildSectionTitle('🏭 협력사별'),
-                  ..._partners.map(_buildPartnerRow),
-                  if (_partners.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.all(16),
-                      child: Center(child: Text('협력사 미종료 작업 없음')),
-                    ),
+                  _buildSectionTitle('🏭', '협력사별'),
+                  ..._partners.map(_buildPartnerCard),
+                  if (_partners.isEmpty) _buildEmpty('협력사 미종료 작업 없음'),
+                  const SizedBox(height: 20),
+                  _buildSectionTitle('🏢', 'GST 공정별'),
+                  ..._gstProcesses.map(_buildGstCard),
+                  if (_gstProcesses.isEmpty) _buildEmpty('GST 공정 미종료 작업 없음'),
                   const SizedBox(height: 16),
-                  _buildSectionTitle('🏢 GST 공정별'),
-                  ..._gstProcesses.map(_buildGstRow),
-                  if (_gstProcesses.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.all(16),
-                      child: Center(child: Text('GST 공정 미종료 작업 없음')),
-                    ),
                 ],
               ),
             ),
@@ -91,95 +89,207 @@ class _PendingTasksGroupedScreenState
   }
 
   Widget _buildHeader() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.deepOrange.shade50,
-        borderRadius: BorderRadius.circular(8),
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: const BorderSide(color: Color(0xFFFEDDB7)),
       ),
+      color: const Color(0xFFFEF6E7),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          children: [
+            Container(
+              width: 40, height: 40,
+              decoration: BoxDecoration(
+                color: const Color(0xFFFEF3C7),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.warning_amber_rounded,
+                  color: Color(0xFFD97706), size: 22),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '전체 미종료 · $_total건',
+                    style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.bold,
+                      color: Color(0xFF1F2937),
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  const Text(
+                    '협력사별 + GST 공정별 분류',
+                    style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSectionTitle(String emoji, String title) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 6),
       child: Row(
         children: [
-          const Icon(Icons.warning_amber, color: Colors.deepOrange, size: 32),
-          const SizedBox(width: 12),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '전체 미종료: $_total건',
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const Text(
-                '협력사 + GST 공정 분류 catch',
-                style: TextStyle(fontSize: 12, color: Colors.black54),
-              ),
-            ],
+          Text(emoji, style: const TextStyle(fontSize: 14)),
+          const SizedBox(width: 6),
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 13, fontWeight: FontWeight.w600,
+              color: Color(0xFF374151), letterSpacing: 0.3,
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildSectionTitle(String title) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Text(
-        title,
-        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-      ),
-    );
-  }
-
-  Widget _buildPartnerRow(Map<String, dynamic> p) {
+  Widget _buildEmpty(String label) {
     return Card(
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: _categoryColor(p['category'] as String?),
-          child: Text(
-            (p['category'] as String?)?.substring(0, 1) ?? '?',
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-          ),
-        ),
-        title: Text(p['name'] ?? '-'),
-        subtitle: Text('${p['category'] ?? '-'} 카테고리'),
-        trailing: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: Colors.deepOrange.shade100,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Text(
-            '${p['count'] ?? 0}건',
-            style: const TextStyle(fontWeight: FontWeight.bold),
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: Colors.grey.shade200),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 24),
+        child: Center(
+          child: Column(
+            children: [
+              Icon(Icons.check_circle_outline,
+                  size: 32, color: Colors.grey.shade400),
+              const SizedBox(height: 6),
+              Text(label, style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+            ],
           ),
         ),
       ),
     );
   }
 
-  Widget _buildGstRow(Map<String, dynamic> g) {
+  Widget _buildPartnerCard(Map<String, dynamic> p) {
+    final color = _categoryColor(p['category'] as String?);
+    final colorSoft = _categoryColorSoft(p['category'] as String?);
     return Card(
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: Colors.blue.shade400,
-          child: Text(
-            (g['category'] as String?) ?? '?',
-            style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
-          ),
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: Colors.grey.shade200),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        child: Row(
+          children: [
+            // 카테고리 chip
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: colorSoft,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                p['category'] ?? '-',
+                style: TextStyle(
+                  fontSize: 10, fontWeight: FontWeight.w700, color: color,
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            // 협력사 이름
+            Expanded(
+              child: Text(
+                p['name'] ?? '-',
+                style: const TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.w600,
+                  color: Color(0xFF1F2937),
+                ),
+              ),
+            ),
+            // 카운트
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFEF3C7),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                '${p['count'] ?? 0}건',
+                style: const TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w700,
+                  color: Color(0xFFD97706),
+                ),
+              ),
+            ),
+          ],
         ),
-        title: Text(g['label'] ?? '-'),
-        subtitle: Text('GST 영역 ${g['category'] ?? '-'} 공정'),
-        trailing: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: Colors.blue.shade100,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Text(
-            '${g['count'] ?? 0}건',
-            style: const TextStyle(fontWeight: FontWeight.bold),
-          ),
+      ),
+    );
+  }
+
+  Widget _buildGstCard(Map<String, dynamic> g) {
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: Colors.grey.shade200),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEDE9FE),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                g['category'] ?? '-',
+                style: const TextStyle(
+                  fontSize: 10, fontWeight: FontWeight.w700,
+                  color: Color(0xFF6366F1),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                g['label'] ?? '-',
+                style: const TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.w600,
+                  color: Color(0xFF1F2937),
+                ),
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEDE9FE),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                '${g['count'] ?? 0}건',
+                style: const TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w700,
+                  color: Color(0xFF6366F1),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -187,11 +297,21 @@ class _PendingTasksGroupedScreenState
 
   Color _categoryColor(String? cat) {
     switch (cat) {
-      case 'MECH': return Colors.indigo;
-      case 'ELEC': return Colors.amber.shade700;
+      case 'MECH': return const Color(0xFFEA580C);
+      case 'ELEC': return const Color(0xFF2563EB);
       case 'TM':
-      case 'TMS': return Colors.purple;
-      default: return Colors.grey;
+      case 'TMS': return const Color(0xFF0D9488);
+      default: return const Color(0xFF6B7280);
+    }
+  }
+
+  Color _categoryColorSoft(String? cat) {
+    switch (cat) {
+      case 'MECH': return const Color(0xFFFEF3C7);
+      case 'ELEC': return const Color(0xFFDBEAFE);
+      case 'TM':
+      case 'TMS': return const Color(0xFFCCFBF1);
+      default: return const Color(0xFFF3F4F6);
     }
   }
 }
