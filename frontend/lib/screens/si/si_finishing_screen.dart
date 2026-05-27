@@ -635,9 +635,12 @@ class _SiFinishingScreenState extends ConsumerState<SiFinishingScreen>
                 Text(siWorkerName, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
               ]),
             ],
-            // 버튼 영역 — Tab 2 (출하 확정) 영역 만
-            // v2.19.6: [출고 완료] 권한 = GST 인원 전체 (admin/manager 영역 X)
-            if (isConfirmed && sn != '-' && (isMyTask || _isGstSelf || _canManage)) ...[
+            // 버튼 영역 — Tab 2 (출하 확정) + Tab 3 (출하 예정) 양쪽
+            // v2.19.9: 옵션 B 채택 — 출하 예정 탭에서 검색 후 직접 출고 완료 처리
+            //   * ETL ship_plan_date 보존 (plan_change_warning 자기 충족 catch 회피)
+            //   * 책임 분리 — Plan = ETL source / 출하 = OPS app
+            //   * audit trail = SI_SHIPMENT.completed_at 자동 기록 (best_ship CTE 정합)
+            if (sn != '-' && (isMyTask || _isGstSelf || _canManage)) ...[
               const SizedBox(height: 10),
               const Divider(color: Color(0xFFE5E7EB), height: 1),
               const SizedBox(height: 10),
