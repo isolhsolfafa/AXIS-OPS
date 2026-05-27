@@ -22,6 +22,7 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
   bool _heatingJacketEnabled = false;
   bool _phaseBlockEnabled = false;
   bool _locationQrRequired = true; // Location QR 필수 여부 (기본: true)
+  bool _shipmentAlertEnabled = false; // Sprint 79 — 출하 미처리 매일 07:30 KST 알림
   bool _isLoadingSettings = false;
 
   // 알림 트리거 설정 (Sprint 54)
@@ -277,6 +278,7 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
           _heatingJacketEnabled = response['heating_jacket_enabled'] as bool? ?? false;
           _phaseBlockEnabled = response['phase_block_enabled'] as bool? ?? false;
           _locationQrRequired = response['location_qr_required'] as bool? ?? true;
+          _shipmentAlertEnabled = response['shipment_alert_enabled'] as bool? ?? false;
           // 근무시간 설정도 같은 응답에서 파싱
           _autoPauseEnabled = response['auto_pause_enabled'] as bool? ?? false;
           _breakMorningStart = response['break_morning_start'] as String? ?? '10:00';
@@ -345,6 +347,7 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
           if (key == 'heating_jacket_enabled') _heatingJacketEnabled = value;
           if (key == 'phase_block_enabled') _phaseBlockEnabled = value;
           if (key == 'location_qr_required') _locationQrRequired = value;
+          if (key == 'shipment_alert_enabled') _shipmentAlertEnabled = value;
           if (key == 'auto_pause_enabled') _autoPauseEnabled = value;
           if (key == 'geo_check_enabled') _geolocationEnabled = value;
           if (key == 'geo_strict_mode') _geoStrictMode = value;
@@ -953,317 +956,8 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
               ),
               const SizedBox(height: 24),
 
-              // ===== 섹션 2: 비활성 사용자 관리 (Sprint 40-C) =====
-              _buildSectionHeader(
-                icon: Icons.person_off,
-                iconBg: GxColors.dangerBg,
-                iconColor: GxColors.danger,
-                title: '비활성 사용자 관리',
-                subtitle: '미로그인 계정 비활성화 / 재활성화',
-              ),
-              const SizedBox(height: 10),
-
-              // 2-1. 미로그인 사용자 (n일)
-              Container(
-                decoration: GxGlass.cardSm(radius: GxRadius.lg).copyWith(
-                  border: Border.all(color: GxColors.warning.withValues(alpha: 0.3), width: 1),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              '${_inactiveDays}일 미로그인',
-                              style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: GxColors.charcoal),
-                            ),
-                          ),
-                          GestureDetector(
-                            onTap: _loadInactiveWorkers,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                              decoration: BoxDecoration(
-                                color: GxColors.accentSoft,
-                                borderRadius: BorderRadius.circular(GxRadius.sm),
-                              ),
-                              child: const Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(Icons.refresh, size: 14, color: GxColors.accent),
-                                  SizedBox(width: 4),
-                                  Text('갱신',
-                                      style: TextStyle(
-                                          fontSize: 12,
-                                          color: GxColors.accent,
-                                          fontWeight: FontWeight.w500)),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const Divider(height: 1, color: GxColors.mist),
-                    if (_isLoadingInactive)
-                      const Padding(
-                        padding: EdgeInsets.all(20),
-                        child: Center(
-                          child: CircularProgressIndicator(color: GxColors.accent, strokeWidth: 2),
-                        ),
-                      )
-                    else if (_inactiveWorkers.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.all(16),
-                        child: Center(
-                          child: Text('미로그인 사용자가 없습니다.',
-                              style: TextStyle(fontSize: 13, color: GxColors.steel)),
-                        ),
-                      )
-                    else
-                      // 5-11 사용자 결정: 최대 240px (~3건) 표시 + 스크롤
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxHeight: 240),
-                        child: ListView.separated(
-                        shrinkWrap: true,
-                        // physics: 외부 ListView 자체 스크롤 가능 (240px 초과 시)
-                        itemCount: _inactiveWorkers.length,
-                        separatorBuilder: (_, __) =>
-                            const Divider(height: 1, color: GxColors.mist),
-                        itemBuilder: (context, idx) {
-                          final w = _inactiveWorkers[idx];
-                          final wId = w['id'] as int;
-                          final wName = w['name'] as String? ?? '';
-                          final wEmail = w['email'] as String? ?? '';
-                          final wCompany = w['company'] as String? ?? '';
-                          final wRole = w['role'] as String? ?? '';
-                          final lastLogin = w['last_login_at'] != null
-                              ? DateTime.tryParse(w['last_login_at'] as String)
-                              : null;
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 16, vertical: 10),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(wName,
-                                          style: const TextStyle(
-                                              fontSize: 13,
-                                              fontWeight: FontWeight.w500,
-                                              color: GxColors.charcoal)),
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        '$wCompany · $wRole · $wEmail',
-                                        style: const TextStyle(
-                                            fontSize: 11, color: GxColors.steel),
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                      if (lastLogin != null) ...[
-                                        const SizedBox(height: 2),
-                                        Text(
-                                          '마지막 로그인: ${lastLogin.year}-${lastLogin.month.toString().padLeft(2, '0')}-${lastLogin.day.toString().padLeft(2, '0')}',
-                                          style: const TextStyle(
-                                              fontSize: 10, color: GxColors.silver),
-                                        ),
-                                      ] else ...[
-                                        const SizedBox(height: 2),
-                                        const Text('마지막 로그인: 없음',
-                                            style: TextStyle(
-                                                fontSize: 10, color: GxColors.silver)),
-                                      ],
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                GestureDetector(
-                                  onTap: () => _deactivateWorker(wId, wName),
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 10, vertical: 5),
-                                    decoration: BoxDecoration(
-                                      color: GxColors.dangerBg,
-                                      borderRadius:
-                                          BorderRadius.circular(GxRadius.sm),
-                                    ),
-                                    child: const Text('비활성화',
-                                        style: TextStyle(
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.w600,
-                                            color: GxColors.danger)),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
-                      ),  // end ConstrainedBox (240px scroll, 5-11)
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-
-              // 2-2. 비활성화된 사용자
-              Container(
-                decoration: GxGlass.cardSm(radius: GxRadius.lg).copyWith(
-                  border: Border.all(color: GxColors.success.withValues(alpha: 0.3), width: 1),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                      child: Text(
-                        '비활성화 계정',
-                        style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: GxColors.charcoal),
-                      ),
-                    ),
-                    const Divider(height: 1, color: GxColors.mist),
-                    if (_deactivatedWorkers.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.all(16),
-                        child: Center(
-                          child: Text('비활성화된 계정이 없습니다.',
-                              style: TextStyle(fontSize: 13, color: GxColors.steel)),
-                        ),
-                      )
-                    else
-                      // 5-11 사용자 결정: 최대 240px (~3건) 표시 + 스크롤
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxHeight: 240),
-                        child: ListView.separated(
-                        shrinkWrap: true,
-                        // physics: 외부 ConstrainedBox 자체 스크롤 가능 (240px 초과 시)
-                        itemCount: _deactivatedWorkers.length,
-                        separatorBuilder: (_, __) =>
-                            const Divider(height: 1, color: GxColors.mist),
-                        itemBuilder: (context, idx) {
-                          final w = _deactivatedWorkers[idx];
-                          final wId = w['id'] as int;
-                          final wName = w['name'] as String? ?? '';
-                          final wEmail = w['email'] as String? ?? '';
-                          final deactivatedAt = w['deactivated_at'] != null
-                              ? DateTime.tryParse(w['deactivated_at'] as String)
-                              : null;
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 16, vertical: 10),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(wName,
-                                          style: const TextStyle(
-                                              fontSize: 13,
-                                              fontWeight: FontWeight.w500,
-                                              color: GxColors.charcoal)),
-                                      const SizedBox(height: 2),
-                                      Text(wEmail,
-                                          style: const TextStyle(
-                                              fontSize: 11, color: GxColors.steel),
-                                          overflow: TextOverflow.ellipsis),
-                                      if (deactivatedAt != null) ...[
-                                        const SizedBox(height: 2),
-                                        Text(
-                                          '비활성화: ${deactivatedAt.year}-${deactivatedAt.month.toString().padLeft(2, '0')}-${deactivatedAt.day.toString().padLeft(2, '0')}',
-                                          style: const TextStyle(
-                                              fontSize: 10, color: GxColors.silver),
-                                        ),
-                                      ],
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                GestureDetector(
-                                  onTap: () => _reactivateWorker(wId, wName),
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 10, vertical: 5),
-                                    decoration: BoxDecoration(
-                                      color: GxColors.successBg,
-                                      borderRadius:
-                                          BorderRadius.circular(GxRadius.sm),
-                                    ),
-                                    child: const Text('재활성화',
-                                        style: TextStyle(
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.w600,
-                                            color: GxColors.success)),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
-                      ),  // end ConstrainedBox (240px scroll, 5-11)
-                  ],
-                ),
-              ),
-              const SizedBox(height: 24),
-
-              // ===== 섹션 4: 미종료 작업 목록 =====
-              _buildSectionHeader(
-                icon: Icons.warning_amber,
-                iconBg: GxColors.warningBg,
-                iconColor: GxColors.warning,
-                title: '미종료 작업',
-                subtitle: '강제 종료 처리 필요 작업 목록',
-                trailing: Text(
-                  '${_pendingTasks.length}건',
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: GxColors.warning),
-                ),
-              ),
-              const SizedBox(height: 10),
-
-              if (_isLoadingTasks)
-                const Center(
-                  child: Padding(
-                    padding: EdgeInsets.all(20),
-                    child: CircularProgressIndicator(color: GxColors.accent, strokeWidth: 2),
-                  ),
-                )
-              else if (_pendingTasks.isEmpty)
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: GxGlass.cardSm(radius: GxRadius.lg),
-                  child: const Center(
-                    child: Column(
-                      children: [
-                        Icon(Icons.check_circle_outline, size: 40, color: GxColors.success),
-                        SizedBox(height: 8),
-                        Text('미종료 작업이 없습니다.', style: TextStyle(fontSize: 13, color: GxColors.steel)),
-                      ],
-                    ),
-                  ),
-                )
-              else
-                // 5-11 사용자 결정: 최대 240px (~3건) 표시 + 스크롤
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 240),
-                  child: SingleChildScrollView(
-                    child: Column(
-                      children: _pendingTasks.map((task) => _buildPendingTaskCard(task)).toList(),
-                    ),
-                  ),
-                ),
-
-              const SizedBox(height: 24),
-
-              // ===== 섹션 5: Admin Settings =====
+              // Sprint 79: 비활성 사용자 관리 + 미종료 작업 영역 메인 메뉴 영역 영역 분리 (/inactive-users + /pending-tasks-grouped)
+// ===== 섹션 5: Admin Settings =====
               _buildSectionHeader(
                 icon: Icons.tune,
                 iconBg: GxColors.accentSoft,
@@ -1301,6 +995,14 @@ class _AdminOptionsScreenState extends ConsumerState<AdminOptionsScreen> {
                             subtitle: 'OFF 시 Location QR 미등록 경고를 건너뜀',
                             value: _locationQrRequired,
                             onChanged: (v) => _updateSetting('location_qr_required', v),
+                          ),
+                          const Divider(height: 1, color: GxColors.mist),
+                          // Sprint 79 — 출하 미처리 알림 (매일 07:30 KST)
+                          _buildSettingToggle(
+                            title: '출하 미처리 알림',
+                            subtitle: '매일 07:30 KST 어제 미처리 catch 메일 발송 (admin + GST manager @gst-in.com 자동)',
+                            value: _shipmentAlertEnabled,
+                            onChanged: (v) => _updateSetting('shipment_alert_enabled', v),
                           ),
                         ],
                       ),
