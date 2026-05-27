@@ -875,7 +875,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 onTap: () => Navigator.pushNamed(context, '/inactive-users'),
               ),
               const SizedBox(height: 8),
-              // Sprint 79: admin 전용 — 미종료 작업 (전체 + 협력사/GST 공정별 분류)
+            ],
+            // Sprint 79: GST 자사 전체 + admin — 미종료 작업 (전체 + 협력사/GST 공정별 분류)
+            // v2.19.3 (사용자 catch 5-28): 기존 admin_options 영역 미종료 영역 GST 인원 전체 권한 정합
+            if (worker?.isAdmin == true || worker?.company == 'GST') ...[
               _buildFeatureCard(
                 icon: Icons.warning_amber,
                 iconBg: const Color(0xFFFFF3CD),

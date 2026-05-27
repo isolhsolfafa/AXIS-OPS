@@ -79,10 +79,13 @@ def get_shipment_by_status_route() -> Tuple[Dict[str, Any], int]:
 
 @admin_shipment_flow_bp.route("/tasks/pending/grouped", methods=["GET"])
 @jwt_required
-@admin_required
+@gst_or_admin_required
 def get_pending_tasks_grouped_route() -> Tuple[Dict[str, Any], int]:
     """
-    미종료 작업 분류 catch (admin only, 메인 메뉴 영역 사용).
+    미종료 작업 분류 catch (GST 자사 + admin, 메인 메뉴 영역 사용).
+
+    v2.19.3 (사용자 catch 5-28): admin only → GST 자사 전체 catch (기존 admin_options 영역 동작 정합).
+    협력사 차단 의도 유지 (협력사 매니저 영역 자사 catch = manager_pending_tasks_screen 영역 별 화면).
 
     Codex Q6 N: UNION ALL + GROUP BY single query (N+1 회피).
 
