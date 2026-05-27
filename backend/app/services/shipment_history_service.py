@@ -160,6 +160,66 @@ def _build_best_ship_cte(start: date, end: date) -> Tuple[str, Tuple]:
     return cte, params
 
 
+def _fetch_plan_change_warning(cur, start: date, end: date) -> Dict[str, Any]:
+    """계획 변경 hint (v2.18.33 사용자 catch — 자기 충족 catch 신호).
+
+    fulfillment_pct / avg_delay_days 영역 "계획일 수정 시 100% 정시 트릭" 영역 catch.
+    etl.change_log 영역 `field_name = 'ship_plan_date'` 영역 변경 횟수 catch.
+
+    5월 운영 검증 (5-27): 148건 중 89건 (60%) ship_plan_date 변경됨 — catch 정합.
+
+    ⚠️ etl.change_log 영역 test DB 영역 없음 — try/except fallback (운영 안전망).
+
+    Returns:
+        { count: int, share_pct: float, hint: str }
+    """
+    # 2단계 SQL — etl.change_log 영역 존재 catch 후 분기
+    # (PostgreSQL CASE WHEN lazy eval 안 됨 — parse 시점 reference catch 회피)
+    cur.execute("SELECT to_regclass('etl.change_log') IS NOT NULL AS has_table")
+    has_etl_change_log = cur.fetchone()['has_table']
+
+    # total plan_count 영역 항상 catch
+    cur.execute(
+        """
+        SELECT COUNT(*) AS total
+        FROM plan.product_info p
+        WHERE p.ship_plan_date >= %s AND p.ship_plan_date < %s
+          AND COALESCE(p.customer, '') <> 'TEST CUSTOMER'
+        """,
+        (start, end),
+    )
+    total = int(cur.fetchone()['total'] or 0)
+
+    # etl.change_log 영역 있으면 변경 catch, 없으면 0
+    changed = 0
+    if has_etl_change_log:
+        cur.execute(
+            """
+            SELECT COUNT(DISTINCT cl.serial_number) AS changed
+            FROM etl.change_log cl
+            WHERE cl.field_name = 'ship_plan_date'
+              AND cl.serial_number IN (
+                  SELECT p.serial_number FROM plan.product_info p
+                  WHERE p.ship_plan_date >= %s AND p.ship_plan_date < %s
+                    AND COALESCE(p.customer, '') <> 'TEST CUSTOMER'
+              )
+            """,
+            (start, end),
+        )
+        changed = int(cur.fetchone()['changed'] or 0)
+    share = round(100.0 * changed / total, 1) if total > 0 else 0.0
+
+    return {
+        'count': changed,
+        'share_pct': share,
+        'hint': (
+            f"{changed}건 계획 변경됨 (전체 {total}건 중 {share}%) — "
+            f"납기 준수율/평균 지연 영역 자기 충족 catch 가능"
+            if changed > 0 else None
+        ),
+    }
+
+
 def _fetch_kpi(cur, start: date, end: date) -> Dict[str, Any]:
     """KPI 6 — plan/shipped/fulfillment/on_time/pending/avg_delay (Codex Q2/Q3 M)."""
     cte, params = _build_best_ship_cte(start, end)
@@ -546,6 +606,8 @@ def get_shipment_summary(
     try:
         cur = conn.cursor()
         kpi = _fetch_kpi(cur, start, end)
+        # v2.18.33 (사용자 catch 5-27): 계획 변경 hint — 자기 충족 catch 신호
+        kpi['plan_change_warning'] = _fetch_plan_change_warning(cur, start, end)
         calendar = _fetch_calendar(cur, start, end)
         by_customer = _fetch_by_customer(cur, start, end)
         by_model = _fetch_by_model(cur, start, end)

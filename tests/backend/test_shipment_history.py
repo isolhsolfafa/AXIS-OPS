@@ -287,6 +287,27 @@ class TestShipmentSummaryKPI:
         assert bm_plan == data['kpi']['plan_count']
         assert bm_shipped == data['kpi']['shipped_count']
 
+    def test_kpi_08_plan_change_warning(self, client, create_test_admin, get_admin_auth_token):
+        """v2.18.33 — kpi.plan_change_warning 필드 영역 (자기 충족 catch 신호)"""
+        admin = create_test_admin
+        token = get_admin_auth_token(admin['id'])
+        resp = client.get('/api/admin/shipment/summary',
+                          headers=_auth_header(token))
+        assert resp.status_code == 200
+        kpi = resp.get_json()['kpi']
+        assert 'plan_change_warning' in kpi, 'kpi.plan_change_warning 영역 필수'
+        warning = kpi['plan_change_warning']
+        # schema 검증
+        assert 'count' in warning
+        assert 'share_pct' in warning
+        assert 'hint' in warning
+        assert isinstance(warning['count'], int)
+        assert isinstance(warning['share_pct'], float)
+        # hint 는 변경 있을 때만 string, 없으면 None
+        assert warning['hint'] is None or isinstance(warning['hint'], str)
+        # share_pct 영역 0~100 범위
+        assert 0 <= warning['share_pct'] <= 100
+
     def test_kpi_07_by_model_avg_lead_time(self, client, create_test_admin,
                                            get_admin_auth_token, seed_shipment_test_data, db_conn):
         """v2.18.29 P-v3 — avg_lead_time_days = AVG(pi_start - LEAST(elec_start, mech_start))"""

@@ -6,6 +6,61 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.18.33] - 2026-05-27 — Sprint 76-BE 계획 변경 hint (plan_change_warning, 자기 충족 catch 신호)
+
+> 사용자 catch (5-27): "계획대비 출하 영역 = 계획일 수정 시 100% 정시 트릭" 모순 catch.
+
+### 운영 검증 (5월 plan 148건)
+
+| 영역 | 값 |
+|---|---|
+| 5월 plan 영역 전체 | 148 |
+| `ship_plan_date` 변경 S/N | **89건 (60%)** ← 자기 충족 catch 가능성 확인 |
+| 전체 변경 record | 185 (S/N당 평균 2회 변경) |
+
+→ fulfillment_pct / avg_delay_days 영역 단독 KPI 영역 신뢰성 catch — 변경 hint 영역 매니저 신호 의무.
+
+### 변경 (BE 1 파일 + pytest 1 TC)
+
+| 파일 | 변경 |
+|------|-----|
+| `backend/app/services/shipment_history_service.py` | `_fetch_plan_change_warning()` 신규 (2단계 SQL — `to_regclass` table catch + `etl.change_log` JOIN) |
+| `get_shipment_summary()` | `kpi['plan_change_warning'] = ...` 응답 추가 |
+| `tests/backend/test_shipment_history.py` | `test_kpi_08_plan_change_warning` 신규 |
+
+### 응답 schema 추가
+
+```json
+"kpi": {
+  "fulfillment_pct": 82.4,
+  "avg_delay_days": 0.0,
+  "plan_change_warning": {                   // ← 신규 (v2.18.33)
+    "count": 89,
+    "share_pct": 60.1,
+    "hint": "89건 계획 변경됨 (전체 148건 중 60.1%) — 납기 준수율/평균 지연 영역 자기 충족 catch 가능"
+  },
+  ...
+}
+```
+
+### 안전망 — etl.change_log 영역 test DB 영역 없음
+
+`to_regclass('etl.change_log')` 영역 IF 분기 — test 환경 영역 자동 0 반환 (count=0, hint=null).
+
+### pytest 결과
+
+- **32/32 PASS** (5분 24초, staging DB)
+- 회귀 위험 0 (BE 신규 함수 + 응답 추가, 기존 영역 영향 0)
+
+### 다음 sprint 인큐베이션 — Sprint 77 (가칭) Lead Time 준수율
+
+- 모델별 standard lead time 영역 admin_settings 등록
+- 시작점/끝점 결정 (mech_start ~ actual_ship_date)
+- 협력사 평가지수 base
+- 운영 6개월+ 영역 actual 정확 일자 누적 후 진입
+
+---
+
 ## [2.18.32] - 2026-05-27 — Sprint 76-BE TEST CUSTOMER 제외 (factory.py v2.15.21 정합)
 
 > 사용자 catch (5-27): 5월 운영 정합성 검증 시 TEST 5건 포함된 응답 → factory.py v2.15.21 (#69) 영역 이미 적용된 패턴 동일 적용 의무.
