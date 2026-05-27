@@ -9,7 +9,7 @@ import logging
 from flask import Blueprint, request, jsonify, g
 from typing import Tuple, Dict, Any
 
-from app.middleware.jwt_auth import jwt_required, admin_required, view_access_required, get_current_worker_id
+from app.middleware.jwt_auth import jwt_required, admin_required, gst_or_admin_required, view_access_required, get_current_worker_id
 from app.models.worker import get_worker_by_id, get_db_connection
 from psycopg2 import Error as PsycopgError
 from app.db_pool import put_conn, get_conn
@@ -256,7 +256,7 @@ def upsert_checklist_record() -> Tuple[Dict[str, Any], int]:
 
 @checklist_bp.route("/api/admin/checklist/master", methods=["GET"])
 @jwt_required
-@admin_required
+@gst_or_admin_required
 def list_checklist_master() -> Tuple[Dict[str, Any], int]:
     """
     체크리스트 마스터 항목 목록 조회 (관리자 전용, Sprint 52)
@@ -375,7 +375,7 @@ def list_checklist_master() -> Tuple[Dict[str, Any], int]:
 
 @checklist_bp.route("/api/admin/checklist/master", methods=["POST"])
 @jwt_required
-@admin_required
+@gst_or_admin_required
 def create_checklist_master() -> Tuple[Dict[str, Any], int]:
     """
     체크리스트 마스터 항목 개별 추가 (관리자 전용, Sprint 52)
@@ -508,7 +508,7 @@ def create_checklist_master() -> Tuple[Dict[str, Any], int]:
 
 @checklist_bp.route("/api/admin/checklist/master/<int:master_id>", methods=["PUT"])
 @jwt_required
-@admin_required
+@gst_or_admin_required
 def update_checklist_master(master_id: int) -> Tuple[Dict[str, Any], int]:
     """
     체크리스트 마스터 항목 수정 (관리자 전용, Sprint 52)
@@ -595,7 +595,7 @@ def update_checklist_master(master_id: int) -> Tuple[Dict[str, Any], int]:
 
 @checklist_bp.route("/api/admin/checklist/master/<int:master_id>/toggle", methods=["PATCH"])
 @jwt_required
-@admin_required
+@gst_or_admin_required
 def toggle_checklist_master(master_id: int) -> Tuple[Dict[str, Any], int]:
     """
     체크리스트 마스터 항목 활성/비활성 토글 (관리자 전용, Sprint 52)
@@ -651,7 +651,7 @@ def toggle_checklist_master(master_id: int) -> Tuple[Dict[str, Any], int]:
 
 @checklist_bp.route("/api/admin/checklist/import", methods=["POST"])
 @jwt_required
-@admin_required
+@gst_or_admin_required
 def import_checklist_master() -> Tuple[Dict[str, Any], int]:
     """
     체크리스트 마스터 데이터 Excel 가져오기 (관리자 전용, Sprint 11)

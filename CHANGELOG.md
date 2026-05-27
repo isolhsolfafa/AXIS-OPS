@@ -6,6 +6,66 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.18.34] - 2026-05-27 — VIEW #72 admin 권한 데코레이터 통일 + 매뉴얼 모바일 PWA fix
+
+> 두 catch 통합 release — VIEW OPS_API_REQUESTS.md #72 운영 차단 catch (testpm GST manager 영역 체크리스트/admin_settings 접근 불가) + OPS 매뉴얼 모바일 PWA catch (`BUG-OPS-MANUAL-BUTTON-MOBILE-PWA-20260526`).
+
+### 변경 (BE 2 파일 + FE 1 파일 + version)
+
+#### #72 admin 권한 데코레이터 통일 (BE 2 파일)
+
+| 파일 | 변경 |
+|------|-----|
+| `backend/app/routes/checklist.py` | `@admin_required` → `@gst_or_admin_required` 5곳 (L259/378/511/598/654) + import 추가 |
+| `backend/app/routes/admin.py` | `/settings` GET `@admin_required` → `@gst_or_admin_required` (L1543) / PUT `@manager_or_admin_required` → `@gst_or_admin_required` (L1574) + import 추가 |
+| `backend/app/routes/admin.py` | `/api/admin/product-codes` 신규 endpoint 추가 (`@jwt_required + @gst_or_admin_required`, `SELECT DISTINCT product_code FROM plan.product_info`) |
+
+#### 매뉴얼 모바일 PWA fix (FE 1 파일)
+
+| 파일 | 변경 |
+|------|-----|
+| `frontend/lib/screens/home/home_screen.dart` | `_handleOpenManual()` 영역 `await authService.getToken()` (secure_storage async) → `ApiService().token` (sync getter) 변경 + import 추가 + token null SnackBar 안내 |
+
+### 영향
+
+#### #72
+
+- **GST manager (testpm 외 모든 자사 manager)** — 체크리스트 관리 + admin_settings 정상 작동 ✅
+- **GST 일반 작업자** (FE `canEdit=true`) — 체크리스트 관리 진입 + admin_settings 정상
+- **협력사 (BAT/FNI/TMS/P&S/C&A)** — `@gst_or_admin_required` 영역 협력사 거부 → 기존 의도 유지
+- **admin** — 영향 0 (계속 통과)
+- **`/product-codes`** — 추후 product_code 모듈화 (200건 → 50개 미만 catch) 후 별 체크리스트 관리 base
+
+#### 매뉴얼 fix
+
+- **Root cause**: `await authService.getToken()` (secure_storage async read) → user gesture context lost → 모바일 popup blocker 차단 → `anchor.click()` 실패
+- **장기 시스템 관점 추천 (A)** — `ApiService.token` sync getter 재사용 (L123 기존 패턴 + DRY 원칙 + 책임 분리)
+- token null catch — SnackBar "세션 만료. 다시 로그인 후 매뉴얼 접속해주세요." 안내 + 매뉴얼 진입 차단
+- 모바일 PWA standalone mode 영역 새 탭 정상 catch (iOS Safari + Android Chrome)
+
+### 검증
+
+- pytest `test_admin_options_api.py` 28/28 PASS (4분 32초, staging DB) — 권한 변경 회귀 0
+- Flask boot OK + `/api/admin/product-codes` route 등록 확인
+- flutter build web GREEN (13.2초)
+
+### 회귀 위험
+
+- 0 (additive endpoint + 권한 catch 영역 GST 자사 확장 + 협력사 차단 유지)
+- FE 매뉴얼 catch 영역 sync getter 변경만 (기존 anchor click 패턴 유지)
+
+### BACKLOG 처리
+
+- `BUG-OPS-MANUAL-BUTTON-MOBILE-PWA-20260526` → ✅ CLOSED (옵션 A 영역 fix 완료)
+- VIEW `OPS_API_REQUESTS.md` #72 → ✅ DONE (BE 측 7곳 + 신규 endpoint 완료)
+
+### 다음 catch (BACKLOG)
+
+- `BACKLOG-VIEW-PRODUCT-CODES-SEMANTIC-20260527` (가칭) — `/api/admin/product-codes` 응답 영역 = 숫자 SKU (200건). FE dropdown UX 영역 검색/페이지네이션 catch (별 sprint). 추후 product_code 모듈화 후 50개 미만 catch 시 재검토
+- 다른 admin/* 영역 `@admin_required` 잘못 적용된 곳 grep sweep (별 sprint)
+
+---
+
 ## [2.18.33] - 2026-05-27 — Sprint 76-BE 계획 변경 hint (plan_change_warning, 자기 충족 catch 신호)
 
 > 사용자 catch (5-27): "계획대비 출하 영역 = 계획일 수정 시 100% 정시 트릭" 모순 catch.

@@ -14,6 +14,7 @@ import '../../widgets/update_dialog.dart';
 import '../../services/update_service.dart';
 import '../../services/notice_service.dart';
 import '../../services/auth_service.dart';  // v2.18.27: 매뉴얼 버튼 token 발급용
+import '../../services/api_service.dart';  // v2.18.34: 매뉴얼 모바일 PWA — sync token getter (user gesture 유지)
 
 /// 홈 화면 (메인 화면)
 ///
@@ -500,29 +501,37 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   /// v2.18.27 — 매뉴얼 새 탭 열기 (token 포함, axis-manual Edge Function 인증 통과용)
   /// Codex M-Q1 + A-Q7 반영: encodeURIComponent + noopener,noreferrer (VIEW 패턴 정합)
   /// v2.18.31 (5-26): 모바일 PWA standalone mode catch 해소 — anchor click 패턴 + fallback
-  Future<void> _handleOpenManual(BuildContext context) async {
+  /// v2.18.34 (5-27): sync token getter 변경 — `await getToken()` (secure_storage async) 영역
+  /// user gesture context lost catch (모바일 popup blocker 차단) 해소.
+  /// ApiService.token (런타임 메모리 캐시, sync getter) 재사용 — DRY 원칙 + 책임 분리 정합.
+  void _handleOpenManual(BuildContext context) {
+    const baseUrl = 'https://axis-manual.netlify.app/';
     try {
-      final authService = AuthService();
-      final token = await authService.getToken();
-      const baseUrl = 'https://axis-manual.netlify.app/';
-      final url = (token != null && token.isNotEmpty)
-          ? '$baseUrl?token=${Uri.encodeQueryComponent(token)}'
-          : baseUrl;
+      // v2.18.34: sync token getter (await 없음) — user gesture 유지 → 모바일 popup 통과
+      final token = ApiService().token;
 
-      // v2.18.31: PWA 모바일 standalone mode 영역 window.open(_blank) 차단 catch 해소
-      // 표준 패턴 = anchor element dynamic + click() 시뮬레이션 (web.dev / MDN 권장)
-      // PWA iOS Safari + Android Chrome 영역 새 탭 정상 열림 (95~99% 정합)
-      try {
-        final anchor = html.AnchorElement(href: url)
-          ..target = '_blank'
-          ..rel = 'noopener noreferrer';
-        html.document.body!.append(anchor);
-        anchor.click();
-        anchor.remove();
-      } catch (anchorErr) {
-        // fallback: 같은 탭 영역 이동 (PWA 떠남, 단 매뉴얼 정상 표시)
-        html.window.location.href = url;
+      if (token == null || token.isEmpty) {
+        // token null catch — 재로그인 의무. SnackBar 안내 + 매뉴얼 진입 차단.
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('세션 만료. 다시 로그인 후 매뉴얼 접속해주세요.'),
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+        return;
       }
+
+      final url = '$baseUrl?token=${Uri.encodeQueryComponent(token)}';
+
+      // anchor click — user gesture context 영역 모바일 PWA standalone 영역 새 탭 정상 열림
+      final anchor = html.AnchorElement(href: url)
+        ..target = '_blank'
+        ..rel = 'noopener noreferrer';
+      html.document.body!.append(anchor);
+      anchor.click();
+      anchor.remove();
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

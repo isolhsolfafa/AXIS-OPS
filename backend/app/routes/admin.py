@@ -14,7 +14,7 @@ from datetime import date, datetime, timezone, timedelta
 from collections import defaultdict
 
 from app.config import Config
-from app.middleware.jwt_auth import jwt_required, admin_required, manager_or_admin_required, view_access_required
+from app.middleware.jwt_auth import jwt_required, admin_required, manager_or_admin_required, gst_or_admin_required, view_access_required
 from app.models.worker import (
     get_db_connection, update_approval_status, get_worker_by_id,
     get_inactive_workers, get_deactivated_workers, deactivate_worker, reactivate_worker,
@@ -1540,7 +1540,7 @@ def toggle_manager(worker_id: int) -> Tuple[Dict[str, Any], int]:
 
 @admin_bp.route("/settings", methods=["GET"])
 @jwt_required
-@admin_required
+@gst_or_admin_required
 def get_settings() -> Tuple[Dict[str, Any], int]:
     """
     admin_settings 전체 조회
@@ -1571,7 +1571,7 @@ def get_settings() -> Tuple[Dict[str, Any], int]:
 
 @admin_bp.route("/settings", methods=["PUT"])
 @jwt_required
-@manager_or_admin_required
+@gst_or_admin_required
 def update_settings() -> Tuple[Dict[str, Any], int]:
     """
     admin_settings UPSERT (여러 키 동시 업데이트 가능)
@@ -2553,3 +2553,40 @@ def update_worker_status() -> Tuple[Dict[str, Any], int]:
         'worker_id': worker_id,
         'action': action,
     }), 200
+
+
+# ─── Sprint #72 (2026-05-27) — product-codes dropdown ──────────────────
+@admin_bp.route("/product-codes", methods=["GET"])
+@jwt_required
+@gst_or_admin_required
+def list_product_codes() -> Tuple[Dict[str, Any], int]:
+    """
+    체크리스트 마스터 추가/편집 모달의 product_code 드롭다운용 (#72).
+
+    plan.product_info 에서 DISTINCT product_code 조회. 현재 운영 = 약 200건 숫자 SKU.
+    추후 product_code 모듈화 (50개 미만 catch) 후 별 체크리스트 관리 base.
+
+    권한: gst_or_admin_required (GST 자사 + admin, 협력사 차단).
+
+    Returns:
+        200: {"product_codes": ["41000514", "41000522", ...]}
+        500: {"error": "INTERNAL_ERROR", "message": str}
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT DISTINCT product_code
+               FROM plan.product_info
+               WHERE product_code IS NOT NULL AND product_code <> ''
+               ORDER BY product_code"""
+        )
+        codes = [r['product_code'] for r in cur.fetchall()]
+        return jsonify({'product_codes': codes}), 200
+    except Exception as e:
+        logger.error(f"list_product_codes error: {e}")
+        return jsonify({'error': 'INTERNAL_ERROR', 'message': str(e)}), 500
+    finally:
+        if conn:
+            put_conn(conn)
