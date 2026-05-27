@@ -1,7 +1,31 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-26 KST (✅ v2.18.30 — Sprint 76-BE best_ship CTE model source 정정. v2.18.29 운영 검증 invariant 실패 후 1줄 fix: `p.product_code AS model` → `p.model AS model`. 운영 1199건 검증 — 두 칼럼 의미 완전 다름 (product_code=숫자 SKU '41200152' / model=분류 이름 'GAIA-I DUAL'). pytest 31/31 GREEN. VIEW type 변경 0. Sprint 76-BE freeze 완료. **선행: v2.18.29 by_model 옵션 C + P-v3 avg_lead_time + v2.18.28 출하이력 BE 신규 (Codex 2 라운드 전수 close + 본문 SQL 반개구간 정정 `8e4dd63`)**)
+> 마지막 업데이트: 2026-05-27 KST (✅ v2.18.33 — Sprint 76-BE plan_change_warning 신규 KPI + Sprint 77 인큐베이션. 사용자 catch: 계획대비 출하 = 계획일 수정 시 100% 정시 트릭 모순. 운영 검증 5월 plan 148건 중 89건 (60%) `ship_plan_date` 변경됨. 자기 충족 catch 매니저 신호 hint 추가. `_fetch_plan_change_warning()` 2단계 SQL (to_regclass IF + etl.change_log JOIN). pytest 32/32 GREEN. commit `d8dcc22`. **선행 trail**: v2.18.32 (TEST CUSTOMER 제외, factory.py v2.15.21 정합) / v2.18.31 (OPS 매뉴얼 모바일 PWA anchor click + fallback — 사용자 추가 catch "메뉴얼로 안넘가네" → BACKLOG `BUG-OPS-MANUAL-BUTTON-MOBILE-PWA-20260526` 🟠 MEDIUM 이관) / v2.18.30 (best_ship CTE model source product_code→model 1줄 fix) / v2.18.29 (by_model 옵션 C + P-v3) / v2.18.28 (출하이력 BE 신규))
+
+---
+
+## 📌 2026-05-27 KST — Sprint 76-BE 본 sprint freeze (v2.18.31 + v2.18.32 + v2.18.33)
+
+### v2.18.33 plan_change_warning 신규 KPI (자기 충족 catch 매니저 신호)
+
+사용자 핵심 catch: "계획대비 출하가 되면 납기 준수가 됬다고 봐야되나… 계획일 수정하면 준수는 항상 100%가 되서 모순이 있는거 같은데"
+
+| 운영 검증 (5월) | 값 |
+|---|---|
+| 5월 plan 전체 (TEST 제외) | 148 |
+| `ship_plan_date` 변경 S/N | 89 (60%) ← 자기 충족 catch 신호 |
+| 전체 변경 record | 185 (S/N당 평균 2회) |
+
+→ `kpi.plan_change_warning = { count, share_pct, hint }` 응답 추가. test DB 영역 `etl.change_log` 없음 — `to_regclass` IF 분기 안전망 (count=0 fallback). pytest 32/32 GREEN. **Sprint 77 (가칭) Lead Time 준수율 신규 KPI 인큐베이션** — 운영 6개월+ actual 정확 일자 누적 후 진입.
+
+### v2.18.32 TEST CUSTOMER 제외 (factory.py v2.15.21 정합)
+
+사용자 catch: "test data는 당연히 제외 되야됨". `_build_best_ship_cte` + `_fetch_monthly_trend` 양쪽 WHERE 절 `AND COALESCE(p.customer, '') <> 'TEST CUSTOMER'` 추가. 5월 응답 plan_count 153→148 / fulfillment_pct 79.7%→82.4% (정합도 ↑). factory.py #69 패턴 동일.
+
+### v2.18.31 OPS 매뉴얼 버튼 모바일 PWA catch (try fix 후 BACKLOG)
+
+사용자 catch: "메뉴얼버튼 눌러도 페이지 전환안됨 피시환경에서는 되는데 모바일 환경에서 전환안됨". `_handleOpenManual()` anchor click + fallback 패치 적용. 사용자 재검증 후 "메뉴얼로 안넘가네 터치는 잘눌리는데" → 원인: `await getToken()` 후 `anchor.click()` 시 user gesture context lost (모바일 popup 차단). **BACKLOG `BUG-OPS-MANUAL-BUTTON-MOBILE-PWA-20260526` 🟠 MEDIUM 이관** — 옵션 A (tokenSync) / B (location.href) / C (조합) 결정 의무.
 
 ---
 
