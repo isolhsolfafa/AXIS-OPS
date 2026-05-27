@@ -343,8 +343,12 @@ class _SiFinishingScreenState extends ConsumerState<SiFinishingScreen>
   }
 
   // v2.19.5: PI/QI 카드 디자인 정합 (gst_products_screen 영역 컨셉 carrier)
+  // v2.19.6: [내 작업 완료] 버튼 추가 (본인 작업 시) — Row Expanded + admin/manager → 강제 종료 동시
   Widget _buildPendingCard(Map<String, dynamic> t) {
     final taskId = t['id'] as int?;
+    final taskWorkerId = t['worker_id'] as int?;
+    final myId = ref.read(authProvider).currentWorker?.id;
+    final isMyTask = taskId != null && taskWorkerId != null && taskWorkerId == myId;
     final sn = (t['serial_number'] as String?) ?? '-';
     final salesOrder = (t['sales_order'] as String?) ?? '';
     final model = (t['model'] as String?) ?? '';
@@ -435,24 +439,43 @@ class _SiFinishingScreenState extends ConsumerState<SiFinishingScreen>
               const SizedBox(width: 4),
               Text(startedStr, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
             ]),
-            // 강제 종료 버튼 (admin/manager 만)
-            if (_canManage && taskId != null) ...[
+            // 버튼 영역 — 본인 task → [내 작업 완료] / admin/manager → [강제 종료] (동시 표시 가능)
+            if (taskId != null && (isMyTask || _canManage)) ...[
               const SizedBox(height: 10),
               const Divider(color: Color(0xFFE5E7EB), height: 1),
               const SizedBox(height: 10),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: () => _forceCloseTask(taskId, sn),
-                  icon: const Icon(Icons.stop_circle, size: 16),
-                  label: const Text('강제 종료', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFFDC2626),
-                    side: const BorderSide(color: Color(0xFFDC2626), width: 1.2),
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  ),
-                ),
+              Row(
+                children: [
+                  if (isMyTask)
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () => _completeMyWork(taskId),
+                        icon: const Icon(Icons.check, size: 15),
+                        label: const Text('내 작업 완료', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFF6366F1),
+                          side: const BorderSide(color: Color(0xFF6366F1), width: 1.2),
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                      ),
+                    ),
+                  if (isMyTask && _canManage) const SizedBox(width: 8),
+                  if (_canManage)
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () => _forceCloseTask(taskId, sn),
+                        icon: const Icon(Icons.stop_circle, size: 15),
+                        label: const Text('강제 종료', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFFDC2626),
+                          side: const BorderSide(color: Color(0xFFDC2626), width: 1.2),
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ],
           ],
@@ -613,7 +636,8 @@ class _SiFinishingScreenState extends ConsumerState<SiFinishingScreen>
               ]),
             ],
             // 버튼 영역 — Tab 2 (출하 확정) 영역 만
-            if (isConfirmed && (isMyTask || (_canManage && sn != '-'))) ...[
+            // v2.19.6: [출고 완료] 권한 = GST 인원 전체 (admin/manager 영역 X)
+            if (isConfirmed && sn != '-' && (isMyTask || _isGstSelf || _canManage)) ...[
               const SizedBox(height: 10),
               const Divider(color: Color(0xFFE5E7EB), height: 1),
               const SizedBox(height: 10),
@@ -625,26 +649,28 @@ class _SiFinishingScreenState extends ConsumerState<SiFinishingScreen>
                       child: OutlinedButton.icon(
                         onPressed: () => _completeMyWork(siTaskId),
                         icon: const Icon(Icons.check, size: 15),
-                        label: const Text('내 작업 완료', style: TextStyle(fontSize: 12)),
+                        label: const Text('내 작업 완료', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                         style: OutlinedButton.styleFrom(
                           foregroundColor: const Color(0xFF6366F1),
-                          side: const BorderSide(color: Color(0xFF6366F1)),
-                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          side: const BorderSide(color: Color(0xFF6366F1), width: 1.2),
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                         ),
                       ),
                     ),
-                  if (isMyTask && _canManage) const SizedBox(width: 8),
-                  // [출고 완료] = admin/manager 만
-                  if (_canManage)
+                  if (isMyTask && (_isGstSelf || _canManage)) const SizedBox(width: 8),
+                  // [출고 완료] = GST 인원 전체 (admin / manager / 일반 작업자 모두)
+                  if (_isGstSelf || _canManage)
                     Expanded(
                       child: ElevatedButton.icon(
                         onPressed: () => _shipComplete(sn),
                         icon: const Icon(Icons.local_shipping, size: 15),
-                        label: const Text('출고 완료', style: TextStyle(fontSize: 12)),
+                        label: const Text('출고 완료', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFF6366F1),
                           foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                         ),
                       ),
                     ),
