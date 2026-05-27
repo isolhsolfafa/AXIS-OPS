@@ -6,6 +6,48 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.18.35] - 2026-05-27 — 매뉴얼 모바일 PWA HOTFIX (ApiService 싱글톤 catch)
+
+> v2.18.34 fix 후 사용자 운영 catch: "세션만료. 다시 로그인 후 메뉴얼 접속" SnackBar 만 뜨고 접속 불가. v2.18.34 영역 매뉴얼 fix 자체 catch 본질 catch 영역 즉시 HOTFIX.
+
+### Root cause
+
+`api_service.dart` L6 — **ApiService 영역 싱글톤 아님** (매번 new instance 생성):
+
+```dart
+class ApiService {
+  String? _token;
+  ApiService({String? baseUrl}) { ... }  // ← new instance 매번
+}
+```
+
+`home_screen.dart _handleOpenManual()` 영역 `ApiService().token` 직접 호출 = **새 instance 생성** + `_token = null` 초기값 = SnackBar 노출.
+
+login 시 `setToken()` 호출한 instance = **`apiServiceProvider`** (Riverpod Provider singleton, `auth_provider.dart` L296). v2.18.34 fix 시 Provider 영역 catch X.
+
+### 변경 (FE 1 파일 + version)
+
+| 파일 | 변경 |
+|------|-----|
+| `frontend/lib/screens/home/home_screen.dart` | `ApiService()` 직접 호출 → `ref.read(apiServiceProvider).token` 변경 (Provider singleton 영역 동일 instance 영역 token 캐시 접근 정합) |
+| `backend/version.py` + `frontend/lib/utils/app_version.dart` | 2.18.34 → 2.18.35 |
+
+### 검증
+
+- flutter build web GREEN (12.6초)
+- 사용자 실기기 catch 정상 (모바일 PWA 매뉴얼 새 탭 열림 ✅)
+
+### 회귀 위험
+
+- 0 (1줄 변경 — `ApiService()` → `ref.read(apiServiceProvider)`)
+- ConsumerState 영역 `ref` 직접 사용 가능 (Widget tree scope)
+
+### 다음 catch — 같은 sprint 인큐베이션
+
+- `REFACTOR-API-SERVICE-SINGLETON-20260527` (가칭) — ApiService 영역 다른 곳 영역 `ApiService()` 직접 호출 grep sweep + Provider 영역 통일. 본 catch 영역 다른 화면 영역 잠재 catch 가능성 catch.
+
+---
+
 ## [2.18.34] - 2026-05-27 — VIEW #72 admin 권한 데코레이터 통일 + 매뉴얼 모바일 PWA fix
 
 > 두 catch 통합 release — VIEW OPS_API_REQUESTS.md #72 운영 차단 catch (testpm GST manager 영역 체크리스트/admin_settings 접근 불가) + OPS 매뉴얼 모바일 PWA catch (`BUG-OPS-MANUAL-BUTTON-MOBILE-PWA-20260526`).
