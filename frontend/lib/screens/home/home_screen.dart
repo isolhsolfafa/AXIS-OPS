@@ -14,7 +14,7 @@ import '../../widgets/update_dialog.dart';
 import '../../services/update_service.dart';
 import '../../services/notice_service.dart';
 import '../../services/auth_service.dart';  // v2.18.27: 매뉴얼 버튼 token 발급용
-import '../../services/api_service.dart';  // v2.18.34: 매뉴얼 모바일 PWA — sync token getter (user gesture 유지)
+// v2.18.35: apiServiceProvider 영역 Provider singleton 사용 (이미 L7 영역 auth_provider.dart import 됨)
 
 /// 홈 화면 (메인 화면)
 ///
@@ -503,12 +503,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   /// v2.18.31 (5-26): 모바일 PWA standalone mode catch 해소 — anchor click 패턴 + fallback
   /// v2.18.34 (5-27): sync token getter 변경 — `await getToken()` (secure_storage async) 영역
   /// user gesture context lost catch (모바일 popup blocker 차단) 해소.
-  /// ApiService.token (런타임 메모리 캐시, sync getter) 재사용 — DRY 원칙 + 책임 분리 정합.
+  /// v2.18.35 (5-27): `ApiService()` 직접 호출 → `ref.read(apiServiceProvider)` 변경.
+  /// 본질 catch — ApiService 영역 싱글톤 아님 → 매번 new instance + token null catch.
+  /// Riverpod Provider singleton 영역 동일 instance 사용 의무 (login 시 setToken 호출된 영역).
   void _handleOpenManual(BuildContext context) {
     const baseUrl = 'https://axis-manual.netlify.app/';
     try {
-      // v2.18.34: sync token getter (await 없음) — user gesture 유지 → 모바일 popup 통과
-      final token = ApiService().token;
+      // v2.18.35: Provider singleton 영역 token — login setToken 호출된 동일 instance
+      final token = ref.read(apiServiceProvider).token;
 
       if (token == null || token.isEmpty) {
         // token null catch — 재로그인 의무. SnackBar 안내 + 매뉴얼 진입 차단.
