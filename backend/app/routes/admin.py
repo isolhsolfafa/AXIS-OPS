@@ -1785,6 +1785,8 @@ def get_pending_tasks() -> Tuple[Dict[str, Any], int]:
                 t.started_at,
                 EXTRACT(EPOCH FROM (NOW() - t.started_at)) / 60 AS elapsed_minutes,
                 pi.sales_order,
+                pi.model,
+                pi.customer,
                 'in_progress' AS status
             FROM app_task_details t
             LEFT JOIN LATERAL (
@@ -1825,6 +1827,8 @@ def get_pending_tasks() -> Tuple[Dict[str, Any], int]:
                     NULL::timestamptz AS started_at,
                     0 AS elapsed_minutes,
                     pi.sales_order,
+                    pi.model,
+                    pi.customer,
                     'not_started' AS status
                 FROM app_task_details t
                 LEFT JOIN plan.product_info pi ON pi.serial_number = t.serial_number
@@ -1874,6 +1878,8 @@ def get_pending_tasks() -> Tuple[Dict[str, Any], int]:
                 'started_at': row['started_at'].isoformat() if row['started_at'] else None,
                 'elapsed_minutes': int(row['elapsed_minutes']) if row['elapsed_minutes'] else 0,
                 'sales_order': row['sales_order'],
+                'model': row.get('model'),
+                'customer': row.get('customer'),
                 'status': row['status'],
             }
             for row in all_rows

@@ -337,57 +337,126 @@ class _SiFinishingScreenState extends ConsumerState<SiFinishingScreen>
       child: ListView.builder(
         physics: const AlwaysScrollableScrollPhysics(),
         itemCount: _pendingTasks.length,
-        itemBuilder: (ctx, idx) {
-          final t = _pendingTasks[idx];
-          final taskId = t['id'] as int?;
-          final sn = t['serial_number'] as String?;
-          return Card(
-            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(children: [
-                    const Icon(Icons.warning_amber, color: Colors.orange, size: 20),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text('${sn ?? '-'} · ${t['sales_order'] ?? '-'}',
-                          style: const TextStyle(fontWeight: FontWeight.w600)),
+        itemBuilder: (ctx, idx) => _buildPendingCard(_pendingTasks[idx]),
+      ),
+    );
+  }
+
+  // v2.19.5: PI/QI 카드 디자인 정합 (gst_products_screen 영역 컨셉 carrier)
+  Widget _buildPendingCard(Map<String, dynamic> t) {
+    final taskId = t['id'] as int?;
+    final sn = (t['serial_number'] as String?) ?? '-';
+    final salesOrder = (t['sales_order'] as String?) ?? '';
+    final model = (t['model'] as String?) ?? '';
+    final customer = (t['customer'] as String?) ?? '';
+    final workerName = (t['worker_name'] as String?) ?? '';
+    final taskName = (t['task_name'] as String?) ?? '마무리공정';
+    final startedAt = t['started_at'] != null
+        ? DateTime.tryParse(t['started_at'] as String)?.toLocal()
+        : null;
+    final startedStr = startedAt != null
+        ? '${startedAt.month}/${startedAt.day} ${startedAt.hour.toString().padLeft(2, '0')}:${startedAt.minute.toString().padLeft(2, '0')}'
+        : '-';
+
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: Colors.grey.shade200),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // S/N (bold large) + 진행중 chip
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    sn,
+                    style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.bold,
+                      color: Color(0xFF1F2937),
                     ),
-                  ]),
-                  const SizedBox(height: 6),
-                  Text(
-                    '시작: ${t['started_at'] ?? '-'} · 작업자: ${t['worker_name'] ?? '-'}',
-                    style: const TextStyle(fontSize: 12, color: Colors.grey),
                   ),
-                  // v2.19.4: PI/QI 영역 컨셉 정합 — Divider + Row Expanded 패턴 + 강제 종료 ElevatedButton (red)
-                  if (_canManage && taskId != null) ...[
-                    const SizedBox(height: 12),
-                    const Divider(color: Color(0xFFE5E7EB), height: 1),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: ElevatedButton.icon(
-                            onPressed: () => _forceCloseTask(taskId, sn),
-                            icon: const Icon(Icons.stop_circle, size: 15),
-                            label: const Text('강제 종료', style: TextStyle(fontSize: 12)),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.red,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(vertical: 8),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ],
-              ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEDE9FE),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: const [
+                      Icon(Icons.play_arrow, size: 12, color: Color(0xFF6366F1)),
+                      SizedBox(width: 2),
+                      Text('진행중', style: TextStyle(fontSize: 11, color: Color(0xFF6366F1), fontWeight: FontWeight.w600)),
+                    ],
+                  ),
+                ),
+              ],
             ),
-          );
-        },
+            // 모델
+            if (model.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(model, style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+            ],
+            // O/N + 고객사
+            if (salesOrder.isNotEmpty || customer.isNotEmpty) ...[
+              const SizedBox(height: 2),
+              Text(
+                [
+                  if (salesOrder.isNotEmpty) 'O/N $salesOrder',
+                  if (customer.isNotEmpty) customer,
+                ].join(' · '),
+                style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+              ),
+            ],
+            const SizedBox(height: 10),
+            const Divider(color: Color(0xFFE5E7EB), height: 1),
+            const SizedBox(height: 10),
+            // 공정 영역
+            Row(children: [
+              const Icon(Icons.assignment_outlined, size: 14, color: Color(0xFF6B7280)),
+              const SizedBox(width: 4),
+              Text(taskName, style: const TextStyle(fontSize: 13, color: Color(0xFF374151))),
+            ]),
+            const SizedBox(height: 4),
+            // 작업자 + 시작 시간
+            Row(children: [
+              const Icon(Icons.person_outline, size: 13, color: Color(0xFF9CA3AF)),
+              const SizedBox(width: 4),
+              Text(workerName, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+              const SizedBox(width: 12),
+              const Icon(Icons.access_time, size: 13, color: Color(0xFF9CA3AF)),
+              const SizedBox(width: 4),
+              Text(startedStr, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+            ]),
+            // 강제 종료 버튼 (admin/manager 만)
+            if (_canManage && taskId != null) ...[
+              const SizedBox(height: 10),
+              const Divider(color: Color(0xFFE5E7EB), height: 1),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () => _forceCloseTask(taskId, sn),
+                  icon: const Icon(Icons.stop_circle, size: 16),
+                  label: const Text('강제 종료', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFFDC2626),
+                    side: const BorderSide(color: Color(0xFFDC2626), width: 1.2),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -455,57 +524,130 @@ class _SiFinishingScreenState extends ConsumerState<SiFinishingScreen>
 
   Widget _buildShipmentCard(Map<String, dynamic> item, {required bool isConfirmed}) {
     final inProgress = item['is_si_finishing_in_progress'] == true;
-    final sn = item['serial_number'] as String?;
+    final sn = (item['serial_number'] as String?) ?? '-';
+    final salesOrder = (item['sales_order'] as String?) ?? '';
+    final model = (item['model'] as String?) ?? '';
+    final customer = (item['customer'] as String?) ?? '';
+    final shipPlan = (item['ship_plan_date'] as String?) ?? '-';
+    final siTaskId = item['si_finishing_task_id'] as int?;
+    final siWorkerId = item['si_finishing_worker_id'] as int?;
+    final siWorkerName = (item['si_finishing_worker_name'] as String?) ?? '';
+    final myId = ref.read(authProvider).currentWorker?.id;
+    final isMyTask = inProgress && siTaskId != null && siWorkerId == myId;
+
     return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: Colors.grey.shade200),
+      ),
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(children: [
-              Icon(Icons.local_shipping, color: inProgress ? Colors.orange : Colors.green, size: 20),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text('${sn ?? '-'} · ${item['sales_order'] ?? '-'}',
-                    style: const TextStyle(fontWeight: FontWeight.w600)),
-              ),
-              if (inProgress)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: Colors.orange.shade100,
-                    borderRadius: BorderRadius.circular(8),
+            // S/N + 진행중 chip
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    sn,
+                    style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.bold,
+                      color: Color(0xFF1F2937),
+                    ),
                   ),
-                  child: const Text('🔄 작업 진행 중',
-                      style: TextStyle(fontSize: 10, color: Colors.deepOrange)),
                 ),
-            ]),
-            const SizedBox(height: 6),
-            Text(
-              '${item['model'] ?? '-'} · ${item['customer'] ?? '-'} · 출하 ${item['ship_plan_date'] ?? '-'}',
-              style: const TextStyle(fontSize: 12, color: Colors.grey),
+                if (inProgress)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEDE9FE),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: const [
+                        Icon(Icons.play_arrow, size: 12, color: Color(0xFF6366F1)),
+                        SizedBox(width: 2),
+                        Text('진행중', style: TextStyle(fontSize: 11, color: Color(0xFF6366F1), fontWeight: FontWeight.w600)),
+                      ],
+                    ),
+                  ),
+              ],
             ),
-            // Tab 2 (출하 확정) 영역 만 [출고 완료] 버튼 (admin/manager)
-            // v2.19.4: PI/QI 영역 컨셉 정합 — Divider + Row Expanded + ElevatedButton (accent indigo)
-            if (isConfirmed && _canManage && sn != null) ...[
-              const SizedBox(height: 12),
+            if (model.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(model, style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+            ],
+            if (salesOrder.isNotEmpty || customer.isNotEmpty) ...[
+              const SizedBox(height: 2),
+              Text(
+                [
+                  if (salesOrder.isNotEmpty) 'O/N $salesOrder',
+                  if (customer.isNotEmpty) customer,
+                ].join(' · '),
+                style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+              ),
+            ],
+            const SizedBox(height: 10),
+            const Divider(color: Color(0xFFE5E7EB), height: 1),
+            const SizedBox(height: 10),
+            // 공정 영역
+            Row(children: [
+              const Icon(Icons.local_shipping_outlined, size: 14, color: Color(0xFF6B7280)),
+              const SizedBox(width: 4),
+              Text('마무리공정', style: const TextStyle(fontSize: 13, color: Color(0xFF374151))),
+              const SizedBox(width: 12),
+              const Icon(Icons.event, size: 13, color: Color(0xFF9CA3AF)),
+              const SizedBox(width: 4),
+              Text('출하 $shipPlan', style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+            ]),
+            if (inProgress && siWorkerName.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Row(children: [
+                const Icon(Icons.person_outline, size: 13, color: Color(0xFF9CA3AF)),
+                const SizedBox(width: 4),
+                Text(siWorkerName, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+              ]),
+            ],
+            // 버튼 영역 — Tab 2 (출하 확정) 영역 만
+            if (isConfirmed && (isMyTask || (_canManage && sn != '-'))) ...[
+              const SizedBox(height: 10),
               const Divider(color: Color(0xFFE5E7EB), height: 1),
               const SizedBox(height: 10),
               Row(
                 children: [
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: () => _shipComplete(sn),
-                      icon: const Icon(Icons.local_shipping, size: 15),
-                      label: const Text('출고 완료', style: TextStyle(fontSize: 12)),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF6366F1),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 8),
+                  // [내 작업 완료] = 본인 task 영역 진행 중 (relay 모드)
+                  if (isMyTask)
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () => _completeMyWork(siTaskId),
+                        icon: const Icon(Icons.check, size: 15),
+                        label: const Text('내 작업 완료', style: TextStyle(fontSize: 12)),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFF6366F1),
+                          side: const BorderSide(color: Color(0xFF6366F1)),
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                        ),
                       ),
                     ),
-                  ),
+                  if (isMyTask && _canManage) const SizedBox(width: 8),
+                  // [출고 완료] = admin/manager 만
+                  if (_canManage)
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: () => _shipComplete(sn),
+                        icon: const Icon(Icons.local_shipping, size: 15),
+                        label: const Text('출고 완료', style: TextStyle(fontSize: 12)),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF6366F1),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ],

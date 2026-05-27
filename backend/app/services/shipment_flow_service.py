@@ -91,20 +91,39 @@ def get_shipment_by_status(
         total = int(row['cnt'] or 0) if row else 0
 
         # items catch (Codex Q8 — is_si_finishing_in_progress 필드 추가)
+        # v2.19.5: si_finishing_task_id + worker_id 추가 ([내 작업 완료] 버튼 carrier)
         cur.execute(
             f"""
             SELECT p.serial_number, p.sales_order, p.model, p.customer,
                    p.mech_partner, p.elec_partner,
                    p.ship_plan_date,
-                   EXISTS (
-                       SELECT 1 FROM app_task_details t
-                       WHERE t.serial_number = p.serial_number
-                         AND t.task_id = 'SI_FINISHING'
-                         AND t.started_at IS NOT NULL
-                         AND t.completed_at IS NULL
-                         AND COALESCE(t.force_closed, FALSE) = FALSE
-                   ) AS is_si_finishing_in_progress
-            {base_sql}
+                   sif.task_id AS si_finishing_task_id,
+                   sif.worker_id AS si_finishing_worker_id,
+                   sif.worker_name AS si_finishing_worker_name,
+                   (sif.task_id IS NOT NULL) AS is_si_finishing_in_progress
+            FROM plan.product_info p
+            LEFT JOIN LATERAL (
+                SELECT t.id AS task_id,
+                       wsl.worker_id,
+                       w.name AS worker_name
+                FROM app_task_details t
+                LEFT JOIN LATERAL (
+                    SELECT wsl2.worker_id FROM work_start_log wsl2
+                    WHERE wsl2.task_id = t.id ORDER BY wsl2.started_at DESC LIMIT 1
+                ) wsl ON TRUE
+                LEFT JOIN workers w ON wsl.worker_id = w.id
+                WHERE t.serial_number = p.serial_number
+                  AND t.task_id = 'SI_FINISHING'
+                  AND t.started_at IS NOT NULL
+                  AND t.completed_at IS NULL
+                  AND COALESCE(t.force_closed, FALSE) = FALSE
+                LIMIT 1
+            ) sif ON TRUE
+            WHERE COALESCE(p.customer, '') <> 'TEST CUSTOMER'
+              AND {date_filter}
+              AND p.ship_plan_date IS NOT NULL
+              AND ({actual_date_expr}) IS NULL
+              {search_filter}
             ORDER BY p.ship_plan_date ASC, p.sales_order ASC
             LIMIT %s OFFSET %s
             """,
@@ -121,6 +140,9 @@ def get_shipment_by_status(
                 'elec_partner': r['elec_partner'],
                 'ship_plan_date': r['ship_plan_date'].isoformat() if r['ship_plan_date'] else None,
                 'is_si_finishing_in_progress': bool(r['is_si_finishing_in_progress']),
+                'si_finishing_task_id': r.get('si_finishing_task_id'),
+                'si_finishing_worker_id': r.get('si_finishing_worker_id'),
+                'si_finishing_worker_name': r.get('si_finishing_worker_name'),
             })
 
         return items, total
