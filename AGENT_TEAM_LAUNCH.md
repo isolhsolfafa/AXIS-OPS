@@ -45710,3 +45710,577 @@ WHERE (p.actual_ship_date IS NOT NULL OR t.completed_at IS NOT NULL)
 → 본 sprint 영역 `BETWEEN :start AND :end` 사용 시 `2026-05-31` + `2026-06-01` 두 month 영역 동시 카운트 catch. **반개구간 `>= :start AND < :end_exclusive` 일괄 적용 의무**.
 
 → `routes/shipment_history.py` query params parsing 영역 `end_exclusive = end + INTERVAL '1 day'` 변환.
+---
+
+# Sprint 79 — FEAT-SI-SHIPMENT-FLOW-3PHASE-20260527
+
+> **본질 catch**: 출하 흐름 3단계 (출하 예정 → 출하 확정 → 출하 완료/미종료) catch + admin 메뉴 분리 + 출하 미처리 알림 자동화.
+
+**날짜**: 2026-05-27
+**선행 trail**: v2.18.30 (출하이력 BE best_ship CTE) + Sprint 68 (ship-complete endpoint) + Sprint 34-A (admin chip 패턴)
+**Codex 자동 이관 catch**: ✅ (3+ 파일 + scheduler 신규 cron + admin_settings 신규 키 = 자동 트리거)
+**버전**: v2.19.0 (minor — 신규 기능)
+
+---
+
+## 1. 배경 + 본질 catch
+
+### 1-1. 사용자 catch (5-27)
+
+OPS 화면 영역 SI 마무리공정 영역 catch 명확화 catch:
+- 매니저 catch — SI 마무리공정 진입 시 = 작업 진행 중 영역 만 catch (출하 예정/대기 catch X)
+- 출하 흐름 base catch 의무 — 3단계 (예정 → 확정 → 완료/미종료)
+
+### 1-2. 운영 base catch
+
+- `ship_plan_date` = ETL 영역 항상 잡혀 있음 (NULL 영역 X 영역 catch)
+- `today = ship_plan_date` = 매일 출하 예정 잡힘
+- 출하 완료 catch base = `actual_ship_date` (ETL) OR `SI_SHIPMENT.completed_at` (app) — COALESCE 패턴 정합 (v2.18.30 best_ship CTE 영역 patterns)
+
+### 1-3. 책임 분리 원칙 정합 (CLAUDE.md L545)
+
+- OPS PWA = SI 화면 (output + 내부 작업자 input)
+- VIEW = 별 catch (출하이력 페이지 영역 동일 데이터 base)
+- Admin = admin_options 영역 chip 패턴 (메일 수신자 관리)
+
+---
+
+## 2. 기능 명세
+
+### 2-1. SI 마무리 공정 하위 탭 3개 (한 화면)
+
+`screens/gst/gst_products_screen.dart` 영역 SI 화면 (현재 단일 list) → **TabBar 영역 3 탭 분리**.
+
+**권한**: 현재 SI 마무리공정 화면 RBAC 동일 (PI/QI/SI role 인원 + admin + GST manager + 작업자).
+
+| # | 메뉴 | 데이터 base | 정렬 |
+|---|---|---|---|
+| 1 | 미종료 작업 | `SI_FINISHING task + started NOT NULL + completed IS NULL` | started_at 오래된 순 |
+| 2 | 출하 확정 | `ship_plan_date == today + actual_date IS NULL` (COALESCE base — excel + app 양쪽 미출하) | sales_order ASC |
+| 3 | 출하 예정 | `ship_plan_date > today + actual_date IS NULL` + 검색창 | ship_plan_date ASC |
+
+`actual_date` 정의 (best_ship CTE 영역 동일 — v2.18.30 패턴):
+```sql
+COALESCE(
+    (SELECT DATE(t.completed_at) FROM app_task_details t
+     WHERE t.serial_number = p.serial_number
+       AND t.task_id = 'SI_SHIPMENT'
+       AND t.completed_at IS NOT NULL
+       AND COALESCE(t.force_closed, FALSE) = FALSE
+     ORDER BY t.completed_at DESC LIMIT 1),
+    p.actual_ship_date
+)
+```
+
+### 2-2. 출하 미처리 자동 알림 (매일 07:30 KST)
+
+`scheduler_service.py` 영역 신규 cron `_alert_shipment_overdue`:
+
+**조건**:
+- `ship_plan_date < today AND actual_date IS NULL` (어제 출하 미처리 + 양쪽 미출하)
+- `admin_settings.shipment_alert_enabled = TRUE` (토글 ON 영역 만)
+
+**대상**:
+- `is_admin=TRUE` 무조건 (gmail 도메인 포함)
+- 추가 매니저 = `admin_settings.shipment_alert_recipients` (worker_id list, admin UI 영역 영역 선택)
+
+**메일 템플릿** (`notification_service.py` 신규 `send_shipment_overdue_alert`):
+```
+제목: ⚠️ [G-AXIS] 어제 출하 미처리 N건 catch (2026-05-27)
+본문:
+어제(2026-05-26) 영역 출하 계획 N건 영역 미처리 catch.
+
+📋 미처리 list:
+- S/N: GBWS-7060 | 고객사: MICRON | 모델: GAIA-I DUAL | 출하 예정: 2026-05-26
+- S/N: GBWS-7111 | 고객사: MICRON | 모델: GAIA-I DUAL | 출하 예정: 2026-05-26
+...
+
+🔗 OPS 출하 확정 화면: https://gaxis-ops.netlify.app/...
+```
+
+### 2-3. admin_options 영역 신규 카드 (Sprint 34-A chip 패턴)
+
+| 카드 | UI | 저장 키 |
+|---|---|---|
+| 출하 미처리 알림 토글 | switch | `shipment_alert_enabled` (bool) |
+| 추가 매니저 메일 수신자 | chip 추가/삭제 (worker email or worker_id 입력) | `shipment_alert_recipients` (JSONB worker_id list) |
+
+### 2-4. 메인 메뉴 신규 (admin only, SI 마무리공정 ~ 관리자 옵션 사이)
+
+| 메뉴 | 데이터 base | endpoint |
+|---|---|---|
+| 비활성 사용자 관리 | 비활성 사용자 + 비활성화 계정 통합 | 기존 `/api/admin/workers/inactive` + `/api/admin/workers/deactivated` 재사용 |
+| 미종료 작업 (전체 + 분류) | 협력사별 + GST 공정별 그룹 catch | 신규 `/api/admin/tasks/pending/grouped` |
+
+**분류 UI** (미종료 작업):
+```
+📋 미종료 작업 (전체 N건)
+
+🏭 협력사
+├─ FNI (MECH) — n건
+├─ BAT (MECH) — n건
+├─ TMS (Module) — n건
+├─ TMS (ELEC) — n건
+├─ P&S — n건
+└─ C&A — n건
+
+🏢 GST 공정
+├─ PI 가압검사 — n건
+├─ QI 공정검사 — n건
+└─ SI 마무리공정 — n건
+```
+
+### 2-5. admin_options 영역 분리 (기존 carrier 제거)
+
+| 카드 | 본 sprint 처리 |
+|---|---|
+| 비활성 사용자 관리 영역 | **제거** (메인 메뉴 영역 분리) |
+| 비활성화 계정 영역 | **제거** (비활성 사용자 메뉴 영역 통합) |
+| 미종료 작업 (admin 카드) | **제거** (메인 메뉴 영역 분리) |
+| manager 영역 미종료 catch (manager_pending_tasks_screen) | **유지** (협력사/GST manager 자사 catch — 기존 카드) |
+
+---
+
+## 3. BE 변경 명세
+
+### 3-1. routes/admin.py — 신규 endpoint 2개
+
+#### A) GET `/api/admin/tasks/pending/grouped` (메인 메뉴 미종료 작업)
+
+```python
+@admin_bp.route("/tasks/pending/grouped", methods=["GET"])
+@jwt_required
+@admin_required
+def get_pending_tasks_grouped() -> Tuple[Dict[str, Any], int]:
+    """
+    미종료 작업 분류 catch (admin only, 메인 메뉴 영역 사용).
+
+    Returns:
+        200: {
+            "total": int,
+            "partners": [{"name": "FNI", "category": "MECH", "count": int}, ...],
+            "gst_processes": [{"category": "PI", "label": "가압검사", "count": int}, ...]
+        }
+    """
+    # SQL — app_task_details + plan.product_info JOIN
+    # 분류 base — task_category + (mech_partner | elec_partner | module_outsourcing) catch
+```
+
+#### B) GET `/api/admin/shipment/by-status` (SI 화면 영역 출하 확정/예정 catch)
+
+```python
+@admin_bp.route("/shipment/by-status", methods=["GET"])
+@jwt_required
+# 권한 = SI 마무리공정 RBAC 동일 (별 decorator 또는 manager_or_admin_required)
+def get_shipment_by_status() -> Tuple[Dict[str, Any], int]:
+    """
+    출하 확정/예정 catch (SI 화면 영역 사용).
+
+    Query Parameters:
+        status: 'confirmed' (today) | 'planned' (future)
+        q: search query (option, 'planned' 영역 검색용)
+        page, per_page
+
+    Returns:
+        200: {
+            "items": [{"serial_number", "sales_order", "model", "customer",
+                       "ship_plan_date", ...}],
+            "total": int,
+            "page": int,
+            "per_page": int
+        }
+    """
+    # SQL — plan.product_info + best_ship actual_date catch + status filter
+```
+
+### 3-2. routes/admin.py — admin_settings 신규 키 2개
+
+`SETTING_KEYS` 영역 신규:
+```python
+SETTING_KEYS = {
+    # ... 기존 ...
+    'shipment_alert_enabled': {'type': 'bool', 'default': False},
+    'shipment_alert_recipients': {'type': 'list', 'default': []},  # worker_id list
+}
+```
+
+### 3-3. services/scheduler_service.py — 신규 cron
+
+```python
+def _alert_shipment_overdue():
+    """
+    매일 07:30 KST 영역 어제 출하 미처리 catch 메일 발송.
+
+    조건: ship_plan_date < today AND actual_date IS NULL
+    대상: is_admin=TRUE 무조건 + admin_settings.shipment_alert_recipients
+    토글: admin_settings.shipment_alert_enabled
+    """
+    # 1. 토글 catch
+    # 2. 미처리 list catch (best_ship CTE 패턴)
+    # 3. 대상 worker list catch (is_admin + recipients)
+    # 4. notification_service.send_shipment_overdue_alert() 호출
+
+# cron 등록
+scheduler.add_job(
+    _alert_shipment_overdue,
+    'cron', hour=7, minute=30,
+    timezone='Asia/Seoul',
+    id='alert_shipment_overdue',
+    max_instances=1,
+    replace_existing=True,
+)
+```
+
+### 3-4. services/notification_service.py — 신규 메일 템플릿
+
+```python
+def send_shipment_overdue_alert(recipients: List[str], overdue_items: List[Dict]) -> bool:
+    """출하 미처리 알림 메일 발송."""
+    subject = f"⚠️ [G-AXIS] 어제 출하 미처리 {len(overdue_items)}건 catch ({yesterday_str})"
+    body_html = render_overdue_template(overdue_items)
+    return send_email(recipients, subject, body_html)
+```
+
+### 3-5. 기존 endpoint 재사용 (변경 0)
+
+- `/api/admin/tasks/pending?category=SI` — 탭 1 미종료 작업 (SI_FINISHING 만)
+- `/api/admin/workers/inactive` + `/api/admin/workers/deactivated` — 비활성 사용자 메뉴
+
+---
+
+## 4. FE 변경 명세
+
+### 4-1. 신규 화면
+
+| 파일 | 영역 |
+|---|---|
+| `screens/admin/inactive_users_screen.dart` | 비활성 사용자 + 비활성화 계정 통합 (admin only) |
+| `screens/admin/pending_tasks_grouped_screen.dart` | 미종료 작업 분류 UI (admin only) |
+
+### 4-2. 수정 화면
+
+| 파일 | 변경 |
+|---|---|
+| `screens/gst/gst_products_screen.dart` | SI 화면 영역 TabBar 3개 catch (미종료/출하 확정/출하 예정) + 검색창 |
+| `screens/home/home_screen.dart` | 메뉴 카드 2개 추가 (SI ~ 관리자 옵션 사이) — 비활성 사용자, 미종료 작업 |
+| `screens/admin/admin_options_screen.dart` | 비활성/미종료 영역 제거 + 신규 카드 2개 (출하 알림 토글 + chip 수신자) |
+
+### 4-3. 권한 catch
+
+| 화면 | 권한 |
+|---|---|
+| SI 화면 탭 3개 | 기존 SI RBAC (변경 0) |
+| 비활성 사용자 메뉴 | admin only |
+| 미종료 작업 메뉴 | admin only |
+| admin_options chip 카드 | admin only |
+
+---
+
+## 5. DB 영향 — admin_settings 신규 키 2개
+
+`admin_settings` 영역 신규 row INSERT (migration 또는 ON CONFLICT DO NOTHING 영역 첫 호출 시 자동):
+
+```sql
+INSERT INTO admin_settings (setting_key, setting_value, description) VALUES
+('shipment_alert_enabled', 'false', '출하 미처리 매일 07:30 알림 토글'),
+('shipment_alert_recipients', '[]', '출하 알림 추가 매니저 수신자 worker_id list')
+ON CONFLICT (setting_key) DO NOTHING;
+```
+
+신규 테이블 X / 신규 컬럼 X / migration X (admin_settings 영역 신규 row 만).
+
+---
+
+## 6. pytest catch
+
+| TC | 영역 |
+|---|---|
+| TC-SHIP-FLOW-01 | `/api/admin/shipment/by-status?status=confirmed` 영역 today 출하 catch |
+| TC-SHIP-FLOW-02 | `/api/admin/shipment/by-status?status=planned` 영역 future 출하 catch |
+| TC-SHIP-FLOW-03 | `/api/admin/shipment/by-status?status=planned&q=GBWS` 영역 검색 base |
+| TC-SHIP-FLOW-04 | actual_date COALESCE catch (app SI_SHIPMENT 영역 우선) |
+| TC-PENDING-GROUPED-01 | `/api/admin/tasks/pending/grouped` 영역 분류 catch |
+| TC-PENDING-GROUPED-02 | 협력사별 catch (FNI/BAT/TMS) |
+| TC-PENDING-GROUPED-03 | GST 공정별 catch (PI/QI/SI) |
+| TC-OVERDUE-ALERT-01 | _alert_shipment_overdue 영역 어제 미처리 catch |
+| TC-OVERDUE-ALERT-02 | 토글 OFF 영역 catch X (skip) |
+| TC-OVERDUE-ALERT-03 | recipients chip list 정합 |
+| TC-OVERDUE-ALERT-04 | is_admin=TRUE 무조건 catch |
+| TC-OVERDUE-ALERT-05 | 미처리 0건 영역 메일 발송 catch X (skip) |
+
+---
+
+## 7. Codex 라운드 1 catch 항목
+
+자동 이관 base catch:
+- ✅ 3+ 파일 touch (admin.py + scheduler_service.py + notification_service.py + FE 5+ 파일)
+- ✅ scheduler 신규 cron (운영 영향)
+- ✅ admin_settings 신규 키 2개 (응답 schema 변경)
+
+Codex 라운드 1 catch 항목:
+- Q1. `actual_date` COALESCE base catch 정합 (best_ship CTE 패턴 재사용 의무 — 별 함수 분리?)
+- Q2. cron 07:30 KST timezone catch (APScheduler 영역 `timezone='Asia/Seoul'` 명시 의무)
+- Q3. 메일 발송 실패 시 retry 정책 (notification_service 영역 기존 패턴 catch)
+- Q4. 미처리 0건 영역 catch — 메일 발송 skip 의무 (spam 방지)
+- Q5. recipients chip list 영역 worker_id vs email catch — 어느 base 저장?
+- Q6. 분류 UI 영역 카운트 catch — N+1 catch (SQL 일괄 GROUP BY 의무)
+- Q7. 권한 catch — SI 화면 탭 3개 영역 RBAC catch (기존 동일 정합)
+- Q8. invariant — 출하 확정 + 출하 예정 sum != 전체 미출하 (이미 시작된 작업 catch — SI_FINISHING started 영역 catch 분리)
+
+---
+
+## 8. 운영 검증 catch
+
+```
+[D+0] 배포 + admin_options 영역 chip + 토글 catch
+[D+0 17:00] 토글 ON + 1명 chip 추가 catch
+[D+1 07:30] scheduler 발송 catch → admin + chip 영역 수신 catch
+[D+1 09:00] 메일 도착 catch (운영팀)
+[D+2] SI 화면 영역 3 탭 catch + 미종료 작업 분류 catch
+[D+7] 통계 catch — scheduler 매일 발송 정합
+```
+
+---
+
+## 9. 진행 순서 catch
+
+```
+[Step 2] Codex 라운드 1 (본 설계서 base, 자동 이관)
+[Step 3] BE 구현 (~2.5h)
+  - admin.py 신규 endpoint 2개 + SETTING_KEYS 추가
+  - scheduler_service.py 신규 cron
+  - notification_service.py 신규 템플릿
+[Step 4] FE 구현 (~3h)
+  - 신규 screen 2개 (inactive_users + pending_tasks_grouped)
+  - gst_products_screen TabBar 3개
+  - home_screen 메뉴 2개 추가
+  - admin_options_screen 분리 + chip 카드
+[Step 5] pytest (12 TC) + flutter build + version v2.19.0
+[Step 6] commit + push + Netlify
+[Step 7] 운영 검증 (D+1 07:30 KST)
+```
+
+
+---
+
+## Sprint 79 — Codex 라운드 1 결과 + 본문 정정 (2026-05-27)
+
+> **Codex 라운드 1 합의**: M=7 / A=2 / N=4. 사용자 결정 catch (Q8 (나) + M2 현행유지 + A-추가1 (가)) + M=7 모두 반영 base 본문 정정.
+
+### M=7 catch 반영
+
+#### Q1 — actual_date COALESCE 함수 분리 (M)
+
+`backend/app/services/shipment_history_service.py:82` 영역 `_best_ship_sql_select()` 영역 이미 존재. 본 sprint 영역 신규 4곳 (shipment/by-status query 2 + overdue cron query 1 + 메일 list query 1) 영역 동일 함수 재사용.
+
+신규 별 sprint 의무 catch — 신규 헬퍼 `_get_actual_date_subquery(table_alias='p')` 추출 (table_alias 인자 base 영역 정합):
+
+```python
+# backend/app/services/shipment_history_service.py
+def _get_actual_date_subquery(table_alias: str = 'p') -> str:
+    """actual_date COALESCE 헬퍼 (v2.18.30 _best_ship_sql_select 영역 추출).
+
+    app SI_SHIPMENT.completed_at 우선 + ETL actual_ship_date fallback.
+    """
+    return f"""COALESCE(
+        (SELECT DATE(t.completed_at) FROM app_task_details t
+         WHERE t.serial_number = {table_alias}.serial_number
+           AND t.task_id = 'SI_SHIPMENT'
+           AND t.completed_at IS NOT NULL
+           AND COALESCE(t.force_closed, FALSE) = FALSE
+         ORDER BY t.completed_at DESC LIMIT 1),
+        {table_alias}.actual_ship_date
+    )"""
+```
+
+→ Sprint 79 영역 4곳 + v2.18.30 `_best_ship_sql_select()` 영역도 본 헬퍼 재사용 catch (회귀 위험 0).
+
+#### Q5 — _validate_setting() int_list 타입 신규 + workers JOIN 필터 (M)
+
+`backend/app/routes/admin.py:130` 영역 `_validate_setting()` 영역 현재 `int_list` 타입 catch X. 본 sprint 영역 신규 정의 의무:
+
+```python
+# admin.py _validate_setting() 영역
+elif setting_type == 'int_list':
+    if not isinstance(setting_value, list):
+        raise ValueError(f'{setting_key}는 int list 타입이어야 합니다.')
+    for item in setting_value:
+        if not isinstance(item, int) or item <= 0:
+            raise ValueError(f'{setting_key} list 영역 양의 정수 worker_id 만 허용.')
+```
+
+`SETTING_KEYS` 영역 신규 키:
+```python
+'shipment_alert_recipients': {'type': 'int_list', 'default': []},
+```
+
+scheduler_service 영역 메일 발송 시 workers JOIN catch:
+```sql
+SELECT id, name, email FROM workers
+WHERE id = ANY(%s)
+  AND approval_status = 'approved'
+  AND is_active = TRUE
+  AND email IS NOT NULL
+  AND email <> ''
+```
+
+→ 매니저 정보 변경 (이름/이메일) 자동 동기화 + 비활성/미승인 자동 제외.
+
+#### Q7 — /api/admin/shipment/by-status 권한 (M)
+
+```python
+@admin_bp.route("/shipment/by-status", methods=["GET"])
+@jwt_required
+@gst_or_admin_required  # ← SI RBAC 정합 (GST 자사 + admin)
+def get_shipment_by_status() -> Tuple[Dict[str, Any], int]:
+    ...
+```
+
+→ 현재 SI 화면 백킹 endpoint `/api/app/gst/products/<category>` 영역 `@jwt_required` + 내부 수동 검사 (gst.py:85-90) 영역 동일 의미론 catch. `@gst_or_admin_required` 영역 캡슐화 정합 (jwt_auth.py:263).
+
+#### Q8 — 탭 overlap 명시 + 배지 표시 (M, 사용자 결정 (나))
+
+탭 1 (미종료 작업) + 탭 2 (출하 확정) 영역 overlap catch — SI_FINISHING task started + ship_plan_date == today 영역 제품 = **양쪽 표시**.
+
+탭 2 영역 표시 시 작업 진행 중 배지 추가:
+```dart
+// gst_products_screen.dart 영역 탭 2 (출하 확정) 영역 카드
+if (item['is_si_finishing_in_progress'] == true) {
+  // 배지: 🔄 작업 진행 중
+  WorkInProgressBadge();
+}
+```
+
+BE 응답 추가 필드 catch:
+```json
+{
+  "serial_number": "GBWS-7060",
+  "ship_plan_date": "2026-05-27",
+  ...
+  "is_si_finishing_in_progress": true   // ← 신규 (탭 2/3 영역 표시)
+}
+```
+
+→ `is_si_finishing_in_progress` 계산 SQL:
+```sql
+EXISTS (
+    SELECT 1 FROM app_task_details t
+    WHERE t.serial_number = p.serial_number
+      AND t.task_id = 'SI_FINISHING'
+      AND t.started_at IS NOT NULL
+      AND t.completed_at IS NULL
+      AND COALESCE(t.force_closed, FALSE) = FALSE
+) AS is_si_finishing_in_progress
+```
+
+#### Q9 — managers API GST 제한 + admin 중복 제외 (M)
+
+`/api/admin/managers` 영역 `company=GST` 명시 제한 catch + admin 자동 제외 (chip 영역 dropdown):
+
+```python
+# admin.py /api/admin/managers/gst-only 또는 query param
+GET /api/admin/managers?company=GST&exclude_admin=true&domain=gst-in.com
+```
+
+→ FE chip 영역 dropdown = `WHERE company='GST' AND is_manager=TRUE AND is_admin=FALSE AND email LIKE '%@gst-in.com'` (admin 자동 제외 — is_admin 영역 무조건 catch base 영역 chip 추가 X).
+
+#### M-추가1 — endpoint 경로 정정 (M)
+
+본문 영역 `/api/admin/workers/inactive` + `/api/admin/workers/deactivated` 영역 **잘못**. 실제 endpoint:
+- `GET /api/admin/inactive-workers` (admin.py:2397)
+- `GET /api/admin/deactivated-workers` (admin.py:2448)
+
+FE `inactive_users_screen.dart` 영역 정정 endpoint 호출 의무.
+
+#### M-추가2 — admin_settings 권한 (사용자 결정 현행 유지)
+
+`/api/admin/settings` 영역 `@gst_or_admin_required` v2.18.34 정합 유지. GST 매니저 catch 가능 + admin 권한 영역 별 부여 catch 영역 별 sprint.
+
+→ `shipment_alert_enabled` + `shipment_alert_recipients` 영역 GST 매니저 catch 가능 (사용자 결정).
+
+### A=2 catch 처리
+
+- **Q3** retry: 단순 실패 로그 + Sentry capture 만. outbox 패턴 → BACKLOG `FEAT-NOTIFICATION-OUTBOX-PATTERN-20260527` 등록.
+- **A-추가1** TEST CUSTOMER 제외 (사용자 결정 (가)): shipment/by-status + overdue cron query 영역 `COALESCE(p.customer, '') <> 'TEST CUSTOMER'` 추가 (v2.18.32 패턴 정합).
+
+### N=4 catch (변경 0)
+
+- Q2 cron timezone — `BackgroundScheduler(timezone=KST)` + `/tmp/axis_ops_scheduler.lock` 영역 catch (변경 X)
+- Q4 0건 skip — `_check_not_started_tasks()` 패턴 정합 (변경 X)
+- Q6 N+1 — UNION ALL + GROUP BY single query catch (구현 catch 만)
+- Q10 admin_options 분리 — `/admin-options` 딥링크 main.dart:136 단일 경로 영역 회귀 위험 0
+
+---
+
+### 정정 SQL 예시 — /api/admin/shipment/by-status
+
+```sql
+-- v2.18.32 TEST CUSTOMER 제외 + actual_date COALESCE 헬퍼 정합
+SELECT p.serial_number, p.sales_order, p.model, p.customer,
+       p.mech_partner, p.elec_partner, p.ship_plan_date,
+       _actual_date AS actual_date,
+       EXISTS (
+           SELECT 1 FROM app_task_details t
+           WHERE t.serial_number = p.serial_number
+             AND t.task_id = 'SI_FINISHING'
+             AND t.started_at IS NOT NULL
+             AND t.completed_at IS NULL
+             AND COALESCE(t.force_closed, FALSE) = FALSE
+       ) AS is_si_finishing_in_progress
+FROM plan.product_info p
+CROSS JOIN LATERAL (SELECT _get_actual_date_subquery('p') AS _actual_date) sub
+WHERE COALESCE(p.customer, '') <> 'TEST CUSTOMER'
+  AND (
+      (%(status)s = 'confirmed' AND p.ship_plan_date = CURRENT_DATE)
+      OR (%(status)s = 'planned' AND p.ship_plan_date > CURRENT_DATE)
+  )
+  AND _actual_date IS NULL
+  AND (%(q)s IS NULL OR p.serial_number ILIKE '%%' || %(q)s || '%%' OR p.sales_order ILIKE '%%' || %(q)s || '%%')
+ORDER BY p.ship_plan_date ASC, p.sales_order ASC
+LIMIT %(per_page)s OFFSET %(offset)s
+```
+
+(LATERAL CROSS JOIN 대신 subquery inline catch 정합)
+
+---
+
+### 정정 SQL 예시 — /api/admin/tasks/pending/grouped
+
+```sql
+-- 협력사별 + GST 공정별 UNION ALL + GROUP BY (N+1 회피)
+WITH pending_tasks AS (
+    SELECT t.id, t.serial_number, t.task_category, t.task_id,
+           p.mech_partner, p.elec_partner, p.module_outsourcing
+    FROM app_task_details t
+    JOIN plan.product_info p ON t.serial_number = p.serial_number
+    WHERE t.started_at IS NOT NULL
+      AND t.completed_at IS NULL
+      AND COALESCE(t.force_closed, FALSE) = FALSE
+      AND COALESCE(p.customer, '') <> 'TEST CUSTOMER'
+)
+SELECT 'partner' AS group_type, partner_name AS name, category, COUNT(*) AS count
+FROM (
+    SELECT mech_partner AS partner_name, 'MECH' AS category FROM pending_tasks WHERE task_category = 'MECH' AND mech_partner IS NOT NULL
+    UNION ALL
+    SELECT elec_partner AS partner_name, 'ELEC' AS category FROM pending_tasks WHERE task_category = 'ELEC' AND elec_partner IS NOT NULL
+    UNION ALL
+    SELECT module_outsourcing AS partner_name, 'TM' AS category FROM pending_tasks WHERE task_category = 'TM' AND module_outsourcing IS NOT NULL
+) partners
+GROUP BY partner_name, category
+
+UNION ALL
+
+SELECT 'gst_process' AS group_type, NULL AS name, task_category AS category, COUNT(*) AS count
+FROM pending_tasks
+WHERE task_category IN ('PI', 'QI', 'SI')
+GROUP BY task_category
+ORDER BY group_type, name, category
+```
+
+---
+
+### 추가 BACKLOG 등록 catch
+
+- `FEAT-NOTIFICATION-OUTBOX-PATTERN-20260527` 🟢 INFO — 운영 영역 메일 발송 retry catch outbox 패턴 (Q3 advisory)
+- `FEAT-GST-MANAGER-ADMIN-ROLE-PROMOTION-20260527` 🟢 INFO — GST 매니저 영역 admin role 부여 catch 영역 (M2 별 sprint, 사용자 결정 base)
+

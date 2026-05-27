@@ -73,6 +73,9 @@ SETTING_KEYS: Dict[str, Dict[str, Any]] = {
     'alert_orphan_on_final_enabled':           {'type': 'bool', 'default': True,  'label': 'FINAL 완료시 미시작 알람'},
     'task_not_started_threshold_days':         {'type': 'int',  'default': 2,     'label': '미시작 경과 기준일'},
     'elec_checklist_issue_alert':              {'type': 'bool', 'default': True,  'label': 'ELEC 체크리스트 ISSUE 알람'},
+    # bool/int_list — Sprint 79 출하 미처리 알림 (07:30 KST cron)
+    'shipment_alert_enabled':     {'type': 'bool',     'default': False, 'label': '출하 미처리 매일 알림 (07:30 KST)'},
+    'shipment_alert_recipients':  {'type': 'int_list', 'default': [],    'label': '출하 알림 추가 매니저 (worker_id list, admin 자동 포함)'},
 }
 
 ALLOWED_KEYS = set(SETTING_KEYS.keys())
@@ -135,6 +138,16 @@ def _validate_setting(key: str, value: Any) -> str | None:
                 return f'{key}[{i}]: 빈 문자열이 아닌 문자열이어야 합니다.'
         if len(value) != len(set(value)):
             return f'{key}: 중복 값이 포함되어 있습니다.'
+
+    elif stype == 'int_list':
+        # Sprint 79 — worker_id list (예: [377, 378]) 검증
+        if not isinstance(value, list):
+            return f'{key}: 배열 타입이어야 합니다. (예: [377, 378])'
+        for i, item in enumerate(value):
+            if not isinstance(item, int) or isinstance(item, bool) or item <= 0:
+                return f'{key}[{i}]: 양의 정수 worker_id 만 허용합니다.'
+        if len(value) != len(set(value)):
+            return f'{key}: 중복 worker_id 가 포함되어 있습니다.'
 
     elif stype == 'string':
         allowed = meta.get('allowed')

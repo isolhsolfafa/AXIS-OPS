@@ -79,6 +79,29 @@ def _resolve_period_range(
     return start, end
 
 
+def _get_actual_date_subquery(table_alias: str = 'p') -> str:
+    """actual_date COALESCE 헬퍼 (Sprint 79 신규 — DRY 분리).
+
+    app SI_SHIPMENT.completed_at 우선 + ETL actual_ship_date fallback.
+    Sprint 79 영역 4곳 (shipment/by-status query + overdue cron + 메일 list) 재사용.
+
+    Args:
+        table_alias: plan.product_info 테이블 alias (기본 'p')
+
+    Returns:
+        COALESCE SQL expression (alias 미포함, 호출자 영역 ` AS actual_date` 추가)
+    """
+    return f"""COALESCE(
+        (SELECT DATE(t.completed_at) FROM app_task_details t
+         WHERE t.serial_number = {table_alias}.serial_number
+           AND t.task_id = 'SI_SHIPMENT'
+           AND t.completed_at IS NOT NULL
+           AND COALESCE(t.force_closed, FALSE) = FALSE
+         ORDER BY t.completed_at DESC LIMIT 1),
+        {table_alias}.actual_ship_date
+    )"""
+
+
 def _best_ship_sql_select() -> str:
     """best_ship CTE SELECT 절 (재사용).
 

@@ -215,6 +215,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.routes.admin_materials import admin_materials_bp    # Sprint 66-BE Step 4: 자재 마스터 admin
     from app.routes.admin_checklists import admin_checklists_bp  # Sprint 66-BE Step 4: 체크리스트 매핑 admin
     from app.routes.shipment_history import shipment_history_bp  # Sprint 76-BE: 출하이력 페이지
+    from app.routes.admin_shipment_flow import admin_shipment_flow_bp  # Sprint 79: 출하 흐름 + 미종료 분류 admin
     from app.routes import work_batch                              # Sprint 64-BE v3: work_bp 에 batch route 등록 (side effect import, register_blueprint 전 필수)
     from app.routes import work_shipment                            # Sprint 68: work_bp 에 ship-complete route 등록 (side effect import)
 
@@ -235,7 +236,8 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(admin_materials_bp)    # Sprint 66-BE Step 4
     app.register_blueprint(admin_checklists_bp)   # Sprint 66-BE Step 4
     app.register_blueprint(shipment_history_bp)   # Sprint 76-BE
-    logger.info("Blueprints registered: auth, work, product, alert, admin, sync, gst, checklist, hr, notices, qr, factory, analytics, production, admin_materials, admin_checklists, shipment_history")
+    app.register_blueprint(admin_shipment_flow_bp)  # Sprint 79: 출하 흐름 + 미종료 분류
+    logger.info("Blueprints registered: auth, work, product, alert, admin, sync, gst, checklist, hr, notices, qr, factory, analytics, production, admin_materials, admin_checklists, shipment_history, admin_shipment_flow")
 
     # Sprint 32: 사용자 행위 트래킹 (access log)
     import time as _time

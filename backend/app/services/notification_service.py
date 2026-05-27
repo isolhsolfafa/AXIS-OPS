@@ -158,3 +158,127 @@ def send_approval_notification_async(name: str, email: str, role: str, company: 
         threading.Thread(target=_run, daemon=True).start()
     except Exception as e:
         logger.error(f"승인 메일 스레드 생성 실패: worker_id={worker_id}, error={e}")
+
+
+# ─── Sprint 79: 출하 미처리 알림 메일 ──────────────────────────────────
+
+def _render_shipment_overdue_html(overdue_items: list, target_date) -> str:
+    """출하 미처리 알림 HTML 템플릿 (Sprint 79).
+
+    Codex M-Q1 (v2.18.20): html.escape 적용 XSS 방지.
+    """
+    target_str = target_date.strftime('%Y-%m-%d') if hasattr(target_date, 'strftime') else str(target_date)
+    safe_date = html.escape(target_str, quote=True)
+    count = len(overdue_items)
+
+    # row catch
+    rows_html = ""
+    for item in overdue_items:
+        safe_sn = html.escape(str(item.get('serial_number', '-')), quote=True)
+        safe_so = html.escape(str(item.get('sales_order', '-')), quote=True)
+        safe_model = html.escape(str(item.get('model', '-')), quote=True)
+        safe_customer = html.escape(str(item.get('customer', '-') or '-'), quote=True)
+        safe_mech = html.escape(str(item.get('mech_partner', '-') or '-'), quote=True)
+        safe_elec = html.escape(str(item.get('elec_partner', '-') or '-'), quote=True)
+        rows_html += f"""
+        <tr>
+            <td style="padding:8px;border:1px solid #ddd;">{safe_sn}</td>
+            <td style="padding:8px;border:1px solid #ddd;">{safe_so}</td>
+            <td style="padding:8px;border:1px solid #ddd;">{safe_model}</td>
+            <td style="padding:8px;border:1px solid #ddd;">{safe_customer}</td>
+            <td style="padding:8px;border:1px solid #ddd;">{safe_mech} / {safe_elec}</td>
+        </tr>
+        """
+
+    return f"""
+    <html>
+    <body style="font-family:'Apple SD Gothic Neo','Malgun Gothic',sans-serif; color:#333; max-width:720px; margin:0 auto;">
+        <div style="background:#fff3cd; border-left:4px solid #ffc107; padding:16px; margin-bottom:24px;">
+            <h2 style="margin:0 0 8px 0; color:#856404;">⚠️ 출하 미처리 catch — {safe_date}</h2>
+            <p style="margin:0; color:#856404;">
+                <strong>{count}건</strong> 영역 출하 계획일 ({safe_date}) 도래 후 미처리 catch.
+                즉시 catch 의무.
+            </p>
+        </div>
+
+        <table style="width:100%; border-collapse:collapse; margin-bottom:24px; font-size:13px;">
+            <thead>
+                <tr style="background:#f5f5f5;">
+                    <th style="padding:10px;border:1px solid #ddd;text-align:left;">S/N</th>
+                    <th style="padding:10px;border:1px solid #ddd;text-align:left;">O/N</th>
+                    <th style="padding:10px;border:1px solid #ddd;text-align:left;">모델</th>
+                    <th style="padding:10px;border:1px solid #ddd;text-align:left;">고객사</th>
+                    <th style="padding:10px;border:1px solid #ddd;text-align:left;">협력사 (MECH/ELEC)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {rows_html}
+            </tbody>
+        </table>
+
+        <div style="background:#e7f3ff; padding:12px; border-radius:6px; margin-bottom:16px;">
+            <p style="margin:0 0 8px 0; font-weight:600; color:#0066cc;">🔗 OPS 접속</p>
+            <p style="margin:0;">
+                <a href="https://gaxis-ops.netlify.app/" style="color:#0066cc;">
+                    https://gaxis-ops.netlify.app/
+                </a> → SI 마무리공정 → 출하 확정 탭
+            </p>
+        </div>
+
+        <p style="color:#999; font-size:11px; margin-top:24px;">
+            본 메일은 G-AXIS OPS 시스템 자동 발송 메일 (07:30 KST).
+            수신자 catch 변경 = OPS 관리자 옵션 화면 영역 catch.
+        </p>
+    </body>
+    </html>
+    """
+
+
+def send_shipment_overdue_alert(recipients: list, overdue_items: list, target_date) -> bool:
+    """출하 미처리 알림 메일 발송 (Sprint 79).
+
+    Args:
+        recipients: 수신자 email list
+        overdue_items: get_overdue_shipments() 결과
+        target_date: 어제 날짜 (date)
+
+    Returns:
+        True = 모든 수신자 발송 성공, False = 일부 실패
+
+    Codex Q3 A: retry catch X — 실패 로그 + Sentry capture (LoggingIntegration ERROR).
+    """
+    if not recipients or not overdue_items:
+        logger.info(
+            f"[shipment_overdue_alert] skip — recipients={len(recipients)}, "
+            f"overdue={len(overdue_items)}"
+        )
+        return False
+
+    target_str = target_date.strftime('%Y-%m-%d') if hasattr(target_date, 'strftime') else str(target_date)
+    subject = f"⚠️ [G-AXIS] 출하 미처리 {len(overdue_items)}건 catch ({target_str})"
+    html_body = _render_shipment_overdue_html(overdue_items, target_date)
+
+    success_count = 0
+    fail_count = 0
+
+    for email in recipients:
+        if not email or '@' not in email:
+            logger.warning(f"[shipment_overdue_alert] invalid email skip: {email}")
+            fail_count += 1
+            continue
+
+        try:
+            ok = _send_smtp(to_email=email, subject=subject, html_body=html_body)
+            if ok:
+                success_count += 1
+            else:
+                fail_count += 1
+        except Exception as e:
+            logger.error(f"[shipment_overdue_alert] send error: to={email}, error={e}")
+            fail_count += 1
+
+    logger.info(
+        f"[shipment_overdue_alert] sent: success={success_count}, fail={fail_count}, "
+        f"target_date={target_str}, overdue={len(overdue_items)}"
+    )
+    return fail_count == 0

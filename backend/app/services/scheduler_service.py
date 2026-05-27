@@ -165,7 +165,16 @@ def init_scheduler() -> BackgroundScheduler:
         replace_existing=True
     )
 
-    logger.info("Scheduler initialized with 12 jobs")
+    # ── Sprint 79: 출하 미처리 알림 — 매일 07:30 KST ──
+    _scheduler.add_job(
+        func=_alert_shipment_overdue,
+        trigger=CronTrigger(hour=7, minute=30),
+        id='alert_shipment_overdue',
+        name='출하 미처리 일일 알림 (07:30 KST)',
+        replace_existing=True
+    )
+
+    logger.info("Scheduler initialized with 13 jobs")
     return _scheduler
 
 
@@ -1145,3 +1154,72 @@ def _cleanup_access_logs():
     finally:
         if conn:
             put_conn(conn)
+
+
+# ─── Sprint 79: 출하 미처리 일일 알림 (07:30 KST) ──────────────────────
+
+def _alert_shipment_overdue():
+    """출하 미처리 catch 일일 알림 메일 발송 (Sprint 79, v2.19.0).
+
+    조건: ship_plan_date == yesterday AND actual_date IS NULL (어제 출하 미처리)
+    대상: is_admin=TRUE 무조건 + admin_settings.shipment_alert_recipients (chip)
+    토글: admin_settings.shipment_alert_enabled (bool)
+
+    Codex 라운드 1 catch 반영:
+    - Q3 (A): retry catch X, 실패 로그 + Sentry capture
+    - Q4 (N): 미처리 0건 영역 skip
+    - Q5 (M): workers JOIN — approval_status + is_active + email 필터
+    - A-추가1: TEST CUSTOMER 제외
+
+    설계서: AGENT_TEAM_LAUNCH.md § Sprint 79
+    """
+    try:
+        from app.models.admin_settings import get_setting
+        from app.services.shipment_flow_service import get_overdue_shipments, get_overdue_alert_recipients
+        from app.services.notification_service import send_shipment_overdue_alert
+
+        # 1. 토글 catch (Codex Q4 N — OFF 영역 skip)
+        enabled = get_setting('shipment_alert_enabled', False)
+        if not enabled:
+            logger.info("[alert_shipment_overdue] shipment_alert_enabled=False → skip")
+            return
+
+        # 2. 어제 출하 미처리 list catch
+        yesterday = (datetime.now(Config.KST) - timedelta(days=1)).date()
+        overdue_items = get_overdue_shipments(yesterday)
+        if not overdue_items:
+            logger.info(f"[alert_shipment_overdue] {yesterday} 미처리 0건 → skip (spam 방지)")
+            return
+
+        # 3. 메일 대상 list catch (admin + chip)
+        recipients_setting = get_setting('shipment_alert_recipients', [])
+        extra_worker_ids = recipients_setting if isinstance(recipients_setting, list) else []
+        recipients = get_overdue_alert_recipients(extra_worker_ids)
+
+        if not recipients:
+            logger.warning(
+                f"[alert_shipment_overdue] 미처리 {len(overdue_items)}건 catch 영역 메일 대상 0명 (admin + recipients 영역 모두 invalid)"
+            )
+            return
+
+        # 4. 메일 발송
+        success = send_shipment_overdue_alert(
+            recipients=[r['email'] for r in recipients],
+            overdue_items=overdue_items,
+            target_date=yesterday,
+        )
+
+        if success:
+            logger.info(
+                f"[alert_shipment_overdue] {yesterday} 미처리 {len(overdue_items)}건 → "
+                f"{len(recipients)}명 발송 완료"
+            )
+        else:
+            logger.error(
+                f"[alert_shipment_overdue] 메일 발송 실패 (yesterday={yesterday}, "
+                f"overdue={len(overdue_items)}, recipients={len(recipients)})"
+            )
+
+    except Exception as e:
+        # Codex Q3 A: 실패 로그 + Sentry capture (LoggingIntegration ERROR level)
+        logger.error(f"[alert_shipment_overdue] 예외 발생: {e}", exc_info=True)
