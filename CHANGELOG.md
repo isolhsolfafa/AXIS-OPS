@@ -6,6 +6,44 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.18.32] - 2026-05-27 — Sprint 76-BE TEST CUSTOMER 제외 (factory.py v2.15.21 정합)
+
+> 사용자 catch (5-27): 5월 운영 정합성 검증 시 TEST 5건 포함된 응답 → factory.py v2.15.21 (#69) 영역 이미 적용된 패턴 동일 적용 의무.
+
+### 변경 (BE 2곳)
+
+| 파일 | 영역 | 변경 |
+|------|---|-----|
+| `backend/app/services/shipment_history_service.py` `_build_best_ship_cte()` | WHERE 절 | `AND COALESCE(p.customer, '') <> 'TEST CUSTOMER'` 추가 |
+| 동일 파일 `_fetch_monthly_trend()` Query 1 | plan.product_info 직접 조회 | 동일 조건 추가 |
+| `backend/version.py` + `app_version.dart` | — | 2.18.32 |
+
+### 효과 (5월 운영 데이터)
+
+| 영역 | Before | After |
+|---|---|---|
+| `kpi.plan_count` | 153 | **148** (TEST 5건 제외) |
+| `kpi.shipped_count` | 122 | **122** (TEST 영역 shipped 0) |
+| `kpi.fulfillment_pct` | 79.7% | **82.4%** (정합도 ↑) |
+| `kpi.pending_count` | 26 | **26** (TEST 영역 pending 영역 plan_date 도래 X 영역 제외 가능성) |
+
+### pytest
+
+- **31/31 PASS** (5분 12초, staging DB)
+- 회귀 위험 0 (BE WHERE 절 1줄 + monthly_trend 1줄)
+
+### 연관
+
+- v2.15.21 (#69 5-18) factory.py `monthly-kpi` 영역 동일 패턴 적용 (5월 169 → 164)
+- 본 sprint 영역 단일 best 정의 정합 확보
+
+### 다음 catch (별 sprint 영역 논의 중)
+
+- 납기 준수율 / 평균 지연일 영역 **기준값 (target)** 도입 — 현재 단순 수치 표시. "82.4% 가 좋은 신호?" 영역 base 없음
+- admin_settings 영역 등록 + alert 임계 + 매니저 시각화
+
+---
+
 ## [2.18.31] - 2026-05-26 — OPS 매뉴얼 버튼 모바일 PWA catch fix (anchor click + fallback)
 
 > 사용자 catch (5-26): OPS 매뉴얼 버튼 PC 환경 정상, 모바일 환경 페이지 전환 안 됨.

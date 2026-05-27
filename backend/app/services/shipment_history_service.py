@@ -132,6 +132,10 @@ def _best_ship_sql_select() -> str:
 def _build_best_ship_cte(start: date, end: date) -> Tuple[str, Tuple]:
     """best_ship CTE 빌더 (반개구간 정합).
 
+    v2.18.32 (사용자 catch 5-27): TEST CUSTOMER 제외 (factory.py v2.15.21 #69 패턴 정합).
+    TEST 데이터 (TEST-1112~1116, customer='TEST CUSTOMER', model='GAIA', plan=5/shipped=0)
+    영역 운영 정합도 catch — 5월 영역 153 → 148 정정 (fulfillment 79.7% → 82.4%).
+
     Returns:
         (sql_with_cte, params) 튜플.
     """
@@ -139,16 +143,17 @@ def _build_best_ship_cte(start: date, end: date) -> Tuple[str, Tuple]:
         WITH best_ship AS (
             SELECT {_best_ship_sql_select()}
             FROM plan.product_info p
-            WHERE p.ship_plan_date >= %s AND p.ship_plan_date < %s
-               OR p.actual_ship_date >= %s AND p.actual_ship_date < %s
-               OR EXISTS (
-                   SELECT 1 FROM app_task_details t
-                   WHERE t.serial_number = p.serial_number
-                     AND t.task_id = 'SI_SHIPMENT'
-                     AND COALESCE(t.force_closed, FALSE) = FALSE
-                     AND DATE(t.completed_at) >= %s
-                     AND DATE(t.completed_at) < %s
-               )
+            WHERE COALESCE(p.customer, '') <> 'TEST CUSTOMER'
+              AND (p.ship_plan_date >= %s AND p.ship_plan_date < %s
+                   OR p.actual_ship_date >= %s AND p.actual_ship_date < %s
+                   OR EXISTS (
+                       SELECT 1 FROM app_task_details t
+                       WHERE t.serial_number = p.serial_number
+                         AND t.task_id = 'SI_SHIPMENT'
+                         AND COALESCE(t.force_closed, FALSE) = FALSE
+                         AND DATE(t.completed_at) >= %s
+                         AND DATE(t.completed_at) < %s
+                   ))
         )
     """
     params = (start, end, start, end, start, end)
@@ -339,12 +344,13 @@ def _fetch_monthly_trend(cur, reference_date: date) -> List[Dict[str, Any]]:
     else:
         end_month = cur_month_start.replace(month=cur_month_start.month + 1)
 
-    # Query 1: 월별 plan
+    # Query 1: 월별 plan (v2.18.32: TEST CUSTOMER 제외)
     cur.execute(
         """
         SELECT DATE_TRUNC('month', ship_plan_date)::date AS month, COUNT(*) AS plan
         FROM plan.product_info
         WHERE ship_plan_date >= %s AND ship_plan_date < %s
+          AND COALESCE(customer, '') <> 'TEST CUSTOMER'
         GROUP BY month;
         """,
         (start_month, end_month),
