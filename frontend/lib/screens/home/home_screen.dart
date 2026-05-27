@@ -868,6 +868,29 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               const SizedBox(height: 8),
             ],
 
+            // Sprint 79: admin 전용 — 비활성 사용자 관리 (SI 마무리공정 ~ 관리자 옵션 사이)
+            if (worker?.isAdmin == true) ...[
+              _buildFeatureCard(
+                icon: Icons.person_off,
+                iconBg: const Color(0xFFFEE2E2),
+                iconColor: const Color(0xFFDC2626),
+                title: '비활성 사용자 관리',
+                subtitle: '미로그인 사용자 + 비활성화 계정 통합 관리',
+                onTap: () => Navigator.pushNamed(context, '/inactive-users'),
+              ),
+              const SizedBox(height: 8),
+              // Sprint 79: admin 전용 — 미종료 작업 (전체 + 협력사/GST 공정별 분류)
+              _buildFeatureCard(
+                icon: Icons.warning_amber,
+                iconBg: const Color(0xFFFFF3CD),
+                iconColor: const Color(0xFFD97706),
+                title: '미종료 작업 (전체)',
+                subtitle: '협력사별 + GST 공정별 분류 catch',
+                onTap: () => Navigator.pushNamed(context, '/pending-tasks-grouped'),
+              ),
+              const SizedBox(height: 8),
+            ],
+
             // 관리자 전용: 관리자 옵션 (공지사항 위)
             if (worker?.isAdmin == true) ...[
               _buildFeatureCard(
@@ -875,7 +898,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 iconBg: GxColors.warningBg,
                 iconColor: GxColors.warning,
                 title: '관리자 옵션',
-                subtitle: '설정, 협력사 관리자, 미종료 작업 처리',
+                subtitle: '설정, 협력사 관리자, 출하 알림 토글',
                 onTap: () => Navigator.pushNamed(context, '/admin-options'),
               ),
               const SizedBox(height: 8),

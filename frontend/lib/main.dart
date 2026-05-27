@@ -21,6 +21,9 @@ import 'screens/progress/sn_progress_screen.dart';
 import 'screens/notice/notice_list_screen.dart';
 import 'screens/admin/notice_write_screen.dart';
 import 'screens/admin/manager_delegation_screen.dart';
+import 'screens/admin/inactive_users_screen.dart';  // Sprint 79
+import 'screens/admin/pending_tasks_grouped_screen.dart';  // Sprint 79
+import 'screens/si/si_finishing_screen.dart';  // Sprint 79
 import 'utils/design_system.dart';
 
 void main() {
@@ -135,6 +138,9 @@ class GAxisApp extends ConsumerWidget {
         '/task-management': (context) => const TaskManagementScreen(),
         '/admin-options': (context) => const AdminOptionsScreen(),
         '/manager-pending-tasks': (context) => const ManagerPendingTasksScreen(),
+        '/inactive-users': (context) => const InactiveUsersScreen(),  // Sprint 79
+        '/pending-tasks-grouped': (context) => const PendingTasksGroupedScreen(),  // Sprint 79
+        '/si-finishing': (context) => const SiFinishingScreen(),  // Sprint 79
         '/home': (context) => const HomeScreen(),
         '/sn-progress': (context) => const SnProgressScreen(),
         '/forgot-password': (context) => const ForgotPasswordScreen(),

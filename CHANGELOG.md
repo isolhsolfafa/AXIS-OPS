@@ -6,6 +6,78 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.19.0] - 2026-05-27 — Sprint 79 FEAT-SI-SHIPMENT-FLOW-3PHASE (출하 흐름 3단계 + admin 분리 + 출하 미처리 알림)
+
+> 큰 sprint catch — SI 마무리공정 영역 TabBar 3개 (미종료/출하 확정/출하 예정) + admin 메인 메뉴 분리 + 매일 07:30 KST 출하 미처리 자동 알림.
+
+### 변경 영역 (BE 6 + FE 5 파일 + pytest 1 + 설계서)
+
+**BE 신규 2 파일**:
+- `services/shipment_flow_service.py` — 4 service 함수 (~280 lines)
+- `routes/admin_shipment_flow.py` — endpoint 2개 (~110 lines)
+
+**BE 수정 4 파일**:
+- `routes/admin.py` — SETTING_KEYS 신규 키 2개 + `_validate_setting` int_list 타입 신규
+- `services/scheduler_service.py` — `_alert_shipment_overdue` cron (매일 07:30 KST)
+- `services/notification_service.py` — `send_shipment_overdue_alert` 메일 템플릿
+- `services/shipment_history_service.py` — `_get_actual_date_subquery()` 헬퍼 분리 (DRY)
+- `__init__.py` — `admin_shipment_flow_bp` 등록
+
+**FE 신규 3 파일**:
+- `screens/si/si_finishing_screen.dart` — SI TabBar 3개 + 검색
+- `screens/admin/inactive_users_screen.dart` — 비활성 사용자 메인 메뉴 (admin only)
+- `screens/admin/pending_tasks_grouped_screen.dart` — 미종료 작업 분류 UI (admin only)
+
+**FE 수정 2 파일**:
+- `screens/home/home_screen.dart` — 메뉴 카드 2개 추가 (SI ~ 관리자 옵션 사이)
+- `main.dart` — route 3개 신규 (`/si-finishing`, `/inactive-users`, `/pending-tasks-grouped`)
+
+### 신규 endpoint
+
+| Endpoint | 권한 | 영역 |
+|---|---|---|
+| `GET /api/admin/shipment/by-status?status=confirmed\|planned` | `@gst_or_admin_required` | SI 화면 탭 2/3 |
+| `GET /api/admin/tasks/pending/grouped` | `@admin_required` | 미종료 작업 분류 (메인 메뉴) |
+
+### 신규 admin_settings 키 2개
+
+- `shipment_alert_enabled` (bool, default=False) — 매일 07:30 KST 출하 미처리 알림 토글
+- `shipment_alert_recipients` (int_list, default=[]) — 추가 매니저 worker_id list (admin 자동 포함)
+
+### Codex 라운드 1 catch 합의 (M=7/A=2/N=4)
+
+| Q | 합의 |
+|---|---|
+| Q1 M | `_get_actual_date_subquery()` 헬퍼 분리 (DRY) |
+| Q5 M | `int_list` 타입 신규 + workers JOIN (approval_status + is_active + email) |
+| Q7 M | `@gst_or_admin_required` (by-status) + `@admin_required` (grouped) |
+| Q8 M (사용자 결정 나) | `is_si_finishing_in_progress` 응답 필드 (탭 1+탭 2 overlap 명시 + 🔄 배지) |
+| Q9 M | workers JOIN 영역 admin 자동 포함 (chip 중복 방지) |
+| M-추가1 | endpoint 경로 정정 (`/api/admin/inactive-workers` + `/api/admin/deactivated-workers`) |
+| M-추가2 (사용자 결정) | admin_settings `@gst_or_admin_required` v2.18.34 정합 유지 |
+| Q3 A | retry catch X — 실패 로그 + Sentry capture |
+| A-추가1 (사용자 결정 가) | TEST CUSTOMER 제외 (v2.18.32 패턴) |
+
+### 검증
+
+- pytest `test_sprint79_shipment_flow.py` 14/14 PASS (1분 37초)
+- Flask boot OK + 신규 route 2개 등록
+- flutter build web GREEN (12.7초)
+
+### 운영 검증 catch (D+1)
+
+- 매일 07:30 KST 영역 `_alert_shipment_overdue` cron 발송 catch
+- 토글 ON + 어제 미처리 catch 시 메일 발송 (admin + recipients chip)
+- 0건 시 skip (spam 방지)
+
+### BACKLOG 등록 catch
+
+- `FEAT-NOTIFICATION-OUTBOX-PATTERN-20260527` 🟢 INFO — outbox 패턴 (Codex Q3 A)
+- `FEAT-GST-MANAGER-ADMIN-ROLE-PROMOTION-20260527` 🟢 INFO — GST 매니저 admin role 부여 (M2 후속)
+- `REFACTOR-ADMIN-OPTIONS-SCREEN-CLEANUP-20260527` 🟡 LOW — admin_options 영역 비활성/미종료 카드 제거 (별 sprint)
+
+---
+
 ## [2.18.35] - 2026-05-27 — 매뉴얼 모바일 PWA HOTFIX (ApiService 싱글톤 catch)
 
 > v2.18.34 fix 후 사용자 운영 catch: "세션만료. 다시 로그인 후 메뉴얼 접속" SnackBar 만 뜨고 접속 불가. v2.18.34 영역 매뉴얼 fix 자체 catch 본질 catch 영역 즉시 HOTFIX.
