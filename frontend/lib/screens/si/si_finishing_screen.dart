@@ -291,6 +291,11 @@ class _SiFinishingScreenState extends ConsumerState<SiFinishingScreen>
     return (w?.isAdmin ?? false) || (w?.isManager ?? false);
   }
 
+  bool get _isGstSelf {
+    final w = ref.read(authProvider).currentWorker;
+    return (w?.company ?? '').toUpperCase().trim() == 'GST';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -356,16 +361,26 @@ class _SiFinishingScreenState extends ConsumerState<SiFinishingScreen>
                     '시작: ${t['started_at'] ?? '-'} · 작업자: ${t['worker_name'] ?? '-'}',
                     style: const TextStyle(fontSize: 12, color: Colors.grey),
                   ),
+                  // v2.19.4: PI/QI 영역 컨셉 정합 — Divider + Row Expanded 패턴 + 강제 종료 ElevatedButton (red)
                   if (_canManage && taskId != null) ...[
-                    const SizedBox(height: 8),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: TextButton.icon(
-                        icon: const Icon(Icons.stop_circle, size: 16),
-                        label: const Text('강제 종료'),
-                        style: TextButton.styleFrom(foregroundColor: Colors.red),
-                        onPressed: () => _forceCloseTask(taskId, sn),
-                      ),
+                    const SizedBox(height: 12),
+                    const Divider(color: Color(0xFFE5E7EB), height: 1),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: () => _forceCloseTask(taskId, sn),
+                            icon: const Icon(Icons.stop_circle, size: 15),
+                            label: const Text('강제 종료', style: TextStyle(fontSize: 12)),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.red,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ],
@@ -472,18 +487,26 @@ class _SiFinishingScreenState extends ConsumerState<SiFinishingScreen>
               style: const TextStyle(fontSize: 12, color: Colors.grey),
             ),
             // Tab 2 (출하 확정) 영역 만 [출고 완료] 버튼 (admin/manager)
+            // v2.19.4: PI/QI 영역 컨셉 정합 — Divider + Row Expanded + ElevatedButton (accent indigo)
             if (isConfirmed && _canManage && sn != null) ...[
-              const SizedBox(height: 8),
-              Align(
-                alignment: Alignment.centerRight,
-                child: ElevatedButton.icon(
-                  icon: const Icon(Icons.check_circle, size: 16),
-                  label: const Text('출고 완료'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green, foregroundColor: Colors.white,
+              const SizedBox(height: 12),
+              const Divider(color: Color(0xFFE5E7EB), height: 1),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () => _shipComplete(sn),
+                      icon: const Icon(Icons.local_shipping, size: 15),
+                      label: const Text('출고 완료', style: TextStyle(fontSize: 12)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF6366F1),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                      ),
+                    ),
                   ),
-                  onPressed: () => _shipComplete(sn),
-                ),
+                ],
               ),
             ],
           ],

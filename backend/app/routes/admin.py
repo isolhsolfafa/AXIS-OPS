@@ -1711,12 +1711,17 @@ def update_settings() -> Tuple[Dict[str, Any], int]:
 
 @admin_bp.route("/tasks/pending", methods=["GET"])
 @jwt_required
-@manager_or_admin_required
 def get_pending_tasks() -> Tuple[Dict[str, Any], int]:
     """
     미종료 작업 목록 조회
     (started_at IS NOT NULL AND completed_at IS NULL)
     + include_not_started=true 시 미시작(started_at IS NULL) 작업도 포함
+
+    v2.19.4 (사용자 catch 5-28): 권한 catch — admin/manager + GST 자사 전체.
+    - admin = 모든 task catch
+    - 협력사 manager = manager_pending_tasks 영역 자사 catch (기존 정합)
+    - GST 자사 전체 (admin / manager / 일반 작업자) = catch 가능 (사용자 의도)
+    - 협력사 일반 작업자 = catch X (보안 유지)
 
     Query Parameters:
         limit: int (default: 50)
@@ -1739,9 +1744,19 @@ def get_pending_tasks() -> Tuple[Dict[str, Any], int]:
     include_not_started = request.args.get('include_not_started', 'false').lower() in ('true', '1', 'yes')
     category = request.args.get('category', None, type=str)
 
-    # 협력사 관리자는 본인 company로 강제 제한 (admin은 모든 company 조회 가능)
+    # v2.19.4: 권한 catch — admin OR manager OR (company='GST' 자사 일반 작업자)
     current_worker = get_worker_by_id(g.worker_id)
-    if current_worker and current_worker.is_manager and not current_worker.is_admin:
+    if not current_worker:
+        return jsonify({'error': 'UNAUTHORIZED', 'message': '인증 필요'}), 401
+    is_gst_self = (current_worker.company or '').strip().upper() == 'GST'
+    if not (current_worker.is_admin or current_worker.is_manager or is_gst_self):
+        return jsonify({
+            'error': 'FORBIDDEN',
+            'message': '관리자, 매니저 또는 GST 자사 인원 권한이 필요합니다.'
+        }), 403
+
+    # 협력사 관리자는 본인 company로 강제 제한 (admin은 모든 company 조회 가능)
+    if current_worker.is_manager and not current_worker.is_admin:
         company = current_worker.company
 
     # company → task_category 필터 (협력사 관리자용)
