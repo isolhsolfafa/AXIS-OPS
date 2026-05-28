@@ -275,56 +275,129 @@ class TestOverdueShipments:
 
 
 class TestOverdueAlertRecipients:
-    """TC-OVERDUE-ALERT-04 ~ 05: 메일 대상 list catch."""
+    """TC-OVERDUE-ALERT-04 ~ 09: 메일 대상 list catch (v2.19.8 name base)."""
 
     def test_overdue_04_admin_always_included(self, db_conn, admin_worker):
         """TC-OVERDUE-ALERT-04: is_admin=TRUE 무조건 catch (Codex Q5)."""
         from app.services.shipment_flow_service import get_overdue_alert_recipients
 
-        recipients = get_overdue_alert_recipients(extra_worker_ids=[])
+        recipients = get_overdue_alert_recipients(extra_names=[])
         admin_ids = [r['id'] for r in recipients]
         assert admin_worker['id'] in admin_ids
 
     def test_overdue_05_inactive_user_excluded(self, db_conn, create_test_worker):
-        """TC-OVERDUE-ALERT-05: is_active=FALSE 영역 catch X (Codex Q5 M — workers JOIN 필터)."""
+        """TC-OVERDUE-ALERT-05: is_active=FALSE catch X (Codex Q5 M — workers JOIN 필터)."""
         from app.services.shipment_flow_service import get_overdue_alert_recipients
 
         inactive_id = create_test_worker(
-            email='s79-inactive@test.com', password='Pw1!', name='S79-Inactive', role='MECH',
-            is_admin=False
+            email='s79-inactive@test.com', password='Pw1!', name='S79_Inactive_2628',
+            role='MECH', is_admin=False
         )
-        # is_active=FALSE 영역 별 catch
         cur = db_conn.cursor()
-        cur.execute("UPDATE workers SET is_active=FALSE WHERE id=%s", (inactive_id,))
+        cur.execute("UPDATE workers SET is_active=FALSE, company='GST', is_manager=TRUE WHERE id=%s", (inactive_id,))
         db_conn.commit()
         cur.close()
 
-        recipients = get_overdue_alert_recipients(extra_worker_ids=[inactive_id])
+        recipients = get_overdue_alert_recipients(extra_names=['S79_Inactive_2628'])
         ids = [r['id'] for r in recipients]
-        assert inactive_id not in ids, "is_active=FALSE 영역 catch X"
+        assert inactive_id not in ids, "is_active=FALSE catch X"
+
+    def test_overdue_06_gst_manager_name_match(self, db_conn, create_test_worker):
+        """TC-OVERDUE-ALERT-06: GST 자사 manager name 매칭 시 catch (v2.19.8 신규)."""
+        from app.services.shipment_flow_service import get_overdue_alert_recipients
+
+        gst_id = create_test_worker(
+            email='s79-gst-mgr@gst-in.com', password='Pw1!', name='S79_GST_Manager',
+            role='MECH', is_admin=False
+        )
+        cur = db_conn.cursor()
+        cur.execute("UPDATE workers SET company='GST', is_manager=TRUE, approval_status='approved', is_active=TRUE WHERE id=%s", (gst_id,))
+        db_conn.commit()
+        cur.close()
+
+        recipients = get_overdue_alert_recipients(extra_names=['S79_GST_Manager'])
+        ids = [r['id'] for r in recipients]
+        assert gst_id in ids, "GST manager name 매칭 시 catch 의무"
+
+    def test_overdue_07_non_gst_excluded(self, db_conn, create_test_worker):
+        """TC-OVERDUE-ALERT-07: 협력사 manager catch X (company != 'GST')."""
+        from app.services.shipment_flow_service import get_overdue_alert_recipients
+
+        partner_id = create_test_worker(
+            email='s79-partner@bat.com', password='Pw1!', name='S79_Partner_Manager',
+            role='MECH', is_admin=False
+        )
+        cur = db_conn.cursor()
+        cur.execute("UPDATE workers SET company='BAT', is_manager=TRUE, approval_status='approved', is_active=TRUE WHERE id=%s", (partner_id,))
+        db_conn.commit()
+        cur.close()
+
+        recipients = get_overdue_alert_recipients(extra_names=['S79_Partner_Manager'])
+        ids = [r['id'] for r in recipients]
+        assert partner_id not in ids, "협력사 manager catch X (company=GST 만)"
+
+    def test_overdue_08_homonym_all_included(self, db_conn, create_test_worker):
+        """TC-OVERDUE-ALERT-08: 동명이인 모두 catch (v2.19.8 안전 catch)."""
+        from app.services.shipment_flow_service import get_overdue_alert_recipients
+
+        id_1 = create_test_worker(
+            email='s79-homonym-1@gst-in.com', password='Pw1!', name='S79_Homonym',
+            role='MECH', is_admin=False
+        )
+        id_2 = create_test_worker(
+            email='s79-homonym-2@gst-in.com', password='Pw1!', name='S79_Homonym',
+            role='ELEC', is_admin=False
+        )
+        cur = db_conn.cursor()
+        cur.execute("UPDATE workers SET company='GST', is_manager=TRUE, approval_status='approved', is_active=TRUE WHERE id IN (%s, %s)", (id_1, id_2))
+        db_conn.commit()
+        cur.close()
+
+        recipients = get_overdue_alert_recipients(extra_names=['S79_Homonym'])
+        ids = [r['id'] for r in recipients]
+        assert id_1 in ids and id_2 in ids, "동명이인 모두 catch (안전 catch)"
+
+    def test_overdue_09_unapproved_excluded(self, db_conn, create_test_worker):
+        """TC-OVERDUE-ALERT-09: approval_status != 'approved' catch X."""
+        from app.services.shipment_flow_service import get_overdue_alert_recipients
+
+        pending_id = create_test_worker(
+            email='s79-pending@gst-in.com', password='Pw1!', name='S79_Pending_Manager',
+            role='MECH', is_admin=False
+        )
+        cur = db_conn.cursor()
+        cur.execute("UPDATE workers SET company='GST', is_manager=TRUE, approval_status='pending', is_active=TRUE WHERE id=%s", (pending_id,))
+        db_conn.commit()
+        cur.close()
+
+        recipients = get_overdue_alert_recipients(extra_names=['S79_Pending_Manager'])
+        ids = [r['id'] for r in recipients]
+        assert pending_id not in ids, "비승인 (pending) catch X"
 
 
-# ─── _validate_setting int_list 타입 검증 ────────────────────────────
+# ─── _validate_setting string_list 타입 검증 (v2.19.8 schema 변경) ─────
 
-class TestValidateSettingIntList:
-    """TC-VALIDATE-01 ~ 02: _validate_setting int_list 타입 신규 검증."""
+class TestValidateSettingStringList:
+    """TC-VALIDATE-01 ~ 02: _validate_setting string_list 검증 (v2.19.8 name base)."""
 
-    def test_validate_01_int_list_valid(self):
-        """TC-VALIDATE-01: int_list 정상 list catch."""
+    def test_validate_01_string_list_valid(self):
+        """TC-VALIDATE-01: string_list 정상 list catch (worker name base)."""
         from app.routes.admin import _validate_setting
 
-        err = _validate_setting('shipment_alert_recipients', [377, 378, 379])
+        err = _validate_setting('shipment_alert_recipients', ['신한국', '박승록', '이현관'])
         assert err is None
 
-    def test_validate_02_int_list_invalid(self):
-        """TC-VALIDATE-02: int_list 영역 영역 invalid 영역 (string, 음수, 중복) catch."""
+    def test_validate_02_string_list_invalid(self):
+        """TC-VALIDATE-02: string_list invalid (빈 문자열, 중복, 비-list, int) catch."""
         from app.routes.admin import _validate_setting
 
-        # string 영역 X
-        assert _validate_setting('shipment_alert_recipients', ['377']) is not None
-        # 음수 영역 X
-        assert _validate_setting('shipment_alert_recipients', [-1]) is not None
-        # 중복 영역 X
-        assert _validate_setting('shipment_alert_recipients', [377, 377]) is not None
-        # 비-list 영역 X
-        assert _validate_setting('shipment_alert_recipients', '377') is not None
+        # 빈 문자열 X
+        assert _validate_setting('shipment_alert_recipients', ['']) is not None
+        # 공백만 X
+        assert _validate_setting('shipment_alert_recipients', ['   ']) is not None
+        # 중복 X
+        assert _validate_setting('shipment_alert_recipients', ['신한국', '신한국']) is not None
+        # 비-list X
+        assert _validate_setting('shipment_alert_recipients', '신한국') is not None
+        # int X (string_list 는 string 만)
+        assert _validate_setting('shipment_alert_recipients', [377]) is not None

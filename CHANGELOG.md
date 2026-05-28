@@ -6,6 +6,118 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.19.9] - 2026-05-28 — Sprint 79 — 출하 예정 탭 [출고 완료] 버튼 추가 (옵션 B 채택)
+
+> 사용자 catch: 생산관리 일정 자동화 X — 매니저 catch 누락 case 발생 가능. 출하 예정 탭 검색창 활용 → 검색된 모델 직접 출하 처리.
+
+### 객관 분석 — 옵션 B 채택
+
+| 옵션 | 분석 |
+|---|---|
+| A (ship_plan_date today 변경 + 출하 확정 탭 이동) | ❌ ETL 덮어쓰기 + plan_change_warning (v2.18.33) 자기 충족 catch 위반 |
+| **B (출하 예정 탭 직접 출고 완료)** | ✅ ETL plan 보존 + 책임 분리 + 매니저 직관 1step + audit trail 자동 |
+
+### 변경
+
+- `si_finishing_screen.dart` 1줄 변경 — `isConfirmed` 조건 제거 → Tab 2 + Tab 3 양쪽 [출고 완료] 버튼
+- BE 변경 0 (audit trail = `SI_SHIPMENT.completed_at` 자동, best_ship CTE 정합)
+
+### 추후 분석 인큐베이션
+
+- `FEAT-SHIPMENT-PROCESS-AUDIT-ANALYSIS-20260528` (가칭)
+- `SI_SHIPMENT.completed_at vs ship_plan_date` 비교 → 매니저 catch 패턴, ETL 정확도, 누락 비율
+- Sprint 77 (Lead Time 준수율) + plan_change_warning 통합 catch
+
+---
+
+## [2.19.8] - 2026-05-28 — Sprint 79 — 출하 알림 chip 카드 (PI 위임 패턴 정합, GST 매니저 name)
+
+> 사용자 catch: 출하 미처리 알림 토글 ON 시 PI 위임 chip 패턴처럼 name 추가 → 해당 사람만 메일 발송.
+
+### BE 변경
+
+- `SETTING_KEYS.shipment_alert_recipients`: `int_list` → **`string_list`** (worker name CSV base)
+- `shipment_flow_service.get_overdue_alert_recipients`:
+  - Parameter: `extra_worker_ids` (`List[int]`) → `extra_names` (`List[str]`)
+  - SQL: `id = ANY` → `name = ANY AND company = 'GST'`
+  - `is_admin = TRUE` 무조건 catch 유지 (gmail 도메인 포함)
+- `scheduler_service._alert_shipment_overdue`: `extra_names` 호출 변경
+
+### FE 변경
+
+- `admin_options_screen.dart`:
+  - `_shipmentAlertRecipients` (`List<String>`) + `_gstManagerNameOptions` 추가
+  - `_loadGstManagerNames()` 신규 — `/admin/workers?company=GST&is_manager=true`
+  - 토글 ON 시 `_buildChipListSetting` 카드 노출 (PI 위임 패턴 정합)
+
+### pytest
+
+- 18/18 PASS (2분 39초)
+- 신규 TC 4건: `overdue_06` GST name 매칭 / `overdue_07` 협력사 제외 / `overdue_08` 동명이인 모두 catch / `overdue_09` 비승인 제외
+
+---
+
+## [2.19.7] - 2026-05-28 — Sprint 79 — 미종료 작업 분류 화면 UI 컨셉 정합 (PI/QI carrier)
+
+- `pending_tasks_grouped_screen.dart` 전면 rewrite — `Card(elevation 0 + grey border + BorderRadius 12)` 패턴
+- 색상 정합: MECH (orange) / ELEC (blue) / TMS (teal) / GST (indigo)
+- 헤더: 차분한 amber 배경 + warning icon
+
+---
+
+## [2.19.6] - 2026-05-28 — Sprint 79 — SI Finishing 버튼 권한 logic 재정정
+
+- Tab 1 미종료: 본인 task → [내 작업 완료] + admin/manager → [강제 종료] (둘 다 catch 시 Row Expanded 가로 배치)
+- Tab 2 출하 확정: [출고 완료] 권한 = `_canManage` → **`_isGstSelf || _canManage`** (GST 인원 전체)
+- 2차 확인 dialog: `_completeMyWork` / `_shipComplete` / `_forceCloseTask` 모두 `showDialog` confirm catch
+
+---
+
+## [2.19.5] - 2026-05-28 — Sprint 79 — SI 카드 디자인 PI/QI 컨셉 정합 + Tab 2 GST 인원 [내 작업 완료] 버튼
+
+### BE schema 추가
+
+- `/admin/tasks/pending` 응답: `model` + `customer` 추가 (in_progress + not_started 양쪽)
+- `/admin/shipment/by-status` 응답: `si_finishing_task_id` + `si_finishing_worker_id` + `si_finishing_worker_name` 추가 (LATERAL JOIN)
+
+### FE catch
+
+- `_buildPendingCard` 신규 — PI/QI 카드 디자인 carrier (S/N bold + 진행중 chip + Divider + 공정 + 작업자 + 시작 시간)
+- Tab 2 카드: 본인 task → [내 작업 완료] / admin/manager → [출고 완료]
+
+---
+
+## [2.19.4] - 2026-05-28 — Sprint 79 — 미종료 작업 권한 BE + SI 버튼 UI PI/QI 컨셉
+
+- BE `/admin/tasks/pending`: `@manager_or_admin_required` 데코레이터 제거 + 본문 권한 분기 (admin OR manager OR company='GST')
+- FE SI Finishing 버튼: `TextButton + Align.centerRight` → `Divider + Row Expanded + ElevatedButton` (PI/QI 정합)
+
+---
+
+## [2.19.3] - 2026-05-28 — Sprint 79 — 미종료 작업 권한 GST 자사 (FE)
+
+- BE `/admin/tasks/pending/grouped`: `@admin_required` → `@gst_or_admin_required`
+- FE home 메뉴: `isAdmin` → `isAdmin || company=='GST'`
+
+---
+
+## [2.19.2] - 2026-05-28 — Sprint 79 — SI Finishing action 버튼 추가
+
+- 함수 3개 추가 (gst_products_screen + admin_options carrier):
+  - `_completeMyWork(taskDetailId)` — POST `/app/work/complete`
+  - `_shipComplete(serialNumber)` — POST `/app/work/ship-complete`
+  - `_forceCloseTask(taskId, sn)` — PUT `/admin/tasks/<id>/force-close`
+
+---
+
+## [2.19.1] - 2026-05-27 — Sprint 79 — SI 카드 navigate + admin_options 분리 + 메일 토글
+
+- home_screen SI 카드: `/gst-products?category=SI` → `/si-finishing`
+- admin_options L957~L1268 (~310 lines) 비활성 사용자 + 미종료 작업 섹션 제거 → 메인 메뉴 분리 정합
+- admin_options Admin Settings 섹션에 출하 미처리 알림 토글 추가 (`shipment_alert_enabled`)
+
+---
+
 ## [2.19.0] - 2026-05-27 — Sprint 79 FEAT-SI-SHIPMENT-FLOW-3PHASE (출하 흐름 3단계 + admin 분리 + 출하 미처리 알림)
 
 > 큰 sprint catch — SI 마무리공정 영역 TabBar 3개 (미종료/출하 확정/출하 예정) + admin 메인 메뉴 분리 + 매일 07:30 KST 출하 미처리 자동 알림.
