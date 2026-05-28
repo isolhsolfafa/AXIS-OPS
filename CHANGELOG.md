@@ -6,6 +6,83 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.19.11] - 2026-05-28 — #74 후속 — `_ALLOWED_DATE_FIELDS` 화이트리스트 qi_start + si_start 추가
+
+> VIEW v1.53.0 prod 배포 후 사용자 catch (Twin파파, 2026-05-28 11:20 KST): Phase 1 QI/SI 카드 카운트 0 (400 INVALID_DATE_FIELD).
+
+### Root cause
+
+`factory.py _ALLOWED_DATE_FIELDS` 영역 `qi_start` / `si_start` 누락 — `date_field=qi_start` 또는 `si_start` 호출 시 400 catch.
+
+### 변경 (1줄)
+
+```python
+_ALLOWED_DATE_FIELDS = {
+    'pi_start', 'qi_start', 'si_start', 'mech_start',  # qi_start + si_start 추가
+    'finishing_plan_end', 'ship_plan_date', 'actual_ship_date'
+}
+```
+
+### 영향
+
+- VIEW Phase 1 + Phase 2 QI/SI 카드 자동 정상화
+- 기존 endpoint 호환 (화이트리스트 확장만)
+- VIEW 변경 0 (BE fix 자동 정합)
+
+### pytest
+
+- `test_factory.py` 11/11 PASS (회귀)
+- 기존 TC (pi_start / mech_start) 영역 그대로 PASS
+
+### Railway 자동 배포
+
+- BE only / push 영역 trigger
+
+---
+
+## [2.19.10] - 2026-05-28 — #74 옵션 C (factory.py date param) + 출하 알림 메일 template 회원가입 컨셉 정합
+
+> 사용자 catch (5-28): 두 가지 통합 release.
+
+### 1. VIEW #74 옵션 C — factory.py `/monthly-detail` `date` parameter 신규
+
+- VIEW Sprint 78 (v1.53.0 mockup) 영역 공정 카드 today 클릭 시 단일 일자 fetch carrier
+- 기존 month range mode + 신규 date single mode 분기
+- `where_sql` + `where_params` 통합 (COUNT + items + by_model + by_customer 4 SQL 동일)
+- 회귀 위험 0 (additive — 기존 month range 영역 변경 0)
+
+### 2. 출하 미처리 메일 template — 회원가입 승인 메일 컨셉 정합
+
+- `_render_shipment_overdue_html` 전면 rewrite (`_render_approval_html` 컨셉 carrier)
+- 외곽: max-width 600 + `#f5f5f7` background + `-apple-system` font
+- 카드: white + border-radius 12 + box-shadow
+- **박스 엣지 색상 제거** (사용자 catch — `border-left` accent 제거)
+- 헤더: ⚠️ + amber (`#d97706`) / 정보 박스 + 표 + [앱 열기] 버튼 + OPS 접속 안내
+
+### 메일 발송 로직 spec 확정 (사용자 합의 정합 trail)
+
+- 기준 일자: **yesterday** `ship_plan_date` (= D-1 plan 도래)
+- 미처리 조건: `actual_date IS NULL` = COALESCE(app SI_SHIPMENT, ETL actual_ship_date) NULL = **양쪽 모두 미처리** (best 패턴 정합)
+- best 패턴: 완료 = OR (app OR ETL) — De Morgan's law 영역 미처리 = AND (양쪽 NULL)
+- 0건 skip / TEST CUSTOMER 제외 / admin 무조건 + chip name list
+
+### pytest
+
+- `test_factory.py` 11/11 PASS (회귀 9 + 신규 2: `date_param_single_day` + `date_invalid_format`)
+
+### 메일 미리보기
+
+- `frontend/web/mail-preview-shipment-overdue.html`
+- local: `file:///Users/twinfafa/Desktop/GST/AXIS-OPS/frontend/web/mail-preview-shipment-overdue.html`
+- Netlify 배포 후: `https://gaxis-ops.netlify.app/mail-preview-shipment-overdue.html`
+
+### Railway 자동 배포
+
+- BE only (FE 변경 0)
+- push 영역 trigger
+
+---
+
 ## [2.19.9] - 2026-05-28 — Sprint 79 — 출하 예정 탭 [출고 완료] 버튼 추가 (옵션 B 채택)
 
 > 사용자 catch: 생산관리 일정 자동화 X — 매니저 catch 누락 case 발생 가능. 출하 예정 탭 검색창 활용 → 검색된 모델 직접 출하 처리.

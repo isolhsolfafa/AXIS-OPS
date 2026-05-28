@@ -28,7 +28,8 @@ factory_bp = Blueprint("factory", __name__, url_prefix="/api/admin/factory")
 # date_field 화이트리스트 (SQL 인젝션 방지)
 # Sprint 62-BE v2.2: monthly-detail 전용 — pi_start 포함 5값 (ProductionPlanPage 토글 호환)
 _ALLOWED_DATE_FIELDS = {
-    'pi_start', 'mech_start', 'finishing_plan_end', 'ship_plan_date', 'actual_ship_date'
+    'pi_start', 'qi_start', 'si_start', 'mech_start',
+    'finishing_plan_end', 'ship_plan_date', 'actual_ship_date'
 }
 # monthly-kpi 전용 — 출하 기준 date만 (pi_start 제외)
 _ALLOWED_DATE_FIELDS_MONTHLY_KPI = {

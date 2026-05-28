@@ -3,7 +3,9 @@
 ## 개요
 GST 제조 현장 작업 관리 시스템 — 스프레드시트 수동 입력에서 모바일 App 실시간 Push로 전환.
 
-> **현재 버전**: **v2.19.9 (Sprint 79 — 출하 예정 탭 [출고 완료] 버튼 옵션 B 채택, 2026-05-28)** — FE 1줄 변경 / 사용자 catch: 생산관리 일정 자동화 X 매니저 누락 case → 출하 예정 탭 검색 후 직접 출하 처리. 객관 분석 옵션 B 채택 (ETL plan 보존 + 책임 분리 + audit trail 자동 = SI_SHIPMENT.completed_at). 추후 분석 인큐베이션 FEAT-SHIPMENT-PROCESS-AUDIT-ANALYSIS-20260528.
+> **현재 버전**: **v2.19.11 (#74 후속 — `_ALLOWED_DATE_FIELDS` qi_start + si_start 추가, 2026-05-28)** — BE 1줄 / VIEW v1.53.0 prod 배포 후 사용자 catch (Twin파파 11:20 KST): Phase 1 QI/SI 카드 카운트 0 (400 INVALID_DATE_FIELD). factory.py 화이트리스트 영역 qi_start + si_start 누락 → 추가. pytest 11/11 PASS. Railway 자동 배포.
+> **선행 release**: v2.19.10 (#74 옵션 C + 출하 메일 template 회원가입 컨셉 정합, 2026-05-28) — BE only / 두 catch 통합. (1) VIEW #74 옵션 C — factory.py /monthly-detail date parameter 신규 (VIEW Sprint 78 v1.53.0 carrier). (2) 출하 미처리 메일 template 전면 rewrite — 회원가입 승인 메일 컨셉 (회색 박스 + 표 + [앱 열기] 버튼) + 박스 엣지 색상 제거. 메일 발송 spec 확정 trail: yesterday ship_plan_date + actual_date IS NULL (= app OR ETL 양쪽 미처리, best 패턴 정합, De Morgan's law). pytest 11/11 PASS (회귀 9 + 신규 2). Railway 자동 배포 trigger.
+> **선행 release**: v2.19.9 (Sprint 79 — 출하 예정 탭 [출고 완료] 버튼 옵션 B 채택, 2026-05-28) — FE 1줄 변경 / 사용자 catch: 생산관리 일정 자동화 X 매니저 누락 case → 출하 예정 탭 검색 후 직접 출하 처리. 객관 분석 옵션 B 채택 (ETL plan 보존 + 책임 분리 + audit trail 자동 = SI_SHIPMENT.completed_at). 추후 분석 인큐베이션 FEAT-SHIPMENT-PROCESS-AUDIT-ANALYSIS-20260528.
 > **선행 release**: v2.19.8 (출하 알림 chip 카드 PI 위임 패턴 정합, GST 매니저 name, 2026-05-28) — BE schema 변경 (int_list → string_list, worker name CSV base) + FE chip 카드 (`_buildChipListSetting` 활용) + pytest 18/18 PASS (4 신규 TC 추가)
 > **선행 release**: v2.19.7 (미종료 작업 분류 화면 UI 컨셉 정합, 2026-05-28) — pending_tasks_grouped Card 디자인 PI/QI carrier
 > **선행 release**: v2.19.6 (SI Finishing 버튼 권한 logic 재정정, 2026-05-28) — Tab 1 본인 [내 작업 완료] + admin/manager [강제 종료] / Tab 2 [출고 완료] GST 인원 전체
