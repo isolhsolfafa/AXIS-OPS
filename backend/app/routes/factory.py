@@ -201,6 +201,7 @@ def get_monthly_detail() -> Tuple[Dict[str, Any], int]:
     # 파라미터 파싱
     month_str = request.args.get('month')
     date_field = request.args.get('date_field', 'pi_start')
+    date_str = request.args.get('date')  # v2.19.10 (#74 옵션 C) — 단일 일자 fetch (month 무관)
     page = max(1, request.args.get('page', 1, type=int))
     per_page = min(500, max(1, request.args.get('per_page', 50, type=int)))
 
@@ -211,36 +212,58 @@ def get_monthly_detail() -> Tuple[Dict[str, Any], int]:
             'message': f'date_field는 {", ".join(sorted(_ALLOWED_DATE_FIELDS))} 중 하나여야 합니다.'
         }), 400
 
-    # month 파싱 (KST 기준)
+    # v2.19.10 (#74): date parameter 영역 단일 일자 fetch (month 무관, 공정 카드 today 영역)
     from datetime import datetime
     kst = timezone(timedelta(hours=9))
     today = datetime.now(kst).date()
-    if month_str:
-        try:
-            parts = month_str.split('-')
-            if len(parts) != 2:
-                raise ValueError
-            year_val = int(parts[0])
-            month_val = int(parts[1])
-            if month_val < 1 or month_val > 12:
-                raise ValueError
-            start_date = date(year_val, month_val, 1)
-        except (ValueError, IndexError):
-            return jsonify({
-                'error': 'INVALID_MONTH',
-                'message': 'month 형식은 YYYY-MM이어야 합니다.'
-            }), 400
-    else:
-        year_val = today.year
-        month_val = today.month
-        start_date = date(year_val, month_val, 1)
-        month_str = f"{year_val}-{month_val:02d}"
 
-    # end_date 계산 (다음 달 1일)
-    if month_val == 12:
-        end_date = date(year_val + 1, 1, 1)
+    where_sql = ""
+    where_params: tuple = ()
+    target_date_val = None
+
+    if date_str:
+        # 단일 일자 mode (VIEW Sprint 78 공정 카드 today 영역)
+        try:
+            target_date_val = datetime.strptime(date_str, '%Y-%m-%d').date()
+        except (ValueError, TypeError):
+            return jsonify({
+                'error': 'INVALID_DATE',
+                'message': 'date 형식은 YYYY-MM-DD이어야 합니다.'
+            }), 400
+        where_sql = f"WHERE p.{date_field} = %s"
+        where_params = (target_date_val,)
+        # month_str 영역 catch (응답 호환 — date 영역 month 표시)
+        month_str = target_date_val.strftime('%Y-%m')
     else:
-        end_date = date(year_val, month_val + 1, 1)
+        # 기존 — month range mode
+        if month_str:
+            try:
+                parts = month_str.split('-')
+                if len(parts) != 2:
+                    raise ValueError
+                year_val = int(parts[0])
+                month_val = int(parts[1])
+                if month_val < 1 or month_val > 12:
+                    raise ValueError
+                start_date = date(year_val, month_val, 1)
+            except (ValueError, IndexError):
+                return jsonify({
+                    'error': 'INVALID_MONTH',
+                    'message': 'month 형식은 YYYY-MM이어야 합니다.'
+                }), 400
+        else:
+            year_val = today.year
+            month_val = today.month
+            start_date = date(year_val, month_val, 1)
+            month_str = f"{year_val}-{month_val:02d}"
+
+        # end_date 계산 (다음 달 1일)
+        if month_val == 12:
+            end_date = date(year_val + 1, 1, 1)
+        else:
+            end_date = date(year_val, month_val + 1, 1)
+        where_sql = f"WHERE p.{date_field} >= %s AND p.{date_field} < %s"
+        where_params = (start_date, end_date)
 
     offset = (page - 1) * per_page
     conn = None
@@ -249,11 +272,10 @@ def get_monthly_detail() -> Tuple[Dict[str, Any], int]:
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # COUNT 쿼리
+        # COUNT 쿼리 (v2.19.10 #74: where_sql/where_params 통합)
         cur.execute(
-            f"SELECT COUNT(*) AS cnt FROM plan.product_info p "
-            f"WHERE p.{date_field} >= %s AND p.{date_field} < %s",
-            (start_date, end_date)
+            f"SELECT COUNT(*) AS cnt FROM plan.product_info p {where_sql}",
+            where_params,
         )
         total = cur.fetchone()['cnt']
         total_pages = math.ceil(total / per_page) if total > 0 else 0
@@ -268,10 +290,10 @@ def get_monthly_detail() -> Tuple[Dict[str, Any], int]:
                        cs.pi_completed, cs.qi_completed, cs.si_completed
                 FROM plan.product_info p
                 LEFT JOIN completion_status cs ON p.serial_number = cs.serial_number
-                WHERE p.{date_field} >= %s AND p.{date_field} < %s
+                {where_sql}
                 ORDER BY p.{date_field} DESC
                 LIMIT %s OFFSET %s""",
-            (start_date, end_date, per_page, offset)
+            where_params + (per_page, offset),
         )
         rows = cur.fetchall()
 
@@ -279,23 +301,21 @@ def get_monthly_detail() -> Tuple[Dict[str, Any], int]:
         cur.execute(
             f"""SELECT p.model, COUNT(*) AS count
                 FROM plan.product_info p
-                WHERE p.{date_field} >= %s AND p.{date_field} < %s
+                {where_sql}
                 GROUP BY p.model
                 ORDER BY count DESC""",
-            (start_date, end_date)
+            where_params,
         )
         by_model = [{'model': r['model'], 'count': r['count']} for r in cur.fetchall()]
 
         # by_customer 집계 쿼리 (#68 — 공장 대시보드 월간 고객사 도넛)
-        # by_model 과 동일 패턴: date_field 화이트리스트 검증 완료(L200) → f-string 안전.
-        # NULL customer 는 by_model 의 NULL model 과 동일하게 GROUP BY 자연 처리 (FE 필터).
         cur.execute(
             f"""SELECT p.customer, COUNT(*) AS count
                 FROM plan.product_info p
-                WHERE p.{date_field} >= %s AND p.{date_field} < %s
+                {where_sql}
                 GROUP BY p.customer
                 ORDER BY count DESC, p.customer ASC""",
-            (start_date, end_date)
+            where_params,
         )
         by_customer = [{'customer': r['customer'], 'count': r['count']} for r in cur.fetchall()]
 

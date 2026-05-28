@@ -163,75 +163,87 @@ def send_approval_notification_async(name: str, email: str, role: str, company: 
 # ─── Sprint 79: 출하 미처리 알림 메일 ──────────────────────────────────
 
 def _render_shipment_overdue_html(overdue_items: list, target_date) -> str:
-    """출하 미처리 알림 HTML 템플릿 (Sprint 79).
+    """출하 미처리 알림 HTML 템플릿 (Sprint 79, v2.19.10).
+
+    v2.19.10: 회원가입 승인 메일 컨셉 정합 (사용자 catch 5-28).
+    - 외곽: max-width 600px, background #f5f5f7, font -apple-system
+    - 카드: white + border-radius 12 + box-shadow
+    - 헤더: ⚠️ + amber color (#d97706)
+    - 정보 박스 + 표 + 액션 박스 + footer
 
     Codex M-Q1 (v2.18.20): html.escape 적용 XSS 방지.
     """
     target_str = target_date.strftime('%Y-%m-%d') if hasattr(target_date, 'strftime') else str(target_date)
+    now_kst = datetime.now(_KST).strftime('%Y-%m-%d %H:%M')
     safe_date = html.escape(target_str, quote=True)
     count = len(overdue_items)
 
-    # row catch
     rows_html = ""
     for item in overdue_items:
         safe_sn = html.escape(str(item.get('serial_number', '-')), quote=True)
-        safe_so = html.escape(str(item.get('sales_order', '-')), quote=True)
-        safe_model = html.escape(str(item.get('model', '-')), quote=True)
+        safe_so = html.escape(str(item.get('sales_order', '-') or '-'), quote=True)
+        safe_model = html.escape(str(item.get('model', '-') or '-'), quote=True)
         safe_customer = html.escape(str(item.get('customer', '-') or '-'), quote=True)
         safe_mech = html.escape(str(item.get('mech_partner', '-') or '-'), quote=True)
         safe_elec = html.escape(str(item.get('elec_partner', '-') or '-'), quote=True)
         rows_html += f"""
         <tr>
-            <td style="padding:8px;border:1px solid #ddd;">{safe_sn}</td>
-            <td style="padding:8px;border:1px solid #ddd;">{safe_so}</td>
-            <td style="padding:8px;border:1px solid #ddd;">{safe_model}</td>
-            <td style="padding:8px;border:1px solid #ddd;">{safe_customer}</td>
-            <td style="padding:8px;border:1px solid #ddd;">{safe_mech} / {safe_elec}</td>
-        </tr>
-        """
+          <td style="padding:8px 6px;border-bottom:1px solid #e5e7eb;font-weight:600;color:#1d1d1f;">{safe_sn}</td>
+          <td style="padding:8px 6px;border-bottom:1px solid #e5e7eb;color:#555;">{safe_so}</td>
+          <td style="padding:8px 6px;border-bottom:1px solid #e5e7eb;color:#555;">{safe_model}</td>
+          <td style="padding:8px 6px;border-bottom:1px solid #e5e7eb;color:#555;">{safe_customer}</td>
+          <td style="padding:8px 6px;border-bottom:1px solid #e5e7eb;color:#888;font-size:11px;">{safe_mech} / {safe_elec}</td>
+        </tr>"""
 
-    return f"""
-    <html>
-    <body style="font-family:'Apple SD Gothic Neo','Malgun Gothic',sans-serif; color:#333; max-width:720px; margin:0 auto;">
-        <div style="background:#fff3cd; border-left:4px solid #ffc107; padding:16px; margin-bottom:24px;">
-            <h2 style="margin:0 0 8px 0; color:#856404;">⚠️ 출하 미처리 catch — {safe_date}</h2>
-            <p style="margin:0; color:#856404;">
-                <strong>{count}건</strong> 영역 출하 계획일 ({safe_date}) 도래 후 미처리 catch.
-                즉시 catch 의무.
-            </p>
-        </div>
+    return f"""\
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="UTF-8"></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:600px;margin:0 auto;padding:24px;background:#f5f5f7;color:#1d1d1f;">
+  <div style="background:#fff;border-radius:12px;padding:24px;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
+    <h2 style="margin-top:0;color:#d97706;">⚠️ 출하 미처리 알림</h2>
+    <p>어제 ({safe_date}) 출하 계획 <strong style="color:#d97706;">{count}건</strong>이 미처리 상태입니다. 즉시 확인 부탁드립니다.</p>
 
-        <table style="width:100%; border-collapse:collapse; margin-bottom:24px; font-size:13px;">
-            <thead>
-                <tr style="background:#f5f5f5;">
-                    <th style="padding:10px;border:1px solid #ddd;text-align:left;">S/N</th>
-                    <th style="padding:10px;border:1px solid #ddd;text-align:left;">O/N</th>
-                    <th style="padding:10px;border:1px solid #ddd;text-align:left;">모델</th>
-                    <th style="padding:10px;border:1px solid #ddd;text-align:left;">고객사</th>
-                    <th style="padding:10px;border:1px solid #ddd;text-align:left;">협력사 (MECH/ELEC)</th>
-                </tr>
-            </thead>
-            <tbody>
-                {rows_html}
-            </tbody>
-        </table>
+    <div style="background:#f9fafb;border-radius:8px;padding:14px 16px;margin:16px 0;font-size:13px;">
+      <p style="margin:4px 0;"><strong>대상 일자:</strong> {safe_date} (어제)</p>
+      <p style="margin:4px 0;"><strong>미처리 건수:</strong> <strong style="color:#d97706;">{count}건</strong></p>
+      <p style="margin:4px 0;color:#888;"><strong>발송 시각:</strong> {now_kst} KST</p>
+    </div>
 
-        <div style="background:#e7f3ff; padding:12px; border-radius:6px; margin-bottom:16px;">
-            <p style="margin:0 0 8px 0; font-weight:600; color:#0066cc;">🔗 OPS 접속</p>
-            <p style="margin:0;">
-                <a href="https://gaxis-ops.netlify.app/" style="color:#0066cc;">
-                    https://gaxis-ops.netlify.app/
-                </a> → SI 마무리공정 → 출하 확정 탭
-            </p>
-        </div>
+    <div style="background:#f9fafb;border-radius:8px;padding:14px 16px;margin:16px 0;font-size:13px;">
+      <p style="margin:0 0 10px 0;font-weight:600;color:#1d1d1f;">📋 미처리 list</p>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead>
+          <tr style="background:#f3f4f6;">
+            <th style="padding:8px 6px;text-align:left;font-size:11px;color:#888;border-bottom:1px solid #e5e7eb;">S/N</th>
+            <th style="padding:8px 6px;text-align:left;font-size:11px;color:#888;border-bottom:1px solid #e5e7eb;">O/N</th>
+            <th style="padding:8px 6px;text-align:left;font-size:11px;color:#888;border-bottom:1px solid #e5e7eb;">모델</th>
+            <th style="padding:8px 6px;text-align:left;font-size:11px;color:#888;border-bottom:1px solid #e5e7eb;">고객사</th>
+            <th style="padding:8px 6px;text-align:left;font-size:11px;color:#888;border-bottom:1px solid #e5e7eb;">협력사 M/E</th>
+          </tr>
+        </thead>
+        <tbody>{rows_html}
+        </tbody>
+      </table>
+    </div>
 
-        <p style="color:#999; font-size:11px; margin-top:24px;">
-            본 메일은 G-AXIS OPS 시스템 자동 발송 메일 (07:30 KST).
-            수신자 catch 변경 = OPS 관리자 옵션 화면 영역 catch.
-        </p>
-    </body>
-    </html>
-    """
+    <p style="margin-top:18px;">OPS 앱에서 출하 처리 부탁드립니다.</p>
+    <p style="margin-top:12px;"><a href="https://gaxis-ops.netlify.app" style="display:inline-block;padding:10px 18px;background:#007aff;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">앱 열기</a></p>
+
+    <div style="background:#eef2ff;border-radius:8px;padding:14px 16px;margin:18px 0;font-size:13px;">
+      <p style="margin:0 0 6px 0;font-weight:600;color:#1d1d1f;">📍 OPS 접속 경로</p>
+      <p style="margin:0;color:#555;line-height:1.6;">
+        앱 로그인 후 <strong>[SI 마무리공정]</strong> → <strong>[출하 확정]</strong> 탭에서 직접 출고 완료 처리.<br>
+        <span style="font-size:11px;color:#888;">검색이 필요한 경우 [출하 예정] 탭에서 S/N · O/N 검색 후 처리 가능합니다.</span>
+      </p>
+    </div>
+
+    <hr style="border:none;border-top:1px solid #e5e5e7;margin:24px 0;">
+    <p style="font-size:11px;color:#888;">이 메일은 매일 07:30 KST 자동 발송됩니다. 수신자 변경: OPS 관리자 옵션 → 출하 미처리 알림. 문의: dkkim1@gst-in.com</p>
+  </div>
+</body>
+</html>
+"""
 
 
 def send_shipment_overdue_alert(recipients: list, overdue_items: list, target_date) -> bool:

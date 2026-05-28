@@ -82,6 +82,36 @@ class TestMonthlyDetail:
         assert resp.status_code == 400
         assert resp.get_json()['error'] == 'INVALID_DATE_FIELD'
 
+    def test_md03b_date_param_single_day(self, client, create_test_admin, get_admin_auth_token):
+        """v2.19.10 (#74 옵션 C) — date parameter 영역 단일 일자 fetch (month 무관)."""
+        admin = create_test_admin
+        token = get_admin_auth_token(admin['id'])
+
+        resp = client.get(
+            '/api/admin/factory/monthly-detail?date=2026-05-27&date_field=pi_start',
+            headers={'Authorization': f'Bearer {token}'}
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        # date mode: month_str = date 영역 month 표시 (응답 호환)
+        assert data['month'] == '2026-05'
+        # items 영역 모두 pi_start = 2026-05-27 (단일 일자)
+        for item in data['items']:
+            if item.get('pi_start'):
+                assert item['pi_start'] == '2026-05-27'
+
+    def test_md03c_date_param_invalid_format(self, client, create_test_admin, get_admin_auth_token):
+        """v2.19.10 — date 영역 형식 invalid → 400 INVALID_DATE."""
+        admin = create_test_admin
+        token = get_admin_auth_token(admin['id'])
+
+        resp = client.get(
+            '/api/admin/factory/monthly-detail?date=2026/05/27',
+            headers={'Authorization': f'Bearer {token}'}
+        )
+        assert resp.status_code == 400
+        assert resp.get_json()['error'] == 'INVALID_DATE'
+
     def test_md04_invalid_month(self, client, create_test_admin, get_admin_auth_token):
         """month=2026-13 → 400"""
         admin = create_test_admin
