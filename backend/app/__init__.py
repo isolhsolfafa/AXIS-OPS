@@ -217,6 +217,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.routes.shipment_history import shipment_history_bp  # Sprint 76-BE: 출하이력 페이지
     from app.routes.admin_shipment_flow import admin_shipment_flow_bp  # Sprint 79: 출하 흐름 + 미종료 분류 admin
     from app.routes.admin_dashboard import admin_dashboard_bp  # Sprint 71: Manager Dashboard 자동 마감 분석
+    from app.routes.admin_debug import admin_debug_bp  # v2.20.2: scheduler 진단 + cron job 강제 실행
     from app.routes import work_batch                              # Sprint 64-BE v3: work_bp 에 batch route 등록 (side effect import, register_blueprint 전 필수)
     from app.routes import work_shipment                            # Sprint 68: work_bp 에 ship-complete route 등록 (side effect import)
 
@@ -239,7 +240,8 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(shipment_history_bp)   # Sprint 76-BE
     app.register_blueprint(admin_shipment_flow_bp)  # Sprint 79: 출하 흐름 + 미종료 분류
     app.register_blueprint(admin_dashboard_bp)      # Sprint 71: Manager Dashboard 자동 마감 분석
-    logger.info("Blueprints registered: auth, work, product, alert, admin, sync, gst, checklist, hr, notices, qr, factory, analytics, production, admin_materials, admin_checklists, shipment_history, admin_shipment_flow, admin_dashboard")
+    app.register_blueprint(admin_debug_bp)          # v2.20.2: scheduler 진단 + cron job 강제 실행
+    logger.info("Blueprints registered: auth, work, product, alert, admin, sync, gst, checklist, hr, notices, qr, factory, analytics, production, admin_materials, admin_checklists, shipment_history, admin_shipment_flow, admin_dashboard, admin_debug")
 
     # Sprint 32: 사용자 행위 트래킹 (access log)
     import time as _time

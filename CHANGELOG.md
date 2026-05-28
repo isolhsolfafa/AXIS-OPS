@@ -6,6 +6,50 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.20.2] - 2026-05-29 — admin debug endpoints (scheduler 진단 + cron 강제 실행)
+
+> 5-29 07:30 KST 출하 미처리 알림 cron 누락 사건 후속. Railway 로그 분석 결과 다른 cron 4종 (pool_warmup / task_reminder / check_orphan_relay_tasks / check_break_time) 은 정상 fire / `alert_shipment_overdue` 만 0건. root cause 즉시 진단 + 운영 중 cron 누락 의심 시 임시 복구 수단 확보.
+
+### 신규 endpoint 2개
+
+- `GET /api/admin/debug/scheduler` — 등록된 cron job 전체 + 다음 실행 시각 + trigger + func 경로
+- `POST /api/admin/debug/run-job/<job_id>` — 특정 cron 즉시 강제 실행 (동기, 결과 응답 포함)
+
+### 신규 파일
+
+- `backend/app/routes/admin_debug.py` (+~110 LoC) — 권한 `@jwt_required + @admin_required`
+
+### 핵심 기능
+
+1. **scheduler 진단**: 실제로 `alert_shipment_overdue` 가 scheduler 에 등록돼 있는지 즉시 확인
+   - 등록 X → root cause A (silent 예외로 add_job 실패)
+   - 등록 O 인데 fire 안 됨 → root cause C (timezone / next_run 계산 이슈)
+2. **강제 발송**: 어제(5-28) 출하 미처리 10건 메일 즉시 발송 + 결과(success/error/traceback) 응답으로 확인
+3. **재발 방지**: 향후 cron 누락 의심 시 1초 만에 검증 + 즉시 복구
+
+### 사용 시나리오
+
+```bash
+# 1. 현재 등록 jobs 확인
+curl -X GET https://<railway>/api/admin/debug/scheduler \
+  -H "Authorization: Bearer <admin_token>"
+# → { "running": true, "job_count": 13, "jobs": [...] }
+# alert_shipment_overdue 가 jobs 안에 있는지 catch
+
+# 2. 강제 실행
+curl -X POST https://<railway>/api/admin/debug/run-job/alert_shipment_overdue \
+  -H "Authorization: Bearer <admin_token>"
+# → { "success": true, "started_at": ..., "finished_at": ... }
+```
+
+### 회귀 위험 0
+
+- 신규 endpoint 2개 (기존 코드 touch 0)
+- admin 전용 권한 (manager 차단)
+- scheduler 자체는 read-only (run-job 만 강제 fire)
+
+---
+
 ## [2.20.1] - 2026-05-29 — Sprint 71 hotfix — partner_task_matrix invariant violation 해소 (Sprint 76 패턴 정합)
 
 > VIEW 측 catch (2026-05-28): `partner_task_matrix.grand_total 202 != started_task_count 215` → InvariantViolationError 500. Sprint 76 `product_code NULL` COALESCE 패턴 정합 fix.
