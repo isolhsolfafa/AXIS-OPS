@@ -6,6 +6,69 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.20.0] - 2026-05-28 — Sprint 71 — Manager Dashboard 자동 마감 분석 API 2개 (FEAT-MANAGER-DASHBOARD-AUTO-CLOSE-20260521)
+
+> AXIS-VIEW Sprint 71 (FEAT-MISSED-CLOSE-ANALYSIS) `/analysis/missed-close` 페이지 BE part — mockup 5 file 작성 완료 + BE freeze (v3.1) + Codex 라운드 1/2/3 close 후 BE 구현 진입. 사용자 catch (2026-05-28): "Mockup 페이지는 만들어져있고 route 엔드포인트가 필요해서 검토".
+
+### 신규 endpoint 2개
+
+- `GET /api/admin/dashboard/auto-close-summary` — KPI 3 (auto/manual/total) + 분포 7종 (trigger / task / partner / hourly / unstarted_task / partner_task_matrix) + 모집단 3분리
+- `GET /api/admin/dashboard/auto-close-details` — drill-down 상세 카드 (페이지네이션 + trigger_task_id filter)
+
+### 신규 파일 (2)
+
+- `backend/app/services/dashboard_service.py` (+620 LoC) — 7 SQL helper + `build_auto_close_summary` + `build_auto_close_details` + `_assert_invariants()` + `InvariantViolationError`
+- `backend/app/routes/admin_dashboard.py` (+150 LoC) — endpoint 2개 + 권한 + period validation + InvariantViolationError → 500 변환
+
+### 핵심 설계 (v3.1 freeze 정합)
+
+- **분류 LIKE** — `AUTO_CLOSED_BY_%` → auto / `MANUAL_FORCE_CLOSE` → manual / `SHIP_COMPLETE` + `ADMIN_COMPLETE` + NULL → 제외
+- **모집단 3분리** (Codex Q7) — `started_task_count` (work_start_log 있는 task) / `unstarted_task_count` (work_start_log 없는 task) / `missed_worker_count` (worker-miss 단위, 한 task 2명 누락 시 2)
+- **V1 hourly** — 24h backfill 강제 + KST 변환 (`AT TIME ZONE 'Asia/Seoul'`)
+- **V6 partner_task_matrix** — canonical 정렬 (`ORDER BY task_name, task_id`) + length 일치 + grand_total = started_task_count assertion (Codex Q6)
+- **invariant check** (Codex Q-Freeze-3) — 5분포 합계 + 4 합산 invariant → `InvariantViolationError` raise → 500 + Sentry capture
+- **평균 대비** — 옵션 A (지난 30일 일평균)
+- **권한** — `@jwt_required + @manager_or_admin_required` + manager partner filter X1 (work_start_log + workers.company EXISTS subquery, 결정 6 정합)
+
+### Codex 라운드 2회 trail
+
+- **라운드 1** (M=3 / A=4): manager filter 기준 불일치 (X1 채택) / pytest GREEN 미확보 / access_log FK cleanup 누락 (root cause 확정)
+- **라운드 2** (M=0 GREEN ✅): M1 + M3 fix 정합 + 18 TC GREEN 입증
+
+### M3 fix — pytest fixture cleanup (Codex Q5 root cause)
+
+- `tests/conftest.py` `create_test_worker` teardown 영역 `app_access_log` 선행 DELETE 추가
+- `backend/app/__init__.py` `log_access` after_request handler 영역 FK violation 시 rollback + `put_conn` 보장 → connection leak 차단
+
+### pytest TC 18 — `tests/backend/test_sprint71_dashboard.py`
+
+- 분류 LIKE 6 (TC-01~06) ✅
+- 모집단 3분리 3 (TC-07/08/09) ✅
+- invariant 2 (TC-10/11) ✅
+- hourly backfill 1 (TC-12) ✅
+- 권한 admin/manager/worker 3 (TC-13~15) ✅
+- drill-down 2 (TC-16/17) ✅
+- grand_total assertion 1 (TC-18) ✅
+
+**결과**: 18/18 PASSED (617s)
+
+### BACKLOG 등록 (Codex A 4건 + 라운드 2 A 4건)
+
+- `partner_task_matrix` `started_task_count` 인자 미사용 정리
+- SQL `EXPLAIN ANALYZE` + 복합 index 후보 검토
+- VIEW trend 색상/아이콘 운영 후 재검토
+- alert threshold 운영 1~3개월 후 재검토
+- `app_access_log` migration constraint drift 점검
+- 추가 TC 권고 (admin partner='BAT' explicit / 빈 응답 / invalid period / 특수문자)
+
+### 후속 catch — AXIS-VIEW
+
+- VIEW `useAutoCloseSummary` / `useAutoCloseDetails` hook 추가 (BE 배포 직후 즉시 가능)
+- read-only consume catch (책임 분리 원칙 정합)
+- 복원/강제 액션 catch 시 OPS PWA 기존 mutation 경로 catch (별 sprint deep link 검토 후보)
+
+---
+
 ## [2.19.11] - 2026-05-28 — #74 후속 — `_ALLOWED_DATE_FIELDS` 화이트리스트 qi_start + si_start 추가
 
 > VIEW v1.53.0 prod 배포 후 사용자 catch (Twin파파, 2026-05-28 11:20 KST): Phase 1 QI/SI 카드 카운트 0 (400 INVALID_DATE_FIELD).

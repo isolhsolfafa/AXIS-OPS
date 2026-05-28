@@ -500,7 +500,14 @@ def create_test_worker(db_conn):
         try:
             cursor = db_conn.cursor()
             for worker_id in created_worker_ids:
-                # 0. hr 스키마 (Sprint 12) — workers 삭제 전에 먼저 정리
+                # 0a. app_access_log (Sprint 32 after_request) — workers FK 선행 catch
+                # Sprint 71 Codex Q5 M fix (2026-05-28): teardown 영역 access_log 누락 시
+                # workers 삭제 실패 → 다음 TC 영역 worker 사라짐 catch
+                try:
+                    cursor.execute("DELETE FROM app_access_log WHERE worker_id = %s", (worker_id,))
+                except Exception:
+                    db_conn.rollback()
+                # 0b. hr 스키마 (Sprint 12) — workers 삭제 전에 먼저 정리
                 try:
                     cursor.execute("DELETE FROM hr.worker_auth_settings WHERE worker_id = %s", (worker_id,))
                 except Exception:

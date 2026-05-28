@@ -216,6 +216,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.routes.admin_checklists import admin_checklists_bp  # Sprint 66-BE Step 4: 체크리스트 매핑 admin
     from app.routes.shipment_history import shipment_history_bp  # Sprint 76-BE: 출하이력 페이지
     from app.routes.admin_shipment_flow import admin_shipment_flow_bp  # Sprint 79: 출하 흐름 + 미종료 분류 admin
+    from app.routes.admin_dashboard import admin_dashboard_bp  # Sprint 71: Manager Dashboard 자동 마감 분석
     from app.routes import work_batch                              # Sprint 64-BE v3: work_bp 에 batch route 등록 (side effect import, register_blueprint 전 필수)
     from app.routes import work_shipment                            # Sprint 68: work_bp 에 ship-complete route 등록 (side effect import)
 
@@ -237,7 +238,8 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(admin_checklists_bp)   # Sprint 66-BE Step 4
     app.register_blueprint(shipment_history_bp)   # Sprint 76-BE
     app.register_blueprint(admin_shipment_flow_bp)  # Sprint 79: 출하 흐름 + 미종료 분류
-    logger.info("Blueprints registered: auth, work, product, alert, admin, sync, gst, checklist, hr, notices, qr, factory, analytics, production, admin_materials, admin_checklists, shipment_history, admin_shipment_flow")
+    app.register_blueprint(admin_dashboard_bp)      # Sprint 71: Manager Dashboard 자동 마감 분석
+    logger.info("Blueprints registered: auth, work, product, alert, admin, sync, gst, checklist, hr, notices, qr, factory, analytics, production, admin_materials, admin_checklists, shipment_history, admin_shipment_flow, admin_dashboard")
 
     # Sprint 32: 사용자 행위 트래킹 (access log)
     import time as _time
@@ -250,6 +252,9 @@ def create_app(config_class: type = Config) -> Flask:
             return response
         start = getattr(g, 'request_start_time', None)
         duration_ms = int((_time.time() - start) * 1000) if start else None
+        # Sprint 71 Codex Q5 M fix (2026-05-28): FK violation / 기타 catch 시
+        # rollback + put_conn 보장 → connection leak 방지
+        conn = None
         try:
             conn = _get_conn()
             cur = conn.cursor()
@@ -271,9 +276,19 @@ def create_app(config_class: type = Config) -> Flask:
                 request.full_path[:500],
             ))
             conn.commit()
-            _put_conn(conn)
         except Exception as e:
             logger.warning(f"Access log failed: {e}")
+            if conn is not None:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+        finally:
+            if conn is not None:
+                try:
+                    _put_conn(conn)
+                except Exception:
+                    pass
         return response
 
     # 헬스 체크 엔드포인트
