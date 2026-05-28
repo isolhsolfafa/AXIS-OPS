@@ -418,6 +418,12 @@ def _query_partner_task_matrix(
     """V6 — 협력사 × task 매트릭스 (Codex Q6 canonical + grand_total assertion).
 
     모집단 = task-row started — 한 task 1회 카운트, 협력사 = task_category 기반.
+
+    v2.20.1 fix (2026-05-28 VIEW catch — Sprint 76 패턴 정합):
+      - 이전: HAVING ... IS NOT NULL 영역 NULL partner 제외 → grand_total 부족
+      - 이후: COALESCE(NULLIF(TRIM(partner), ''), '(미지정)') 영역 통합 group
+      - PI/QI/SI category (ELSE NULL) + product_info partner NULL → '(미지정)' 분류
+      - grand_total = started_task_count 정합 보장 (invariant violation 해소)
     """
     sql = f"""
         WITH started_auto AS (
@@ -432,21 +438,20 @@ def _query_partner_task_matrix(
               AND EXISTS (SELECT 1 FROM work_start_log wsl WHERE wsl.task_id = t.id)
         )
         SELECT
-            CASE
-              WHEN task_category = 'MECH' THEN mech_partner
-              WHEN task_category = 'ELEC' THEN elec_partner
-              WHEN task_category = 'TM'   THEN module_outsourcing
-              ELSE NULL
-            END AS company,
+            COALESCE(
+              NULLIF(TRIM(
+                CASE
+                  WHEN task_category = 'MECH' THEN mech_partner
+                  WHEN task_category = 'ELEC' THEN elec_partner
+                  WHEN task_category = 'TM'   THEN module_outsourcing
+                  ELSE NULL
+                END
+              ), ''),
+              '(미지정)'
+            ) AS company,
             task_id, task_name, COUNT(*) AS cnt
         FROM started_auto
         GROUP BY 1, task_id, task_name
-        HAVING CASE
-              WHEN task_category = 'MECH' THEN mech_partner
-              WHEN task_category = 'ELEC' THEN elec_partner
-              WHEN task_category = 'TM'   THEN module_outsourcing
-              ELSE NULL
-            END IS NOT NULL
         ORDER BY company, task_id
     """
     params = [start, end, _AUTO_LIKE] + partner_params
