@@ -260,6 +260,51 @@ def manager_or_admin_required(f: Callable) -> Callable:
     return decorated_function
 
 
+def si_manager_or_admin_required(f: Callable) -> Callable:
+    """
+    SI 인원(role='SI') 또는 매니저(is_manager) 또는 관리자(is_admin) 권한 검증.
+
+    용도: SI 마무리공정 출고완료(ship-complete). SI 작업자가 직접 출고 처리.
+    (2026-05-29 Twin파파 결정: GST SI 인원 전체 출고완료 허용)
+
+    ⚠️ 현재는 정적 role='SI' 기준. 공정(activeRole) 전환 시 동적 권한 연동은
+       BACKLOG `FEAT-ACTIVE-ROLE-DYNAMIC-PERMISSION-20260529` 참조.
+
+    jwt_required와 함께 사용되어야 합니다.
+
+    Usage:
+        @app.route('/api/app/work/ship-complete', methods=['POST'])
+        @jwt_required
+        @si_manager_or_admin_required
+        def ship_complete_route():
+            ...
+    """
+    @wraps(f)
+    def decorated_function(*args: Any, **kwargs: Any) -> Any:
+        if not hasattr(g, 'worker_id'):
+            return jsonify({
+                'error': 'UNAUTHORIZED',
+                'message': '인증이 필요합니다.'
+            }), 401
+
+        worker = get_current_worker()
+        is_si = bool(worker and worker.role == 'SI')
+
+        if not worker or not (worker.is_admin or worker.is_manager or is_si):
+            logger.warning(
+                f"Forbidden: worker_id={g.worker_id} attempted SI/manager/admin access"
+            )
+            return jsonify({
+                'error': 'FORBIDDEN',
+                'message': 'SI 인원, 매니저 또는 관리자 권한이 필요합니다.'
+            }), 403
+
+        logger.debug(f"SI/manager/admin access granted: worker_id={g.worker_id}")
+        return f(*args, **kwargs)
+
+    return decorated_function
+
+
 def gst_or_admin_required(f: Callable) -> Callable:
     """
     GST 소속 전직원 또는 Admin만 허용.

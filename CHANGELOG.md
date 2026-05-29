@@ -6,6 +6,29 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.20.15] - 2026-05-29 — SI 마무리공정 출고완료 권한 확장 (GST SI 인원 허용)
+
+> OPS SI 마무리공정 "출고 완료" 버튼이 manager/admin만 가능 → SI 일반 작업자(role='SI', is_manager=False)가 403. GST SI 인원 6명 중 1명(엄대선, manager)만 가능했음.
+
+### Fix
+- **BE**: `jwt_auth.py` 신규 데코레이터 `si_manager_or_admin_required` (manager OR admin OR role='SI'). `work_shipment.py` ship-complete route `@manager_or_admin_required` → `@si_manager_or_admin_required`. admin-complete(PI/QI 종료)은 `@manager_or_admin_required` 유지 (무변경)
+- **FE**: `gst_products_screen.dart` — `canShip = canManage || (category=='SI' && isSi)`. SI 인원은 SI 화면에서만 [출고 완료] 노출 / PI·QI 화면(같은 공용 화면)에선 [종료] 버튼 미노출 (admin-complete은 manager/admin 한정)
+
+### 정책
+- SI 마무리공정의 마지막 액션 = 출고완료 → SI 작업자가 직접 처리 (Twin파파 결정 2026-05-29)
+- 현재는 정적 `workers.role == 'SI'` 기준. 공정(activeRole) 전환 시 동적 권한 연동은 BACKLOG `FEAT-ACTIVE-ROLE-DYNAMIC-PERMISSION-20260529`
+
+### 검증
+- pytest test_ship_complete — 신규 `TestShipCompletePermission` (PERM-01 SI 작업자 200 / PERM-02 PI 작업자 403 / PERM-03 협력사 manager 200 회귀) + **기존 TC-SHIP-11 회귀 수정** (`_worker`가 role='SI'라 SI 확장 후 200이 되어 깨짐 → PI 작업자로 교체)
+- **Codex 라운드 1: M=0 / A=6 (전부 advisory)** — Codex가 PERM-03 회귀 TC 추가. 단 TC-SHIP-11 SI 작업자 회귀는 Codex 미검출 → Claude 측 catch 후 수정
+- 회귀: 기존 manager/admin ship-complete 불변 / admin-complete 무변경 / migration 불필요
+- VIEW 변경 0 (OPS 앱 전용 화면)
+
+### 후속 BACKLOG
+- `FEAT-ACTIVE-ROLE-DYNAMIC-PERMISSION-20260529` 🟡 — 공정(activeRole) 전환 시 권한 동적 연동 (JWT activeRole 반영 + BE 권한 체크 activeRole 기준 + 토큰 재발급). 사용자 요청 (2026-05-29)
+
+---
+
 ## [2.20.14] - 2026-05-29 — 종료 분석 페이지 GST 매니저 전체 조회 (권한 fix)
 
 > 종료(자동마감) 분석 페이지에서 GST 매니저(is_admin=False)가 GST task(PI/QI/SI 검사)만 보이고 협력사 task(MECH/ELEC/TMS)는 안 보임. admin은 전체 정상.

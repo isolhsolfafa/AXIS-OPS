@@ -346,10 +346,16 @@ class TestShipComplete:
 
     def test_non_manager_permission_denied(
             self, client, create_test_worker, get_auth_token, db_conn):
-        """TC-SHIP-11: 일반 작업자(비 manager/admin) → 403"""
+        """TC-SHIP-11: 일반 작업자(비 SI/manager/admin) → 403.
+
+        v2.20.15: SI 인원은 이제 허용되므로 비-SI 작업자(PI)로 거부 검증.
+        (이전엔 _worker(role='SI') 사용 → SI 확장 후 200이 되어 깨짐)"""
         sn = _sn(f'11_{_TS()}')
         qr = _seed_product(db_conn, sn)
-        wid = _worker(create_test_worker, '11')
+        wid = create_test_worker(
+            email=f'ship_w_pi11_{_TS()}@test.com', password='Test123!',
+            name='Worker PI 11', role='PI', company='GST',
+        )
         token = get_auth_token(wid)
         fin_id = _seed_si_task(db_conn, sn, qr, 'SI_FINISHING', 'NORMAL', wid,
                                started_at="NOW() - INTERVAL '2 hours'")
@@ -371,3 +377,88 @@ class TestShipComplete:
                             headers={'Authorization': f'Bearer {token}'})
         assert resp.status_code == 404
         assert resp.get_json()['error'] == 'SI_TASK_NOT_FOUND'
+
+
+# ---------------------------------------------------------------------------
+# v2.20.15 — SI 인원 출고완료 권한 확장 (manager/admin → + role='SI')
+# ---------------------------------------------------------------------------
+
+def _si_worker_token(create_test_worker, get_auth_token, tag):
+    wid = create_test_worker(
+        email=f'ship_si_{tag}_{_TS()}@test.com', password='Test123!',
+        name=f'SI {tag}', role='SI', company='GST',
+    )
+    return get_auth_token(wid), wid
+
+
+def _pi_worker_token(create_test_worker, get_auth_token, tag):
+    wid = create_test_worker(
+        email=f'ship_pi_{tag}_{_TS()}@test.com', password='Test123!',
+        name=f'PI {tag}', role='PI', company='GST',
+    )
+    return get_auth_token(wid), wid
+
+
+def _partner_manager_token(create_test_worker, get_auth_token, tag):
+    wid = create_test_worker(
+        email=f'ship_mgr_{tag}_{_TS()}@test.com', password='Test123!',
+        name=f'MECH Manager {tag}', role='MECH', company='FNI',
+        is_manager=True,
+    )
+    return get_auth_token(wid), wid
+
+
+class TestShipCompletePermission:
+    """v2.20.15 — SI 인원(role='SI', non-manager)도 출고완료 허용.
+    admin-complete(PI/QI 종료)은 manager/admin 유지 → ship-complete만 SI 확장."""
+
+    def test_si_worker_can_ship_complete(
+            self, client, create_test_worker, get_auth_token, db_conn):
+        """TC-SHIP-PERM-01: SI 인원(role='SI', is_manager=False)도 출고완료 200"""
+        sn = _sn(f'perm01_{_TS()}')
+        qr = _seed_product(db_conn, sn)
+        token, wid = _si_worker_token(create_test_worker, get_auth_token, 'p01')
+        fin_id = _seed_si_task(db_conn, sn, qr, 'SI_FINISHING', 'NORMAL', wid,
+                               started_at="NOW() - INTERVAL '2 hours'")
+        _seed_si_task(db_conn, sn, qr, 'SI_SHIPMENT', 'SINGLE_ACTION', wid)
+        _seed_wsl(db_conn, fin_id, sn, qr, wid)
+
+        resp = client.post('/api/app/work/ship-complete',
+                            json={'serial_number': sn},
+                            headers={'Authorization': f'Bearer {token}'})
+        assert resp.status_code == 200, resp.get_json()
+        assert resp.get_json()['si_completed'] is True
+
+    def test_pi_worker_forbidden_ship_complete(
+            self, client, create_test_worker, get_auth_token, db_conn):
+        """TC-SHIP-PERM-02: PI 인원(role='PI', non-manager)은 출고완료 403"""
+        sn = _sn(f'perm02_{_TS()}')
+        qr = _seed_product(db_conn, sn)
+        token, wid = _pi_worker_token(create_test_worker, get_auth_token, 'p02')
+        fin_id = _seed_si_task(db_conn, sn, qr, 'SI_FINISHING', 'NORMAL', wid,
+                               started_at="NOW() - INTERVAL '2 hours'")
+        _seed_si_task(db_conn, sn, qr, 'SI_SHIPMENT', 'SINGLE_ACTION', wid)
+        _seed_wsl(db_conn, fin_id, sn, qr, wid)
+
+        resp = client.post('/api/app/work/ship-complete',
+                            json={'serial_number': sn},
+                            headers={'Authorization': f'Bearer {token}'})
+        assert resp.status_code == 403, resp.get_json()
+
+    def test_partner_manager_can_ship_complete(
+            self, client, create_test_worker, get_auth_token, db_conn):
+        """TC-SHIP-PERM-03: 협력사 manager(role='MECH') 기존 출고완료 권한 유지"""
+        sn = _sn(f'perm03_{_TS()}')
+        qr = _seed_product(db_conn, sn)
+        token, _ = _partner_manager_token(create_test_worker, get_auth_token, 'p03')
+        wid = _worker(create_test_worker, 'p03')
+        fin_id = _seed_si_task(db_conn, sn, qr, 'SI_FINISHING', 'NORMAL', wid,
+                               started_at="NOW() - INTERVAL '2 hours'")
+        _seed_si_task(db_conn, sn, qr, 'SI_SHIPMENT', 'SINGLE_ACTION', wid)
+        _seed_wsl(db_conn, fin_id, sn, qr, wid)
+
+        resp = client.post('/api/app/work/ship-complete',
+                            json={'serial_number': sn},
+                            headers={'Authorization': f'Bearer {token}'})
+        assert resp.status_code == 200, resp.get_json()
+        assert resp.get_json()['si_completed'] is True

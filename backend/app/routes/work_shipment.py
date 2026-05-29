@@ -18,6 +18,7 @@ from app.routes.work import work_bp  # 기존 blueprint 재사용
 from app.middleware.jwt_auth import (
     jwt_required,
     manager_or_admin_required,
+    si_manager_or_admin_required,
     get_current_worker,
 )
 from app.services import shipment_service
@@ -27,16 +28,19 @@ logger = logging.getLogger(__name__)
 
 @work_bp.route("/work/ship-complete", methods=["POST"])
 @jwt_required
-@manager_or_admin_required
+@si_manager_or_admin_required
 def ship_complete_route() -> Tuple[Any, int]:
     """출하 완료 — 한 S/N 의 SI task 2개(SI_FINISHING + SI_SHIPMENT) 완료.
+
+    권한: SI 인원(role='SI') / 매니저 / 관리자 — SI 마무리공정 출고 처리.
+    (v2.20.15 — GST SI 인원 전체 출고완료 허용. 기존 manager/admin 한정 완화)
 
     Request Body: { "serial_number": str, "completed_at": str|null(옵션 ISO8601) }
     Response 200: { serial_number, completed_tasks, si_completed,
                     completed_at, already_completed }
     Response 400: INVALID_REQUEST | INVALID_COMPLETED_AT* | SI_FINISHING_NOT_STARTED
     Response 404: SI_TASK_NOT_FOUND
-    Response 403: @manager_or_admin_required 영역 처리
+    Response 403: @si_manager_or_admin_required 처리
     """
     data = request.get_json() or {}
     serial_number = data.get('serial_number')

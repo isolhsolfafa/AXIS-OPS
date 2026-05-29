@@ -535,7 +535,13 @@ class _GstProductsScreenState extends ConsumerState<GstProductsScreen> {
     final startedAt = product['started_at'] as String?;
     final taskDetailId = product['task_detail_id'] as int?;
     final auth = ref.read(authProvider);
-    final canShip = auth.isAdmin || auth.isManager;
+    // v2.20.15 — SI 마무리공정 출고완료(category=='SI')만 SI 인원(role='SI') 허용.
+    //   PI/QI 종료([종료]=admin-complete)는 manager/admin 유지 → SI 인원 PI/QI 화면에선
+    //   버튼 미노출 (canShip=false). admin/manager 는 전 카테고리 그대로.
+    //   GST SI 인원 출고완료 허용 (Twin파파 결정 2026-05-29).
+    final canManage = auth.isAdmin || auth.isManager;
+    final isSi = auth.currentRole == 'SI';
+    final canShip = canManage || (widget.category == 'SI' && isSi);
 
     String? formattedStartedAt;
     if (startedAt != null) {
