@@ -6,6 +6,64 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.20.3] - 2026-05-29 — APScheduler timezone fix (시간 단위 cron 9시간 지연 버그)
+
+> v2.20.2 디버그 endpoint로 root cause 확정: APScheduler `BackgroundScheduler(timezone=Config.KST)` 가 stdlib `timezone(timedelta(hours=9))` 를 정확한 IANA tz 로 인식 못해 시간 단위 cron 의 fire time 을 UTC 로 해석. 분 단위/interval cron 은 영향 없음.
+
+### 확정 증거 (v2.20.2 `/api/admin/debug/scheduler` 응답)
+
+```json
+"id": "alert_shipment_overdue",
+"trigger": "cron[hour='7', minute='30']",
+"next_run_time": "2026-05-29T07:30:00+00:00"  ← UTC 07:30 = KST 16:30!
+"timezone": "UTC+09:00"
+```
+
+→ 의도: 07:30 KST (= 22:30 UTC) / 실제: 07:30 UTC (= 16:30 KST) — **9시간 지연**
+
+### 영향받은 cron 8종 (시간 단위 전부)
+
+| Cron | 의도 KST | 실제 fire | Sprint |
+|---|---|---|---|
+| `alert_shipment_overdue` | 07:30 | 16:30 | Sprint 79 |
+| `task_escalation` | 09:00 | 18:00 | Sprint 3 |
+| `_check_checklist_done_task_open_09` | 09:00 | 18:00 | Sprint 52 |
+| `_check_checklist_done_task_open_15` | 15:00 | 00:00 (+1) | Sprint 52 |
+| `shift_end_reminder_17` | 17:00 | 02:00 (+1) | Sprint 3 |
+| `check_unfinished_tasks` | 18:00 | 03:00 (+1) | 기존 |
+| `shift_end_reminder_20` | 20:00 | 05:00 (+1) | Sprint 3 |
+| `cleanup_access_logs` | 03:00 | 12:00 | Sprint 32 |
+
+영향 없는 cron (timezone 무관):
+- `pool_warmup` (interval 5분)
+- `task_reminder` (cron[minute='0'] 매 정각)
+- `check_break_time` (cron[second='0'] 매 분 정각)
+- `check_orphan_relay_tasks` (cron[minute='0'] 매 정각)
+
+### Fix
+
+`backend/app/config.py`:
+```python
+from zoneinfo import ZoneInfo
+KST = ZoneInfo('Asia/Seoul')  # 이전: timezone(timedelta(hours=9))
+```
+
+`backend/requirements.txt`:
+```
+tzdata>=2024.1  # Railway 컨테이너 IANA tz DB 보장
+```
+
+### 부수 변경
+
+- `_alert_shipment_overdue` 가 실행 결과 dict 반환 (enabled / overdue_count / recipients_emails / send_success / reason)
+- `admin_debug` run-job endpoint 가 `job_result` 응답 필드에 포함 → 메일 발송 성공/실패 즉시 확인 가능
+
+### 영향
+
+배포 후 즉시 scheduler 재초기화 → 모든 시간 단위 cron 의 next_run_time 이 정상 KST 시각으로 재계산. 내일(5-30) 07:30 KST 부터 출하 미처리 알림 정상 발송 예정.
+
+---
+
 ## [2.20.2] - 2026-05-29 — admin debug endpoints (scheduler 진단 + cron 강제 실행)
 
 > 5-29 07:30 KST 출하 미처리 알림 cron 누락 사건 후속. Railway 로그 분석 결과 다른 cron 4종 (pool_warmup / task_reminder / check_orphan_relay_tasks / check_break_time) 은 정상 fire / `alert_shipment_overdue` 만 0건. root cause 즉시 진단 + 운영 중 cron 누락 의심 시 임시 복구 수단 확보.

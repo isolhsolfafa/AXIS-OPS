@@ -98,14 +98,16 @@ def run_job_now(job_id: str):
 
     try:
         # 동기 실행 (admin 응답 안에서 결과 확인 가능)
-        job.func()
+        # v2.20.3: cron 함수가 dict 반환하면 응답에 포함 (실제 메일 발송 결과 등)
+        job_result = job.func()
         return jsonify({
             "success": True,
             "job_id": job_id,
             "job_name": job.name,
             "started_at": started_at,
             "finished_at": datetime.utcnow().isoformat() + "Z",
-            "message": "job 실행 완료 (예외 없이 종료). 결과는 Railway 로그/Sentry 확인.",
+            "message": "job 실행 완료 (예외 없이 종료).",
+            "job_result": job_result if isinstance(job_result, dict) else None,
         }), 200
     except Exception as exc:
         tb = traceback.format_exc()

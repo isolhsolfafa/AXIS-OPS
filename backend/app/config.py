@@ -5,6 +5,7 @@ Sprint 5: python-dotenv 적용, SMTP 설정 추가, Refresh Token 만료 설정
 
 import os
 from datetime import timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
@@ -57,7 +58,11 @@ class Config:
     SOCKETIO_MESSAGE_QUEUE = None
 
     # --- Timezone ---
-    KST = timezone(timedelta(hours=9))  # Asia/Seoul (UTC+9)
+    # v2.20.3 fix (2026-05-29): APScheduler CronTrigger 가 stdlib `timezone(timedelta)`
+    # 를 KST 로 정확히 인식 못해 시간 단위 cron 이 UTC 로 해석됨 (07:30 KST → 16:30 KST 로 9h 지연 fire).
+    # IANA tz (ZoneInfo) 로 변경하면 APScheduler 가 KST 로 정확히 인식.
+    # 이전: timezone(timedelta(hours=9))  # 시간 단위 cron 9시간 지연 버그
+    KST = ZoneInfo('Asia/Seoul')  # Asia/Seoul (UTC+9)
 
     # --- Flask ---
     DEBUG: bool = os.getenv("FLASK_DEBUG", "True").lower() == "true"
