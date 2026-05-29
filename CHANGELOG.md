@@ -6,6 +6,44 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.20.11] - 2026-05-29 — TMS(M)/TMS(E) 협력사 구분 + 매트릭스 셀↔리스트 정합 통일
+
+> 사용자 catch: 매트릭스 'TMS' 셀이 모듈(TMS(M))+전장(TMS(E)) 뭉쳐 표시 + 셀 클릭 시 리스트 불일치 (TMS 셀 27 vs details 327).
+
+### 도메인 규칙 (Twin파파 2026-05-29)
+DB partner 컬럼은 'TMS' 단일 저장이나 의미 분리:
+- `mech_partner='TMS'` → TMS(M) (MECH)
+- `module_outsourcing='TMS'` → TMS(M) (TMS)
+- `elec_partner='TMS'` → TMS(E) (ELEC)
+→ ELEC 의 TMS 만 TMS(E), 나머지(MECH/TMS) TMS 는 TMS(M).
+
+### Fix
+- `_COMPANY_SQL` 표준 SQL 식 신설 (category별 1개 partner + TMS(M)/(E) 분기 + COALESCE '(미지정)')
+- `_resolve_company_py`: details row 후처리 Python 버전 (1:1 정합)
+- matrix / details / `_build_partner_filter` 3곳 통일 → 매트릭스 셀 ↔ 리스트 분류 기준 일치
+- v2.20.10 `_UNASSIGNED` 특수분기 제거 (일반 통일에 흡수)
+
+### 운영 검증 (5월)
+- 매트릭스 (started auto): (미지정) 4 / BAT 28 / C&A 46 / FNI 38 / P&S 80 / TMS(E) 19 / TMS(M) 8 = grand_total 223
+- 셀 클릭 details (auto+manual+force): TMS(M) 49(auto 8+force 41) / TMS(E) 21 / C&A 47 / (미지정) 5
+- 매트릭스(started auto) vs details(force 포함) 모집단 분리 — 차이=force, 분류 기준 1:1 정합
+
+---
+
+## [2.20.10] - 2026-05-29 — 미지정 분류 버그 2건 (task_category TM→TMS + 미지정 셀 클릭)
+
+> 사용자 catch: 매트릭스 '(미지정)' 셀 클릭 시 리스트 0건.
+
+### 버그 1 — task_category 오타 (TM → TMS)
+- dashboard_service.py 만 `task_category='TM'` (task_service.py 전체는 'TMS') — TMS 8건 매칭 실패 → 잘못 '(미지정)'
+- Fix: matrix CASE + details company 결정 'TM' → 'TMS' (v2.20.11 에서 _COMPANY_SQL 로 흡수)
+
+### 버그 2 — '(미지정)' 셀 클릭 0건
+- partner='(미지정)' 을 `pi.mech_partner='(미지정)' OR ...` 직접 매칭 → DB 에 없는 표시값 → 0건
+- Fix: `_UNASSIGNED` sentinel + category-aware CASE 매칭 (v2.20.11 에서 통일)
+
+---
+
 ## [2.20.9] - 2026-05-29 — v2.20.8 syntax 깨짐 hotfix (trigger_sql 복원)
 
 > v2.20.8 (afe477e) Railway 배포 실패 (15분+ 지연) — 4 분포 SQL force_closed=FALSE 가드 python 일괄 치환 시 regex 가 details endpoint 의 `trigger_sql` 문자열 리터럴 내부 `AND t.close_reason LIKE %s` 까지 매칭 → 줄바꿈 삽입 → `unterminated string literal (line 755)` → import 실패 → Flask boot 실패 → Railway health check 실패 → 배포 rollback (v2.20.7 잔존).
