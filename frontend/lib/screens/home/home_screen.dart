@@ -234,10 +234,31 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   /// 출근/퇴근 처리
   Future<void> _handleAttendance() async {
+    final checkType = _attendanceStatus == AttendanceStatus.notCheckedIn ? 'in' : 'out';
+    // 퇴근은 실수 클릭 방지 — 확인 다이얼로그 (출근은 바로 처리)
+    if (checkType == 'out') {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('퇴근 확인'),
+          content: const Text('퇴근 처리하시겠습니까?\n출근 중 상태가 종료됩니다.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('취소'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('퇴근'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true) return; // 취소 시 처리 중단
+    }
     setState(() => _attendanceLoading = true);
     try {
       final apiService = ref.read(apiServiceProvider);
-      final checkType = _attendanceStatus == AttendanceStatus.notCheckedIn ? 'in' : 'out';
       final Map<String, dynamic> body = {'check_type': checkType};
       // 출근 시만 work_site/product_line 전송 (퇴근 시 BE에서 자동 복사)
       if (checkType == 'in') {
@@ -252,6 +273,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       }
       await apiService.post('/hr/attendance/check', data: body);
       await _fetchAttendanceStatus();
+      // 출근/퇴근 처리 성공 토스트 (협력사 one-action 확인 피드백)
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(checkType == 'in' ? '출근 처리되었습니다' : '퇴근 처리되었습니다'),
+            backgroundColor: GxColors.success,
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 2),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.sm)),
+          ),
+        );
+      }
     } catch (e) {
       if (mounted) {
         final errMsg = e.toString().replaceFirst('Exception: ', '');
