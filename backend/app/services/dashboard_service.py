@@ -149,6 +149,18 @@ def _build_partner_filter(
     ⚠️ 호출 query 영역 `t.id` 영역 alias 의무 (subquery EXISTS catch).
     """
     if is_admin:
+        if partner == _UNASSIGNED:
+            # v2.20.10 (#76 후속): '(미지정)' 셀 클릭 catch — partner 매칭 불가 케이스
+            # (PI/QI/SI category = ELSE NULL, 또는 해당 category partner NULL/빈값)
+            # company 결정 로직 (CASE + COALESCE) 과 1:1 정합 — '(미지정)' 매칭
+            return (
+                " AND COALESCE(NULLIF(TRIM(CASE "
+                "WHEN t.task_category = 'MECH' THEN pi.mech_partner "
+                "WHEN t.task_category = 'ELEC' THEN pi.elec_partner "
+                "WHEN t.task_category = 'TMS' THEN pi.module_outsourcing "
+                "ELSE NULL END), ''), %s) = %s ",
+                [_UNASSIGNED, _UNASSIGNED],
+            )
         if partner:
             return (
                 " AND (pi.mech_partner = %s OR pi.elec_partner = %s "
@@ -173,6 +185,7 @@ def _build_partner_filter(
 
 _AUTO_LIKE = "AUTO_CLOSED_BY_%"
 _MANUAL_EQ = "MANUAL_FORCE_CLOSE"
+_UNASSIGNED = "(미지정)"  # partner 매칭 불가 (PI/QI/SI category 또는 partner NULL)
 
 
 def _query_kpi_counts(
@@ -486,7 +499,7 @@ def _query_partner_task_matrix(
                 CASE
                   WHEN task_category = 'MECH' THEN mech_partner
                   WHEN task_category = 'ELEC' THEN elec_partner
-                  WHEN task_category = 'TM'   THEN module_outsourcing
+                  WHEN task_category = 'TMS'  THEN module_outsourcing
                   ELSE NULL
                 END
               ), ''),
@@ -842,7 +855,7 @@ def build_auto_close_details(
             company = r["mech_partner"] or "(미지정)"
         elif cat == "ELEC":
             company = r["elec_partner"] or "(미지정)"
-        elif cat == "TM":
+        elif cat == "TMS":
             company = r["module_outsourcing"] or "(미지정)"
         else:
             company = "(미지정)"
