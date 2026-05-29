@@ -752,8 +752,7 @@ def build_auto_close_details(
     trigger_sql = ""
     trigger_params: List[Any] = []
     if trigger_task_id:
-        trigger_sql = " AND t.close_reason LIKE %s
-              AND t.force_closed = FALSE "
+        trigger_sql = " AND t.close_reason LIKE %s "
         trigger_params = [f"%:{trigger_task_id}"]
 
     page = max(1, page)
