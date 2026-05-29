@@ -1,8 +1,14 @@
 # AXIS-OPS Database Schema Map
 
-> 운영 DB (Railway PostgreSQL 15) 기준 — 최종 업데이트: 2026-05-12 (운영 DB 직접 조회 검증 완료)
-> 8개 스키마, **35개 테이블**, 3개 ENUM (alert_type_enum 24값)
-> v2.14.1 (2026-05-12) 시점 정합 — Migration 053 (5-07) checklist 스키마 확장 반영
+> 운영 DB (Railway PostgreSQL 15) 기준 — 최종 업데이트: 2026-05-30 (운영 DB 직접 조회 검증 완료)
+> 8개 스키마, **35개 테이블**, ENUM 4개 (alert_type_enum 24값 / approval_status_enum 3값 / role_enum 8값(PM 포함) / role_enum_new 7값 — 마이그레이션 잔재, 실사용 X)
+> v2.21.2 (2026-05-30) 시점 정합 — Migration 056/057 (Sprint 41-D duration_source) 반영
+>
+> **5-12 → 5-30 변경 사항** (테이블 수 35개 불변 — 컬럼/CHECK 변경만):
+> - Migration 055 (v2.14.3, 5-13): ELEC checklist placeholder deactivate (데이터만, schema 변경 X)
+> - Migration 056 (v2.15.3, 5-14): `public.app_task_details.duration_source VARCHAR` 컬럼 추가 (Sprint 41-D) + CHECK 4값 (NORMAL_COMPLETION/ATTENDANCE_OUT/FALLBACK_TRIGGER_DATE_17/INVALID_WARNING)
+> - Migration 057 (v2.15.16, 5-15): duration_source CHECK 4→**5값** (PREV_DAY_CAP 추가 — 익일/주말 trigger 자동 마감 시 started.date 17:00 KST cap)
+> - ⚠️ 스키마 무변경 (응답/로직만) 후속 release: v2.20.x (Sprint 71 자동마감 분석 — 기존 테이블 조회) / v2.21.0 (Sprint 80 출하예정 주차 그룹핑 — 기존 테이블 GROUP BY) / v2.21.2 (geo_check_enabled 응답 additive) — **migration 없음**
 >
 > **5-07 → 5-12 변경 사항**:
 > - Migration 053 (v2.12.0, 5-07): `public.product_bom` + `public.bom_checklist_log` + `public.bom_csv_import` → `checklist` 스키마 이전/삭제 + `checklist.material_master` 신설 (10 cols + RESTRICT FK)
@@ -83,10 +89,10 @@ close_reason        TEXT
 is_paused           BOOLEAN DEFAULT false
 total_pause_minutes INTEGER DEFAULT 0
 task_type           VARCHAR(20) NOT NULL DEFAULT 'NORMAL'
-duration_source     VARCHAR(40) DEFAULT NULL  -- Sprint 41-D (migration 056): NORMAL_COMPLETION/ATTENDANCE_OUT/FALLBACK_TRIGGER_DATE_17/INVALID_WARNING
+duration_source     VARCHAR(40) DEFAULT NULL  -- Sprint 41-D (migration 056) + PREV_DAY_CAP (migration 057, v2.15.16)
 ```
 UNIQUE: (serial_number, qr_doc_id, task_category, task_id)
-CHECK: duration_source IS NULL OR duration_source IN ('NORMAL_COMPLETION', 'ATTENDANCE_OUT', 'FALLBACK_TRIGGER_DATE_17', 'INVALID_WARNING')
+CHECK: duration_source IS NULL OR duration_source IN ('NORMAL_COMPLETION', 'ATTENDANCE_OUT', 'FALLBACK_TRIGGER_DATE_17', 'INVALID_WARNING', 'PREV_DAY_CAP')  -- migration 057 (v2.15.16): PREV_DAY_CAP 추가 (익일/주말 trigger 자동 마감 시 started.date 17:00 KST cap)
 
 ### qr_registry (10컬럼) — QR ↔ 제품 매핑
 ```
@@ -546,7 +552,9 @@ product_bom ←── bom_checklist_log (bom_item_id)
 ## ENUM 타입
 
 ### role_enum
-`MECH, ELEC, TM, PI, QI, SI, ADMIN, PM`
+`MECH, ELEC, TM, PI, QI, SI, ADMIN, PM` (8값 — 실사용)
+
+> ⚠️ `role_enum_new` (7값: MECH, ELEC, TM, PI, QI, SI, ADMIN — **PM 없음**) 도 운영 DB 에 존재하나 **마이그레이션 잔재(미사용)**. 실제 `workers.role` 은 `role_enum` (8값, PM 포함) 사용. 정리 대상 (BACKLOG 후보).
 
 ### approval_status_enum
 `pending, approved, rejected`
