@@ -42,28 +42,28 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
   /// 협력사별 허용 역할
   static const Map<String, List<Map<String, String>>> _companyRoles = {
     'FNI': [
-      {'code': 'MECH', 'name': 'MECH - Mechanical'},
+      {'code': 'MECH', 'name': 'MECH - 기구'},
     ],
     'BAT': [
-      {'code': 'MECH', 'name': 'MECH - Mechanical'},
+      {'code': 'MECH', 'name': 'MECH - 기구'},
     ],
     'TMS(M)': [
-      {'code': 'MECH', 'name': 'MECH - Mechanical'},
+      {'code': 'MECH', 'name': 'MECH - 기구'},
     ],
     'TMS(E)': [
-      {'code': 'ELEC', 'name': 'ELEC - Electrical'},
+      {'code': 'ELEC', 'name': 'ELEC - 전장'},
     ],
     'P&S': [
-      {'code': 'ELEC', 'name': 'ELEC - Electrical'},
+      {'code': 'ELEC', 'name': 'ELEC - 전장'},
     ],
     'C&A': [
-      {'code': 'ELEC', 'name': 'ELEC - Electrical'},
+      {'code': 'ELEC', 'name': 'ELEC - 전장'},
     ],
     'GST': [
-      {'code': 'PI', 'name': 'PI - Pressure Inspection'},
-      {'code': 'QI', 'name': 'QI - Process Inspection'},
-      {'code': 'SI', 'name': 'SI - Shipping Inspection'},
-      {'code': 'PM', 'name': 'PM - Production Manager'},
+      {'code': 'PI', 'name': 'PI - 가압검사'},
+      {'code': 'QI', 'name': 'QI - 공정검사'},
+      {'code': 'SI', 'name': 'SI - 마무리공정'},
+      {'code': 'PM', 'name': 'PM - 생산관리'},
     ],
   };
 
@@ -222,7 +222,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                   const SizedBox(height: 16),
 
                   // 이름
-                  _buildLabel('NAME'),
+                  _buildLabel('NAME 이름'),
                   const SizedBox(height: 5),
                   TextFormField(
                     controller: _nameController,
@@ -235,7 +235,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                   const SizedBox(height: 12),
 
                   // 이메일
-                  _buildLabel('EMAIL'),
+                  _buildLabel('EMAIL 이메일'),
                   const SizedBox(height: 5),
                   TextFormField(
                     controller: _emailController,
@@ -259,7 +259,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                   const SizedBox(height: 8),
 
                   // 협력사 선택
-                  _buildLabel('COMPANY'),
+                  _buildLabel('COMPANY 소속'),
                   const SizedBox(height: 5),
                   DropdownButtonFormField<String>(
                     initialValue: _selectedCompany,
@@ -290,14 +290,14 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                   const SizedBox(height: 12),
 
                   // 역할 선택 (협력사 선택 후 활성화)
-                  _buildLabel('ROLE'),
+                  _buildLabel('ROLE 역할'),
                   const SizedBox(height: 5),
                   DropdownButtonFormField<String>(
                     initialValue: _selectedRole,
                     decoration: _inputDecoration(
                       _selectedCompany == null
                           ? '협력사를 먼저 선택하세요'
-                          : 'Select role',
+                          : '역할 선택',
                     ),
                     style: const TextStyle(fontSize: 13, color: GxColors.charcoal),
                     items: _availableRoles.map((role) {
@@ -314,7 +314,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                   const SizedBox(height: 12),
 
                   // 비밀번호
-                  _buildLabel('PASSWORD'),
+                  _buildLabel('PASSWORD 비밀번호'),
                   const SizedBox(height: 5),
                   TextFormField(
                     controller: _passwordController,
@@ -337,7 +337,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                   const SizedBox(height: 12),
 
                   // 비밀번호 확인
-                  _buildLabel('CONFIRM PASSWORD'),
+                  _buildLabel('CONFIRM PASSWORD 비밀번호 확인'),
                   const SizedBox(height: 5),
                   TextFormField(
                     controller: _confirmPasswordController,
