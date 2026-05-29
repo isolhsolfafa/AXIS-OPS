@@ -178,20 +178,30 @@ _MANUAL_EQ = "MANUAL_FORCE_CLOSE"
 def _query_kpi_counts(
     cur, start, end, partner_sql, partner_params
 ) -> Dict[str, int]:
-    """auto/manual count + 모집단 3분리 (started/unstarted/worker-miss)."""
+    """auto/manual/force count + 모집단 3분리 (started/unstarted/worker-miss).
+
+    v2.20.7 (VIEW #77): 옵션 X 채택 — force_closed=TRUE 카운트 추가.
+    - auto_closed   = close_reason LIKE 'AUTO_CLOSED_BY_%' AND force_closed=FALSE
+    - manual_closed = close_reason = 'MANUAL_FORCE_CLOSE' AND force_closed=FALSE (legacy, 운영 0건)
+    - force_closed  = force_closed = TRUE (매니저 명시적 [강제 종료] 버튼)
+    - total_missed_close = auto + manual + force 합
+    """
     sql = f"""
         WITH base AS (
-            SELECT t.id, t.close_reason, t.task_category
+            SELECT t.id, t.close_reason, t.task_category, t.force_closed
             FROM app_task_details t
             LEFT JOIN plan.product_info pi ON pi.serial_number = t.serial_number
             WHERE t.completed_at >= %s AND t.completed_at < %s
               {partner_sql}
         ),
         auto AS (
-            SELECT id FROM base WHERE close_reason LIKE %s
+            SELECT id FROM base WHERE close_reason LIKE %s AND force_closed = FALSE
         ),
         manual AS (
-            SELECT id FROM base WHERE close_reason = %s
+            SELECT id FROM base WHERE close_reason = %s AND force_closed = FALSE
+        ),
+        force AS (
+            SELECT id FROM base WHERE force_closed = TRUE
         ),
         auto_started AS (
             SELECT DISTINCT a.id
@@ -215,6 +225,7 @@ def _query_kpi_counts(
         SELECT
             (SELECT COUNT(*) FROM auto) AS auto_count,
             (SELECT COUNT(*) FROM manual) AS manual_count,
+            (SELECT COUNT(*) FROM force) AS force_count,
             (SELECT COUNT(*) FROM auto_started) AS started_task_count,
             (SELECT COUNT(*) FROM auto_unstarted) AS unstarted_task_count,
             (SELECT COUNT(*) FROM missed_workers) AS missed_worker_count
@@ -225,6 +236,7 @@ def _query_kpi_counts(
     return {
         "auto_count": int(row["auto_count"] or 0),
         "manual_count": int(row["manual_count"] or 0),
+        "force_count": int(row["force_count"] or 0),
         "started_task_count": int(row["started_task_count"] or 0),
         "unstarted_task_count": int(row["unstarted_task_count"] or 0),
         "missed_worker_count": int(row["missed_worker_count"] or 0),
@@ -389,6 +401,30 @@ def _query_hourly_distribution(
     return [{"hour": int(r["hour"]), "count": int(r["count"])} for r in cur.fetchall()]
 
 
+def _query_force_close_reason_distribution(
+    cur, start, end, partner_sql, partner_params
+) -> List[Dict[str, Any]]:
+    """v2.20.7 (VIEW #77): 강제 종료 close_reason 분포 (매니저 free-text)."""
+    sql = f"""
+        SELECT
+            COALESCE(NULLIF(TRIM(t.close_reason), ''), '(미입력)') AS close_reason,
+            COUNT(*) AS cnt
+        FROM app_task_details t
+        LEFT JOIN plan.product_info pi ON pi.serial_number = t.serial_number
+        WHERE t.completed_at >= %s AND t.completed_at < %s
+          AND t.force_closed = TRUE
+          {partner_sql}
+        GROUP BY 1
+        ORDER BY cnt DESC, close_reason ASC
+    """
+    params = [start, end] + partner_params
+    cur.execute(sql, params)
+    return [
+        {"close_reason": r["close_reason"], "count": int(r["cnt"])}
+        for r in cur.fetchall()
+    ]
+
+
 def _query_unstarted_task_distribution(
     cur, start, end, partner_sql, partner_params
 ) -> List[Dict[str, Any]]:
@@ -547,15 +583,22 @@ def _assert_invariants(response: Dict[str, Any]) -> None:
         )
 
     # total_missed_close 4 invariant
-    if tm["count"] != ac["count"] + mc["count"]:
+    # v2.20.7 (#77): force_closed 합산 추가 — total = auto + manual + force
+    fc = response.get("force_closed", {"count": 0, "prev_period_count": 0})
+    expected_total = ac["count"] + mc["count"] + fc.get("count", 0)
+    if tm["count"] != expected_total:
         issues.append(
-            f"total_missed_close.count {tm['count']} != auto+manual "
-            f"{ac['count'] + mc['count']}"
+            f"total_missed_close.count {tm['count']} != auto+manual+force "
+            f"{expected_total}"
         )
-    if tm["prev_period_count"] != ac["prev_period_count"] + mc["prev_period_count"]:
+    expected_prev = (
+        ac["prev_period_count"] + mc["prev_period_count"]
+        + fc.get("prev_period_count", 0)
+    )
+    if tm["prev_period_count"] != expected_prev:
         issues.append(
-            f"total_missed_close.prev {tm['prev_period_count']} != auto.prev+manual.prev "
-            f"{ac['prev_period_count'] + mc['prev_period_count']}"
+            f"total_missed_close.prev {tm['prev_period_count']} != "
+            f"auto.prev+manual.prev+force.prev {expected_prev}"
         )
     expected_delta = _format_delta(tm["count"], tm["prev_period_count"])
     if tm["delta"] != expected_delta:
@@ -626,13 +669,19 @@ def build_auto_close_summary(
                 cur, start, end, partner_sql, partner_params,
                 cur_kpi["started_task_count"],
             )
+            # v2.20.7 (#77): 강제 종료 close_reason 분포
+            force_close_reason_distribution = _query_force_close_reason_distribution(
+                cur, start, end, partner_sql, partner_params
+            )
     finally:
         put_conn(conn)
 
     auto_count = cur_kpi["auto_count"]
     manual_count = cur_kpi["manual_count"]
-    total_count = auto_count + manual_count
-    prev_total = prev_kpi["auto_count"] + prev_kpi["manual_count"]
+    force_count = cur_kpi["force_count"]
+    # v2.20.7 (#77): total = auto + manual + force
+    total_count = auto_count + manual_count + force_count
+    prev_total = prev_kpi["auto_count"] + prev_kpi["manual_count"] + prev_kpi["force_count"]
 
     response: Dict[str, Any] = {
         "period": label,
@@ -650,6 +699,15 @@ def build_auto_close_summary(
             "prev_period_count": prev_kpi["manual_count"],
             "delta": _format_delta(manual_count, prev_kpi["manual_count"]),
             "improvement_pct": _improvement_pct(manual_count, prev_kpi["manual_count"]),
+        },
+        # v2.20.7 (#77): 강제 종료 block (옵션 X — force_closed=TRUE only)
+        "force_closed": {
+            "count": force_count,
+            "prev_period_count": prev_kpi["force_count"],
+            "delta": _format_delta(force_count, prev_kpi["force_count"]),
+            "trend": _trend(force_count, prev_kpi["force_count"]),
+            "improvement_pct": _improvement_pct(force_count, prev_kpi["force_count"]),
+            "by_reason": force_close_reason_distribution,
         },
         "total_missed_close": {
             "count": total_count,
@@ -694,6 +752,15 @@ def build_auto_close_details(
     per_page = max(1, min(100, per_page))
     offset = (page - 1) * per_page
 
+    # v2.20.7 (#77): 분류 영역 — auto / manual / force 합집합 (총 종료 누락)
+    # close_filter: (AUTO_CLOSED_BY_% AND force=FALSE) OR (MANUAL_FORCE_CLOSE AND force=FALSE) OR (force=TRUE)
+    close_filter = (
+        "((t.close_reason LIKE %s AND t.force_closed = FALSE) "
+        "OR (t.close_reason = %s AND t.force_closed = FALSE) "
+        "OR t.force_closed = TRUE)"
+    )
+    close_filter_params = [_AUTO_LIKE, _MANUAL_EQ]
+
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
@@ -702,25 +769,28 @@ def build_auto_close_details(
                 FROM app_task_details t
                 LEFT JOIN plan.product_info pi ON pi.serial_number = t.serial_number
                 WHERE t.completed_at >= %s AND t.completed_at < %s
-                  AND t.close_reason LIKE %s
+                  AND {close_filter}
                   {partner_sql}
                   {trigger_sql}
             """
             cur.execute(
                 count_sql,
-                [start, end, _AUTO_LIKE] + partner_params + trigger_params,
+                [start, end] + close_filter_params + partner_params + trigger_params,
             )
             total = int(cur.fetchone()["total"] or 0)
 
             # v2.20.6 fix (VIEW #76 HOTFIX, 2026-05-29): plan.product_info alias 영역
             # count_sql (pi) 과 item_sql (p) 불일치 → partner_sql 의 하드코딩 pi.mech_partner
             # 가 item_sql 안에서 undefined alias → 500. alias 'pi' 로 통일.
+            # v2.20.6 (#76 fix): plan.product_info alias 'pi' 통일
+            # v2.20.7 (#77): close_filter + force_closed / closed_by 컬럼 추가
             item_sql = f"""
                 SELECT
                     t.id AS task_detail_id,
                     t.completed_at, t.serial_number, t.task_id, t.task_name,
                     t.close_reason, t.duration_minutes, t.elapsed_minutes,
                     t.task_category,
+                    t.force_closed, t.closed_by,
                     pi.model, pi.sales_order,
                     w_trigger.id AS trigger_worker_id,
                     w_trigger.name AS trigger_worker_name,
@@ -742,7 +812,7 @@ def build_auto_close_details(
                 LEFT JOIN plan.product_info pi ON pi.serial_number = t.serial_number
                 LEFT JOIN workers w_trigger ON w_trigger.id = t.closed_by
                 WHERE t.completed_at >= %s AND t.completed_at < %s
-                  AND t.close_reason LIKE %s
+                  AND {close_filter}
                   {partner_sql}
                   {trigger_sql}
                 ORDER BY t.completed_at DESC
@@ -750,7 +820,7 @@ def build_auto_close_details(
             """
             cur.execute(
                 item_sql,
-                [start, end, _AUTO_LIKE] + partner_params + trigger_params + [per_page, offset],
+                [start, end] + close_filter_params + partner_params + trigger_params + [per_page, offset],
             )
             rows = cur.fetchall()
     finally:
@@ -775,6 +845,16 @@ def build_auto_close_details(
         if r["close_reason"] and ":" in r["close_reason"]:
             trigger_tid = r["close_reason"].rsplit(":", 1)[-1]
 
+        # v2.20.7 (#77): close_type 분류
+        if r.get("force_closed"):
+            close_type = "force"
+        elif r["close_reason"] and r["close_reason"].startswith("AUTO_CLOSED_BY_"):
+            close_type = "auto"
+        elif r["close_reason"] == "MANUAL_FORCE_CLOSE":
+            close_type = "manual"
+        else:
+            close_type = "auto"  # 보수적 fallback
+
         items.append({
             "task_detail_id": r["task_detail_id"],
             "closed_at": r["completed_at"].isoformat() if r["completed_at"] else None,
@@ -782,6 +862,7 @@ def build_auto_close_details(
             "model": r["model"],
             "sales_order": r["sales_order"],
             "company": company,
+            "close_type": close_type,
             "closed_tasks": [{"task_id": r["task_id"], "task_name": r["task_name"]}],
             "task_count": 1,
             "trigger": {
