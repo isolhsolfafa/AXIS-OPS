@@ -6,6 +6,29 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.20.12] - 2026-05-29 — VIEW #75 catch 1: ETL 변경 이력 필터 KST 자정 정합
+
+> VIEW EtlChangeLogPage 운영 catch: "오늘/7일/14일/30일" 필터가 `NOW()` 24h 롤링 기준이라 어제 오후가 섞여 자정 정합 X.
+
+### Fix (admin.py `/admin/etl/changes`)
+```sql
+-- Before: NOW() - INTERVAL 'N days'  (24h 롤링, 어제 오후 포함)
+-- After (옵션 A, days=1=오늘 자정~현재):
+cl.changed_at >= ((now() AT TIME ZONE 'Asia/Seoul')::date - (INTERVAL '1 day' * (%s - 1)))::timestamp
+```
+- changed_at = KST naive → `(now() AT TIME ZONE 'Asia/Seoul')::date` 기준 (서버 tz 독립)
+- days=1 → 오늘 자정 / days=7 → 6일 전 자정 (오늘 포함 7일)
+- VIEW PERIOD_OPTIONS `{value:1, label:'오늘'}` 의미 정합
+
+### 검증 (운영)
+- 경계: days=1→오늘 00:00 / 7→6일전 00:00 / 14→13일전 / 30→29일전 ✅
+- 카운트: 오늘 24h롤링 32 → 자정기준 4 (어제 오후 28건 정확히 제외)
+
+### catch 2 (serial_number tracking) — 스킵 (의도)
+serial_number = 제품 고유 식별자 = 변경 불가가 정상. etl.change_log field_name 7종에 serial_number 없음 (ETL 미추적, 추적할 변경 자체가 없어야 정상). Twin파파 결정.
+
+---
+
 ## [2.20.11] - 2026-05-29 — TMS(M)/TMS(E) 협력사 구분 + 매트릭스 셀↔리스트 정합 통일
 
 > 사용자 catch: 매트릭스 'TMS' 셀이 모듈(TMS(M))+전장(TMS(E)) 뭉쳐 표시 + 셀 클릭 시 리스트 불일치 (TMS 셀 27 vs details 327).

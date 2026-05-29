@@ -2350,7 +2350,14 @@ def get_etl_changes() -> Tuple[Dict[str, Any], int]:
         cur = conn.cursor()
 
         # 동적 WHERE 절 구성
-        conditions = ["cl.changed_at >= NOW() - INTERVAL '%s days'"]
+        # v2.20.12 (VIEW #75 catch 1): KST 자정 정합 — 옵션 A (days=1 = 오늘 자정~현재).
+        # 이전 `NOW() - INTERVAL 'N days'` = 24h 롤링 (어제 오후 포함, 자정 정합 X).
+        # changed_at = KST naive 이므로 (now() AT TIME ZONE 'Asia/Seoul')::date 기준 (서버 tz 독립).
+        # days=1 → 오늘 자정 / days=7 → 6일 전 자정 (오늘 포함 7일).
+        conditions = [
+            "cl.changed_at >= "
+            "((now() AT TIME ZONE 'Asia/Seoul')::date - (INTERVAL '1 day' * (%s - 1)))::timestamp"
+        ]
         params: list = [days]
 
         if field:
