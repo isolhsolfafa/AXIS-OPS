@@ -22,6 +22,11 @@ class _SiFinishingScreenState extends ConsumerState<SiFinishingScreen>
   List<Map<String, dynamic>> _confirmedShipments = [];
   List<Map<String, dynamic>> _plannedShipments = [];
 
+  // Sprint 80: 출하예정 주차별 그룹 (검색 없을 때만). 배지/현황은 _plannedTotal 기준.
+  List<Map<String, dynamic>> _plannedByWeek = [];
+  int _plannedTotal = 0;
+  final Set<String> _expandedWeeks = {};
+
   bool _loadingPending = false;
   bool _loadingConfirmed = false;
   bool _loadingPlanned = false;
@@ -96,6 +101,15 @@ class _SiFinishingScreenState extends ConsumerState<SiFinishingScreen>
             _confirmedShipments = items;
           } else {
             _plannedShipments = items;
+            // Sprint 80: 검색 없을 때만 by_week 집계 갱신 (전체 기준).
+            //   배지/현황 = _plannedTotal (평면 200 cap 아닌 전체).
+            _plannedTotal = (res['total'] as int?) ?? items.length;
+            if (_searchQuery.isEmpty) {
+              _plannedByWeek =
+                  List<Map<String, dynamic>>.from(res['by_week'] as List? ?? []);
+            } else {
+              _plannedByWeek = [];
+            }
           }
         });
       }
@@ -291,9 +305,13 @@ class _SiFinishingScreenState extends ConsumerState<SiFinishingScreen>
     return (w?.isAdmin ?? false) || (w?.isManager ?? false);
   }
 
-  bool get _isGstSelf {
+  /// v2.20.x Sprint 80: 출고완료 버튼 노출 = BE si_manager_or_admin_required 정확 미러
+  /// (role=='SI' || is_manager || is_admin). GST PI/QI 비매니저는 버튼 미노출(403 방지).
+  bool get _canShip {
     final w = ref.read(authProvider).currentWorker;
-    return (w?.company ?? '').toUpperCase().trim() == 'GST';
+    return (w?.role ?? '') == 'SI' ||
+        (w?.isManager ?? false) ||
+        (w?.isAdmin ?? false);
   }
 
   @override
@@ -306,7 +324,7 @@ class _SiFinishingScreenState extends ConsumerState<SiFinishingScreen>
           tabs: [
             Tab(text: '미종료 (${_pendingTasks.length})'),
             Tab(text: '출하 확정 (${_confirmedShipments.length})'),
-            Tab(text: '출하 예정 (${_plannedShipments.length})'),
+            Tab(text: '출하 예정 ($_plannedTotal)'),
           ],
         ),
       ),
@@ -521,27 +539,127 @@ class _SiFinishingScreenState extends ConsumerState<SiFinishingScreen>
         Expanded(
           child: loading
               ? const Center(child: CircularProgressIndicator())
-              : items.isEmpty
-                  ? RefreshIndicator(
-                      onRefresh: () => _fetchShipments(status: isConfirmed ? 'confirmed' : 'planned'),
-                      child: ListView(
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        children: [
-                          const SizedBox(height: 200),
-                          Center(child: Text(isConfirmed ? '오늘 출하 예정 없음' : '미래 출하 예정 없음')),
-                        ],
-                      ),
-                    )
-                  : RefreshIndicator(
-                      onRefresh: () => _fetchShipments(status: isConfirmed ? 'confirmed' : 'planned'),
-                      child: ListView.builder(
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        itemCount: items.length,
-                        itemBuilder: (ctx, idx) => _buildShipmentCard(items[idx], isConfirmed: isConfirmed),
-                      ),
-                    ),
+              // Sprint 80: 출하예정 + 검색 없음 → 주차별 그룹 카드 (현황 파악).
+              //   검색하면 평면 결과(특정 S/N 찾기). 출하확정은 항상 평면.
+              : (!isConfirmed && _searchQuery.isEmpty)
+                  ? (_plannedByWeek.isEmpty
+                      ? _emptyShipmentView(isConfirmed)
+                      : RefreshIndicator(
+                          onRefresh: () => _fetchShipments(status: 'planned'),
+                          child: ListView.builder(
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            itemCount: _plannedByWeek.length,
+                            itemBuilder: (ctx, idx) =>
+                                _buildWeekGroupCard(_plannedByWeek[idx]),
+                          ),
+                        ))
+                  : items.isEmpty
+                      ? _emptyShipmentView(isConfirmed)
+                      : RefreshIndicator(
+                          onRefresh: () => _fetchShipments(status: isConfirmed ? 'confirmed' : 'planned'),
+                          child: ListView.builder(
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            itemCount: items.length,
+                            itemBuilder: (ctx, idx) => _buildShipmentCard(items[idx], isConfirmed: isConfirmed),
+                          ),
+                        ),
         ),
       ],
+    );
+  }
+
+  Widget _emptyShipmentView(bool isConfirmed) {
+    return RefreshIndicator(
+      onRefresh: () => _fetchShipments(status: isConfirmed ? 'confirmed' : 'planned'),
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          const SizedBox(height: 200),
+          Center(child: Text(isConfirmed ? '오늘 출하 예정 없음' : '미래 출하 예정 없음')),
+        ],
+      ),
+    );
+  }
+
+  /// Sprint 80: 주차 그룹 카드 (ExpansionTile 접힘 기본). 펼치면 모델별 카운트.
+  Widget _buildWeekGroupCard(Map<String, dynamic> week) {
+    final wk = (week['week'] as String?) ?? '';
+    final count = (week['count'] as int?) ?? 0;
+    final dateFrom = (week['date_from'] as String?) ?? '';
+    final dateTo = (week['date_to'] as String?) ?? '';
+    final byModel = List<Map<String, dynamic>>.from(week['by_model'] as List? ?? []);
+
+    // "2026-W24" → "W24", 날짜 "2026-06-08" → "6/8"
+    final wkShort = wk.contains('-W') ? 'W${wk.split('-W').last}' : wk;
+    String md(String iso) {
+      final p = iso.split('-');
+      if (p.length < 3) return iso;
+      return '${int.tryParse(p[1]) ?? p[1]}/${int.tryParse(p[2]) ?? p[2]}';
+    }
+    final range = (dateFrom.isNotEmpty && dateTo.isNotEmpty)
+        ? '${md(dateFrom)}~${md(dateTo)}'
+        : '';
+    // W53(12/31) = 출하일 미정 placeholder (Codex A-Q3)
+    final isUndated = wk.endsWith('W53') || dateFrom.endsWith('-12-31') || dateTo.endsWith('-12-31');
+
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: ExpansionTile(
+        initiallyExpanded: _expandedWeeks.contains(wk),
+        onExpansionChanged: (open) {
+          setState(() {
+            if (open) {
+              _expandedWeeks.add(wk);
+            } else {
+              _expandedWeeks.remove(wk);
+            }
+          });
+        },
+        leading: const Icon(Icons.calendar_month, size: 20, color: Color(0xFF6366F1)),
+        title: Row(
+          children: [
+            Text(wkShort, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+            const SizedBox(width: 6),
+            if (range.isNotEmpty)
+              Text(range, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+            if (isUndated) ...[
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEF3C7),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: const Text('미정', style: TextStyle(fontSize: 10, color: Color(0xFF92400E))),
+              ),
+            ],
+          ],
+        ),
+        trailing: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          decoration: BoxDecoration(
+            color: const Color(0xFFEEF2FF),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text('$count건',
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF6366F1))),
+        ),
+        children: byModel.map((m) {
+          final model = (m['model'] as String?) ?? '-';
+          final mc = (m['count'] as int?) ?? 0;
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(56, 4, 20, 4),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(child: Text(model, style: const TextStyle(fontSize: 13))),
+                Text('$mc',
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+              ],
+            ),
+          );
+        }).toList(),
+      ),
     );
   }
 
@@ -640,7 +758,7 @@ class _SiFinishingScreenState extends ConsumerState<SiFinishingScreen>
             //   * ETL ship_plan_date 보존 (plan_change_warning 자기 충족 catch 회피)
             //   * 책임 분리 — Plan = ETL source / 출하 = OPS app
             //   * audit trail = SI_SHIPMENT.completed_at 자동 기록 (best_ship CTE 정합)
-            if (sn != '-' && (isMyTask || _isGstSelf || _canManage)) ...[
+            if (sn != '-' && (isMyTask || _canShip)) ...[
               const SizedBox(height: 10),
               const Divider(color: Color(0xFFE5E7EB), height: 1),
               const SizedBox(height: 10),
@@ -661,9 +779,9 @@ class _SiFinishingScreenState extends ConsumerState<SiFinishingScreen>
                         ),
                       ),
                     ),
-                  if (isMyTask && (_isGstSelf || _canManage)) const SizedBox(width: 8),
-                  // [출고 완료] = GST 인원 전체 (admin / manager / 일반 작업자 모두)
-                  if (_isGstSelf || _canManage)
+                  if (isMyTask && _canShip) const SizedBox(width: 8),
+                  // [출고 완료] = SI 인원 + GST manager + admin (BE si_manager_or_admin 정합)
+                  if (_canShip)
                     Expanded(
                       child: ElevatedButton.icon(
                         onPressed: () => _shipComplete(sn),

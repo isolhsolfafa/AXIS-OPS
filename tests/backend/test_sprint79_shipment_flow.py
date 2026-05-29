@@ -401,3 +401,115 @@ class TestValidateSettingStringList:
         assert _validate_setting('shipment_alert_recipients', '신한국') is not None
         # int X (string_list 는 string 만)
         assert _validate_setting('shipment_alert_recipients', [377]) is not None
+
+
+# ─── Sprint 80: 출하예정 주차별 그룹 (get_shipment_week_groups + route) ───
+
+def _find_model_count(by_week, model):
+    """by_week 전체에서 특정 model 카운트 합 (테스트 격리용 고유 모델)."""
+    total = 0
+    for w in by_week:
+        for m in w.get('by_model', []):
+            if m['model'] == model:
+                total += m['count']
+    return total
+
+
+class TestShipmentWeekGroups:
+    """Sprint 80 — ISO 주차별 + 모델별 집계 (M-Q8 범위)."""
+
+    def test_week_01_group_by_week_and_model(self, db_conn, create_test_worker):
+        """TC-WK-01: 같은 주 미래 출하 2건(고유모델) → by_week 해당 주차 by_model count==2."""
+        from app.services.shipment_flow_service import get_shipment_week_groups
+        uniq = f'ZWK01_{_PREFIX}'
+        d = _TODAY + timedelta(days=8)  # 다음주 보장
+        _seed_product(db_conn, _sn('WK01a'), ship_plan_date=d, actual_ship_date=None, model=uniq)
+        _seed_product(db_conn, _sn('WK01b'), ship_plan_date=d, actual_ship_date=None, model=uniq)
+        by_week = get_shipment_week_groups()
+        assert _find_model_count(by_week, uniq) == 2
+
+    def test_week_02_actual_completed_excluded(self, db_conn, create_test_worker):
+        """TC-WK-02: actual_ship_date 완료 건 제외."""
+        from app.services.shipment_flow_service import get_shipment_week_groups
+        uniq = f'ZWK02_{_PREFIX}'
+        d = _TODAY + timedelta(days=9)
+        _seed_product(db_conn, _sn('WK02a'), ship_plan_date=d, actual_ship_date=None, model=uniq)
+        _seed_product(db_conn, _sn('WK02b'), ship_plan_date=d, actual_ship_date=d, model=uniq)  # 출하완료 제외
+        by_week = get_shipment_week_groups()
+        assert _find_model_count(by_week, uniq) == 1
+
+    def test_week_03_test_customer_excluded(self, db_conn, create_test_worker):
+        """TC-WK-03: TEST CUSTOMER 제외."""
+        from app.services.shipment_flow_service import get_shipment_week_groups
+        uniq = f'ZWK03_{_PREFIX}'
+        d = _TODAY + timedelta(days=10)
+        _seed_product(db_conn, _sn('WK03a'), ship_plan_date=d, actual_ship_date=None,
+                      customer='TEST CUSTOMER', model=uniq)
+        by_week = get_shipment_week_groups()
+        assert _find_model_count(by_week, uniq) == 0
+
+    def test_week_04_structure_and_sorting(self, db_conn, create_test_worker):
+        """TC-WK-04: 구조 정합 — week.count==sum(by_model.count), week asc, by_model count desc."""
+        from app.services.shipment_flow_service import get_shipment_week_groups
+        d = _TODAY + timedelta(days=11)
+        _seed_product(db_conn, _sn('WK04a'), ship_plan_date=d, actual_ship_date=None, model=f'ZWK04A_{_PREFIX}')
+        by_week = get_shipment_week_groups()
+        assert len(by_week) >= 1
+        prev_week = ''
+        for w in by_week:
+            # week.count == sum(by_model.count)
+            assert w['count'] == sum(m['count'] for m in w['by_model'])
+            # by_model count 내림차순
+            counts = [m['count'] for m in w['by_model']]
+            assert counts == sorted(counts, reverse=True)
+            # week 오름차순
+            assert w['week'] >= prev_week
+            prev_week = w['week']
+            # 필수 키
+            assert set(w.keys()) >= {'week', 'date_from', 'date_to', 'count', 'by_model'}
+
+    def test_week_05_route_planned_has_by_week(self, client, db_conn, create_test_worker, get_auth_token):
+        """TC-WK-05: route planned + 검색 없음 → by_week 포함."""
+        uniq = f'ZWK05_{_PREFIX}'
+        d = _TODAY + timedelta(days=12)
+        _seed_product(db_conn, _sn('WK05a'), ship_plan_date=d, actual_ship_date=None, model=uniq)
+        wid = create_test_worker(email='s80-5@test.com', password='Pw1!', name='S80-5',
+                                 role='SI', company='GST')
+        token = get_auth_token(wid)
+        res = client.get('/api/admin/shipment/by-status?status=planned',
+                         headers={'Authorization': f'Bearer {token}'})
+        assert res.status_code == 200
+        data = res.get_json()
+        assert 'by_week' in data
+        assert _find_model_count(data['by_week'], uniq) == 1
+
+    def test_week_06_route_confirmed_no_by_week(self, client, db_conn, create_test_worker, get_auth_token):
+        """TC-WK-06: route confirmed → by_week 미포함."""
+        wid = create_test_worker(email='s80-6@test.com', password='Pw1!', name='S80-6',
+                                 role='SI', company='GST')
+        token = get_auth_token(wid)
+        res = client.get('/api/admin/shipment/by-status?status=confirmed',
+                         headers={'Authorization': f'Bearer {token}'})
+        assert res.status_code == 200
+        assert 'by_week' not in res.get_json()
+
+    def test_week_07_route_planned_search_no_by_week_and_per_page1_full(
+            self, client, db_conn, create_test_worker, get_auth_token):
+        """TC-WK-07: planned + q → by_week 없음 / planned no-q per_page=1 이어도 by_week 전체 기준."""
+        uniq = f'ZWK07_{_PREFIX}'
+        d = _TODAY + timedelta(days=13)
+        _seed_product(db_conn, _sn('WK07a'), ship_plan_date=d, actual_ship_date=None, model=uniq)
+        _seed_product(db_conn, _sn('WK07b'), ship_plan_date=d, actual_ship_date=None, model=uniq)
+        wid = create_test_worker(email='s80-7@test.com', password='Pw1!', name='S80-7',
+                                 role='SI', company='GST')
+        token = get_auth_token(wid)
+        # 검색 → by_week 없음
+        res_q = client.get(f'/api/admin/shipment/by-status?status=planned&q={_sn("WK07a")}',
+                           headers={'Authorization': f'Bearer {token}'})
+        assert res_q.status_code == 200
+        assert 'by_week' not in res_q.get_json()
+        # per_page=1 이어도 by_week 는 전체(2건) 기준
+        res = client.get('/api/admin/shipment/by-status?status=planned&per_page=1',
+                         headers={'Authorization': f'Bearer {token}'})
+        assert res.status_code == 200
+        assert _find_model_count(res.get_json()['by_week'], uniq) == 2

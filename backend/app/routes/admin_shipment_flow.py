@@ -20,6 +20,7 @@ from typing import Tuple, Dict, Any
 from app.middleware.jwt_auth import jwt_required, admin_required, gst_or_admin_required
 from app.services.shipment_flow_service import (
     get_shipment_by_status,
+    get_shipment_week_groups,
     get_pending_tasks_grouped,
 )
 from psycopg2 import Error as PsycopgError
@@ -63,12 +64,17 @@ def get_shipment_by_status_route() -> Tuple[Dict[str, Any], int]:
 
     try:
         items, total = get_shipment_by_status(status=status, q=q, page=page, per_page=per_page)
-        return jsonify({
+        resp: Dict[str, Any] = {
             'items': items,
             'total': total,
             'page': page,
             'per_page': per_page,
-        }), 200
+        }
+        # Sprint 80: 출하예정 + 검색 없음 → 주차별 그룹 집계 추가 (additive).
+        #   전체 기준 집계라 per_page cap 무관. confirmed / 검색 모드엔 미포함.
+        if status == 'planned' and not (q and q.strip()):
+            resp['by_week'] = get_shipment_week_groups()
+        return jsonify(resp), 200
     except PsycopgError as e:
         logger.error(f"shipment/by-status DB error: {e}")
         return jsonify({'error': 'INTERNAL_ERROR', 'message': 'DB 조회 실패'}), 500

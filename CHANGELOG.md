@@ -6,6 +6,34 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.21.0] - 2026-05-29 — Sprint 80: SI 출하예정 주차별 그룹핑 + 200 cap 누락 해소
+
+> OPS SI 마무리공정 "출하 예정" 탭 개편. 평면 200건 리스트 → ISO 주차(52주) 그룹 카드. 실측 389건 중 189건 누락(200 cap) 동시 해소.
+
+### 문제
+- per_page 200 cap → 출하예정 389건 중 189건 누락 (검색은 BE 필터 후라 특정 S/N 조회는 정상이었음)
+- 모델만 묶으면 GAIA-I DUAL 230건 한 덩어리 → 출하날짜 제각각이라 주차 단위 필요
+
+### BE (additive, 기존 계약 무변경)
+- `shipment_flow_service.py` 신규 `get_shipment_week_groups()` — ISO 주차(`IYYY-WIW`)별 + 모델별 카운트 집계 (전체 기준, 200 cap 무관). week asc / by_model count desc. WHERE는 기존 planned base_sql과 1:1 동일 (M-Q6)
+- `admin_shipment_flow.py` — planned + 검색 없음일 때만 응답에 `by_week` append. 기존 `get_shipment_by_status` 튜플 서비스는 무변경 (M-Q7 — 별도 함수 호출)
+
+### FE (`si_finishing_screen.dart`)
+- 출하예정 탭: 검색 없으면 주차 ExpansionTile 카드(접힘 기본, 펼치면 모델 카운트) / 검색하면 평면. 탭 배지 = `_plannedTotal`(전체 기준). W53/12-31 "미정" 칩
+- 출고완료 버튼 권한 정합: `_isGstSelf`(company=='GST', GST 전원) → `_canShip`(`role=='SI' || isManager || isAdmin`, BE `si_manager_or_admin_required` 정확 미러). **GST PI/QI 비매니저 403 방지**. BE 권한 데코 무변경 (협력사 매니저는 read가 막혀 무해)
+
+### 검증
+- pytest `test_sprint79_shipment_flow` **25 passed** (기존 18 + 신규 WK-01~07: 주차/모델 그룹·actual 제외·TEST 제외·구조 정합·route by_week 포함/미포함·per_page=1에도 전체)
+- **Codex 라운드 1 (M=4/A=2/N=3) → 라운드 2 (M=0, DEPLOY_SAFE: YES)** — M 4건(predicate 공유/튜플 계약/pytest 확대/권한 정합) 전부 반영
+- flutter build web GREEN. migration 불필요. 권한 BE 변경 0
+- 설계서: `SPRINT80_SI_SHIPMENT_WEEK_GROUP.md`
+
+### 후속 BACKLOG (Codex 라운드 2 A)
+- `BACKLOG-SPRINT80-W53-PLACEHOLDER-20260529` 🟡 — FE "미정" 칩이 12/31 placeholder 가정. 실제 ISO W53 출하 생기면 오표시 → BE가 미정 플래그 필드로 내려줄 때만 표시
+- `TEST-SPRINT80-WEEK-EDGE-20260529` 🟡 — W53 경계 / SI_SHIPMENT 완료 기반 actual 제외 / cleanup-before-yield 경계 TC
+
+---
+
 ## [2.20.15] - 2026-05-29 — SI 마무리공정 출고완료 권한 확장 (GST SI 인원 허용)
 
 > OPS SI 마무리공정 "출고 완료" 버튼이 manager/admin만 가능 → SI 일반 작업자(role='SI', is_manager=False)가 403. GST SI 인원 6명 중 1명(엄대선, manager)만 가능했음.

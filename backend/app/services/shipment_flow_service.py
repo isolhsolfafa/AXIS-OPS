@@ -151,6 +151,71 @@ def get_shipment_by_status(
         put_conn(conn)
 
 
+# ─── 1-B. 출하 예정 주차별 그룹 집계 (Sprint 80) ──────────────────────
+
+def get_shipment_week_groups() -> List[Dict[str, Any]]:
+    """출하 예정(planned, 검색 없음) ISO 주차별 + 모델별 카운트 집계.
+
+    Sprint 80 (FEAT-SI-FINISHING-SHIPMENT-WEEK-GROUP):
+    - 전체 기준 집계 (per_page cap 무관 — GROUP BY 라 200 limit 영향 없음)
+    - by_week: ISO 주차(IYYY-WIW) 오름차순(임박 먼저), 각 주차 by_model count 내림차순
+    - 검색(q) 모드에서는 route 가 호출 안 함 (평면 items 만)
+
+    ⚠️ WHERE predicate 는 get_shipment_by_status() status='planned'/q=None 의
+       base_sql 과 1:1 동일 유지 필수 (Codex M-Q6 정합):
+         customer<>'TEST CUSTOMER' / ship_plan_date>CURRENT_DATE
+         / ship_plan_date IS NOT NULL / actual_date IS NULL
+
+    Returns:
+        [{week, date_from, date_to, count, by_model: [{model, count}, ...]}, ...]
+    """
+    actual_date_expr = _get_actual_date_subquery('p')
+
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            SELECT
+                to_char(p.ship_plan_date, 'IYYY-"W"IW')            AS week,
+                date_trunc('week', p.ship_plan_date)::date          AS date_from,
+                (date_trunc('week', p.ship_plan_date)::date + 6)    AS date_to,
+                COALESCE(NULLIF(TRIM(p.model), ''), '(미정)')        AS model,
+                COUNT(*)                                            AS cnt
+            FROM plan.product_info p
+            WHERE COALESCE(p.customer, '') <> 'TEST CUSTOMER'
+              AND p.ship_plan_date > CURRENT_DATE
+              AND p.ship_plan_date IS NOT NULL
+              AND ({actual_date_expr}) IS NULL
+            GROUP BY week, date_from, date_to, model
+            ORDER BY week ASC, cnt DESC, model ASC
+            """
+        )
+        rows = cur.fetchall()
+    finally:
+        put_conn(conn)
+
+    # nest: week → by_model (ORDER BY week ASC 라 같은 주차 연속 → 순서 보존)
+    weeks: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
+    for r in rows:
+        wk = r['week']
+        if wk not in weeks:
+            weeks[wk] = {
+                'week': wk,
+                'date_from': r['date_from'].isoformat() if r['date_from'] else None,
+                'date_to': r['date_to'].isoformat() if r['date_to'] else None,
+                'count': 0,
+                'by_model': [],
+            }
+            order.append(wk)
+        cnt = int(r['cnt'] or 0)
+        weeks[wk]['by_model'].append({'model': r['model'], 'count': cnt})
+        weeks[wk]['count'] += cnt
+
+    return [weeks[w] for w in order]
+
+
 # ─── 2. 미종료 작업 분류 (메인 메뉴 admin only) ────────────────────────
 
 def get_pending_tasks_grouped() -> Dict[str, Any]:
