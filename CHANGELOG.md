@@ -6,6 +6,88 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.20.9] - 2026-05-29 — v2.20.8 syntax 깨짐 hotfix (trigger_sql 복원)
+
+> v2.20.8 (afe477e) Railway 배포 실패 (15분+ 지연) — 4 분포 SQL force_closed=FALSE 가드 python 일괄 치환 시 regex 가 details endpoint 의 `trigger_sql` 문자열 리터럴 내부 `AND t.close_reason LIKE %s` 까지 매칭 → 줄바꿈 삽입 → `unterminated string literal (line 755)` → import 실패 → Flask boot 실패 → Railway health check 실패 → 배포 rollback (v2.20.7 잔존).
+
+### Fix
+- `trigger_sql = " AND t.close_reason LIKE %s "` 한 줄 복원 (details trigger filter — close_filter 가 이미 force_closed 처리하므로 가드 불필요)
+- 4 분포 SQL force_closed=FALSE 가드 7곳 정상 유지 (L257/297/313/361/395/442/478)
+
+### 검증 (배포 후)
+- `/auto-close-summary?period=month`: 200, invariant 통과
+  - auto=223 (started=223, missed_worker=243) / manual=0 / force=107 / total=330
+  - 분포 정합: task_dist=223 / partner_dist=243 / grand_total=223
+- force.by_reason: 누락 38 / 작업자누락 27 / 작업자 미처리 26 / ...
+- `/auto-close-details`: close_type 'auto'/'force' 분류 정상
+- #76 partner=C&A: 200, total=95 (회귀 0)
+
+### 교훈
+일괄 치환(sed/regex) 후 반드시 `ast.parse` syntax 검증 선행. 문자열 리터럴 내부 매칭 위험.
+
+---
+
+## [2.20.8] - 2026-05-29 — #77 hotfix — 4 분포 SQL force_closed=FALSE 가드 (배포 실패 → v2.20.9)
+
+> v2.20.7 배포 후 invariant violation (task_distribution sum != started_task_count, 차이 4). 원인: auto CTE 에는 force_closed=FALSE 가드 추가했으나 4 분포 SQL 누락. force_closed=TRUE + AUTO_CLOSED_BY_% 케이스가 분포에만 포함되어 차이 발생.
+
+### Fix (의도)
+4 분포 SQL (trigger / task / partner / hourly + task_distribution CTE + partner_task_matrix CTE) 에 `AND t.force_closed=FALSE` 가드 8곳 추가.
+
+⚠️ **배포 실패** — python 일괄 치환이 trigger_sql 문자열 리터럴 깨뜨림 → Flask boot 실패 → v2.20.9 에서 syntax 복원.
+
+---
+
+## [2.20.7] - 2026-05-29 — VIEW #77 — force_closed 카운트 + close_type 추가
+
+> VIEW v1.54.0 Sprint 71 정식 연동 catch — 마감 유형 3분류 (자동/수동/강제). 옵션 X 채택 (force_closed=TRUE only, v2.15.16 force_closed=FALSE 통일 합의 정합).
+
+### 운영 검증 (5-15 이후)
+- force_closed=TRUE: 99건 (closed_by 매핑 97%)
+- close_reason 매니저 free-text: '누락'/'작업자누락'/'작업자 미처리'/'종료 안함'/'test'
+- MANUAL_FORCE_CLOSE enum: 0건 (legacy 정의, 운영 미사용)
+
+### 분류 정의
+- auto_closed = `close_reason LIKE 'AUTO_CLOSED_BY_%' AND force_closed=FALSE`
+- manual_closed = `close_reason = 'MANUAL_FORCE_CLOSE' AND force_closed=FALSE`
+- force_closed = `force_closed = TRUE` (매니저 명시적 [강제 종료])
+- total_missed_close = auto + manual + force
+
+### 변경
+1. `_query_kpi_counts`: force CTE 신규 + force_count + auto/manual force_closed=FALSE 가드
+2. `_query_force_close_reason_distribution` (신규): 강제 종료 close_reason 분포 (by_reason)
+3. `build_auto_close_summary`: force_closed block (count/prev/delta/trend/improvement_pct/by_reason) + total = auto+manual+force
+4. `_assert_invariants`: total 영역 force 합산 추가
+5. `build_auto_close_details`: close_filter (auto OR manual OR force 합집합) + items 영역 close_type ('auto'|'manual'|'force')
+
+### VIEW 측 후속
+- types/dashboard.ts AutoCloseSummary 영역 force_closed?: CountWithDelta + by_reason
+- AutoCloseDetailItem 영역 close_type?: 'auto'|'manual'|'force'
+- KPI 3카드 분리 (옵션 A — Twin파파 확정)
+
+---
+
+## [2.20.6] - 2026-05-29 — VIEW #76 HOTFIX — auto-close-details 500 (SQL alias mismatch)
+
+> VIEW v1.54.0 localhost 검증 중 매트릭스 셀 클릭 시 partner=C%26A → 500 INTERNAL_ERROR.
+
+### Root Cause — SQL alias mismatch
+- count_sql: `LEFT JOIN plan.product_info pi` (alias 'pi')
+- item_sql: `LEFT JOIN plan.product_info p` (alias 'p') ← 불일치
+- `_build_partner_filter` 응답: hardcoded `pi.mech_partner`
+- partner 미지정 → partner_sql="" → 정상 / partner 명시 → item_sql 안 undefined alias 'pi' → PostgreSQL error → 500
+
+### Fix
+- item_sql alias 'p' → 'pi' 통일 (count_sql 정합)
+- p.model/p.sales_order/p.mech_partner/p.elec_partner/p.module_outsourcing → pi.*
+- row 처리 영역 PI/QI/SI category + partner NULL → '(미지정)' 분류 (Sprint 71 v3 패턴 정합)
+
+### 검증
+- partner=C&A: 200, total 80 (이전 500)
+- VIEW 영향 0 (코드 변경 0, BE fix 자동 정합)
+
+---
+
 ## [2.20.3] - 2026-05-29 — APScheduler timezone fix (시간 단위 cron 9시간 지연 버그)
 
 > v2.20.2 디버그 endpoint로 root cause 확정: APScheduler `BackgroundScheduler(timezone=Config.KST)` 가 stdlib `timezone(timedelta(hours=9))` 를 정확한 IANA tz 로 인식 못해 시간 단위 cron 의 fire time 을 UTC 로 해석. 분 단위/interval cron 은 영향 없음.
