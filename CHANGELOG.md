@@ -6,6 +6,41 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.21.2] - 2026-05-30 — 위치 검증 토글 Off 시 출근 GPS 권한 요청 제거
+
+> 협력사 출근 시 브라우저 위치 권한 팝업이 떴는데, admin 위치 검증 토글(`geo_check_enabled`)이 Off인데도 발생.
+
+### 원인
+- FE `_handleAttendance`가 설정과 무관하게 출근 시 무조건 `_getCurrentLocation()`(Web Geolocation) 호출
+- BE는 `geo_check_enabled=true AND work_site=='GST'`일 때만 위치 검증(`hr.py:132`) → Off면 위치를 안 봄. FE만 불필요하게 권한 요청
+
+### Fix
+- **BE** `hr.py`: `/hr/attendance/today` 응답에 `geo_check_enabled: is_geo_check_enabled()` 추가 (additive)
+- **FE** `home_screen.dart`: `_geoCheckEnabled` 파싱 + 출근 시 `(_geoCheckEnabled && work_site=='GST')`일 때만 GPS 호출 — BE 검증 조건과 정확 정합. Off면 권한 팝업 없음
+- `_attendanceStatusLoaded` 게이트 — 설정 미로드/조회 실패 시 fail-open 방지 (Codex M-Q2)
+
+### 검증
+- Codex 라운드 1 **M=1(race fail-open) 반영 / A=2** (attendance/today 키 TC + 별 사항 BACKLOG)
+- flutter build GREEN. 회귀 0 (additive + 조건 가드). 퇴근 GPS 원래 없음
+- 현재 토글 Off → 협력사 출근 시 위치 권한 팝업 미발생. 토글 On 시에만 GPS 요청
+
+---
+
+## [2.21.1] - 2026-05-30 — 협력사 퇴근 실수 클릭 방지 + 출퇴근 성공 토스트
+
+> 출퇴근 버튼이 one-action 토글이라 퇴근을 모르고 누르면 출근 상태가 바로 종료됨.
+
+### Fix (`home_screen.dart` `_handleAttendance`)
+- 퇴근(checkType=='out') 시 **"퇴근 처리하시겠습니까? / 출근 중 상태가 종료됩니다"** 확인 다이얼로그 (취소 시 중단)
+- 출근은 바로 처리 (실수해도 재클릭 가능)
+- 처리 성공 시 토스트 피드백 추가
+
+### 검증
+- flutter build GREEN. FE only, 회귀 0
+- ②단계 Codex 이관 0항목 (FE 토글/다이얼로그) → Opus 자가 리뷰
+
+---
+
 ## [2.21.0] - 2026-05-29 — Sprint 80: SI 출하예정 주차별 그룹핑 + 200 cap 누락 해소
 
 > OPS SI 마무리공정 "출하 예정" 탭 개편. 평면 200건 리스트 → ISO 주차(52주) 그룹 카드. 실측 389건 중 189건 누락(200 cap) 동시 해소.
