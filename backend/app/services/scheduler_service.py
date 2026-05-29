@@ -1196,10 +1196,7 @@ def _alert_shipment_overdue():
         result['yesterday'] = yesterday.isoformat()
         overdue_items = get_overdue_shipments(yesterday)
         result['overdue_count'] = len(overdue_items)
-        if not overdue_items:
-            result['reason'] = f'{yesterday} 미처리 0건 → skip (spam 방지)'
-            logger.info(f"[alert_shipment_overdue] {result['reason']}")
-            return result
+        # v2.20.5: 0건 시에도 발송 (daily health check — cron 정상 작동 확인 용도)
 
         recipients_setting = get_setting('shipment_alert_recipients', [])
         extra_names = recipients_setting if isinstance(recipients_setting, list) else []

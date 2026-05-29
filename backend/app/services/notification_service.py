@@ -166,17 +166,38 @@ def _render_shipment_overdue_html(overdue_items: list, target_date) -> str:
     """출하 미처리 알림 HTML 템플릿 (Sprint 79, v2.19.10).
 
     v2.19.10: 회원가입 승인 메일 컨셉 정합 (사용자 catch 5-28).
-    - 외곽: max-width 600px, background #f5f5f7, font -apple-system
-    - 카드: white + border-radius 12 + box-shadow
-    - 헤더: ⚠️ + amber color (#d97706)
-    - 정보 박스 + 표 + 액션 박스 + footer
-
-    Codex M-Q1 (v2.18.20): html.escape 적용 XSS 방지.
+    v2.20.5: overdue_items=[] 분기 추가 — "전일 출하 모두 완료" 메일 (daily health check).
     """
     target_str = target_date.strftime('%Y-%m-%d') if hasattr(target_date, 'strftime') else str(target_date)
     now_kst = datetime.now(_KST).strftime('%Y-%m-%d %H:%M')
     safe_date = html.escape(target_str, quote=True)
     count = len(overdue_items)
+
+    # v2.20.5: 0건 분기 — "전일 출하 모두 완료" 메일 (daily health check)
+    if count == 0:
+        return f"""\
+<!DOCTYPE html>
+<html lang="ko">
+<head><meta charset="UTF-8"></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:600px;margin:0 auto;padding:24px;background:#f5f5f7;color:#1d1d1f;">
+  <div style="background:#fff;border-radius:12px;padding:24px;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
+    <h2 style="margin-top:0;color:#059669;">✅ 출하 완료 알림</h2>
+    <p>어제 ({safe_date}) 출하 계획이 <strong style="color:#059669;">모두 정상 처리</strong> 되었습니다.</p>
+
+    <div style="background:#f9fafb;border-radius:8px;padding:14px 16px;margin:16px 0;font-size:13px;">
+      <p style="margin:4px 0;"><strong>대상 일자:</strong> {safe_date} (어제)</p>
+      <p style="margin:4px 0;"><strong>미처리 건수:</strong> <strong style="color:#059669;">0건 ✅</strong></p>
+      <p style="margin:4px 0;color:#888;"><strong>발송 시각:</strong> {now_kst} KST</p>
+    </div>
+
+    <p style="margin-top:18px;">이 메일은 출하 알림 시스템이 매일 정상 작동 중임을 확인하는 메일입니다.</p>
+
+    <hr style="border:none;border-top:1px solid #e5e5e7;margin:24px 0;">
+    <p style="font-size:11px;color:#888;">이 메일은 매일 07:30 KST 자동 발송됩니다. 수신자 변경: OPS 관리자 옵션 → 출하 미처리 알림. 문의: dkkim1@gst-in.com</p>
+  </div>
+</body>
+</html>
+"""
 
     rows_html = ""
     for item in overdue_items:
@@ -259,15 +280,17 @@ def send_shipment_overdue_alert(recipients: list, overdue_items: list, target_da
 
     Codex Q3 A: retry catch X — 실패 로그 + Sentry capture (LoggingIntegration ERROR).
     """
-    if not recipients or not overdue_items:
-        logger.info(
-            f"[shipment_overdue_alert] skip — recipients={len(recipients)}, "
-            f"overdue={len(overdue_items)}"
-        )
+    # v2.20.5: overdue_items=0건 이어도 발송 (daily health check 메일)
+    if not recipients:
+        logger.info(f"[shipment_overdue_alert] skip — recipients=0")
         return False
 
     target_str = target_date.strftime('%Y-%m-%d') if hasattr(target_date, 'strftime') else str(target_date)
-    subject = f"⚠️ [G-AXIS] 출하 미처리 {len(overdue_items)}건 catch ({target_str})"
+    overdue_count = len(overdue_items)
+    if overdue_count > 0:
+        subject = f"⚠️ [G-AXIS] 출하 미처리 {overdue_count}건 ({target_str})"
+    else:
+        subject = f"✅ [G-AXIS] 출하 완료 ({target_str})"
     html_body = _render_shipment_overdue_html(overdue_items, target_date)
 
     success_count = 0
