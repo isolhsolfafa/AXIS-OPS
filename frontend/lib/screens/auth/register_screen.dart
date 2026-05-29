@@ -222,7 +222,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                   const SizedBox(height: 16),
 
                   // 이름
-                  _buildLabel('NAME 이름'),
+                  _buildLabel('NAME (이름)'),
                   const SizedBox(height: 5),
                   TextFormField(
                     controller: _nameController,
@@ -235,7 +235,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                   const SizedBox(height: 12),
 
                   // 이메일
-                  _buildLabel('EMAIL 이메일'),
+                  _buildLabel('EMAIL (이메일)'),
                   const SizedBox(height: 5),
                   TextFormField(
                     controller: _emailController,
@@ -259,7 +259,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                   const SizedBox(height: 8),
 
                   // 협력사 선택
-                  _buildLabel('COMPANY 소속'),
+                  _buildLabel('COMPANY (소속)'),
                   const SizedBox(height: 5),
                   DropdownButtonFormField<String>(
                     initialValue: _selectedCompany,
@@ -290,7 +290,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                   const SizedBox(height: 12),
 
                   // 역할 선택 (협력사 선택 후 활성화)
-                  _buildLabel('ROLE 역할'),
+                  _buildLabel('ROLE (역할)'),
                   const SizedBox(height: 5),
                   DropdownButtonFormField<String>(
                     initialValue: _selectedRole,
@@ -314,7 +314,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                   const SizedBox(height: 12),
 
                   // 비밀번호
-                  _buildLabel('PASSWORD 비밀번호'),
+                  _buildLabel('PASSWORD (비밀번호)'),
                   const SizedBox(height: 5),
                   TextFormField(
                     controller: _passwordController,
@@ -337,7 +337,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                   const SizedBox(height: 12),
 
                   // 비밀번호 확인
-                  _buildLabel('CONFIRM PASSWORD 비밀번호 확인'),
+                  _buildLabel('CONFIRM PASSWORD (비밀번호 확인)'),
                   const SizedBox(height: 5),
                   TextFormField(
                     controller: _confirmPasswordController,
