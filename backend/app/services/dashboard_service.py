@@ -149,24 +149,11 @@ def _build_partner_filter(
     ⚠️ 호출 query 영역 `t.id` 영역 alias 의무 (subquery EXISTS catch).
     """
     if is_admin:
-        if partner == _UNASSIGNED:
-            # v2.20.10 (#76 후속): '(미지정)' 셀 클릭 catch — partner 매칭 불가 케이스
-            # (PI/QI/SI category = ELSE NULL, 또는 해당 category partner NULL/빈값)
-            # company 결정 로직 (CASE + COALESCE) 과 1:1 정합 — '(미지정)' 매칭
-            return (
-                " AND COALESCE(NULLIF(TRIM(CASE "
-                "WHEN t.task_category = 'MECH' THEN pi.mech_partner "
-                "WHEN t.task_category = 'ELEC' THEN pi.elec_partner "
-                "WHEN t.task_category = 'TMS' THEN pi.module_outsourcing "
-                "ELSE NULL END), ''), %s) = %s ",
-                [_UNASSIGNED, _UNASSIGNED],
-            )
         if partner:
-            return (
-                " AND (pi.mech_partner = %s OR pi.elec_partner = %s "
-                "OR pi.module_outsourcing = %s) ",
-                [partner, partner, partner],
-            )
+            # v2.20.11: 매트릭스 셀 ↔ details 정합 — company 결정 표준 식 (_COMPANY_SQL)
+            # 으로 통일. TMS(M)/TMS(E) 구분 + '(미지정)' + 일반 협력사 모두 동일 기준.
+            # (이전: category-blind OR 매칭 → 매트릭스 셀(27) vs details(327) 불일치)
+            return (f" AND {_COMPANY_SQL} = %s ", [partner])
         return ("", [])
     # manager — 자기 회사 worker 참여 task (work_start_log + workers.company)
     if worker_company:
@@ -186,6 +173,47 @@ def _build_partner_filter(
 _AUTO_LIKE = "AUTO_CLOSED_BY_%"
 _MANUAL_EQ = "MANUAL_FORCE_CLOSE"
 _UNASSIGNED = "(미지정)"  # partner 매칭 불가 (PI/QI/SI category 또는 partner NULL)
+
+# v2.20.11: company 결정 표준 SQL 식 — matrix / details / partner_filter 공통 사용.
+# 도메인 규칙 (Twin파파 2026-05-29):
+#   DB partner 컬럼엔 'TMS' 단일 저장이나 의미 분리 —
+#     mech_partner='TMS'        → TMS(M)  (MECH category)
+#     module_outsourcing='TMS'  → TMS(M)  (TMS category)
+#     elec_partner='TMS'        → TMS(E)  (ELEC category)
+#   즉 ELEC 의 TMS 만 TMS(E), 나머지(MECH/TMS) 의 TMS 는 TMS(M).
+# 그 외 협력사(FNI/BAT/P&S/C&A 등)는 그대로. partner NULL / PI·QI·SI → '(미지정)'.
+# 표준 식 (alias t = app_task_details, pi = plan.product_info).
+_COMPANY_SQL = (
+    "COALESCE(NULLIF(TRIM(CASE "
+    "WHEN t.task_category = 'MECH' THEN "
+    "CASE WHEN pi.mech_partner = 'TMS' THEN 'TMS(M)' ELSE pi.mech_partner END "
+    "WHEN t.task_category = 'ELEC' THEN "
+    "CASE WHEN pi.elec_partner = 'TMS' THEN 'TMS(E)' ELSE pi.elec_partner END "
+    "WHEN t.task_category = 'TMS' THEN "
+    "CASE WHEN pi.module_outsourcing = 'TMS' THEN 'TMS(M)' ELSE pi.module_outsourcing END "
+    "ELSE NULL END), ''), '(미지정)')"
+)
+
+
+def _resolve_company_py(task_category, mech_partner, elec_partner, module_outsourcing):
+    """company 결정 Python 버전 (details row 후처리용 — _COMPANY_SQL 과 1:1 정합)."""
+    if task_category == "MECH":
+        raw = mech_partner
+        if raw == "TMS":
+            return "TMS(M)"
+    elif task_category == "ELEC":
+        raw = elec_partner
+        if raw == "TMS":
+            return "TMS(E)"
+    elif task_category == "TMS":
+        raw = module_outsourcing
+        if raw == "TMS":
+            return "TMS(M)"
+    else:
+        raw = None
+    if raw is None or str(raw).strip() == "":
+        return "(미지정)"
+    return raw
 
 
 def _query_kpi_counts(
@@ -480,11 +508,12 @@ def _query_partner_task_matrix(
       - PI/QI/SI category (ELSE NULL) + product_info partner NULL → '(미지정)' 분류
       - grand_total = started_task_count 정합 보장 (invariant violation 해소)
     """
+    # v2.20.11: company 결정 _COMPANY_SQL 통일 (TMS(M)/TMS(E) 구분 + details/filter 정합)
     sql = f"""
         WITH started_auto AS (
             SELECT DISTINCT ON (t.id)
-                t.id, t.task_id, t.task_name, t.task_category,
-                pi.mech_partner, pi.elec_partner, pi.module_outsourcing
+                t.id, t.task_id, t.task_name,
+                {_COMPANY_SQL} AS company
             FROM app_task_details t
             LEFT JOIN plan.product_info pi ON pi.serial_number = t.serial_number
             WHERE t.completed_at >= %s AND t.completed_at < %s
@@ -493,19 +522,7 @@ def _query_partner_task_matrix(
               {partner_sql}
               AND EXISTS (SELECT 1 FROM work_start_log wsl WHERE wsl.task_id = t.id)
         )
-        SELECT
-            COALESCE(
-              NULLIF(TRIM(
-                CASE
-                  WHEN task_category = 'MECH' THEN mech_partner
-                  WHEN task_category = 'ELEC' THEN elec_partner
-                  WHEN task_category = 'TMS'  THEN module_outsourcing
-                  ELSE NULL
-                END
-              ), ''),
-              '(미지정)'
-            ) AS company,
-            task_id, task_name, COUNT(*) AS cnt
+        SELECT company, task_id, task_name, COUNT(*) AS cnt
         FROM started_auto
         GROUP BY 1, task_id, task_name
         ORDER BY company, task_id
@@ -848,17 +865,12 @@ def build_auto_close_details(
 
     items = []
     for r in rows:
-        # company 결정 — task_category 기반
-        # v2.20.6: PI/QI/SI category (ELSE NULL) → '(미지정)' 분류 (Sprint 71 v3 패턴 정합)
-        cat = r["task_category"]
-        if cat == "MECH":
-            company = r["mech_partner"] or "(미지정)"
-        elif cat == "ELEC":
-            company = r["elec_partner"] or "(미지정)"
-        elif cat == "TMS":
-            company = r["module_outsourcing"] or "(미지정)"
-        else:
-            company = "(미지정)"
+        # company 결정 — _resolve_company_py (_COMPANY_SQL 과 1:1 정합)
+        # v2.20.11: TMS(M)/TMS(E) 구분 (mech/module TMS → TMS(M), elec TMS → TMS(E))
+        company = _resolve_company_py(
+            r["task_category"], r["mech_partner"],
+            r["elec_partner"], r["module_outsourcing"],
+        )
 
         # trigger task_id 추출
         trigger_tid = None
