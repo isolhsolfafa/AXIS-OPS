@@ -6,6 +6,32 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.20.14] - 2026-05-29 — 종료 분석 페이지 GST 매니저 전체 조회 (권한 fix)
+
+> 종료(자동마감) 분석 페이지에서 GST 매니저(is_admin=False)가 GST task(PI/QI/SI 검사)만 보이고 협력사 task(MECH/ELEC/TMS)는 안 보임. admin은 전체 정상.
+
+### Root Cause
+- GST 인원은 PI/QI/SI 검사 공정만 수행 → 기존 `_build_partner_filter` manager 분기가 `work_start_log JOIN workers WHERE w_f.company = worker_company` 로 "자기 회사 소속 worker 참여 task만" 필터링
+- GST 매니저(company='GST') → GST 인원 참여 task(검사)만 매칭 → 협력사 작업 task 전부 누락
+- admin은 `is_admin=True` 분기로 필터 없이 전체 노출
+
+### Fix (dashboard_service.py — `_build_partner_filter`)
+- `is_full_access = is_admin or (worker_company == "GST")` — GST는 발주·관리 주체 → admin과 동일하게 전체 조회 (partner 쿼리 시 해당 협력사만)
+- 협력사 매니저(BAT/C&A/FNI/P&S/TMS)는 자기 회사 격리 유지 (무변경)
+- summary + details 두 endpoint 동일 함수 → 일관 적용
+
+### 검증
+- pytest test_sprint71_dashboard 신규 `test_tc14b_gst_manager_sees_all_partners` (GST 매니저 → BAT+FNI 둘 다) + 기존 tc13(admin)/tc14(FNI 매니저 격리)/tc15(plain worker 403) 회귀 유지
+- **Codex 라운드 1: M=0 (배포 블로커 없음) / A=2** — A-Q2(company='GST' 정규화 유틸) + A-Q6(추가 경계 TC) BACKLOG 이관
+- 회귀 위험: GST 매니저만 동작 변경 / 협력사 매니저·admin 무변경 / migration 불필요 (기존 테이블만 조회)
+- VIEW 변경 0 (BE 권한 로직만 → GST 매니저 토큰으로 호출 시 자동 전체 데이터 반환)
+
+### 후속 BACKLOG (Codex A)
+- `REFACTOR-COMPANY-NORMALIZE-20260529` 🟡 LOW — workers.company 'GST' 직접 문자열 비교 다수 (jwt_auth.py 등) → `normalize_company()` 공통 유틸 또는 DB check constraint
+- `TEST-S71-GST-MANAGER-EDGE-20260529` 🟡 LOW — GST 매니저 details endpoint / partner=FNI 필터 / company 공백·소문자 경계 TC
+
+---
+
 ## [2.20.13] - 2026-05-29 — VIEW #78: 공장 대시보드 TEST 데이터 전역 제외 (#69 확장)
 
 > 공장 대시보드(`/factory`)에 TEST S/N 노출. #69의 `customer='TEST CUSTOMER'` 제외만으로는 부족.

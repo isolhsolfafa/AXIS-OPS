@@ -148,14 +148,19 @@ def _build_partner_filter(
 
     ⚠️ 호출 query 영역 `t.id` 영역 alias 의무 (subquery EXISTS catch).
     """
-    if is_admin:
+    # v2.20.14 (Twin파파 2026-05-29 결정): GST 는 발주·관리 주체 →
+    #   admin 과 동일하게 전체 조회. 협력사 매니저(BAT/C&A/FNI/P&S/TMS)만 자기 회사 격리.
+    #   배경: GST 인원은 PI/QI/SI 검사 공정만 수행 → 기존 company='GST' 필터 시
+    #   GST 매니저가 협력사 task(MECH/ELEC/TMS) 를 못 봐 분석 페이지 취지 위배.
+    is_full_access = is_admin or (worker_company == "GST")
+    if is_full_access:
         if partner:
             # v2.20.11: 매트릭스 셀 ↔ details 정합 — company 결정 표준 식 (_COMPANY_SQL)
             # 으로 통일. TMS(M)/TMS(E) 구분 + '(미지정)' + 일반 협력사 모두 동일 기준.
             # (이전: category-blind OR 매칭 → 매트릭스 셀(27) vs details(327) 불일치)
             return (f" AND {_COMPANY_SQL} = %s ", [partner])
         return ("", [])
-    # manager — 자기 회사 worker 참여 task (work_start_log + workers.company)
+    # 협력사 매니저 — 자기 회사 worker 참여 task (work_start_log + workers.company)
     if worker_company:
         return (
             " AND EXISTS (SELECT 1 FROM work_start_log wsl_f "

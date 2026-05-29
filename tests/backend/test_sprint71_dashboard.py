@@ -159,6 +159,10 @@ def seed_sprint71_baseline(db_conn, create_test_worker):
         email="s71-fni-mgr@test.axisos.com", password="Test1234!",
         name="FNI Manager", role="MECH", is_manager=True, company="FNI",
     )
+    gst_manager = create_test_worker(
+        email="s71-gst-mgr@test.axisos.com", password="Test1234!",
+        name="GST Manager", role="QI", is_manager=True, company="GST",
+    )
     bat_worker1 = create_test_worker(
         email="s71-bat-w1@test.axisos.com", password="Test1234!",
         name="BAT W1", role="MECH", company="BAT",
@@ -270,6 +274,7 @@ def seed_sprint71_baseline(db_conn, create_test_worker):
         "admin_id": admin_id,
         "bat_manager": bat_manager,
         "fni_manager": fni_manager,
+        "gst_manager": gst_manager,
         "plain_worker": plain_worker,
         "bat_worker1": bat_worker1,
         "bat_worker2": bat_worker2,
@@ -598,6 +603,29 @@ class TestPermissions:
         # FNI manager → FNI partner 만 (BAT 영역 미포함)
         companies = {p["company"] for p in data["partner_distribution"]}
         assert "BAT" not in companies
+
+    def test_tc14b_gst_manager_sees_all_partners(
+        self, client, seed_sprint71_baseline, get_auth_token
+    ):
+        """v2.20.14 — GST 매니저(발주·관리 주체)는 admin 과 동일하게 전체 조회.
+
+        기존 버그: company='GST' 필터 → GST 인원(PI/QI/SI 검사만 수행) 참여 task만
+        보여 협력사 task(BAT/FNI 등) 누락. fix 후 BAT·FNI 둘 다 보여야 함.
+        """
+        token = get_auth_token(
+            seed_sprint71_baseline["gst_manager"],
+            email="s71-gst-mgr@test.axisos.com", role="QI", is_admin=False,
+        )
+        res = client.get(
+            "/api/admin/dashboard/auto-close-summary?period=today",
+            headers=_auth_headers(token),
+        )
+        assert res.status_code == 200
+        data = res.get_json()
+        companies = {p["company"] for p in data["partner_distribution"]}
+        # GST 매니저 → 협력사 전체 (admin 과 동일). BAT + FNI 둘 다 catch.
+        assert "BAT" in companies
+        assert "FNI" in companies
 
     def test_tc15_plain_worker_forbidden(
         self, client, seed_sprint71_baseline, get_auth_token
