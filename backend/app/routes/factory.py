@@ -36,6 +36,16 @@ _ALLOWED_DATE_FIELDS_MONTHLY_KPI = {
     'mech_start', 'finishing_plan_end', 'ship_plan_date', 'actual_ship_date'
 }
 
+# v2.20.13 (#78 — #69 확장): 공장 대시보드 TEST 데이터 전역 제외.
+# 운영 검증 (2026-05-29): TEST S/N 17건 중 12건이 customer != 'TEST CUSTOMER'
+# (SEC 등 실고객사명) → #69 customer 제외만으로는 12건 누락 → serial_number prefix OR 통합.
+# 표준 제외 조건 (alias 'p' = plan.product_info). 모든 집계 쿼리 WHERE 에 AND 결합.
+# ⚠️ psycopg2 %% 이스케이프 — 'TEST%' 의 % 가 파라미터 플레이스홀더로 오인되면
+#    tuple index out of range. LIKE 패턴 % → %% (리터럴 % 로 인식).
+_TEST_EXCLUDE_SQL = (
+    "COALESCE(p.customer, '') <> 'TEST CUSTOMER' AND p.serial_number NOT LIKE 'TEST%%'"
+)
+
 
 def _count_shipped(conn, start, end, basis: str) -> int:
     """주간/월간 출하 카운트 3분기 헬퍼 (Sprint 62-BE v2.4 — FIX-FACTORY-KPI-SHIPPED-V2.4-AMENDMENT-20260428).
@@ -66,13 +76,15 @@ def _count_shipped(conn, start, end, basis: str) -> int:
                 AND t.completed_at  IS NOT NULL
                 AND COALESCE(t.force_closed, FALSE) = FALSE
                WHERE p.ship_plan_date >= %s AND p.ship_plan_date < %s
-                 AND (p.actual_ship_date IS NOT NULL OR t.completed_at IS NOT NULL)""",
+                 AND (p.actual_ship_date IS NOT NULL OR t.completed_at IS NOT NULL)
+                 AND """ + _TEST_EXCLUDE_SQL,
             (start, end)
         )
     elif basis == 'actual':
         cur.execute(
-            """SELECT COUNT(*) AS cnt FROM plan.product_info
-               WHERE actual_ship_date >= %s AND actual_ship_date < %s""",
+            """SELECT COUNT(*) AS cnt FROM plan.product_info p
+               WHERE p.actual_ship_date >= %s AND p.actual_ship_date < %s
+                 AND """ + _TEST_EXCLUDE_SQL,
             (start, end)
         )
     elif basis == 'best':
@@ -96,7 +108,8 @@ def _count_shipped(conn, start, end, basis: str) -> int:
                 AND COALESCE(t.force_closed, FALSE) = FALSE
                WHERE (p.actual_ship_date IS NOT NULL OR t.completed_at IS NOT NULL)
                  AND COALESCE(DATE(t.completed_at), p.actual_ship_date) >= %s
-                 AND COALESCE(DATE(t.completed_at), p.actual_ship_date) <  %s""",
+                 AND COALESCE(DATE(t.completed_at), p.actual_ship_date) <  %s
+                 AND """ + _TEST_EXCLUDE_SQL,
             (start, end)
         )
     else:
@@ -231,7 +244,7 @@ def get_monthly_detail() -> Tuple[Dict[str, Any], int]:
                 'error': 'INVALID_DATE',
                 'message': 'date 형식은 YYYY-MM-DD이어야 합니다.'
             }), 400
-        where_sql = f"WHERE p.{date_field} = %s"
+        where_sql = f"WHERE p.{date_field} = %s AND {_TEST_EXCLUDE_SQL}"
         where_params = (target_date_val,)
         # month_str 영역 catch (응답 호환 — date 영역 month 표시)
         month_str = target_date_val.strftime('%Y-%m')
@@ -263,7 +276,7 @@ def get_monthly_detail() -> Tuple[Dict[str, Any], int]:
             end_date = date(year_val + 1, 1, 1)
         else:
             end_date = date(year_val, month_val + 1, 1)
-        where_sql = f"WHERE p.{date_field} >= %s AND p.{date_field} < %s"
+        where_sql = f"WHERE p.{date_field} >= %s AND p.{date_field} < %s AND {_TEST_EXCLUDE_SQL}"
         where_params = (start_date, end_date)
 
     offset = (page - 1) * per_page
@@ -434,7 +447,8 @@ def get_weekly_kpi() -> Tuple[Dict[str, Any], int]:
                       cs.pi_completed, cs.qi_completed, cs.si_completed
                FROM plan.product_info p
                LEFT JOIN completion_status cs ON p.serial_number = cs.serial_number
-               WHERE p.finishing_plan_end >= %s AND p.finishing_plan_end <= %s""",
+               WHERE p.finishing_plan_end >= %s AND p.finishing_plan_end <= %s
+                 AND """ + _TEST_EXCLUDE_SQL,
             (week_start, week_end)
         )
         rows = cur.fetchall()
@@ -583,11 +597,12 @@ def get_monthly_kpi() -> Tuple[Dict[str, Any], int]:
         cur = conn.cursor()
 
         # production_count: date_field 기준 COUNT (화이트리스트 검증 완료, f-string 안전)
-        # #69: TEST CUSTOMER 제외 — 테스트 데이터가 실 생산량에 집계되어 도넛(by_customer)과 불일치
+        # #69: TEST CUSTOMER 제외 → #78 (v2.20.13): serial_number LIKE 'TEST%' OR 통합
+        #   (TEST S/N 17건 중 12건이 customer != 'TEST CUSTOMER' = SEC 등 → customer만으로 누락)
         cur.execute(
             f"SELECT COUNT(*) AS cnt FROM plan.product_info p "
             f"WHERE p.{date_field} >= %s AND p.{date_field} < %s "
-            f"AND COALESCE(p.customer, '') <> 'TEST CUSTOMER'",
+            f"AND {_TEST_EXCLUDE_SQL}",
             (start_date, end_date)
         )
         row = cur.fetchone()

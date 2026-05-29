@@ -6,6 +6,32 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.20.13] - 2026-05-29 — VIEW #78: 공장 대시보드 TEST 데이터 전역 제외 (#69 확장)
+
+> 공장 대시보드(`/factory`)에 TEST S/N 노출. #69의 `customer='TEST CUSTOMER'` 제외만으로는 부족.
+
+### Root Cause (운영 검증 2026-05-29)
+- TEST S/N(`serial_number LIKE 'TEST%'`) **17건** 중 **12건이 customer != 'TEST CUSTOMER'** (SEC 등 실고객사명)
+- `customer_but_not_sn = 0` → serial_number prefix가 customer 조건의 상위집합
+- #69 customer 기준만으로는 12건(TEST-1111/2221~2226/333/4444/5555 등) 누락
+
+### Fix (factory.py 전역)
+- `_TEST_EXCLUDE_SQL` 표준 상수 신설: `COALESCE(p.customer,'') <> 'TEST CUSTOMER' AND p.serial_number NOT LIKE 'TEST%'` (OR 통합, 미래 방어)
+- 적용 6곳:
+  - `_count_shipped` basis 3분기 (plan/actual/best)
+  - `get_monthly_detail` where_sql 2 mode (단일/range) → count/items/by_model/by_customer 전부 정합
+  - `get_weekly_kpi` production + by_stage
+  - `get_monthly_kpi` production_count (#69 customer-only → serial_number OR 확장)
+
+### 검증
+- monthly_detail 5월 (mech_start): 169 → 164 (TEST 5건 제외)
+- DB/마이그레이션 변경 0, **FE 변경 0** (BE 응답 자동 정합)
+
+### 비고
+- 공장 대시보드 = 경영 지표 → 토글 없이 항상 제외 (SNStatus/QR 페이지는 admin showTestSN 토글 별개)
+
+---
+
 ## [2.20.12] - 2026-05-29 — VIEW #75 catch 1: ETL 변경 이력 필터 KST 자정 정합
 
 > VIEW EtlChangeLogPage 운영 catch: "오늘/7일/14일/30일" 필터가 `NOW()` 24h 롤링 기준이라 어제 오후가 섞여 자정 정합 X.
