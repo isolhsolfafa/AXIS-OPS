@@ -59,7 +59,7 @@ def init_scheduler() -> BackgroundScheduler:
     # ── 1단계: TASK_REMINDER — 매 1시간 ─────────────────────────
     _scheduler.add_job(
         func=task_reminder_job,
-        trigger=CronTrigger(minute=0),  # 매 정각
+        trigger=CronTrigger(minute=0, timezone=Config.KST),  # 매 정각
         id='task_reminder',
         name='작업자 리마인더 (매 1시간)',
         replace_existing=True
@@ -68,7 +68,7 @@ def init_scheduler() -> BackgroundScheduler:
     # ── 기존: 미완료 작업 14h+ 체크 (매일 18:00 KST) ─────────────
     _scheduler.add_job(
         func=run_unfinished_task_check,
-        trigger=CronTrigger(hour=18, minute=0),
+        trigger=CronTrigger(hour=18, minute=0, timezone=Config.KST),
         id='check_unfinished_tasks',
         name='미완료 작업 체크 (정규 퇴근시간)',
         replace_existing=True
@@ -77,14 +77,14 @@ def init_scheduler() -> BackgroundScheduler:
     # ── 2단계: SHIFT_END_REMINDER — 17:00, 20:00 KST ─────────────
     _scheduler.add_job(
         func=shift_end_reminder_job,
-        trigger=CronTrigger(hour=17, minute=0),
+        trigger=CronTrigger(hour=17, minute=0, timezone=Config.KST),
         id='shift_end_reminder_17',
         name='퇴근 알림 (17:00 KST)',
         replace_existing=True
     )
     _scheduler.add_job(
         func=shift_end_reminder_job,
-        trigger=CronTrigger(hour=20, minute=0),
+        trigger=CronTrigger(hour=20, minute=0, timezone=Config.KST),
         id='shift_end_reminder_20',
         name='퇴근 알림 (20:00 KST)',
         replace_existing=True
@@ -93,7 +93,7 @@ def init_scheduler() -> BackgroundScheduler:
     # ── 3단계: TASK_ESCALATION — 익일 09:00 KST ──────────────────
     _scheduler.add_job(
         func=task_escalation_job,
-        trigger=CronTrigger(hour=9, minute=0),
+        trigger=CronTrigger(hour=9, minute=0, timezone=Config.KST),
         id='task_escalation',
         name='미종료 Task 에스컬레이션 (09:00 KST)',
         replace_existing=True
@@ -102,7 +102,7 @@ def init_scheduler() -> BackgroundScheduler:
     # ── Sprint 9: 휴게시간 자동 일시정지 — 매 분 (정확히 HH:MM:00에 실행) ──
     _scheduler.add_job(
         func=check_break_time_job,
-        trigger=CronTrigger(second=0),  # 매 분 정각(HH:MM:00)에 실행 → current_time == start_time 비교 보장
+        trigger=CronTrigger(second=0, timezone=Config.KST),  # 매 분 정각(HH:MM:00)에 실행 → current_time == start_time 비교 보장
         id='check_break_time',
         name='휴게시간 자동 일시정지 (매 분)',
         replace_existing=True
@@ -111,7 +111,7 @@ def init_scheduler() -> BackgroundScheduler:
     # ── Sprint 32 + FIX-ACCESS-LOG-RETENTION-90D-20260429: Access Log 정리 — 매일 03:00 (90일 이상 삭제) ──
     _scheduler.add_job(
         func=_cleanup_access_logs,
-        trigger=CronTrigger(hour=3, minute=0),
+        trigger=CronTrigger(hour=3, minute=0, timezone=Config.KST),
         id='cleanup_access_logs',
         name='Access Log 정리 (90일+)',
         replace_existing=True
@@ -120,7 +120,7 @@ def init_scheduler() -> BackgroundScheduler:
     # ── Sprint 41-B: 릴레이 미완료 감지 — 매 1시간 (task_reminder와 동일 주기) ──
     _scheduler.add_job(
         func=check_orphan_relay_tasks_job,
-        trigger=CronTrigger(minute=0),
+        trigger=CronTrigger(minute=0, timezone=Config.KST),
         id='check_orphan_relay_tasks',
         name='릴레이 미완료 task 감지 (매 1시간)',
         replace_existing=True
@@ -129,7 +129,7 @@ def init_scheduler() -> BackgroundScheduler:
     # ── Sprint 61-BE: 미시작 task 에스컬레이션 — 매일 09:00 KST ──
     _scheduler.add_job(
         func=_check_not_started_tasks,
-        trigger=CronTrigger(hour=9, minute=0),
+        trigger=CronTrigger(hour=9, minute=0, timezone=Config.KST),
         id='check_not_started_tasks',
         name='미시작 Task 에스컬레이션 (09:00 KST)',
         replace_existing=True
@@ -138,7 +138,7 @@ def init_scheduler() -> BackgroundScheduler:
     # ── Sprint 61-BE: 체크리스트 완료 + task 미종료 감지 — 매일 09:00 KST ──
     _scheduler.add_job(
         func=_check_checklist_done_task_open,
-        trigger=CronTrigger(hour=9, minute=0),
+        trigger=CronTrigger(hour=9, minute=0, timezone=Config.KST),
         id='check_checklist_done_task_open_09',
         name='체크리스트 완료 task 미종료 감지 (09:00 KST)',
         replace_existing=True
@@ -147,7 +147,7 @@ def init_scheduler() -> BackgroundScheduler:
     # ── Sprint 61-BE: 체크리스트 완료 + task 미종료 감지 — 매일 15:00 KST ──
     _scheduler.add_job(
         func=_check_checklist_done_task_open,
-        trigger=CronTrigger(hour=15, minute=0),
+        trigger=CronTrigger(hour=15, minute=0, timezone=Config.KST),
         id='check_checklist_done_task_open_15',
         name='체크리스트 완료 task 미종료 감지 (15:00 KST)',
         replace_existing=True
@@ -168,7 +168,7 @@ def init_scheduler() -> BackgroundScheduler:
     # ── Sprint 79: 출하 미처리 알림 — 매일 07:30 KST ──
     _scheduler.add_job(
         func=_alert_shipment_overdue,
-        trigger=CronTrigger(hour=7, minute=30),
+        trigger=CronTrigger(hour=7, minute=30, timezone=Config.KST),
         id='alert_shipment_overdue',
         name='출하 미처리 일일 알림 (07:30 KST)',
         replace_existing=True
