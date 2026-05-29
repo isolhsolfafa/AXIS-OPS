@@ -37,6 +37,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   AttendanceStatus _attendanceStatus = AttendanceStatus.notCheckedIn;
   String? _checkInTime;
   bool _attendanceLoading = false;
+  // v2.21.2: 위치 검증 토글(geo_check_enabled). Off면 출근 시 GPS 권한 요청 안 함.
+  bool _geoCheckEnabled = false;
+  bool _attendanceStatusLoaded = false;
 
   // 출퇴근 분류 (Sprint 17)
   String _selectedWorkSite = 'GST';
@@ -175,6 +178,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         }
         _selectedWorkSite = lastWorkSite;
         _selectedProductLine = lastProductLine;
+        _geoCheckEnabled = response['geo_check_enabled'] == true;
+        _attendanceStatusLoaded = true;
       });
     } catch (e) {
       debugPrint('[HomeScreen] fetchAttendanceStatus error: $e');
@@ -234,6 +239,25 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   /// 출근/퇴근 처리
   Future<void> _handleAttendance() async {
+    if (!_attendanceStatusLoaded) {
+      setState(() => _attendanceLoading = true);
+      await _fetchAttendanceStatus();
+      if (mounted) setState(() => _attendanceLoading = false);
+      if (!_attendanceStatusLoaded) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('출퇴근 설정 확인에 실패했습니다. 잠시 후 다시 시도해주세요.'),
+              backgroundColor: GxColors.danger,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(GxRadius.sm)),
+            ),
+          );
+        }
+        return;
+      }
+    }
+
     final checkType = _attendanceStatus == AttendanceStatus.notCheckedIn ? 'in' : 'out';
     // 퇴근은 실수 클릭 방지 — 확인 다이얼로그 (출근은 바로 처리)
     if (checkType == 'out') {
@@ -264,11 +288,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       if (checkType == 'in') {
         body['work_site'] = _selectedWorkSite;
         body['product_line'] = _selectedProductLine;
-        // GPS 위치 조회 → latitude/longitude 추가 (권한 거부 시 서버가 geo_strict_mode에 따라 처리)
-        final location = await _getCurrentLocation();
-        if (location != null) {
-          body['latitude'] = location['lat'];
-          body['longitude'] = location['lng'];
+        // v2.21.2: BE 위치 검증 조건과 동일하게 GST 출근에서 토글이 켜진 경우만 GPS 요청.
+        if (_geoCheckEnabled && _selectedWorkSite == 'GST') {
+          final location = await _getCurrentLocation();
+          if (location != null) {
+            body['latitude'] = location['lat'];
+            body['longitude'] = location['lng'];
+          }
         }
       }
       await apiService.post('/hr/attendance/check', data: body);

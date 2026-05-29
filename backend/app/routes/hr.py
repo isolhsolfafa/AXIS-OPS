@@ -311,4 +311,7 @@ def attendance_today() -> Tuple[Dict[str, Any], int]:
     return jsonify({
         'status': status,
         'records': records,
+        # v2.21.2: FE 가 위치 검증 Off 시 출근 GPS 권한 요청을 건너뛰도록 설정 전달.
+        #   (geo_check_enabled=false 면 BE 가 위치를 안 보므로 FE GPS 호출 불필요)
+        'geo_check_enabled': is_geo_check_enabled(),
     }), 200
