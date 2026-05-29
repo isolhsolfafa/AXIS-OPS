@@ -712,17 +712,20 @@ def build_auto_close_details(
             )
             total = int(cur.fetchone()["total"] or 0)
 
+            # v2.20.6 fix (VIEW #76 HOTFIX, 2026-05-29): plan.product_info alias 영역
+            # count_sql (pi) 과 item_sql (p) 불일치 → partner_sql 의 하드코딩 pi.mech_partner
+            # 가 item_sql 안에서 undefined alias → 500. alias 'pi' 로 통일.
             item_sql = f"""
                 SELECT
                     t.id AS task_detail_id,
                     t.completed_at, t.serial_number, t.task_id, t.task_name,
                     t.close_reason, t.duration_minutes, t.elapsed_minutes,
                     t.task_category,
-                    p.model, p.sales_order,
+                    pi.model, pi.sales_order,
                     w_trigger.id AS trigger_worker_id,
                     w_trigger.name AS trigger_worker_name,
                     w_trigger.company AS trigger_worker_company,
-                    p.mech_partner, p.elec_partner, p.module_outsourcing,
+                    pi.mech_partner, pi.elec_partner, pi.module_outsourcing,
                     (SELECT json_agg(json_build_object(
                         'worker_id', wsl.worker_id,
                         'worker_name', w_orig.name,
@@ -736,7 +739,7 @@ def build_auto_close_details(
                      WHERE wsl.task_id = t.id AND wcl.id IS NULL
                     ) AS original_workers
                 FROM app_task_details t
-                LEFT JOIN plan.product_info p ON p.serial_number = t.serial_number
+                LEFT JOIN plan.product_info pi ON pi.serial_number = t.serial_number
                 LEFT JOIN workers w_trigger ON w_trigger.id = t.closed_by
                 WHERE t.completed_at >= %s AND t.completed_at < %s
                   AND t.close_reason LIKE %s
@@ -756,15 +759,16 @@ def build_auto_close_details(
     items = []
     for r in rows:
         # company 결정 — task_category 기반
+        # v2.20.6: PI/QI/SI category (ELSE NULL) → '(미지정)' 분류 (Sprint 71 v3 패턴 정합)
         cat = r["task_category"]
         if cat == "MECH":
-            company = r["mech_partner"]
+            company = r["mech_partner"] or "(미지정)"
         elif cat == "ELEC":
-            company = r["elec_partner"]
+            company = r["elec_partner"] or "(미지정)"
         elif cat == "TM":
-            company = r["module_outsourcing"]
+            company = r["module_outsourcing"] or "(미지정)"
         else:
-            company = None
+            company = "(미지정)"
 
         # trigger task_id 추출
         trigger_tid = None
