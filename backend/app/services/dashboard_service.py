@@ -255,6 +255,7 @@ def _query_trigger_distribution(
         LEFT JOIN plan.product_info pi ON pi.serial_number = t.serial_number
         WHERE t.completed_at >= %s AND t.completed_at < %s
           AND t.close_reason LIKE %s
+              AND t.force_closed = FALSE
           {partner_sql}
         GROUP BY 1
         ORDER BY cnt DESC, trigger_task_id ASC
@@ -294,6 +295,7 @@ def _query_task_distribution(
             LEFT JOIN plan.product_info pi ON pi.serial_number = t.serial_number
             WHERE t.completed_at >= %s AND t.completed_at < %s
               AND t.close_reason LIKE %s
+              AND t.force_closed = FALSE
               {partner_sql}
               AND EXISTS (SELECT 1 FROM work_start_log wsl WHERE wsl.task_id = t.id)
         ),
@@ -309,6 +311,7 @@ def _query_task_distribution(
             WHERE t.completed_at >= (CURRENT_DATE - INTERVAL '30 days')
               AND t.completed_at < CURRENT_DATE
               AND t.close_reason LIKE %s
+              AND t.force_closed = FALSE
             GROUP BY t.task_id
         )
         SELECT c.task_id, c.task_name, c.cnt,
@@ -356,6 +359,7 @@ def _query_partner_distribution(
         LEFT JOIN plan.product_info pi ON pi.serial_number = t.serial_number
         WHERE t.completed_at >= %s AND t.completed_at < %s
           AND t.close_reason LIKE %s
+              AND t.force_closed = FALSE
           AND wcl.id IS NULL
           {partner_sql}
         GROUP BY w.company
@@ -389,6 +393,7 @@ def _query_hourly_distribution(
                  LEFT JOIN plan.product_info pi ON pi.serial_number = t.serial_number
                  WHERE t.completed_at >= %s AND t.completed_at < %s
                    AND t.close_reason LIKE %s
+              AND t.force_closed = FALSE
                    {partner_sql}
                  GROUP BY 1
              )
@@ -435,6 +440,7 @@ def _query_unstarted_task_distribution(
         LEFT JOIN plan.product_info pi ON pi.serial_number = t.serial_number
         WHERE t.completed_at >= %s AND t.completed_at < %s
           AND t.close_reason LIKE %s
+              AND t.force_closed = FALSE
           {partner_sql}
           AND NOT EXISTS (SELECT 1 FROM work_start_log wsl WHERE wsl.task_id = t.id)
         GROUP BY t.task_id, t.task_name
@@ -470,6 +476,7 @@ def _query_partner_task_matrix(
             LEFT JOIN plan.product_info pi ON pi.serial_number = t.serial_number
             WHERE t.completed_at >= %s AND t.completed_at < %s
               AND t.close_reason LIKE %s
+              AND t.force_closed = FALSE
               {partner_sql}
               AND EXISTS (SELECT 1 FROM work_start_log wsl WHERE wsl.task_id = t.id)
         )
@@ -745,7 +752,8 @@ def build_auto_close_details(
     trigger_sql = ""
     trigger_params: List[Any] = []
     if trigger_task_id:
-        trigger_sql = " AND t.close_reason LIKE %s "
+        trigger_sql = " AND t.close_reason LIKE %s
+              AND t.force_closed = FALSE "
         trigger_params = [f"%:{trigger_task_id}"]
 
     page = max(1, page)
