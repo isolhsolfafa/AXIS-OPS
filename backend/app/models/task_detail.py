@@ -442,20 +442,34 @@ def start_task(task_detail_id: int, started_at: datetime) -> bool:
 # ──────────────────────────────────────────────────────────────
 
 _TASK_MANHOUR_SQL = """
-WITH sessions AS (
-  SELECT ws.worker_id,
+WITH starts AS (
+  -- 세션 상한 = 완료기록 / 다음 start / close_at 중 가장 빠른 것 (LEAD capping)
+  --   · 정상: 완료기록이 세션을 닫음
+  --   · 버려진 재시작: 다음 start 가 닫음 (open 세션 과다계상 방지)
+  --   · 최종 open: close_at 이 닫음
+  SELECT ws.worker_id, ws.started_at,
+         LEAD(ws.started_at) OVER (PARTITION BY ws.worker_id ORDER BY ws.started_at) AS next_start
+  FROM work_start_log ws
+  WHERE ws.task_id = %(tid)s
+    AND ws.started_at < %(close_at)s          -- start > close_at 역전 방지 (crash 가드)
+),
+sessions AS (
+  SELECT worker_id,
          tstzrange(
-           ws.started_at,
-           COALESCE(
-             (SELECT MIN(wc.completed_at) FROM work_completion_log wc
-              WHERE wc.task_id = ws.task_id AND wc.worker_id = ws.worker_id
-                AND wc.completed_at >= ws.started_at),
+           started_at,
+           LEAST(
+             COALESCE(
+               (SELECT MIN(wc.completed_at) FROM work_completion_log wc
+                WHERE wc.task_id = %(tid)s AND wc.worker_id = s.worker_id
+                  AND wc.completed_at >= s.started_at),
+               'infinity'::timestamptz
+             ),
+             COALESCE(next_start, 'infinity'::timestamptz),
              %(close_at)s
            ),
            '[)'
          ) AS sess
-  FROM work_start_log ws
-  WHERE ws.task_id = %(tid)s
+  FROM starts s
 ),
 sess_union AS (
   SELECT worker_id, range_agg(sess) AS mr FROM sessions GROUP BY worker_id
@@ -465,6 +479,7 @@ pauses AS (
          tstzrange(wpl.paused_at, COALESCE(wpl.resumed_at, %(close_at)s), '[)') AS pr
   FROM work_pause_log wpl
   WHERE wpl.task_detail_id = %(tid)s AND wpl.pause_type = 'manual'
+    AND wpl.paused_at < %(close_at)s          -- pause start > close_at 역전 방지
     AND COALESCE(wpl.resumed_at, %(close_at)s) > wpl.paused_at
 ),
 pause_union AS (
