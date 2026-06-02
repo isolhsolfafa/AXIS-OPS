@@ -1,7 +1,8 @@
 # AXIS-OPS Handoff
 
 > 세션 종료 시 업데이트. 다음 세션이 즉시 작업을 이어갈 수 있도록 현재 상태를 기록합니다.
-> 마지막 업데이트: 2026-05-30 KST (✅ v2.21.2 — 본 세션 v2.20.12~v2.21.2 (10 release). **핵심**: (1) **VIEW #78** 공장 대시보드 TEST 데이터 전역 제외 (`_TEST_EXCLUDE_SQL` factory.py 6곳). (2) **v2.20.14** 종료분석 GST 매니저 전체 조회 (`_build_partner_filter` is_full_access). (3) **v2.20.15** SI 출고완료 권한 확장 — `si_manager_or_admin_required` 데코 신규 (role='SI' \|\| manager \|\| admin). (4) **Sprint 80 (v2.21.0)** SI 출하예정 ISO 주차별 그룹핑 + 200 cap 누락(389중 189) 해소 — `get_shipment_week_groups()` + FE 주차 ExpansionTile. (5) **v2.21.1** 협력사 퇴근 확인 다이얼로그(실수 클릭 방지) + 성공 토스트. (6) **v2.21.2** 위치 검증 토글 Off 시 출근 GPS 권한 팝업 제거 (`geo_check_enabled` FE 연동). + 가입화면 한글화 + 입력라벨 괄호 통일(`NAME (이름)`). **Codex**: Sprint 80 라운드1 M4→라운드2 M0 / 권한 fix M0~M1 전부 반영. **교훈**: version bump → flutter build → 배포 순서 (v2.21.0 빌드 누락 catch). **VIEW 후속**: Sprint 80 by_week consume (VIEW 측 별도) + W53 미정 placeholder BE 필드화 (BACKLOG).
+> 마지막 업데이트: 2026-06-02 KST (🚧 **FIX-DURATION-MANUAL-PAUSE-RAW 진행 중 — 정상완료 경로까지 완료, 미배포**. 본 세션: (1) v2.21.3 MECH 자재 드롭다운 줄바꿈 (배포 완료). (2) worker 2계정 삭제 (qq.com 4267 hr FK 63+1 정리 + gmail 4575). (3) #79 강제종료 협력사 매트릭스 설계 (AGENT_TEAM_LAUNCH.md Sprint 81, 미구현). (4) **FIX-DURATION 메인** — 수동 일시정지 미반영 + 휴게 이중차감 (duration이 raw로 덮어써져 pause 무시, 운영 210건). 설계 v1~v8 **Codex 8라운드 GO (M:5→10→2→4→1→1→1→0)**. man-hour = per-worker interval-union(세션) − (수동 pause ∩ session_union), 휴게 미차감, 3경로 통일, 단일 UPDATE 원자성, FLOOR. **구현 완료분**: `compute_task_manhour()`+`complete_task_unified()` (task_detail.py) + 정상완료 경로 (task_service.py L810) + pytest 15 GREEN (test_fix_duration_manual_pause.py). **남은 작업**: ship/admin(shipment_service.py:194/303) + 자동마감(auto_close_relay_task) 위임 / admin force-close `AUTO_CLOSED_` prefix 400 가드 / migration 058 백필(close_reason allowlist preflight) / 회귀 스위트 / v2.22.0 배포. **회귀 0** (ship/admin/auto 현행 complete_task 유지). 롤백 `93a5082`(설계+헬퍼) / `39b0681`(정상경로+테스트). 상세 ↓ 2026-06-02 섹션.
+> 이전: 2026-05-30 KST (✅ v2.21.2 — 본 세션 v2.20.12~v2.21.2 (10 release). **핵심**: (1) **VIEW #78** 공장 대시보드 TEST 데이터 전역 제외 (`_TEST_EXCLUDE_SQL` factory.py 6곳). (2) **v2.20.14** 종료분석 GST 매니저 전체 조회 (`_build_partner_filter` is_full_access). (3) **v2.20.15** SI 출고완료 권한 확장 — `si_manager_or_admin_required` 데코 신규 (role='SI' \|\| manager \|\| admin). (4) **Sprint 80 (v2.21.0)** SI 출하예정 ISO 주차별 그룹핑 + 200 cap 누락(389중 189) 해소 — `get_shipment_week_groups()` + FE 주차 ExpansionTile. (5) **v2.21.1** 협력사 퇴근 확인 다이얼로그(실수 클릭 방지) + 성공 토스트. (6) **v2.21.2** 위치 검증 토글 Off 시 출근 GPS 권한 팝업 제거 (`geo_check_enabled` FE 연동). + 가입화면 한글화 + 입력라벨 괄호 통일(`NAME (이름)`). **Codex**: Sprint 80 라운드1 M4→라운드2 M0 / 권한 fix M0~M1 전부 반영. **교훈**: version bump → flutter build → 배포 순서 (v2.21.0 빌드 누락 catch). **VIEW 후속**: Sprint 80 by_week consume (VIEW 측 별도) + W53 미정 placeholder BE 필드화 (BACKLOG).
 > 이전: 2026-05-29 KST (✅ v2.20.11 — Sprint 71 종료누락 분석 마무리 + 출하 알림 cron 복구. 본 세션 v2.20.0~11 12 release. **핵심**: (1) Sprint 71 Manager Dashboard 자동마감 분석 API 2개 신규 (dashboard_service + admin_dashboard) — summary/details, 분류 LIKE + 모집단 3분리 + invariant. (2) **출하 알림 cron 9시간 지연 메가버그** — APScheduler `timezone=timedelta` → IANA `ZoneInfo('Asia/Seoul')` + tzdata + CronTrigger 13개 timezone 명시. 시간단위 cron 8종 전부 영향. (3) 출하 0건 시에도 완료 메일 (daily health check, 수신 확인). (4) VIEW #76 (SQL alias p↔pi 500) + #77 (force_closed 3분류 옵션 X + close_type + by_reason). (5) TMS(M)/TMS(E) 협력사 구분 + 매트릭스 셀↔리스트 정합 (`_COMPANY_SQL` 통일). 운영 검증: auto 223 + manual 0 + force 107 = total 330. 미시작 자동마감 0건 정상. **교훈**: 일괄 치환(sed/regex) 후 `ast.parse` 검증 필수 (v2.20.8 배포 실패). **VIEW 후속**: Sprint 71 KPI 3카드 + TMS(M)/(E) row + close_type 라벨 + by_reason 표시 (BE 배포 완료, OPS_API_REQUESTS.md #77 회신 trail 작성됨).
 > 이전: v2.19.11 — #74 후속 `_ALLOWED_DATE_FIELDS` qi_start + si_start 추가. BE 1줄 / VIEW v1.53.0 prod 배포 후 사용자 catch — Phase 1 QI/SI 카드 카운트 0 (400 INVALID_DATE_FIELD). factory.py 화이트리스트 누락 fix. pytest 11/11 PASS. Railway 자동 배포 trigger.
 > 이전: v2.19.10 — #74 옵션 C (factory.py date param) + 출하 메일 template 회원가입 컨셉 정합. BE only. 두 catch 통합: (1) VIEW #74 옵션 C carrier — VIEW Sprint 78 v1.53.0 mockup 진행 중 / (2) 메일 template rewrite — 회원가입 승인 메일 컨셉 + 박스 엣지 제거. 메일 발송 spec 확정: yesterday ship_plan_date + actual_date IS NULL (best 패턴 OR / De Morgan's AND). pytest 11/11 PASS. Railway 자동 배포 trigger. Sprint 79 영역 v2.19.0~v2.19.10 영역 11 release freeze.
@@ -10,6 +11,53 @@
 > 이전: v2.18.35 — 매뉴얼 모바일 PWA HOTFIX. v2.18.34 fix 후 사용자 운영 catch ("세션만료" SnackBar 만 뜨고 접속 불가) 영역 즉시 HOTFIX. Root cause: `api_service.dart` 영역 ApiService 영역 싱글톤 아님 → `ApiService()` 직접 호출 = 새 instance + token null. Fix: `home_screen.dart _handleOpenManual()` 영역 `ApiService().token` → `ref.read(apiServiceProvider).token` 변경 (Riverpod Provider singleton 영역 login 시 setToken() 호출된 동일 instance). 사용자 실기기 catch 정상 ✅. **다음 catch**: BACKLOG `REFACTOR-API-SERVICE-SINGLETON-20260527` 등록 의무 — 다른 곳 영역 `ApiService()` 직접 호출 grep sweep + Provider 통일.
 > 이전: v2.18.34 — VIEW #72 admin 권한 데코레이터 통일 + 매뉴얼 모바일 PWA fix. 두 catch 통합 release. (1) #72 운영 차단 catch — checklist.py 5곳 + admin.py L1543/L1574 `@admin_required` → `@gst_or_admin_required` + `/api/admin/product-codes` 신규 endpoint. testpm 외 모든 GST manager 체크리스트/admin_settings 정상화. (2) `BUG-OPS-MANUAL-BUTTON-MOBILE-PWA-20260526` CLOSED — `home_screen.dart _handleOpenManual()` 영역 `await getToken()` (secure_storage async) → `ApiService().token` (sync getter) 변경. 장기 시스템 관점 옵션 A 채택 (DRY + 책임 분리 + 표준 패턴 + 장기 확장성). pytest 28/28 PASS + flutter build web GREEN. **선행 trail**: v2.18.33 (plan_change_warning 신규) / v2.18.32 (TEST CUSTOMER 제외) / v2.18.31 (매뉴얼 모바일 1차 try → BACKLOG 이관 → v2.18.34 최종 fix)
 > 이전: ✅ v2.18.33 — Sprint 76-BE plan_change_warning 신규 KPI + Sprint 77 인큐베이션. 사용자 catch: 계획대비 출하 = 계획일 수정 시 100% 정시 트릭 모순. 운영 검증 5월 plan 148건 중 89건 (60%) `ship_plan_date` 변경됨. 자기 충족 catch 매니저 신호 hint 추가. `_fetch_plan_change_warning()` 2단계 SQL (to_regclass IF + etl.change_log JOIN). pytest 32/32 GREEN. commit `d8dcc22`. **선행 trail**: v2.18.32 (TEST CUSTOMER 제외, factory.py v2.15.21 정합) / v2.18.31 (OPS 매뉴얼 모바일 PWA anchor click + fallback — 사용자 추가 catch "메뉴얼로 안넘가네" → BACKLOG `BUG-OPS-MANUAL-BUTTON-MOBILE-PWA-20260526` 🟠 MEDIUM 이관) / v2.18.30 (best_ship CTE model source product_code→model 1줄 fix) / v2.18.29 (by_model 옵션 C + P-v3) / v2.18.28 (출하이력 BE 신규))
+
+---
+
+## 📌 2026-06-02 KST — FIX-DURATION-MANUAL-PAUSE-RAW (🚧 진행 중, 미배포)
+
+### 버그 (사용자 접수)
+"08:00 시작 → 09:00 일시정지 → 15:00 재개 시 duration 값이 이상하다."
+→ 운영 DB 진단: `app_task_details.duration_minutes`가 `complete_task()`(task_detail.py:455)에서 **raw(완료−시작)로 덮어써져 수동 pause 무시**. 정상완료 흐름 `complete_work()` L811 `_finalize`(SUM−pause) → L817 `complete_task`(raw 덮어쓰기) 순서가 원인. **운영 210건 영향** (수동 pause 보유 완료 task 중 미반영).
+
+### 사용자 확정 스펙
+- 휴게/점심 차감 **안 함** (원본 데이터 적재)
+- 수동 일시정지(`pause_type='manual'`)만 차감
+- man-hour = 모든 세션 합 (재활성화 다중 세션 — 운영 38 task 중복 세션은 정당한 이력, 보존)
+- 3경로(정상완료/수동강제/자동마감) 단일 공식 통일
+- 재활성화는 지금 제거 안 함 (합산 공식이 미래 시작/종료-only 와 자동 호환)
+
+### 확정 공식 (Codex 8라운드 GO, AGENT_TEAM_LAUNCH.md § FIX-DURATION v8)
+```
+session_union(worker)      = range_agg(tstzrange(session_start, session_complete))  -- auto=[last_started,close_at] 가상
+manual_pause_union(worker) = range_agg(tstzrange(paused_at, COALESCE(resumed_at, close_at))) WHERE pause_type='manual'
+worker_manhour = FLOOR(GREATEST(0, length(session_union) − length(manual_pause_union ∩ session_union)))
+task.duration  = Σ workers
+→ completed_at + duration + elapsed + worker_count + audit(현행값) 단일 UPDATE 원자
+```
+실데이터 검증: TEST-1111 td233424=13 / td73819(raw83−pause75)=8 / td87480 멀티=union∩pause.
+
+### 구현 완료분 (커밋 `39b0681`)
+- `backend/app/models/task_detail.py`: `_TASK_MANHOUR_SQL` + `compute_task_manhour(cur, tid, close_at)` + `complete_task_unified(tid, completed_at, *, close_at, force_closed, closed_by, close_reason, duration_source, race_guard)` → 성공 시 {duration_minutes, elapsed_minutes, worker_count} dict
+- `backend/app/services/task_service.py` L810: 정상완료 경로 → `complete_task_unified(force_closed=False, ...)` 교체. import L26 추가.
+- `tests/backend/test_fix_duration_manual_pause.py`: 15 TC GREEN (`_ensure_worker` 9000+ id, TEST_DUR_ prefix cleanup)
+
+### 남은 작업 (다음 세션) — 설계서 v3~v8 + G7 TC 매트릭스 참조
+1. **ship/admin 경로**: `shipment_service.py:194/303` `complete_task` 호출 → `complete_task_unified` (close_reason='SHIP_COMPLETE'/'ADMIN_COMPLETE', force_closed=FALSE, closed_by=worker). `_finalize_task_multi_worker` import 제거 가능 여부 확인 (정상경로 미사용 후 ship/admin만 남음).
+2. **자동마감**: `auto_close_relay_task` (task_detail.py:723) → `compute_task_manhour(virtual_close_at=close_at)` 위임 (현 raw EXTRACT 대체). race guard `WHERE completed_at IS NULL AND force_closed=FALSE` 보존. `duration_calculator.calculate_auto_close_duration` 의 total_pause → manual only 정합.
+3. **admin force-close prefix 가드**: `admin.py:1128/1291` close_reason 입력에 `startswith('AUTO_CLOSED_')` → 400 차단.
+4. **migration 058 백필**: 재계산 = `force_closed=FALSE OR (force_closed=TRUE AND close_reason IN ('AUTO_CLOSED_LEGACY') OR LIKE 'AUTO_CLOSED_BY_FIRST_FINAL_TRIGGER:%' OR LIKE 'AUTO_CLOSED_BY_SECOND_FINAL_TRIGGER:%')`. 보존 = 그 외 force_closed=TRUE. preflight: 정확3패턴 외 'AUTO_CLOSED_%' 행 탐지 시 중단. elapsed NULL fallback, GREATEST(0), 멱등. 운영 실측: force_closed=TRUE&closed_by NULL=4 (전부 AUTO_CLOSED_).
+5. **pytest 잔여**: DP-09(ship)/DP-32(admin)/DP-24(active pause force-close clamp)/DP-16(백필 재계산)/DP-20(수동강제 보존)/DP-21(legacy auto closed_by NULL)/DP-23(close_reason NULL 보존)/DP-25(prefix 400)/DP-34(preflight)/DP-35(elapsed NULL) + 회귀(test_relay_first_final / test_force_close / test_working_hours 의미갱신 / test_ship_complete / test_admin_complete / test_hotfix04_orphan).
+6. **배포**: version v2.22.0 (MINOR — duration 의미 변경) + CHANGELOG/CLAUDE.md/PROGRESS + 배포 + 백필 실행 + T+검증(210건 정정).
+
+### 별 BACKLOG (등록 완료)
+- `REF-TASK-DETAIL-CONN-INJECTION-20260602` 🟠 — 전사 트랜잭션(옵션 a) conn 주입형 (task_detail.py 917줄 God File 분할 동반).
+- (미등록, 등록 권고) `BUG-WORKER-COUNT-UNDERCOUNT-20260602` — worker_count 컬럼 9.2% vs work_start_log distinct 29% 괴리.
+
+### 주의 (Codex 라운드 7 A)
+- race guard 실제 경로 = `models/task_detail.py:793-795`.
+- complete_task_unified 는 audit 값을 **현행 그대로** 전달 (본 fix 는 duration 만 변경, audit 의미 불변).
+- 회귀 스위트는 test DB 느림 (15 TC ≈ 2분) → 전수 수십 분 소요 감안.
 
 ---
 
