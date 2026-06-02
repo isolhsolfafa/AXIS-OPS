@@ -6,6 +6,27 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.21.3] - 2026-06-02 — MECH 체크리스트 자재 드롭다운 긴 spec 줄바꿈 표시
+
+> MECH 체크리스트 자재 선택 드롭다운에서 긴 자재 사양(flow sensor / MFC 등)이 `...`로 잘려 전체 spec이 안 보이던 문제.
+
+### 원인
+- `mech_checklist_screen.dart` 드롭다운 메뉴 항목이 `Text(opt, overflow: TextOverflow.ellipsis)` — 한 줄 + ellipsis로 잘림
+- 단순히 ellipsis만 제거하면 Flutter `DropdownButton` 기본 항목 높이(`kMinInteractiveDimension` 48px) 고정 때문에 줄바꿈해도 잘리거나 RenderFlex overflow 발생
+
+### Fix
+- **FE** `mech_checklist_screen.dart` (자재 선택 드롭다운):
+  - `itemHeight: null` — 항목 높이 가변 (줄바꿈 표시 필수 조건)
+  - `selectedItemBuilder` 추가 — 닫힌 필드는 1줄 ellipsis 유지 (선택 후 카드 레이아웃 부풀림 방지)
+  - 메뉴 항목 `ellipsis` → `softWrap: true, maxLines: 3` — 열면 전체 spec 줄바꿈 표시
+- ELEC은 짧은 옵션(TUBE 색상 등)이라 이번 범위 제외
+
+### 검증
+- flutter build web GREEN. FE-only / 데이터·BE 무변경 / 회귀 위험 0
+- 열면 전체 사양 줄바꿈 표시, 선택 후 닫으면 1줄 ellipsis
+
+---
+
 ## [2.21.2] - 2026-05-30 — 위치 검증 토글 Off 시 출근 GPS 권한 요청 제거
 
 > 협력사 출근 시 브라우저 위치 권한 팝업이 떴는데, admin 위치 검증 토글(`geo_check_enabled`)이 Off인데도 발생.

@@ -897,6 +897,14 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
           DropdownButtonFormField<String>(
             value: options.contains(currentValue) ? currentValue : null,
             isExpanded: true,
+            itemHeight: null,  // ⭐ 긴 자재 spec 줄바꿈 표시 (항목 높이 가변 — 줄바꿈 필수 조건)
+            // 닫힌 필드는 1줄 유지 (선택 후 카드 레이아웃 부풀림 방지)
+            selectedItemBuilder: (context) => options
+                .map((opt) => Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(opt, maxLines: 1, overflow: TextOverflow.ellipsis),
+                    ))
+                .toList(),
             decoration: InputDecoration(
               border: const OutlineInputBorder(),
               contentPadding:
@@ -908,7 +916,8 @@ class _MechChecklistScreenState extends ConsumerState<MechChecklistScreen> {
             items: options
                 .map((opt) => DropdownMenuItem(
                       value: opt,
-                      child: Text(opt, overflow: TextOverflow.ellipsis),
+                      // 열린 메뉴는 전체 spec 줄바꿈 (최대 3줄)
+                      child: Text(opt, softWrap: true, maxLines: 3),
                     ))
                 .toList(),
             onChanged: isPhase2 ? null : (value) {  // ⭐ v2.11.3 R2: 2차 disabled
