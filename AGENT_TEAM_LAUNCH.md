@@ -46284,3 +46284,1021 @@ ORDER BY group_type, name, category
 - `FEAT-NOTIFICATION-OUTBOX-PATTERN-20260527` 🟢 INFO — 운영 영역 메일 발송 retry catch outbox 패턴 (Q3 advisory)
 - `FEAT-GST-MANAGER-ADMIN-ROLE-PROMOTION-20260527` 🟢 INFO — GST 매니저 영역 admin role 부여 catch 영역 (M2 별 sprint, 사용자 결정 base)
 
+
+---
+
+# Sprint 81 — FEAT-FORCE-CLOSED-PARTNER-MATRIX-2AXIS-20260602 (#79)
+
+> **본질**: 강제 종료(force_closed=TRUE) 를 협력사별 2축(공정 / 처리 기간)으로 집계 → 자동 마감 매트릭스(v2.20.x)에 이미 있는 협력사 분포를 강제 종료에도 동일하게 제공.
+
+**날짜**: 2026-06-02
+**우선순위**: 🟠 MEDIUM (협력사 평가 raw insight 보강)
+**연관**: VIEW OPS_API_REQUESTS.md #79 / VIEW MissedCloseAnalysisPage / OPS `dashboard_service.py` `build_auto_close_summary()`
+**선행 trail**: v2.20.0 (Sprint 71 dashboard_service 신설) + v2.20.1 (`_COMPANY_SQL` COALESCE 정합) + v2.20.7~9 (force_closed KPI 3분류 + by_reason)
+**Codex 자동 이관 체크리스트**: ✅ API 응답 계약 변경(`force_closed` 키 2개 추가) → 자동 이관 대상
+**버전**: v2.22.0 (minor — 신규 응답 필드)
+
+---
+
+## 1. 배경 — VIEW 요청 vs 실데이터 검증 결과
+
+VIEW #79 요청은 `force_closed` 응답에 협력사 매트릭스 2개를 추가해 달라는 것:
+- `partner_task_matrix` — 협력사 × 공정 (어디서 강제 종료 많은지)
+- `partner_elapsed_matrix` — 협력사 × 처리 기간 버킷 (강제 종료를 얼마나 빨리/늦게 처리했는지 = 협력사 관리 즉응성)
+
+VIEW 요청 원안에는 Codex 라운드 1(5-29) 지적 2건이 반영돼 있었음:
+- **M-2**: 미시작 = `elapsed_minutes IS NULL` → '미시작' 버킷
+- **M-3**: company 폴백 ①task partner → ②worker company → ③(미지정)
+
+→ **OPS 측에서 운영 DB 직접 조회로 두 전제를 재검증한 결과, 둘 다 실데이터와 어긋나 단순화 가능함을 확인.** 아래 §2 가 검증 trail.
+
+---
+
+## 2. 운영 DB 검증 trail (2026-06-02, force_closed=TRUE = 129건 기준)
+
+### 2-1. 쟁점 1 — "미시작" 기준 (M-2 재검증)
+
+VIEW 원안: 미시작 = `elapsed_minutes IS NULL`.
+
+운영 조회 결과:
+
+| 분류 | 건수 |
+|---|---|
+| `started_at IS NULL` (진짜 미시작 = 작업자 시작 안 함) | 10 |
+| └ 그중 `elapsed_minutes = 0` | 8 |
+| └ 그중 `elapsed_minutes IS NULL` | 2 |
+
+→ **원안 기준(`elapsed_minutes IS NULL`)으로 미시작을 거르면 8건이 누락됨.** 그 8건은 `elapsed_minutes = 0` 이라 `0 < 1440` 조건에 걸려 **"1일내" 버킷으로 오분류** → 시작도 안 한 강제 종료가 "1일 안에 빠르게 처리됨"으로 집계 → 협력사 즉응성 지표가 거짓으로 좋아 보임.
+
+**결정**: 미시작 기준 = **`started_at IS NULL`** (먼저 분리), 나머지만 `elapsed_minutes` 버킷팅. 이래야 미시작 8건이 제자리(미시작 버킷)로 감.
+
+### 2-2. 쟁점 2 — company 폴백 (M-3 재검증)
+
+VIEW 원안: ①task partner → ②worker company → ③(미지정) 3단계 폴백.
+
+운영 조회 결과 (`_COMPANY_SQL` 분류):
+
+| company | 건수 |
+|---|---|
+| BAT (MECH) | 55 |
+| TMS(M) (TMS) | 49 |
+| FNI (MECH) | 7 |
+| TMS(E) (ELEC) | 5 |
+| C&A (ELEC) | 4 |
+| TMS(M) (MECH) | 3 |
+| P&S (ELEC) | 3 |
+| **(미지정)** | **3** |
+
+→ 협력사 task 126건은 **①task partner 만으로 이미 100% 분류**됨 (협력사 중 '(미지정)' = 0건). '(미지정)' 3건 = QI 1 + SI 2 = **전부 GST 자사 검사 공정** (PI/QI/SI 는 협력사 매핑 자체가 없음 → '(미지정)' = 정상, v2.20.1 #71 패턴 정합).
+
+→ **②worker company 폴백을 추가해도 실데이터상 차이 0.** '(미지정)' 3건은 작업자도 GST 직원이라 'GST' 가 나올 뿐이고, 애초에 협력사 평가 표에서 빠져야 하는 건.
+
+**결정**: 폴백 추가하지 않고 자동 마감 매트릭스가 쓰는 **`_COMPANY_SQL` 그대로 재사용**. auto 매트릭스와 분류 일관성 자동 확보.
+
+---
+
+## 3. 설계 — 단순화된 결론
+
+VIEW 원안 대비 OPS 결론은 **더 정확하면서 더 단순**:
+
+| 항목 | VIEW 원안 | OPS 확정 (DB 검증 후) |
+|---|---|---|
+| 미시작 기준 | `elapsed_minutes IS NULL` | **`started_at IS NULL`** (먼저 분리) |
+| company 결정 | ①②③ 3단계 폴백 (신규 로직) | **`_COMPANY_SQL` 재사용** (신규 로직 0) |
+| 집계 골격 | 신규 | **`_query_partner_task_matrix` 복제** (모집단만 force) |
+
+→ 핵심: 기존 `_query_partner_task_matrix` 로직을 복제하고, 모집단을 `force_closed = TRUE` 로 바꾸고, elapsed 매트릭스의 미시작 버킷만 `started_at IS NULL` 로 분리. **DB/마이그레이션 변경 0, 기존 데이터 무변경.**
+
+---
+
+## 4. BE 변경 명세 (`dashboard_service.py` 단일 파일)
+
+### 4-1. 신규 함수 `_query_force_partner_task_matrix()` — 협력사 × 공정
+
+`_query_partner_task_matrix()` (L503) 복제 + 모집단 교체:
+- `AND t.close_reason LIKE %s AND t.force_closed = FALSE` (auto)
+  → `AND t.force_closed = TRUE` (force)
+- `EXISTS (work_start_log)` 조건 **제거** — force 매트릭스는 미시작(work_start_log 없는) 강제 종료도 포함해야 grand_total == force_count 성립
+- 협력사 결정 = `_COMPANY_SQL` 그대로
+- 반환 스키마 동일 (`task_columns` / `rows[{company,counts,total,alert}]` / `column_totals` / `grand_total`)
+
+### 4-2. 신규 함수 `_query_force_partner_elapsed_matrix()` — 협력사 × 처리 기간
+
+골격은 4-1 과 동일하되 **컬럼 축이 공정 대신 처리 기간 버킷**:
+
+```
+버킷 (고정 5칸, task_id 키):
+  elapsed_unknown  "미시작"   ← started_at IS NULL          (최우선 분리)
+  elapsed_1d       "1일내"    ← started_at NOT NULL AND elapsed_minutes < 1440
+  elapsed_1_3d     "1~3일"    ← 1440 <= elapsed_minutes < 4320
+  elapsed_3_7d     "3~7일"    ← 4320 <= elapsed_minutes < 10080
+  elapsed_7d       "7일+"     ← elapsed_minutes >= 10080
+```
+
+SQL CASE 분기 (우선순위 = 미시작 먼저):
+```sql
+CASE
+  WHEN t.started_at IS NULL THEN 'elapsed_unknown'
+  WHEN t.elapsed_minutes < 1440 THEN 'elapsed_1d'
+  WHEN t.elapsed_minutes < 4320 THEN 'elapsed_1_3d'
+  WHEN t.elapsed_minutes < 10080 THEN 'elapsed_3_7d'
+  ELSE 'elapsed_7d'
+END AS elapsed_bucket
+```
+
+> ⚠️ `started_at NOT NULL` 인데 `elapsed_minutes IS NULL` 인 잔여 케이스: 운영 0건이지만 방어적으로 `ELSE 'elapsed_7d'` 가 아닌 `WHEN t.started_at IS NULL` 만 미시작으로 보내고, started 있는 NULL elapsed 는 `COALESCE(elapsed_minutes, 0)` 로 '1일내' 귀속 (또는 별도 가드). → pytest TC 로 경계 고정.
+
+- 컬럼 순서 = 위 5칸 고정 (auto 매트릭스처럼 동적 정렬 X — 버킷은 의미 순서가 있음)
+- `task_columns` = 5칸 고정 배열, 데이터 없는 버킷도 0 으로 표시
+
+### 4-3. `build_auto_close_summary()` — force_closed block 확장
+
+L710 부근 `_query_partner_task_matrix` 호출 다음에 2개 추가 호출:
+```python
+force_partner_task_matrix = _query_force_partner_task_matrix(
+    cur, start, end, partner_sql, partner_params)
+force_partner_elapsed_matrix = _query_force_partner_elapsed_matrix(
+    cur, start, end, partner_sql, partner_params)
+```
+
+L746 `"force_closed"` dict 에 2개 키 추가 (additive):
+```python
+"force_closed": {
+    "count": force_count,
+    ... (기존),
+    "by_reason": force_close_reason_distribution,
+    "partner_task_matrix": force_partner_task_matrix,        # ← 추가
+    "partner_elapsed_matrix": force_partner_elapsed_matrix,  # ← 추가
+},
+```
+
+### 4-4. `_assert_invariants()` — force 매트릭스 invariant 추가
+
+L629 force block 다음에:
+```python
+ftm = fc.get("partner_task_matrix", {}).get("grand_total", 0)
+fem = fc.get("partner_elapsed_matrix", {}).get("grand_total", 0)
+if ftm != fc.get("count", 0):
+    issues.append(f"force partner_task_matrix.grand_total {ftm} != force_closed.count {fc.get('count',0)}")
+if fem != fc.get("count", 0):
+    issues.append(f"force partner_elapsed_matrix.grand_total {fem} != force_closed.count {fc.get('count',0)}")
+```
+
+> ⚠️ 핵심 — 두 매트릭스 모두 미시작(work_start_log 없는) force 를 포함해야 `grand_total == force_count` 성립. elapsed 매트릭스는 '미시작' 버킷이 그 역할. task 매트릭스는 `EXISTS(work_start_log)` 조건 제거가 그 역할. → 둘 다 빠지면 invariant 위반 → 500 + Sentry.
+
+### 4-5. partner filter 정합
+
+`partner_sql` / `partner_params` 는 `build_auto_close_summary()` 가 이미 만들어 둔 것 (manager 자기 회사 격리 + admin 전체). 두 신규 함수에 그대로 전달 → 협력사 매니저는 자기 회사 force 매트릭스만, admin 은 전체.
+
+---
+
+## 5. 응답 스키마 (additive — 기존 키 불변)
+
+```json
+"force_closed": {
+  "count": 129, "prev_period_count": .., "delta": "..", "trend": "..",
+  "improvement_pct": ..,
+  "by_reason": [...],
+  "partner_task_matrix": {
+    "task_columns": [ {"task_id":"IF_1","task_name":"I.F 1 (도킹 후)"}, ... ],
+    "rows": [ {"company":"BAT","counts":[..],"total":55,"alert":true}, ... ],
+    "column_totals": [..], "grand_total": 129
+  },
+  "partner_elapsed_matrix": {
+    "task_columns": [
+      {"task_id":"elapsed_unknown","task_name":"미시작"},
+      {"task_id":"elapsed_1d","task_name":"1일내"},
+      {"task_id":"elapsed_1_3d","task_name":"1~3일"},
+      {"task_id":"elapsed_3_7d","task_name":"3~7일"},
+      {"task_id":"elapsed_7d","task_name":"7일+"}
+    ],
+    "rows": [ {"company":"BAT","counts":[..],"total":55,"alert":true}, ... ],
+    "column_totals": [..], "grand_total": 129
+  }
+}
+```
+
+→ VIEW 타입은 `force_closed` 에 `partner_task_matrix?` / `partner_elapsed_matrix?` optional 2개만 추가 (기존 `PartnerTaskMatrix` 스키마 재사용).
+
+---
+
+## 6. pytest TC 매트릭스 (신규 파일 `test_sprint81_force_matrix.py`)
+
+| TC | 시나리오 | 검증 |
+|---|---|---|
+| FM-01 | force 0건 | 두 매트릭스 `rows: []` / `grand_total: 0` |
+| FM-02 | force N건 | 두 매트릭스 `grand_total == force_count == by_reason 합` |
+| FM-03 | 미시작(`started_at IS NULL`) force | '미시작' 버킷 집계 + '1일내' 미오염 |
+| FM-04 | `started_at NULL` + `elapsed=0` | '미시작' 버킷 (원안 버그 재현 차단 — 핵심 TC) |
+| FM-05 | elapsed 경계값 (1439/1440/4319/4320/10079/10080) | 버킷 분류 정확 |
+| FM-06 | company 분기 (BAT/TMS(M)/TMS(E)) | `_COMPANY_SQL` 정합 |
+| FM-07 | GST 자사(QI/SI) force | '(미지정)' 분류 + 협력사 평가서 자연 제외 |
+| FM-08 | invariant — 두 매트릭스 grand_total == force_count | 위반 시 500 |
+| FM-09 | manager partner filter | 자기 회사 force 만 (격리) |
+| FM-10 | 회귀 — auto 매트릭스 / KPI 3분류 불변 | 기존 18 TC GREEN |
+
+---
+
+## 7. 회귀 위험 / 영향 범위
+
+| 영역 | 변경 |
+|---|---|
+| `dashboard_service.py` | 신규 함수 2개 + summary dict 2키 + invariant 2줄 (additive) |
+| 기존 auto 매트릭스 / KPI / by_reason | 무변경 (force block 만 확장) |
+| DB / 마이그레이션 | **없음** (기존 테이블 조회만) |
+| `/auto-close-details` endpoint | 무변경 |
+| VIEW | optional 2키 추가 (BE 미배포 시 undefined → mock fallback, 자동 degrade) |
+
+→ additive 라 기존 소비처 회귀 0.
+
+---
+
+## 8. VIEW 측 선행 작업 (#79 M-5 — BE 배포 전 필수)
+
+> BE 가 배포해도 VIEW 가 아래 3건 선행 안 하면 mock 배지 stale 지속 + force 데이터가 "자동 마감" 으로 오표시.
+
+1. 타입 확장 — `force_closed` 에 `partner_task_matrix?` / `partner_elapsed_matrix?` optional 추가
+2. mock 조건부 fallback — 실데이터 존재 시 실데이터, 부재 시에만 mock
+3. `PartnerTaskMatrix` 컴포넌트 제목/메타 props 화 — force 매트릭스가 "자동 마감" 으로 오표시되는 것 차단
+
+→ VIEW 세션 담당. OPS BE 배포와 독립 진행 가능 (additive optional 이라 순서 무관).
+
+---
+
+## 9. 진행 순서
+
+1. ✅ 운영 DB 검증 (§2 완료 — 미시작 8건 + 협력사 100% 분류 확인)
+2. 본 설계서 → Codex 라운드 1 교차 검증 (API 응답 계약 변경 = 자동 이관)
+3. Codex M 해결 후 `dashboard_service.py` 구현 (신규 함수 2 + summary 2키 + invariant 2줄)
+4. pytest `test_sprint81_force_matrix.py` 10 TC + 회귀 18 TC GREEN
+5. version bump v2.22.0 + 문서 동기화 + 배포
+6. T+검증 (운영 `/auto-close-summary` force_closed 매트릭스 grand_total == 129 확인)
+7. VIEW 선행 3건 후 mock → 실데이터 전환 (VIEW 세션)
+
+---
+
+## 10. VIEW 원안 대비 변경 trail (재검증 결론)
+
+- **M-2 (미시작 기준)**: VIEW 원안 `elapsed_minutes IS NULL` → OPS `started_at IS NULL` 로 정정. 근거 = 운영 force 129건 중 미시작 10건의 8건이 `elapsed=0` 이라 원안 기준은 "1일내" 오분류. **이 정정이 본 sprint 핵심 가치** (협력사 즉응성 지표 무결성).
+- **M-3 (company 폴백)**: VIEW 원안 ①②③ 3단계 → OPS `_COMPANY_SQL` 재사용 (폴백 ② 제거). 근거 = 협력사 task 126건 ①만으로 100% 분류, '(미지정)' 3건은 GST 자사라 폴백 무의미. auto 매트릭스 일관성 + 단순성 확보.
+- VIEW 측에 본 정정 trail 회신 필요 (OPS_API_REQUESTS.md #79 — OPS 응답 섹션).
+
+---
+
+# FIX — FIX-DURATION-MANUAL-PAUSE-RAW-20260602 (수동 일시정지 미반영 + 휴게 이중차감)
+
+> **본질**: 작업 완료 시 `duration_minutes`가 raw(완료−시작)로 덮어써져 **작업자의 수동 일시정지가 전혀 반영되지 않음**. 사용자 의도 = 휴게/점심은 차감 안 함(원본 적재) + 수동 일시정지만 차감.
+
+**날짜**: 2026-06-02
+**우선순위**: 🟠 MEDIUM (man-hour 데이터 정확도 — 운영 210건 영향, 단 출하/생산 차단은 아님)
+**유형**: 클린 코어 데이터 원칙 영향 (duration 계산) → CLAUDE.md ②단계 **자동 Codex 이관 대상**
+**버전**: v2.22.0 (구현 시점 확정 — duration 의미 변경이라 MINOR)
+**접수**: 사용자 catch — "8시 시작 → 9시 일시정지 → 15시 재개 시 duration 값이 이상하다"
+
+---
+
+## 1. 사용자 의도 (확정 스펙)
+
+| 항목 | 의도 |
+|---|---|
+| 휴게/점심 차감 | **하지 않음** (원본 데이터 적재 — 분석 단계에서 후처리) |
+| 수동 일시정지 차감 | **반영** (작업자가 멈춘 시간은 일한 시간 아님 → 빼야 함) |
+
+→ **목표 공식: `duration_minutes = (완료 − 시작) − 수동 일시정지`** (휴게 차감 없음)
+
+---
+
+## 2. 근본 원인 — 완료 시 raw로 덮어쓰기 + 2단계 계산 충돌
+
+작업 완료(`task_service.complete_work`) 흐름:
+
+```
+L811  _finalize_task_multi_worker(task.id, completed_at)
+        → app_task_details.duration = SUM(work_completion_log.duration) − 수동pause  (계산해서 저장)
+L817  complete_task(task_detail_id, completed_at)   [models/task_detail.py:455]
+        → app_task_details.duration = (EXTRACT(EPOCH(완료−시작))/60)::INT  ← raw 로 덮어씀 (최종 승자)
+```
+
+`complete_task()`(Sprint 1 구형 함수)가 **나중에 실행되며 앞 단계 pause 차감값을 raw로 덮어쓰기** → 수동 pause 완전 무시.
+
+부가 발견 — 2단계 계산이 서로 다른 테이블에 다른 의미로 기록됨:
+- `work_completion_log.duration` (작업자별) = `_calculate_working_minutes()` = raw − **휴게** (휴게 차감됨 ← 의도와 반대)
+- `app_task_details.duration` (task) = raw (`complete_task` 덮어쓰기 — 휴게·pause 둘 다 미차감)
+
+→ 두 테이블 불일치. 사용자 의도(원본 적재) 기준으로는 **양쪽 다 휴게 차감 없이 raw 여야 하고, app 레벨에서만 수동 pause 차감**이 맞음.
+
+---
+
+## 3. 운영 DB 검증 (2026-06-02 직접 조회)
+
+### 3-1. 시나리오 정밀 재현 (08:00 시작 → 09:00 정지 → 15:00 재개 → 16:00 완료)
+
+| 단계 | 계산 | 값 |
+|---|---|---|
+| raw (완료−시작) | 16:00 − 08:00 | 480분 |
+| 수동 pause | 15:00 − 09:00 | 360분 |
+| **목표 duration** | 480 − 360 | **120분** |
+| 현재 저장값 | raw 덮어쓰기 (pause 무시) | **480분** ❌ |
+
+### 3-2. 실데이터 (정상완료 + 같은날 + 수동pause 30분+)
+
+| task | raw | 저장 duration | elapsed | 수동pause | 목표(raw−pause) | 판정 |
+|---|---|---|---|---|---|---|
+| 68483 (MECH) | 166 | 166 | 166 | 68 | 98 | ❌ |
+| 73819 (PI) | 83 | 83 | 83 | 75 | 8 | ❌ |
+| 57688 (PI) | 137 | 138 | 137 | 102 | 35 | ❌ |
+| 56733 (MECH) | 331 | 332 | 331 | 78 | 253 | ❌ |
+
+→ 전부 `duration ≈ elapsed = raw`, 수동 pause 미반영 확인.
+
+### 3-3. 영향 규모
+
+| | |
+|---|---|
+| 수동 pause>0 정상완료 task | 321건 |
+| **그중 pause 미반영 (duration ≥ elapsed)** | **210건** |
+| 무시된 pause 총합 | 639,579분 (≈10,660시간) |
+| 최근 30일 영향 | 173건 |
+
+---
+
+## 4. 코드 위치 (관련 전부)
+
+| 파일:라인 | 함수 | 현재 동작 | 관련성 |
+|---|---|---|---|
+| `models/task_detail.py:455` | `complete_task()` | duration = raw(완료−시작), pause·휴게 미차감 | ⛐ 주범 (덮어쓰기) |
+| `services/task_service.py:817` | `complete_work()` | `_finalize` 후 `complete_task` 호출 | 덮어쓰기 트리거 |
+| `services/task_service.py:2071-2085` | `_finalize_task_multi_worker()` | duration = SUM(completion) − 수동pause | 덮어써져 무효 |
+| `services/task_service.py:1828` | `_record_completion_log()` | per-worker = `_calculate_working_minutes` (휴게 차감) | work_completion_log 휴게 차감 (의도와 반대) |
+| `models/work_pause_log.py:161` | `resume_pause()` | pause_duration = resumed−paused (원시) | 수동 pause 원천값 (정상) |
+| `services/duration_calculator.py:149` | `calculate_auto_close_duration()` | raw − total_pause_minutes | force/auto-close 경로 (별 분기 — §6 Q) |
+
+`complete_task()` 호출처 3곳 (덮어쓰기 제거 시 회귀 위험 → 내부 공식 변경 방향 채택):
+- `task_service.py:817` (정상 완료)
+- `shipment_service.py:194` (ship-complete SI_FINISHING)
+- `shipment_service.py:303` (admin-complete PI/QI)
+
+---
+
+## 5. 수정 설계 (제안)
+
+### 5-1. 핵심 (결정 1) — `complete_task()` 공식 정정
+
+`complete_task()`의 duration 공식을 `raw − 수동pause`로 변경 (덮어쓰기 자체는 유지하되 공식만 교정 → ship/admin 경로 동일 적용, NULL 회귀 0):
+
+```sql
+UPDATE app_task_details
+SET completed_at = %s,
+    duration_minutes = GREATEST(0,
+        (EXTRACT(EPOCH FROM (%s - started_at)) / 60)::INTEGER
+        - COALESCE((
+            SELECT SUM(pause_duration_minutes)
+            FROM work_pause_log
+            WHERE task_detail_id = %s
+              AND resumed_at IS NOT NULL
+              AND pause_type NOT IN ('break_morning','lunch','break_afternoon','dinner')
+        ), 0)
+    )
+WHERE id = %s AND started_at IS NOT NULL
+```
+
+- `pause_type NOT IN (break_*)` → 휴게 auto-pause는 차감 제외 (원본 적재 의도)
+- `resumed_at IS NOT NULL` → 완료 시점 활성 pause는 `complete_work`에서 이미 resume됨 (L631-642). ship/admin 경로 활성 pause 잔존 가능성은 §6 Q2
+- `GREATEST(0, ...)` → 음수 방지
+
+### 5-2. 결정 2 — work_completion_log 휴게 차감 제거 (원본 적재 일관성)
+
+`_record_completion_log()` L1828:
+```python
+personal_duration = _calculate_working_minutes(row['started_at'], completed_at)
+```
+→ raw 로 변경:
+```python
+personal_duration = max(0, int((completed_at - row['started_at']).total_seconds() / 60))
+```
+- per-worker 기록도 휴게 차감 없이 raw → app/worker 양 테이블 의미 통일
+- `_finalize_task_multi_worker`의 SUM도 자동 raw화 (단 app_task_details.duration 최종값은 `complete_task` 공식이 결정 — _finalize 의 duration write는 사실상 무효, elapsed/worker_count 산출 용도로만 유지)
+- `_calculate_working_minutes` / `_calculate_break_overlap` 함수는 호출처 사라지면 **dead code → 제거 검토** (또는 분석용 보존 — §6 Q4)
+
+### 5-3. 결정 3 — 기존 210건 소급 보정 (백필)
+
+```sql
+UPDATE app_task_details td
+SET duration_minutes = GREATEST(0, td.elapsed_minutes - COALESCE((
+        SELECT SUM(wpl.pause_duration_minutes) FROM work_pause_log wpl
+        WHERE wpl.task_detail_id = td.id AND wpl.resumed_at IS NOT NULL
+          AND wpl.pause_type NOT IN ('break_morning','lunch','break_afternoon','dinner')
+    ), 0))
+WHERE td.completed_at IS NOT NULL
+  AND td.force_closed = FALSE          -- force/auto-close 는 duration_calculator 별 경로 (§6 Q3)
+  AND COALESCE(td.total_pause_minutes, 0) > 0
+  AND td.elapsed_minutes IS NOT NULL
+```
+- migration 058 (data backfill)로 적용 + 적용 전후 카운트 검증
+- ⚠️ 백필 범위 = `force_closed = FALSE` 만 (force-close 는 §6 Q3 결론에 따라 별도)
+
+---
+
+## 6. Codex 검증 핵심 질문 (열린 결정)
+
+- **Q1 (멀티 작업자 man-hour)**: 현재 `complete_task` 공식은 task 레벨 `raw(완료−시작) − task수동pause`. 멀티 작업자 시 man-hour = Σ(작업자별 근무) 여야 하는데, task 레벨 raw 는 "최초시작~마지막완료" 구간이라 man-hour 정의와 다름. 단일 작업자(운영 대다수)는 정확. **멀티 작업자 man-hour 를 (a) task raw−pause 유지 (단순·근사) vs (b) Σ(work_completion_log per-worker − per-worker pause) (정밀) 중 무엇으로?** per-worker pause 는 work_pause_log.worker_id 로 분리 가능.
+- **Q2 (ship/admin 완료 시 활성 pause)**: ship-complete / admin-complete 경로는 완료 전 active pause resume 처리가 없을 수 있음. `resumed_at IS NOT NULL` 필터가 미완료 pause 를 누락 → 차감 안 됨. 해당 경로에서도 완료 직전 active pause 강제 resume 필요한지?
+- **Q3 (force/auto-close 경로 정합)**: `duration_calculator.calculate_auto_close_duration()` = `raw − total_pause_minutes`. `total_pause_minutes` 는 휴게 auto-pause 포함(전체 합) → 휴게까지 차감 = 사용자 의도(휴게 미차감)와 불일치. force-close 도 `manual pause 만 차감`으로 통일해야 하는가? (백필 Q3 와 연동)
+- **Q4 (dead code)**: `_calculate_working_minutes` / `_calculate_break_overlap` / `_BREAK_PERIOD_KEYS` 제거 vs 분석용 보존?
+- **Q5 (백필 안전성)**: migration 058 백필 WHERE 범위 + 음수 클램프 + 재실행 멱등성. elapsed_minutes NULL 인 과거 행 처리.
+- **Q6 (휴게 auto-pause 정책)**: 휴게시간 스케줄러 자동 pause 가 work_pause_log 에 break_* 타입으로 쌓임. 사용자 의도(휴게 미차감)면 이 auto-pause 기능 자체를 끄거나 기록만 하고 차감 제외 유지? (현 설계는 차감 제외 유지)
+
+---
+
+## 7. pytest TC 계획 (신규 `test_fix_duration_manual_pause.py`)
+
+| TC | 시나리오 | 기대 |
+|---|---|---|
+| DP-01 | 8시 시작 → 9시 정지 → 15시 재개 → 16시 완료 | duration = 480 − 360 = 120 |
+| DP-02 | pause 없음 정상 완료 | duration = raw (= elapsed) |
+| DP-03 | 점심 걸친 수동 정지 (휴게 이중차감 회귀) | 휴게 추가 차감 안 됨 |
+| DP-04 | 휴게 auto-pause(break_lunch)만 존재 | 차감 안 됨 (raw 유지) |
+| DP-05 | 수동 pause > raw (음수) | GREATEST(0) → 0 |
+| DP-06 | 멀티 작업자 (Q1 결론 반영) | 합산 정의 정합 |
+| DP-07 | ship-complete / admin-complete 경로 (Q2) | duration NULL 회귀 0 + pause 차감 |
+| DP-08 | 백필 SQL 멱등 (2회 실행 동일) | 재실행 변화 0 |
+| DP-09 | 회귀 — force-close duration_calculator (Q3 결론) | 기존 TC GREEN |
+
+---
+
+## 8. 회귀 / 영향 범위
+
+| 영역 | 변경 |
+|---|---|
+| `models/task_detail.py` `complete_task` | duration 공식 (raw → raw−수동pause) |
+| `services/task_service.py` `_record_completion_log` | 휴게 차감 제거 (raw) |
+| `migrations/058_*` | 기존 210건 백필 (force_closed=FALSE) |
+| 정상/ship/admin 완료 | duration 의미 변경 (man-hour 정확화) |
+| force/auto-close | Q3 결론 따라 별도 (기본: 본 fix 범위 밖) |
+| VIEW / 분석 | duration 값 변동 (man-hour 감소) — 사용자 의도 정합. 별 통지 불필요(값 정정) |
+
+---
+
+## 9. 진행 순서
+
+1. ✅ 운영 DB 진단 (§3 완료 — 210건 + 시나리오 재현)
+2. 본 설계서 → **Codex 라운드 1** (Q1~Q6 결정)
+3. Codex M 해결 후 구현 (task_detail + task_service + migration 058)
+4. pytest 9 TC + 회귀 (test_relay_first_final 등 duration 관련 전수)
+5. version bump v2.22.0 + 문서 + 배포
+6. 백필 적용 + T+검증 (210건 → raw−pause 정정 확인)
+
+---
+
+## v2 갱신 (Codex 라운드 1 반영 + per-worker interval-union 확정 + 사용자 결정)
+
+> v1(§1~§9) 대비 변경: man-hour 정의를 **per-worker interval-union 세션 합산**으로 확정, 3경로 통일, 중복 세션 보존+표시 집계 분리, complete_task 책임 분리. Codex 라운드 1 (M=5/A=2/N=2) 전건 반영.
+
+### A. 사용자 결정 (2026-06-02 논의 확정)
+
+1. **휴게/점심 차감 = 절대 안 함** (원본 데이터 적재). pause_type='manual' 만 차감.
+2. **man-hour = 모든 세션의 합** (재활성화로 쪼개진 세션 전부 합산). 최신-only 폐기 — 앞 세션 버리면 과소계상.
+3. **3경로(정상완료 / 수동 강제종료 / 자동마감) 단일 공식 통일** (force-close 포함).
+4. **재활성화는 지금 제거 안 함** — 합산 공식이 미래의 "시작/종료 only"와 호환(세션 1개로 자연 degrade). UI 정리는 후속.
+5. **중복 세션 행은 보존** (audit 이벤트 로그). 대시보드 "2개씩 보임"은 표시 계층 집계로 별도 처리(VIEW).
+
+### B. 운영 DB 검증 (v2 추가)
+
+- **멀티 작업자 규모**: 완료 task worker_count 기준 180/1958=9.2% / work_start_log distinct worker 기준 654건(~29%). `worker_count` 컬럼 과소집계 의심(부수 catch). → per-worker 타당.
+- **세션 중복 실재**: 동일(task,worker) 완료기록 2건+ = **38 task** (최대 4건). 재활성화→재완료가 work_start_log + work_completion_log 에 새 행 누적. 표시·합산 처리 필요.
+- **세션 disjoint 검증**: 완결 세션 2,519건 중 겹침 **13건(0.5%)** → 세션 합산 안전. 단 0.5% 겹침 → interval-union 가드 필수.
+- **TEST-1111 재현**: INSPECTION(td233424) worker 4414 가 완료(15:47:38 dur0)→재활성화→완료(15:50:55 dur2)→재활성화→완료(16:03:14 dur11) = 3 세션. 합산 13분 = 정확.
+
+### C. 확정 man-hour 공식 (per-worker interval-union)
+
+```
+worker_manhour(task, worker) =
+    length( UNION( 그 worker 의 모든 [session_start, session_complete] 구간 ) )
+    − Σ( 그 worker 의 pause_type='manual' pause_duration )
+    , 최소 0
+
+task.duration_minutes (man-hour) = Σ over workers ( worker_manhour )
+task.elapsed_minutes  = MAX(완료) − MIN(시작)   (현행 유지)
+task.worker_count     = COUNT(DISTINCT worker_id)  (현행 — 단 과소집계 의심 §B 별 검증)
+
+원칙:
+  · 휴게 차감 0 (원본 적재)
+  · pause_type='manual' 만 차감 (positive 필터 — Codex Add-1)
+  · interval-union → 0.5% 세션 겹침 이중계상 방지
+  · 세션 1개면 = (완료−시작) − manual pause  ← 미래 시작/종료-only 와 동일 (graceful degrade)
+```
+
+세션 정의: work_start_log.started_at ~ 그 이후 최초 work_completion_log.completed_at (동일 worker). 미완 세션(완료 없음)은 man-hour 제외.
+
+### D. complete_task 책임 분리 (Codex Q1/Q2 반영)
+
+문제: 현재 `complete_task()`(task_detail.py:455) 가 duration 을 raw 로 덮어씀 + ship/admin 경로도 이걸 호출. 단순 공식 교정(v1 §5-1)은 멀티 작업자 man-hour 를 elapsed 로 뭉갬.
+
+**v2 방향 — 계산 책임 단일화**:
+1. **신규 함수** `compute_task_manhour(task_detail_id) -> int` (services 계층, §C interval-union 공식 구현). 단일 SSoT.
+2. `complete_task()` (task_detail.py): duration 계산 **제거** → `completed_at` 만 set. (raw 덮어쓰기 삭제)
+3. 정상완료(`task_service.complete_work` L811-817): `_finalize_task_multi_worker` 가 `compute_task_manhour()` 호출해 duration 저장. complete_task 는 completed_at 만.
+4. **ship/admin 완료**(`shipment_service.py:194/303`): complete_task 호출 후 `compute_task_manhour()` 명시 호출해 duration 저장 (NULL 회귀 차단 — Codex Q1).
+5. **수동 강제종료**(`admin.py:980`): raw 공식 → `compute_task_manhour()` 호출로 교체.
+6. **자동마감**(`duration_calculator.calculate_auto_close_duration` + auto_close_relay_task): `total_pause_minutes`(휴게 포함) 차감 → manual pause 만 차감하도록 정정 + 가능하면 `compute_task_manhour()` 정합. 단 auto-close 는 미완 세션 close 라 close_at 기준 세션 처리 필요 → §F Q-A.
+
+### E. Codex 라운드 1 M 반영 매트릭스
+
+| Codex | 라벨 | v2 반영 |
+|---|---|---|
+| Q1 멀티 man-hour | M | **per-worker interval-union 채택** (§C). complete_task 덮어쓰기 제거 + compute_task_manhour SSoT (§D) |
+| Q2 ship/admin active pause | M | 완료 직전 active manual pause 강제 resume(완료시각 clamp) + compute_task_manhour 호출 (§D-4) |
+| Q3 force/auto-close 휴게 차감 | M | **3경로 통일** — manual 만 차감 (§A-3, §D-5/6) |
+| Q6 auto-pause 정책 | M | total_pause_minutes 대신 pause_type='manual' 합만 차감 (§C) |
+| Add-1 NOT IN→='manual' | M | positive 필터 `pause_type='manual'` 확정 (§C) |
+| Q4 dead code | N | `_calculate_working_minutes` 보존 (호출처 남음 — _record_completion_log 는 raw 화하되 함수 제거는 별도) |
+| Q5 백필 안전성 | A | migration 058 — elapsed NULL 행은 `완료−시작` fallback, GREATEST(0), force_closed 포함(통일), 멱등 |
+| Add-3 기존 테스트 | A | test_working_hours / test_force_close 의미 갱신 |
+
+### F. 신규 열린 질문 (Codex 라운드 2 판정 요청)
+
+- **Q-A (자동마감 세션 처리)**: auto-close 는 "미완 세션"을 close_at 으로 강제 종료. 이때 그 미완 세션도 interval-union 에 `[start, close_at]` 으로 포함시켜 compute_task_manhour 일관 적용 가능한가? 아니면 auto-close 는 close_at 기반 별도 계산 유지?
+- **Q-B (중복 세션 표시 — VIEW)**: 대시보드/상세뷰가 work_completion_log 세션을 worker 행으로 나열 → 중복 표시. worker 단위 집계(1 worker = 1행, man-hour = 세션합) 로 표시 변경. OPS BE 응답(work.py `_enrich_tasks_with_workers` 등)에서 집계할지 VIEW 표시단에서 집계할지?
+- **Q-C (백필 범위)**: 3경로 통일이므로 백필도 force_closed 포함 전체로 확대? v1 은 force_closed=FALSE 만. interval-union 재계산이라 과거 force-close 도 정정 가능. 단 수동 강제종료(closed_by 명시)는 관리자 판단 시각이라 건드릴지 결정 필요.
+- **Q-D (worker_count 과소집계)**: 9.2%(컬럼) vs 29%(start_log) 괴리 — 별 버그인지, 본 fix 에서 worker_count 도 `COUNT(DISTINCT worker_id FROM work_start_log)` 재계산으로 정정할지.
+- **Q-E (interval-union 구현 위치)**: Python 후처리 vs SQL(`tstzrange` + `range_agg`/병합). PostgreSQL 15 `range_agg` 사용 가능 — SQL 단일 쿼리로 union 길이 산출 검토.
+
+### G. pytest TC (v2 — interval-union + 세션)
+
+| TC | 시나리오 | 기대 |
+|---|---|---|
+| DP-01 | 8→9 정지→15 재개→16 완료 (1 worker 1세션 + manual pause) | 480−360=120 |
+| DP-02 | 단일 세션 pause 없음 | raw=elapsed |
+| DP-03 | 재활성화 3세션 (TEST-1111 패턴, dur 0/2/11) | 합산 13 |
+| DP-04 | 세션 겹침(0.5% 케이스) | interval-union → 이중계상 0 |
+| DP-05 | 멀티 작업자 2명 동시(병렬) | man-hour = 각자 합 (elapsed보다 큼) |
+| DP-06 | 멀티 작업자 + 각자 재활성화 | per-worker union 후 합 |
+| DP-07 | 휴게 auto-pause(break_*) 존재 | 차감 안 됨(raw 유지) |
+| DP-08 | manual pause > union (음수) | GREATEST(0)→0 |
+| DP-09 | ship/admin 완료 (Q2 active pause) | duration NULL 회귀 0 + manual 차감 |
+| DP-10 | 자동마감 (Q-A 결론) | manual 만 차감 + close_at 세션 |
+| DP-11 | 백필 멱등 (2회 동일) | 변화 0 |
+| DP-12 | 회귀 — 기존 duration 관련 전수 | GREEN |
+
+### H. 진행 순서 (v2)
+
+1. ✅ DB 검증 (멀티 규모 + 세션 disjoint + 중복 38 + TEST-1111 재현)
+2. **Codex 라운드 2** (Q-A~Q-E 판정 + v2 공식 검증)
+3. 합의 후 구현 — `compute_task_manhour()` SSoT + complete_task 책임분리 + 3경로 + migration 058
+4. pytest 12 TC + 회귀
+5. v2.22.0 + 문서 + 배포 + 백필
+6. (후속/별) VIEW 대시보드 세션 표시 집계(Q-B) + worker_count 정정(Q-D) + 재활성화 UI 정리(장기)
+
+---
+
+## v3 갱신 (Codex 라운드 2 반영 — M=10/A=3 전건)
+
+> v2 대비 변경: man-hour 공식을 **interval-intersection 기반**으로 정밀화(manual pause ∩ session_union), 자동마감 가상구간 처리, 백필에서 수동 강제종료 제외, 대시보드 집계 OPS BE 이관, SQL(tstzrange+range_agg) 구현 확정. Codex 라운드 2 M=10/A=3 전건 반영.
+
+### A3. 공식 정밀화 (Codex Q-E + 엣지 2/3 — 가장 중요)
+
+v2 공식 `union(세션) − Σ(manual pause)` 의 결함: manual pause 를 무조건 차감하면 (엣지 2) pause 가 세션 경계를 걸칠 때 세션 사이 gap 까지 과차감, (엣지 3) pause 가 세션 밖(안 일하는 구간)에 있을 때 부당 차감.
+
+**확정 공식 (intersection 기반)**:
+```
+session_union(worker) = range_agg( tstzrange(session_start, session_complete) )   -- 멀티레인지
+manual_pause_union(worker) = range_agg( tstzrange(paused_at, resumed_at) )         -- pause_type='manual' 만
+effective_pause(worker) = length( manual_pause_union ∩ session_union )             -- 교집합만
+worker_manhour = length(session_union) − effective_pause(worker)    , 최소 0
+task.duration = Σ over workers ( worker_manhour )
+```
+
+→ pause 는 **세션과 겹치는 부분만** 차감. 세션 밖 pause(엣지3)=0 차감, 경계 걸침(엣지2)=겹친 부분만. 세션 겹침(0.5%)=union 이 자동 병합.
+
+### B3. 자동마감 = 가상 구간 (Codex Q-A)
+
+- auto-close 는 **가짜 `work_completion_log` INSERT 금지**. 계산 내부에서만 미완 세션을 `tstzrange(last_started_at, close_at)` 가상 구간으로 session_union 에 포함.
+- `duration_calculator.calculate_auto_close_duration()` 의 `raw − total_pause_minutes` → **`compute_task_manhour()` 단일 공식으로 위임** (이중 SSoT 제거). close_at 을 가상 세션 종료로 전달.
+- audit 컬럼(force_closed/closed_by/close_reason/duration_source)은 계산 함수가 **건드리지 않고** 각 경로 audit writer 가 유지.
+
+### C3. 백필 범위 (Codex Q-C)
+
+migration 058 백필 분기:
+- **재계산 O**: 실측 완료 세션이 있는 task (정상완료 + 자동마감 미완세션 close_at 포함). `compute_task_manhour()` 재계산.
+- **재계산 X (제외)**: **수동 강제종료** = `force_closed=TRUE AND closed_by IS NOT NULL` — 관리자 판단 close_at 을 실측 man-hour 로 합성하면 감사 데이터 오염 (BACKLOG 클린 코어 원칙). 현행값 보존.
+- elapsed NULL 과거 행 = `완료−시작` fallback. GREATEST(0). 멱등(2회 실행 동일).
+
+### D3. complete_task 책임분리 트랜잭션 안전 (Codex §D 위험)
+
+- 신규 `compute_task_manhour(task_detail_id, virtual_close_at=None)` — SSoT 단일 함수. (virtual_close_at 전달 시 미완 세션을 가상 구간으로 포함 = auto-close 용)
+- `complete_task()` (task_detail.py): duration 계산 **제거** → completed_at 만 set.
+- 3경로 모두 **같은 트랜잭션 내**에서 completed_at/audit set → `compute_task_manhour()` → duration UPDATE (부분 업데이트 방지):
+  - 정상완료: `_finalize_task_multi_worker` 내 호출
+  - ship/admin: `shipment_service.py:194/303` 호출 후 명시 호출 (NULL 회귀 차단)
+  - 수동 강제종료: `admin.py:980` raw → 호출 교체
+  - 자동마감: `calculate_auto_close_duration` → compute_task_manhour(virtual_close_at=close_at) 위임
+- audit writer 와 계산 함수 책임 분리 명확 (계산 함수는 duration 만 반환/UPDATE, audit 컬럼 불간섭).
+
+### E3. 구현 방식 (Codex Q-E) — SQL 단일 CTE
+
+PostgreSQL 15 `tstzrange` + `range_agg` (multirange) 단일 CTE 로 session_union / pause_union / 교집합 길이 산출. Python 후처리 대비 겹침·경계·세션밖 pause 일관 처리 + 백필 재사용 용이. `compute_task_manhour()` 가 이 쿼리 1회 실행.
+
+### F3. worker_count (Codex Q-D)
+
+- worker_count 9.2% vs 29% 괴리 = **별 BACKLOG bug** (`BUG-WORKER-COUNT-UNDERCOUNT-20260602`). 본 sprint 구현 조건 아님.
+- 단 본 fix 신규 로직은 worker_count 컬럼에 **의존 금지** — man-hour 는 work_start_log/completion_log per-worker union 으로만 산출.
+
+### G3. pytest TC 추가 (Codex §G — Must 6건)
+
+기존 §G(v2) DP-01~12 + 추가:
+| TC | 시나리오 | 기대 |
+|---|---|---|
+| DP-13 | manual pause 가 세션 밖(안 일하는 구간) | 차감 0 (엣지3) |
+| DP-14 | manual pause 가 세션 경계 걸침 | 겹친 부분만 차감 (엣지2) |
+| DP-15 | auto-close 미완세션 — DB INSERT 없이 `[start, close_at]` 가상구간 계산 | 가상 구간 man-hour 산출 |
+| DP-16 | 수동 강제종료(closed_by 있음) 백필 제외 | 현행값 보존 (재계산 안 함) |
+| DP-17 | 3경로(정상/ship-admin/auto) 모두 active manual pause close_at clamp 후 계산 | 일관 |
+| DP-18 | `_enrich_tasks_with_workers` 응답 — 동일 task+worker 다중 세션 → 1 worker 행 집계 | worker 단위 1행 |
+| DP-19 (A) | break pause 가 session 보다 길어도 차감 0 | raw 유지 |
+
+### H3. 대시보드 집계 (Codex Q-B)
+
+- 세션 중복 표시 → **OPS BE 응답에서 (task,worker) 집계** (`work.py _enrich_tasks_with_workers` / `task_service_batch`) → 1 worker = 1행, man-hour = 세션 union. VIEW 는 렌더만.
+- 책임분리 원칙(CLAUDE.md L545 — OPS BE = 집계 SSoT) 정합.
+
+### 진행 순서 (v3)
+
+1. ✅ DB 검증 + Codex 라운드 1·2 합의
+2. **Codex 라운드 3** (v3 공식 + SQL + 3경로 위임 + 백필 분기 최종 검증)
+3. 합의 후 구현 — `compute_task_manhour()` SQL CTE + complete_task 책임분리 + 3경로 + migration 058 (수동강제 제외)
+4. pytest DP-01~19 + 회귀
+5. v2.22.0 + 문서 + 배포 + 백필
+6. (별 BACKLOG) worker_count 정정 / 재활성화 UI 정리(장기)
+
+---
+
+## v4 갱신 (Codex 라운드 3 반영 — M=2 + 운영 데이터 확인 + pause 익일 close 시나리오)
+
+> v3 대비: C3 백필 식별자를 `closed_by IS NULL` → `close_reason LIKE 'AUTO_CLOSED_%'` 로 정정(legacy 오분류 차단), DP-20/21 추가, B3/D3/E3 advisory 명세. + 사용자 catch "pause 하면 익일 task close" 시나리오 명시 검증.
+
+### C4. 백필 식별자 정정 (Codex 라운드 3 M-C3 — 운영 데이터 검증 완료)
+
+라운드 3 catch: `closed_by IS NULL` 제외 기준은 결함. **운영 실측 (2026-06-02)**:
+- 완료 task 강제종료 분류: 정상(force_closed=F) 1,865 / 수동강제(closed_by 있음) 121 / **force_closed=TRUE & closed_by NULL = 4**
+- 그 4건 close_reason = 전부 `AUTO_CLOSED_BY_*` (자동마감) → closed_by 기준 제외 시 **자동마감을 재계산에서 잘못 빼버림** (반대 오류)
+
+**확정 백필 분기** (close_reason 기반):
+```
+재계산 O:
+  · force_closed = FALSE (정상완료)
+  · force_closed = TRUE AND close_reason LIKE 'AUTO_CLOSED_%' (자동마감 — closed_by 유무 무관)
+재계산 X (현행 보존):
+  · 수동 강제종료 = force_closed = TRUE AND close_reason NOT LIKE 'AUTO_CLOSED_%'
+    (= MANUAL_FORCE_CLOSE / SHIP_COMPLETE / ADMIN_COMPLETE 등 관리자 판단 close_at)
+elapsed NULL fallback / GREATEST(0) / 멱등
+```
+
+### G4. pytest TC 추가 (Codex 라운드 3 M-G3)
+
+| TC | 시나리오 | 기대 |
+|---|---|---|
+| DP-20 | 수동 강제종료 (close_reason NOT LIKE 'AUTO_CLOSED_%', closed_by NULL/있음 무관) | 백필 제외, 현행값 보존 |
+| DP-21 | legacy 자동마감 (force_closed=TRUE, close_reason LIKE 'AUTO_CLOSED_%', closed_by NULL) | 재계산 포함 |
+
+### B4/D4/E4. Advisory 명세 (Codex 라운드 3 A)
+
+- **B4**: `compute_task_manhour(task_detail_id, virtual_close_at=None)` 시그니처 확정. close_at/duration_source 산정은 기존 `calculate_close_at()` 가 유지(PREV_DAY_CAP migration 057 등) → 그 close_at 을 `compute_task_manhour(virtual_close_at=close_at)` 로 전달. 계산 함수는 man-hour 만 반환, duration_source 는 호출부가 set.
+- **D4**: `compute_task_manhour()` + `complete_task()` 는 **conn/cur 주입형**으로 변경 (현재 각자 self-commit → 부분 업데이트 위험). 3경로가 같은 트랜잭션에서 completed_at/audit/duration 일괄 commit.
+- **E4**: multirange 길이 = `SELECT SUM(EXTRACT(EPOCH FROM (upper(r)-lower(r)))/60) FROM unnest(multirange) r`. 대량 백필 = task 배치 단위 + (task_id) 인덱스 활용, range_agg Partial Mode 미지원이라 task별 그룹 단위 실행.
+
+### I4. pause 익일 close 시나리오 (사용자 catch — 명시 검증)
+
+**확인된 동작**: paused(미완 일시정지) task 는 **일별 스케줄러가 일괄 close 하지 않음** (`check_unfinished_tasks` = 알림만 / `task_escalation_job` = 알림만). 실제 close 는:
+- 같은 공정의 FINAL task 완료 → SECOND/FIRST_FINAL 트리거 → `auto_close_relay_task()` 가 잔여 미완·pause task 자동 close (close_reason `AUTO_CLOSED_BY_*`)
+- close_at = `calculate_close_at()` (익일/주말이면 PREV_DAY_CAP = 전일 17:00 KST cap, migration 057)
+- 운영 현재 is_paused=TRUE 미완 task = 75건 (일괄 안 닫힘 입증)
+
+**duration 정합 (A3/B3 적용)**:
+```
+paused task auto-close 시:
+  session 가상구간 = tstzrange(last_started_at, close_at)   ← B3
+  manual pause (resumed_at NULL 상태) = tstzrange(paused_at, NULL=무한상단)
+  effective_pause = length( manual_pause ∩ session_union )
+                  = paused_at ~ close_at 부분만 (close_at 으로 자연 clamp)   ← A3 교집합
+  worker_manhour = (close_at − last_started) − (paused_at ~ close_at) = last_started ~ paused_at
+```
+→ 즉 "시작~일시정지까지 실제 일한 시간"만 man-hour 로 정확히 산출. pause 후 안 일한 구간(paused~close)은 교집합으로 자연 차감. `resumed_at NULL` → close_at clamp 는 intersection 이 자동 처리 (별도 분기 불필요). 단 **구현 시 기존 `resumed_at IS NOT NULL` 필터 재사용 금지** — auto-close 경로는 미완 pause(resumed_at NULL)도 close_at 으로 clamp 해 포함.
+
+→ Codex 라운드 3 항목 7 (N) 정합 확인. DP-15(가상구간) + DP-17(active pause clamp) + 신규 DP-22 로 커버:
+
+| TC | 시나리오 | 기대 |
+|---|---|---|
+| DP-22 | pause 중(resumed_at NULL) task 익일 auto-close (close_at=전일17:00 PREV_DAY_CAP) | man-hour = last_started~paused_at, paused~close 차감 |
+
+### 진행 순서 (v4)
+
+1. ✅ DB 검증 + Codex 라운드 1·2·3
+2. **Codex 라운드 4** (C4 close_reason 분기 + DP-20/21/22 + B4/D4/E4 명세 최종 GO 판정)
+3. 합의(GO) 후 구현
+4. pytest DP-01~22 + 회귀
+5. v2.22.0 + 배포 + 백필(C4 분기)
+6. (별 BACKLOG) worker_count 정정 / 재활성화 UI 정리
+
+---
+
+## v5 갱신 (Codex 라운드 4 반영 — M=4 + 사용자 결정 옵션 c)
+
+> v4 대비: D4 트랜잭션 = **옵션 c (단일 UPDATE 원자성)** 채택, C4 백필 식별자 = **allowlist** 전환, I4 미완 pause = **COALESCE(resumed_at, close_at) clamp** SQL 명시, DP-23/24/25 추가. conn 주입형 대공사는 별 리팩토링 Sprint 분리(BACKLOG). Codex 라운드 4 M=4 전건 반영.
+
+### C5. 백필/분류 식별자 = allowlist (Codex 라운드 4 M-C4)
+
+라운드 4 catch: 수동 강제종료 `close_reason`은 사용자 자유 입력(admin.py:1128/1291) → `AUTO_CLOSED_` prefix 우연 입력 시 오분류. `NOT LIKE` 부정 조건 폐기.
+
+**확정 (allowlist 양성 분류)**:
+```
+재계산 O (자동마감/정상):
+  · force_closed = FALSE
+  · force_closed = TRUE AND close_reason LIKE 'AUTO_CLOSED_%'
+      (AUTO_CLOSED_LEGACY / AUTO_CLOSED_BY_FIRST_FINAL_TRIGGER:* / AUTO_CLOSED_BY_SECOND_FINAL_TRIGGER:*)
+재계산 X (수동 — 현행 보존):
+  · force_closed = TRUE AND close_reason IN ('MANUAL_FORCE_CLOSE','SHIP_COMPLETE','ADMIN_COMPLETE')
+  · force_closed = TRUE AND close_reason IS NULL          ← 보존 (안전측)
+  · force_closed = TRUE AND 그 외 사용자 자유 입력 사유    ← 보존 (안전측)
+```
+→ 즉 "재계산은 명시적 자동마감(`AUTO_CLOSED_%`)만 양성 포함, 나머지 force_closed는 전부 보존". 자유 입력 사유가 `AUTO_CLOSED_`로 시작해도 — **추가 가드**: `force_close_task()` (admin.py) 에 `AUTO_CLOSED_` prefix 예약어 차단(400) 추가해 입력 단계에서 봉쇄.
+
+### D5. 트랜잭션 = 옵션 c (단일 UPDATE 원자성) — Codex 라운드 4 M-D4
+
+conn 주입형 대공사(God File `task_detail.py` 917줄 🔴) 대신 **completed_at + duration 을 한 UPDATE 로 원자화**:
+```sql
+-- compute_task_manhour() 가 값만 반환하는 게 아니라, 완료 처리를 단일 UPDATE 로 수행
+UPDATE app_task_details
+SET completed_at = %(completed_at)s,
+    duration_minutes = ( <interval-union manhour SQL (E5)> ),
+    elapsed_minutes  = GREATEST(0, EXTRACT(EPOCH FROM (%(completed_at)s - started_at))/60)::int,
+    updated_at = CURRENT_TIMESTAMP
+WHERE id = %(task_id)s AND started_at IS NOT NULL
+```
+- duration 산출 서브쿼리(E5)와 completed_at 갱신이 **같은 statement** → 부분 업데이트(완료시각만 찍히고 duration 누락) 불가.
+- audit 컬럼(force_closed/closed_by/close_reason/duration_source)은 **각 경로가 본 UPDATE 전에 자기 책임으로 set** (불간섭 유지).
+- `complete_task()` 의 기존 raw duration UPDATE → 본 단일 UPDATE 로 교체. 3경로(정상/ship-admin/수동강제/자동마감) 모두 동일 UPDATE 헬퍼 호출.
+- ⚠️ 전체 완료흐름(completion_status/알림 등) 다중 commit 은 **기존과 동일** (본 fix 가 악화 안 함). 전사 트랜잭션 통합은 별 Sprint.
+
+**별 BACKLOG**: `REF-TASK-DETAIL-CONN-INJECTION-20260602` 🟠 MEDIUM — task_detail.py 분할 + 3경로 conn 주입형 (리팩토링 안전 7원칙: [REFACTOR] 단독 커밋, migration 없이, Before/After GREEN). = 옵션 a 를 정식 채널로 달성.
+
+### I5. 미완 pause clamp SQL (Codex 라운드 4 M-I4)
+
+`resumed_at IS NULL`(미완 pause) 을 close_at(또는 completed_at)으로 clamp:
+```sql
+manual_pause_union = range_agg(
+    tstzrange( paused_at, COALESCE(resumed_at, %(close_at)s), '[)' )
+)  WHERE pause_type='manual'
+```
+- 정상완료: close_at = completed_at
+- 자동마감: close_at = calculate_close_at() (PREV_DAY_CAP 등)
+- DP-22 재검증: 시작08:00 / pause09:00(resumed_at NULL) / 익일 trigger close_at=17:00(PREV_DAY_CAP) →
+  session=[08:00,17:00], manual_pause=[09:00, COALESCE(NULL,17:00)=17:00] → 교집합=[09:00,17:00]=480
+  → manhour = 540 − 480 = **60분** (시작~정지 실작업). 540 오산출 방지 확인.
+- ⚠️ 기존 `resumed_at IS NOT NULL` 필터(task_service.py:2079, duration_calculator.py:140) 재사용 금지 — 본 공식은 미완 pause 도 clamp 포함.
+
+### G5. pytest TC 추가 (Codex 라운드 4 M-G4)
+
+| TC | 시나리오 | 기대 |
+|---|---|---|
+| DP-23 | force_closed=TRUE AND close_reason IS NULL | 백필 보존 (재계산 X, SQL NULL 3-valued 안전) |
+| DP-24 | active manual pause(resumed_at NULL) 중 수동 force_close, completed_at clamp | pause∩session 만 차감 |
+| DP-25 | 수동 force-close 사유가 'AUTO_CLOSED_' prefix | 입력 단계 400 차단 (또는 백필 보존 분류) |
+
+### 진행 순서 (v5)
+
+1. ✅ DB 검증 + Codex 라운드 1·2·3·4
+2. **Codex 라운드 5** (C5 allowlist + D5 단일UPDATE + I5 clamp + DP-23/24/25 최종 GO 판정)
+3. GO 후 구현 — compute_task_manhour 단일 UPDATE + 3경로 + migration 058(allowlist) + AUTO_CLOSED_ prefix 가드
+4. pytest DP-01~25 + 회귀
+5. v2.22.0 + 배포 + 백필
+6. 별 BACKLOG: REF-TASK-DETAIL-CONN-INJECTION (옵션 a) / worker_count 정정 / 재활성화 UI 정리
+
+---
+
+## v6 갱신 (Codex 라운드 5 반영 — M=1 블로커 해소 + A 2건)
+
+> v5 대비: D5 audit-before-UPDATE 분리 결함(M-Q2) 해소 = **audit 컬럼을 단일 UPDATE에 포함**. C5 allowlist를 prefix→**정확 패턴 + preflight**(Q1). DP-26 partial-write TC + DP-25 결정론화(Q4). DP-22 문서 표기 정정.
+
+### D6. 단일 UPDATE에 audit 컬럼 포함 (Codex 라운드 5 M-Q2 — 블로커 해소)
+
+v5 결함: "audit 은 UPDATE 전에 각 경로가 set" → audit commit 후 단일 UPDATE 실패 시 audit만 남고 completed_at/duration NULL = partial write 잔존.
+
+**확정**: audit 컬럼(force_closed/closed_by/close_reason/duration_source)도 **같은 단일 UPDATE 의 SET 절에 포함** (각 경로가 파라미터로 전달):
+```sql
+UPDATE app_task_details
+SET completed_at     = %(completed_at)s,
+    duration_minutes = ( <interval-union ∩ pause manhour 서브쿼리 (E5/I5)> ),
+    elapsed_minutes  = GREATEST(0, EXTRACT(EPOCH FROM (%(completed_at)s - started_at))/60)::int,
+    force_closed     = %(force_closed)s,      -- 경로별 전달 (정상완료=FALSE)
+    closed_by        = %(closed_by)s,         -- 정상완료=NULL
+    close_reason     = %(close_reason)s,      -- 정상완료=NULL
+    duration_source  = %(duration_source)s,   -- calculate_close_at() 결과 또는 NULL
+    updated_at       = CURRENT_TIMESTAMP
+WHERE id = %(task_id)s AND started_at IS NOT NULL
+```
+- completed_at + duration + elapsed + audit 전부 **한 statement** → partial write 원천 차단.
+- 경로별 파라미터: 정상완료(force_closed=FALSE, closed_by/close_reason=NULL) / 수동강제(force_closed=TRUE, closed_by, close_reason='MANUAL_FORCE_CLOSE') / ship-admin(close_reason='SHIP_COMPLETE'/'ADMIN_COMPLETE', force_closed=FALSE) / 자동마감(force_closed=FALSE, close_reason='AUTO_CLOSED_BY_*', duration_source).
+- 별도 audit UPDATE/commit 제거. `complete_task()` raw UPDATE → 본 헬퍼로 완전 교체.
+- 전사 트랜잭션(completion_status/알림 등 후속 다중 commit)은 여전히 별 BACKLOG `REF-TASK-DETAIL-CONN-INJECTION` (본 fix 책임 부분만 원자화).
+
+### C6. allowlist 정확 패턴 + preflight (Codex 라운드 5 Q1-A)
+
+prefix `LIKE 'AUTO_CLOSED_%'` 는 역사적 수동 자유입력이 우연히 'AUTO_CLOSED_'로 시작 시 재계산 오분류 가능. **정확 패턴으로 강화**:
+```
+재계산 O (자동마감) = force_closed=TRUE AND (
+    close_reason = 'AUTO_CLOSED_LEGACY'
+    OR close_reason LIKE 'AUTO_CLOSED_BY_FIRST_FINAL_TRIGGER:%'
+    OR close_reason LIKE 'AUTO_CLOSED_BY_SECOND_FINAL_TRIGGER:%'
+)  -- 실제 코드 write literal (task_detail.py:770/772/775) 만
++ force_closed=FALSE (정상완료)
+재계산 X = 그 외 force_closed=TRUE 전부 (보존)
+```
+**preflight (migration 058 선행)**: `SELECT COUNT(*) FROM app_task_details WHERE force_closed=TRUE AND close_reason LIKE 'AUTO_CLOSED_%' AND close_reason NOT IN/NOT LIKE (위 3 정확 패턴)` → 0 이 아니면 백필 중단 + 수동 검토 (역사적 오분류 행 탐지). + admin force_close_task() 'AUTO_CLOSED_' prefix 입력 차단(400) 유지.
+
+### G6. TC 추가/정정 (Codex 라운드 5 Q4-A)
+
+| TC | 시나리오 | 기대 |
+|---|---|---|
+| DP-25 (정정) | 수동 force-close 사유 'AUTO_CLOSED_' prefix 입력 | **400 차단** (결정론 — 입력 단계 봉쇄). 역사적 행은 preflight 가 탐지 |
+| DP-26 (신규) | audit set 후 단일 UPDATE 경로 — 한 statement 원자성 | audit + completed_at + duration 동시 기록 (partial write 불가 검증) |
+
+### 정정 (Codex 라운드 5 Q3)
+
+I5/DP-22 표기: session=540, pause∩session=480, **manhour=540−480=60분** (시작08:00~정지09:00 실작업 60분). v5 본문 "60분" 맞음 (480은 교집합 길이, net 아님). 혼동 표기 정리.
+
+### 진행 순서 (v6)
+
+1. ✅ DB 검증 + Codex 라운드 1·2·3·4·5
+2. **Codex 라운드 6** (D6 audit 단일UPDATE + C6 정확패턴/preflight + DP-25/26 최종 GO)
+3. GO 후 구현
+4. pytest DP-01~26 + 회귀
+5. v2.22.0 + 배포 + 백필(preflight)
+6. 별 BACKLOG: REF-TASK-DETAIL-CONN-INJECTION / worker_count / 재활성화 UI
+
+---
+
+## v7 갱신 (Codex 라운드 6 반영 — M=1 정합 + pytest 대폭 보강)
+
+> v6 대비: D6 수동강제 close_reason 정책 모순(M-R6-1) 정정 = **자유 입력 유지** + AUTO_CLOSED_ prefix 차단. + 사용자 요청 "pytest 충분히" → TC 매트릭스 DP-01~35 전면 확장 + 회귀 스위트 명시.
+
+### D7. 수동강제 close_reason = 자유 입력 유지 (Codex 라운드 6 M-R6-1)
+
+v6 D6 의 "수동강제 close_reason='MANUAL_FORCE_CLOSE' 고정" 은 실제 API(admin.py:1128/1285 사용자 자유 입력 저장)와 모순. **정정 — 경로별 audit 파라미터 확정**:
+```
+정상완료:   force_closed=FALSE, closed_by=NULL,        close_reason=NULL,                duration_source=NULL
+수동강제:   force_closed=TRUE,  closed_by=g.worker_id, close_reason=<검증된 사용자 자유입력>, duration_source=NULL
+            └ 단 close_reason.startswith('AUTO_CLOSED_') → 400 차단 (예약 prefix, admin force_close_task)
+ship완료:   force_closed=FALSE, closed_by=g.worker_id, close_reason='SHIP_COMPLETE',      duration_source=NULL
+admin완료:  force_closed=FALSE, closed_by=g.worker_id, close_reason='ADMIN_COMPLETE',     duration_source=NULL
+자동마감:   force_closed=FALSE, closed_by=NULL,        close_reason='AUTO_CLOSED_BY_*',    duration_source=calculate_close_at()
+```
+→ C6 백필 분류와 정합: 재계산 = force_closed=FALSE(정상/ship/admin/auto) OR (force_closed=TRUE AND close_reason 정확3패턴). 수동강제(force_closed=TRUE + 자유입력)는 보존. ship/admin 은 force_closed=FALSE 라 재계산 포함 (관리자 완료지만 실측 세션 기반이므로 재계산 무해 — completed_at 기준 세션 union).
+
+> ⚠️ ship/admin 완료(force_closed=FALSE)는 백필 재계산 대상에 포함됨. 단 이들은 실측 completed_at + 실제 세션이 있으므로 interval-union 재계산이 정확(관리자 close_at 합성 아님). 수동강제만 보존.
+
+### A 주의 (Codex 라운드 6 — 구현 시 필수)
+
+- migration 058 preflight 제외 조건 = `AND NOT (close_reason='AUTO_CLOSED_LEGACY' OR close_reason LIKE 'AUTO_CLOSED_BY_FIRST_FINAL_TRIGGER:%' OR close_reason LIKE 'AUTO_CLOSED_BY_SECOND_FINAL_TRIGGER:%')` 괄호식 명시 (NOT IN/NOT LIKE 단독 혼용 논리오류 방지).
+- auto-close 단일 helper 이전 시 기존 race guard `WHERE completed_at IS NULL AND force_closed=FALSE` (task_detail.py:793) **반드시 보존**.
+
+### G7. pytest TC 매트릭스 (전면 확장 — "충분히")
+
+신규 파일 `tests/backend/test_fix_duration_manual_pause.py`. 운영 데이터 보존 규칙 준수(테스트 생성분만 cleanup).
+
+**그룹 1 — 기본 공식 (단일 작업자)**
+| TC | 시나리오 | 기대 |
+|---|---|---|
+| DP-01 | 08:00 시작→09:00 manual pause→15:00 재개→16:00 완료 | (480 세션) − (360 pause∩session) = 120 |
+| DP-02 | 단일 세션 pause 없음 | duration = elapsed = raw |
+| DP-03 | 재활성화 3세션 (TEST-1111 패턴 0/2/11) | 합산 = 13 |
+| DP-04 | 세션 시간 겹침 (0.5% 케이스) | range_agg union → 이중계상 0 |
+| DP-05 | break auto-pause(lunch)만 존재 | 차감 0 (raw 유지, 휴게 미차감) |
+| DP-08 | manual pause > session (음수) | GREATEST(0) → 0 |
+| DP-13 | manual pause 가 세션 밖(완료~재활성 사이) | 차감 0 (교집합 0) |
+| DP-14 | manual pause 가 세션 경계 걸침 | 겹친 부분만 차감 |
+| DP-19 | break pause 가 session 보다 김 | 차감 0 |
+
+**그룹 2 — 멀티 작업자**
+| TC | 시나리오 | 기대 |
+|---|---|---|
+| DP-06 | 2명 병렬(동시간대) | man-hour = 각자 합 (> elapsed) |
+| DP-07 | 3명 각자 다른 시간 | Σ per-worker union |
+| DP-27 | 2명 + 각자 재활성화 다중세션 | per-worker union 후 Σ |
+| DP-28 | 1명 pause / 다른 1명 정상 | worker별 독립 pause 차감 |
+| DP-29 | worker_count 컬럼 미의존 검증 | log 기반 distinct 로만 산출 |
+
+**그룹 3 — 자동마감 / pause 익일 close**
+| TC | 시나리오 | 기대 |
+|---|---|---|
+| DP-15 | auto-close 미완세션 — DB INSERT 없이 [start, close_at] 가상구간 | 가상구간 man-hour |
+| DP-17 | 3경로 active pause close_at clamp | 일관 |
+| DP-22 | 08:00 시작/09:00 pause(미완)/익일 close_at=17:00(PREV_DAY_CAP) | 540−480=60 (시작~정지 실작업) |
+| DP-30 | auto-close race guard (completed_at NOT NULL) | 재처리 안 함 (guard 보존) |
+| DP-31 | auto-close + PREV_DAY_CAP duration_source 기록 | duration_source 정확 + 단일 UPDATE |
+
+**그룹 4 — 3경로 통일 + 트랜잭션**
+| TC | 시나리오 | 기대 |
+|---|---|---|
+| DP-09 | ship-complete 경로 | duration NULL 회귀 0 + manual 차감 + close_reason='SHIP_COMPLETE' |
+| DP-32 | admin-complete 경로 | 동일 (close_reason='ADMIN_COMPLETE') |
+| DP-24 | active manual pause 중 수동 force_close, completed_at clamp | pause∩session 만 차감 |
+| DP-26 | 단일 UPDATE 원자성 — completed_at+duration+elapsed+audit 동시 | partial write 불가 (한 statement) |
+| DP-33 | 수동강제 자유입력 close_reason 보존 | 입력값 그대로 저장 + force_closed=TRUE |
+
+**그룹 5 — 백필(migration 058)**
+| TC | 시나리오 | 기대 |
+|---|---|---|
+| DP-11 | 백필 멱등 (2회 실행) | 변화 0 |
+| DP-16 | 정상완료 과거행 백필 재계산 | raw→interval-union−pause 정정 |
+| DP-20 | 수동강제(force_closed=TRUE 자유입력) | 백필 제외, 현행 보존 |
+| DP-21 | legacy auto-close (AUTO_CLOSED_BY_*, closed_by NULL) | 재계산 포함 |
+| DP-23 | force_closed=TRUE AND close_reason NULL | 보존 (SQL NULL 3-valued 안전) |
+| DP-25 | 수동 force-close 사유 'AUTO_CLOSED_' prefix 입력 | 400 차단 (입력 봉쇄) |
+| DP-34 | preflight — 정확3패턴 외 'AUTO_CLOSED_%' 행 존재 | 백필 중단 + 경고 |
+| DP-35 | 백필 elapsed NULL 과거행 | 완료−시작 fallback + GREATEST(0) |
+
+**회귀 스위트 (Before/After GREEN 필수)**
+- `test_relay_first_final.py` (38) / `test_v2_15_16/18` / `test_force_close.py` / `test_working_hours.py`(의미 갱신) / `test_ship_complete.py` / `test_admin_complete.py` / `test_hotfix04_orphan.py`(duration fallback) 전수 재실행.
+
+### 진행 순서 (v7)
+
+1. ✅ DB 검증 + Codex 라운드 1~6
+2. **Codex 라운드 7** (D7 close_reason 정합 + G7 TC 확장 최종 GO)
+3. GO 후 구현
+4. pytest DP-01~35 (그룹1~5) + 회귀 스위트 GREEN
+5. v2.22.0 + 배포 + 백필(preflight)
+6. 별 BACKLOG: REF-TASK-DETAIL-CONN-INJECTION / worker_count / 재활성화 UI
+
+---
+
+## v8 갱신 (Codex 라운드 7 반영 — M=1 audit 정합 + A 3건)
+
+> v7 대비: D7 자동마감 closed_by 표기 오류(M-R7-1) 정정 = **audit 값은 현행 코드 동작 그대로 보존**(본 fix 는 duration 만 변경). + 파일 경로/테스트 수/DP 번호 표기 정정(A 3건).
+
+### D8. audit 값 = 현행 동작 보존 (Codex 라운드 7 M-R7-1)
+
+핵심 원칙 명문화: **본 fix 는 duration 계산만 변경하고 audit 컬럼 의미·값은 일절 바꾸지 않는다.** 단일 UPDATE(D6) 가 audit 컬럼을 SET 절에 포함하는 이유는 *원자성*이지 *값 변경*이 아님 → 각 경로는 **현재 코드가 쓰는 audit 값을 그대로** 파라미터로 전달.
+
+**실제 코드 정합 (정정)** — auto_close_relay_task (task_service.py:1367/1371/1486/1490 → task_detail.py:789):
+```
+정상완료:   force_closed=FALSE, closed_by=NULL,        close_reason=NULL
+수동강제:   force_closed=TRUE,  closed_by=g.worker_id, close_reason=<사용자 자유입력>  (AUTO_CLOSED_ prefix 400 차단)
+ship완료:   force_closed=FALSE, closed_by=g.worker_id, close_reason='SHIP_COMPLETE'
+admin완료:  force_closed=FALSE, closed_by=g.worker_id, close_reason='ADMIN_COMPLETE'
+자동마감:   force_closed=<현행 — v2.15.16 이후 FALSE>, closed_by=o_worker_id (← 정정: NULL 아님, 현행 코드),
+            close_reason='AUTO_CLOSED_BY_{FIRST|SECOND}_FINAL_TRIGGER:{trigger}', duration_source=calculate_close_at()
+```
+→ C6 백필 분류는 **close_reason 기준**이라 closed_by 값과 무관 (영향 0). 자동마감 closed_by=o_worker_id 는 현행 그대로 보존, 본 fix 가 건드리지 않음.
+
+### A8. 표기 정정 (Codex 라운드 7 A 1~3)
+
+- **A-R7-1**: race guard 경로 = `backend/app/models/task_detail.py:793-795` (services 아님). 구현 티켓 정정.
+- **A-R7-2**: 회귀 스위트 = "**현행 전체**" 재실행 (test_relay_first_final 현행 28 등 — 고정 숫자 표기 폐기, 'all GREEN' 기준).
+- **A-R7-3**: DP-10(자동마감 — 그룹3 DP-15/22/30/31 로 흡수) / DP-12(회귀 — 회귀 스위트로 대체) → v7 표 누락분은 **회귀 스위트 + 그룹3 으로 커버** 명시 (별도 DP-10/12 재기재 불요).
+
+### 진행 순서 (v8)
+
+1. ✅ DB 검증 + Codex 라운드 1~7
+2. **Codex 라운드 8** (D8 audit 현행보존 + A 표기정정 — 최종 GO 확인)
+3. GO 후 구현
+4. pytest 그룹1~5 (DP-01~35) + 회귀 스위트 all GREEN
+5. v2.22.0 + 배포 + 백필(preflight)
+6. 별 BACKLOG: REF-TASK-DETAIL-CONN-INJECTION / worker_count / 재활성화 UI
+
+---
+
+## 구현 노트 (실데이터 SQL 검증 2026-06-02 — Codex GO 후)
+
+interval-union ∩ pause manhour SQL 을 PG16 운영 DB 에 read-only 검증:
+- td73819 (raw83 − manual pause75) → **8분 정확** ✅
+- TEST-1111 td233424 3세션 → 13.96 → **FLOOR 13분** (per-worker `GREATEST(0, sess_min − pause_min)` 에 FLOOR 적용 — 과거 int truncation 동작 일치, 분 단위 인플레 방지)
+- td87480 멀티 2명 → union∩pause 반영 정상 (긴 pause/gap 제외)
+
+**확정 SQL (구현용)**:
+```sql
+WITH sessions AS (
+  SELECT ws.worker_id,
+         tstzrange(ws.started_at,
+           COALESCE((SELECT MIN(wc.completed_at) FROM work_completion_log wc
+                     WHERE wc.task_id=ws.task_id AND wc.worker_id=ws.worker_id
+                       AND wc.completed_at >= ws.started_at), %(close_at)s), '[)') AS sess
+  FROM work_start_log ws WHERE ws.task_id=%(tid)s
+),
+sess_union AS (SELECT worker_id, range_agg(sess) AS mr FROM sessions GROUP BY worker_id),
+pauses AS (
+  SELECT wpl.worker_id, tstzrange(wpl.paused_at, COALESCE(wpl.resumed_at, %(close_at)s), '[)') AS pr
+  FROM work_pause_log wpl
+  WHERE wpl.task_detail_id=%(tid)s AND wpl.pause_type='manual'
+    AND COALESCE(wpl.resumed_at, %(close_at)s) > wpl.paused_at
+),
+pause_union AS (SELECT worker_id, range_agg(pr) AS mr FROM pauses GROUP BY worker_id),
+per_worker AS (
+  SELECT su.worker_id,
+    (SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (upper(r)-lower(r)))/60),0) FROM unnest(su.mr) r) AS sess_min,
+    COALESCE((SELECT SUM(EXTRACT(EPOCH FROM (upper(r)-lower(r)))/60)
+              FROM unnest(su.mr * COALESCE(pu.mr,'{}'::tstzmultirange)) r),0) AS pause_min
+  FROM sess_union su LEFT JOIN pause_union pu USING(worker_id)
+)
+SELECT COALESCE(SUM(FLOOR(GREATEST(0, sess_min - pause_min))),0)::int AS manhour FROM per_worker
+```
+→ `close_at` = 정상완료 completed_at / 자동마감 calculate_close_at(). 멀티레인지 교집합 `*` 연산자. worker별 FLOOR 후 합산.

@@ -12,6 +12,15 @@
 > **트리거**: 2026-03-22 AXIS SYSTEM 점검 보고서 지적 사항 미해결 + 감사 이후 파일 크기 오히려 증가
 > **실측 기준일**: 2026-04-21
 
+### REF-TASK-DETAIL-CONN-INJECTION-20260602 🟠 MEDIUM (2026-06-02 등록)
+
+> **근거**: FIX-DURATION-MANUAL-PAUSE-RAW-20260602 (v2.22.0) Codex 라운드 4 M-D4. 작업 완료 3경로(정상완료 / ship-admin / 수동강제 / 자동마감)가 각자 self-commit → 같은 트랜잭션 보장 불가. 완벽한 원자성(옵션 a)은 `task_detail.py`(917줄 🔴 필수분할) conn 주입형 전환 필요 = God File 대공사.
+> **결정 (2026-06-02)**: duration fix 에는 옵션 c(단일 UPDATE 원자성)만 적용 (God File 미접촉, 규칙 준수). conn 주입형 전환은 본 리팩토링 Sprint 로 분리.
+> **범위**: task_detail.py 분할 + complete_task/_finalize_task_multi_worker/auto_close_relay_task conn 주입형 + 전체 완료흐름(completion_status/알림/duration) 단일 트랜잭션.
+> **규칙**: 리팩토링 안전 7원칙 — [REFACTOR] 단독 커밋, migration 미포함, Before/After pytest GREEN 증명, git tag pre-refactor.
+> **선행 조건**: FIX-DURATION-MANUAL-PAUSE-RAW (v2.22.0) 배포 후 착수.
+
+
 ### 📊 현재 위반 현황 (1단계 기준: 🟡 500 / 🔴 800 / ⛔ 1200)
 
 #### OPS BE

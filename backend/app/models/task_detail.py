@@ -431,6 +431,158 @@ def start_task(task_detail_id: int, started_at: datetime) -> bool:
             put_conn(conn)
 
 
+# ──────────────────────────────────────────────────────────────
+# FIX-DURATION-MANUAL-PAUSE-RAW-20260602 (v2.22.0)
+# man-hour = per-worker interval-union(세션) − (수동 pause ∩ session_union)
+#   · 휴게(break_*) 미차감 (원본 데이터 적재 — 사용자 결정)
+#   · pause_type='manual' 만 차감 (positive 필터)
+#   · auto-close 미완 세션/미완 pause 는 close_at 으로 clamp
+#   · worker 별 FLOOR 후 합산 (분 단위 인플레 방지, 과거 truncation 일치)
+# 설계: AGENT_TEAM_LAUNCH.md § FIX-DURATION-MANUAL-PAUSE-RAW (Codex 라운드 1~8 GO)
+# ──────────────────────────────────────────────────────────────
+
+_TASK_MANHOUR_SQL = """
+WITH sessions AS (
+  SELECT ws.worker_id,
+         tstzrange(
+           ws.started_at,
+           COALESCE(
+             (SELECT MIN(wc.completed_at) FROM work_completion_log wc
+              WHERE wc.task_id = ws.task_id AND wc.worker_id = ws.worker_id
+                AND wc.completed_at >= ws.started_at),
+             %(close_at)s
+           ),
+           '[)'
+         ) AS sess
+  FROM work_start_log ws
+  WHERE ws.task_id = %(tid)s
+),
+sess_union AS (
+  SELECT worker_id, range_agg(sess) AS mr FROM sessions GROUP BY worker_id
+),
+pauses AS (
+  SELECT wpl.worker_id,
+         tstzrange(wpl.paused_at, COALESCE(wpl.resumed_at, %(close_at)s), '[)') AS pr
+  FROM work_pause_log wpl
+  WHERE wpl.task_detail_id = %(tid)s AND wpl.pause_type = 'manual'
+    AND COALESCE(wpl.resumed_at, %(close_at)s) > wpl.paused_at
+),
+pause_union AS (
+  SELECT worker_id, range_agg(pr) AS mr FROM pauses GROUP BY worker_id
+),
+per_worker AS (
+  SELECT su.worker_id,
+    (SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (upper(r)-lower(r)))/60),0)
+       FROM unnest(su.mr) r) AS sess_min,
+    COALESCE((SELECT SUM(EXTRACT(EPOCH FROM (upper(r)-lower(r)))/60)
+              FROM unnest(su.mr * COALESCE(pu.mr, '{}'::tstzmultirange)) r),0) AS pause_min
+  FROM sess_union su LEFT JOIN pause_union pu USING(worker_id)
+)
+SELECT COALESCE(SUM(FLOOR(GREATEST(0, sess_min - pause_min))),0)::int AS manhour
+FROM per_worker
+"""
+
+
+def compute_task_manhour(cur, task_detail_id: int, close_at: datetime) -> int:
+    """man-hour(분) 산출 — interval-union(세션) − (수동 pause ∩ session_union).
+
+    Args:
+        cur: 활성 커서 (호출부 트랜잭션 공유)
+        task_detail_id: app_task_details.id
+        close_at: 미완 세션/미완 pause clamp 시각
+                  (정상완료=completed_at / 자동마감=calculate_close_at() 결과)
+    Returns:
+        man-hour 분 (int, 최소 0). work_start_log 없으면 0.
+    """
+    cur.execute(_TASK_MANHOUR_SQL, {'tid': task_detail_id, 'close_at': close_at})
+    row = cur.fetchone()
+    if row is None:
+        return 0
+    # RealDictCursor / tuple cursor 양쪽 호환
+    val = row['manhour'] if isinstance(row, dict) else row[0]
+    return int(val or 0)
+
+
+def complete_task_unified(
+    task_detail_id: int,
+    completed_at: datetime,
+    *,
+    close_at: Optional[datetime] = None,
+    force_closed: bool = False,
+    closed_by: Optional[int] = None,
+    close_reason: Optional[str] = None,
+    duration_source: Optional[str] = None,
+    race_guard: bool = False,
+) -> bool:
+    """작업 완료 단일 UPDATE (completed_at + duration + elapsed + worker_count + audit 원자 기록).
+
+    FIX-DURATION-MANUAL-PAUSE-RAW-20260602 — duration 은 compute_task_manhour() 로 산출.
+    audit 컬럼 값은 호출부가 현행 동작 그대로 전달 (본 fix 는 duration 만 변경, audit 의미 불변).
+
+    Args:
+        completed_at: 완료 시각 (timezone-aware)
+        close_at: man-hour clamp 시각 (None → completed_at)
+        force_closed/closed_by/close_reason/duration_source: 경로별 audit (현행값 전달)
+        race_guard: True 면 WHERE 에 completed_at IS NULL AND force_closed=FALSE 추가
+                    (자동마감 동시 트리거 no-op 보존 — task_detail.py 기존 가드)
+    Returns:
+        True = UPDATE 성공 / False = race no-op 또는 실패
+    """
+    if close_at is None:
+        close_at = completed_at
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        manhour = compute_task_manhour(cur, task_detail_id, close_at)
+        guard_sql = " AND completed_at IS NULL AND force_closed = FALSE" if race_guard else ""
+        cur.execute(
+            f"""
+            UPDATE app_task_details
+            SET completed_at     = %(completed_at)s,
+                duration_minutes = %(manhour)s,
+                elapsed_minutes  = GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (%(completed_at)s - started_at))/60))::int,
+                worker_count     = GREATEST(1, (
+                    SELECT COUNT(DISTINCT worker_id) FROM work_start_log WHERE task_id = %(tid)s
+                )),
+                force_closed     = %(force_closed)s,
+                closed_by        = %(closed_by)s,
+                close_reason     = %(close_reason)s,
+                duration_source  = %(duration_source)s,
+                updated_at       = CURRENT_TIMESTAMP
+            WHERE id = %(tid)s AND started_at IS NOT NULL{guard_sql}
+            RETURNING id
+            """,
+            {
+                'completed_at': completed_at, 'manhour': manhour, 'tid': task_detail_id,
+                'force_closed': force_closed, 'closed_by': closed_by,
+                'close_reason': close_reason, 'duration_source': duration_source,
+            },
+        )
+        updated = cur.fetchone() is not None
+        conn.commit()
+        if updated:
+            logger.info(
+                f"complete_task_unified: id={task_detail_id}, manhour={manhour}m, "
+                f"close_at={close_at}, force_closed={force_closed}, "
+                f"close_reason={close_reason}"
+            )
+        else:
+            logger.info(
+                f"complete_task_unified: id={task_detail_id} no-op "
+                f"(race_guard={race_guard} or started_at NULL)"
+            )
+        return updated
+    except PsycopgError as e:
+        if conn:
+            conn.rollback()
+        logger.error(f"complete_task_unified failed: id={task_detail_id}, error={e}")
+        return False
+    finally:
+        if conn:
+            put_conn(conn)
+
+
 def complete_task(task_detail_id: int, completed_at: datetime) -> bool:
     """
     작업 완료 처리 (duration_minutes 자동 계산)
