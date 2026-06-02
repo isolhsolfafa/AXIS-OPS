@@ -23,6 +23,7 @@ from app.models.task_detail import (
     get_tasks_by_serial_number,
     start_task,
     complete_task,
+    complete_task_unified,
     get_incomplete_tasks,
 )
 from app.models.completion_status import (
@@ -807,18 +808,24 @@ class TaskService:
                 'task_finished': False,
             }, 200
 
-        # 마지막 작업자 완료 → Task 전체 완료 처리 (멀티 작업자 집계)
-        multi_result = _finalize_task_multi_worker(task.id, completed_at)
-        duration_minutes = multi_result['duration_minutes']
-        elapsed_minutes = multi_result['elapsed_minutes']
-        worker_count = multi_result['worker_count']
-
-        # app_task_details 업데이트
-        if not complete_task(task_detail_id, completed_at):
+        # 마지막 작업자 완료 → Task 전체 완료 (단일 UPDATE 원자 기록)
+        # FIX-DURATION-MANUAL-PAUSE-RAW-20260602 (v2.22.0):
+        #   기존 _finalize_task_multi_worker(SUM−pause, 휴게차감) + complete_task(raw 덮어쓰기) 2단계 →
+        #   complete_task_unified 단일 UPDATE (man-hour = interval-union − 수동pause∩session, 휴게 미차감).
+        #   정상완료 audit = force_closed FALSE / closed_by, close_reason, duration_source NULL (현행 보존).
+        completion = complete_task_unified(
+            task_detail_id, completed_at,
+            force_closed=False, closed_by=None,
+            close_reason=None, duration_source=None,
+        )
+        if not completion:
             return {
                 'error': 'COMPLETE_FAILED',
                 'message': '작업 완료 실패'
             }, 500
+        duration_minutes = completion['duration_minutes']
+        elapsed_minutes = completion['elapsed_minutes']
+        worker_count = completion['worker_count']
 
         logger.info(
             f"Work completed: task_id={task_detail_id}, "

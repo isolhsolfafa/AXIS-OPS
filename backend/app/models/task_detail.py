@@ -513,7 +513,7 @@ def complete_task_unified(
     close_reason: Optional[str] = None,
     duration_source: Optional[str] = None,
     race_guard: bool = False,
-) -> bool:
+) -> Optional[Dict[str, int]]:
     """작업 완료 단일 UPDATE (completed_at + duration + elapsed + worker_count + audit 원자 기록).
 
     FIX-DURATION-MANUAL-PAUSE-RAW-20260602 — duration 은 compute_task_manhour() 로 산출.
@@ -526,7 +526,8 @@ def complete_task_unified(
         race_guard: True 면 WHERE 에 completed_at IS NULL AND force_closed=FALSE 추가
                     (자동마감 동시 트리거 no-op 보존 — task_detail.py 기존 가드)
     Returns:
-        True = UPDATE 성공 / False = race no-op 또는 실패
+        성공 시 {'duration_minutes', 'elapsed_minutes', 'worker_count'} dict
+        race no-op / 실패 시 None (truthy 체크로 분기 가능)
     """
     if close_at is None:
         close_at = completed_at
@@ -551,7 +552,7 @@ def complete_task_unified(
                 duration_source  = %(duration_source)s,
                 updated_at       = CURRENT_TIMESTAMP
             WHERE id = %(tid)s AND started_at IS NOT NULL{guard_sql}
-            RETURNING id
+            RETURNING duration_minutes, elapsed_minutes, worker_count
             """,
             {
                 'completed_at': completed_at, 'manhour': manhour, 'tid': task_detail_id,
@@ -559,25 +560,37 @@ def complete_task_unified(
                 'close_reason': close_reason, 'duration_source': duration_source,
             },
         )
-        updated = cur.fetchone() is not None
+        row = cur.fetchone()
         conn.commit()
-        if updated:
-            logger.info(
-                f"complete_task_unified: id={task_detail_id}, manhour={manhour}m, "
-                f"close_at={close_at}, force_closed={force_closed}, "
-                f"close_reason={close_reason}"
-            )
-        else:
+        if row is None:
             logger.info(
                 f"complete_task_unified: id={task_detail_id} no-op "
                 f"(race_guard={race_guard} or started_at NULL)"
             )
-        return updated
+            return None
+        # RealDictCursor / tuple cursor 양쪽 호환
+        if isinstance(row, dict):
+            result = {
+                'duration_minutes': row['duration_minutes'],
+                'elapsed_minutes': row['elapsed_minutes'],
+                'worker_count': row['worker_count'],
+            }
+        else:
+            result = {
+                'duration_minutes': row[0],
+                'elapsed_minutes': row[1],
+                'worker_count': row[2],
+            }
+        logger.info(
+            f"complete_task_unified: id={task_detail_id}, manhour={manhour}m, "
+            f"close_at={close_at}, force_closed={force_closed}, close_reason={close_reason}"
+        )
+        return result
     except PsycopgError as e:
         if conn:
             conn.rollback()
         logger.error(f"complete_task_unified failed: id={task_detail_id}, error={e}")
-        return False
+        return None
     finally:
         if conn:
             put_conn(conn)
