@@ -633,23 +633,32 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
 
             cur.execute(
                 """
+                -- FIX-DURATION (v2.22.0): 세션 페어링 — 각 시작 1건 = 그 세션의 완료 1건만.
+                --   기존 work_start_log × work_completion_log cross join (재활성화 N시작×M완료=N*M 행 폭증)
+                --   → LATERAL 로 [start, 다음 start) 범위 첫 완료 1건만 매칭 (세션 N개 = N행).
+                WITH ws AS (
+                    SELECT wsl.task_id, wsl.task_category, wsl.task_id_ref, wsl.worker_id, wsl.started_at,
+                           LEAD(wsl.started_at) OVER (
+                               PARTITION BY wsl.task_id, wsl.worker_id ORDER BY wsl.started_at
+                           ) AS next_start
+                    FROM work_start_log wsl
+                    WHERE wsl.serial_number = %s
+                )
                 SELECT
-                    wsl.task_id,
-                    wsl.task_category,
-                    wsl.task_id_ref,
-                    wsl.worker_id,
+                    ws.task_id,
+                    ws.task_category,
+                    ws.task_id_ref,
+                    ws.worker_id,
                     w.name AS worker_name,
                     w.company AS worker_company,
-                    wsl.started_at,
+                    ws.started_at,
                     COALESCE(wcl.completed_at, td.completed_at) AS completed_at,
-                    -- FIX-VIEW-ORPHAN-DURATION (v2.15.17): orphan worker (auto-close, wcl 없음)
-                    -- 영역 duration NULL → VIEW '—' 표시 catch. wcl 없으면 close 시각 - started_at
-                    -- 근사 계산 (GREATEST 0 클램프 + FLOOR + ::int — 음수/float 방지, Codex Q1 M).
+                    -- FIX-VIEW-ORPHAN-DURATION (v2.15.17): orphan worker (auto-close, wcl 없음) 근사
                     COALESCE(
                         wcl.duration_minutes,
                         GREATEST(0, FLOOR(
                             EXTRACT(EPOCH FROM (
-                                COALESCE(wcl.completed_at, td.completed_at) - wsl.started_at
+                                COALESCE(wcl.completed_at, td.completed_at) - ws.started_at
                             )) / 60
                         ))::int
                     ) AS duration_minutes,
@@ -660,14 +669,20 @@ def get_tasks_by_serial(serial_number: str) -> Tuple[Dict[str, Any], int]:
                     END AS status,
                     (wcl.id IS NULL AND td.completed_at IS NOT NULL) AS is_orphan,
                     td.completed_at AS task_closed_at
-                FROM work_start_log wsl
-                JOIN workers w ON wsl.worker_id = w.id
-                LEFT JOIN work_completion_log wcl
-                    ON wsl.task_id = wcl.task_id AND wsl.worker_id = wcl.worker_id
+                FROM ws
+                JOIN workers w ON ws.worker_id = w.id
+                LEFT JOIN LATERAL (
+                    SELECT wc.id, wc.completed_at, wc.duration_minutes
+                    FROM work_completion_log wc
+                    WHERE wc.task_id = ws.task_id AND wc.worker_id = ws.worker_id
+                      AND wc.completed_at >= ws.started_at
+                      AND (ws.next_start IS NULL OR wc.completed_at < ws.next_start)
+                    ORDER BY wc.completed_at ASC
+                    LIMIT 1
+                ) wcl ON TRUE
                 LEFT JOIN app_task_details td
-                    ON wsl.task_id = td.id
-                WHERE wsl.serial_number = %s
-                ORDER BY wsl.task_category, wsl.started_at ASC
+                    ON ws.task_id = td.id
+                ORDER BY ws.task_category, ws.started_at ASC
                 """,
                 (serial_number,)
             )
