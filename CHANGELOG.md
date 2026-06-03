@@ -6,6 +6,34 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.22.0] - 2026-06-03 — duration man-hour 재정의 (수동 일시정지 미반영 + 휴게 이중차감 fix)
+
+> 작업 완료 시 `duration_minutes`가 raw(완료−시작)로 덮어써져 **작업자 수동 일시정지가 전혀 반영되지 않던** 버그 (운영 210건). 사용자 결정 = 휴게/점심 차감 안 함(원본 적재) + 수동 일시정지만 차감.
+
+### 새 man-hour 정의 (compute_task_manhour SSoT)
+- **완료로그 ≥1건**: per-worker interval-union(세션) − (수동 pause ∩ session_union). 세션 상한 = LEAST(완료기록, 다음 start(LEAD), close_at). 멀티워커 man-hour 정확 + 재시작 capping.
+- **완료로그 0건** (순수 open 자동마감): 단일구간 `[MAX(last_started), close_at] − manual∩` (추정값).
+- 휴게(break_*) 미차감 / pause_type='manual'만 차감 / worker별 FLOOR 합산 / `started_at < close_at` crash 가드.
+
+### 3경로 통일 (단일 UPDATE 원자 — completed_at+duration+elapsed+worker_count+audit)
+- **정상완료** (`task_service.complete_work`): `_finalize`+`complete_task`(raw 덮어쓰기) → `complete_task_unified`
+- **ship/admin 완료** (`shipment_service`): 3단계 → `complete_task_unified` (close_reason SHIP/ADMIN_COMPLETE)
+- **자동마감** (`auto_close_relay_task`): 시그니처 유지 내부 `compute_task_manhour` 위임 (호출처 5곳 무변경, race guard/audit 보존)
+- **수동 강제종료** (`admin.force_close_task`): 휴게 차감(`_calculate_working_minutes`) 제거 → `compute_task_manhour`. `AUTO_CLOSED_` prefix 입력 400 차단
+
+### 검증
+- 운영 데이터 직접 비교 (O/N 6873/6878/6770) + AUDIT_TRAIL_GUIDE §11 진단으로 자동마감/완료로그 분기 발견·해소
+- **Codex 12라운드 GO** (설계 추상 1~8 + 운영검증 9~12, M:5→10→2→4→1→1→1→0→2→2→1→0)
+- 회귀 95 GREEN (test_fix_duration 15 + relay 38 + force_close 17 + ship/admin 25)
+- 검증 예: IF_1 자동마감 = 세션451 − pause338 = 113 (구 451은 pause 미차감)
+
+### 후속 (별도)
+- migration 058 백필 (과거 210건 정정, preflight 동반) — 별 단계
+- 별 BACKLOG: REF-TASK-DETAIL-CONN-INJECTION(전사 트랜잭션) / worker_count 과소집계 / AUTOCLOSE-BACKSTOP(3일+OPEN 244) / 대시보드 세션 표시 집계
+- 설계: AGENT_TEAM_LAUNCH.md § FIX-DURATION-MANUAL-PAUSE-RAW (v1~v12)
+
+---
+
 ## [2.21.3] - 2026-06-02 — MECH 체크리스트 자재 드롭다운 긴 spec 줄바꿈 표시
 
 > MECH 체크리스트 자재 선택 드롭다운에서 긴 자재 사양(flow sensor / MFC 등)이 `...`로 잘려 전체 spec이 안 보이던 문제.
