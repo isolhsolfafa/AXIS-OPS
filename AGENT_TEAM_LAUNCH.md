@@ -46296,7 +46296,7 @@ ORDER BY group_type, name, category
 **연관**: VIEW OPS_API_REQUESTS.md #79 / VIEW MissedCloseAnalysisPage / OPS `dashboard_service.py` `build_auto_close_summary()`
 **선행 trail**: v2.20.0 (Sprint 71 dashboard_service 신설) + v2.20.1 (`_COMPANY_SQL` COALESCE 정합) + v2.20.7~9 (force_closed KPI 3분류 + by_reason)
 **Codex 자동 이관 체크리스트**: ✅ API 응답 계약 변경(`force_closed` 키 2개 추가) → 자동 이관 대상
-**버전**: v2.22.0 (minor — 신규 응답 필드)
+**버전**: v2.23.0 (minor — 신규 응답 필드. ⚠️ 당초 v2.22.0 표기였으나 FIX-DURATION 이 v2.22.0 선점 → v2.23.0 으로 정정 2026-06-03)
 
 ---
 
@@ -46542,6 +46542,25 @@ if fem != fc.get("count", 0):
 - **M-2 (미시작 기준)**: VIEW 원안 `elapsed_minutes IS NULL` → OPS `started_at IS NULL` 로 정정. 근거 = 운영 force 129건 중 미시작 10건의 8건이 `elapsed=0` 이라 원안 기준은 "1일내" 오분류. **이 정정이 본 sprint 핵심 가치** (협력사 즉응성 지표 무결성).
 - **M-3 (company 폴백)**: VIEW 원안 ①②③ 3단계 → OPS `_COMPANY_SQL` 재사용 (폴백 ② 제거). 근거 = 협력사 task 126건 ①만으로 100% 분류, '(미지정)' 3건은 GST 자사라 폴백 무의미. auto 매트릭스 일관성 + 단순성 확보.
 - VIEW 측에 본 정정 trail 회신 필요 (OPS_API_REQUESTS.md #79 — OPS 응답 섹션).
+
+---
+
+## 11. 구현 + Codex 3라운드 trail (2026-06-04 v2.23.0 배포)
+
+**구현** (`dashboard_service.py` 단일 파일, DB/migration 0):
+- `_assemble_company_matrix(raw, fixed_columns=None)` 공용 빌더 (동적 컬럼 / 고정 버킷 분기 + col_idx 밖 키 방어)
+- `_query_force_partner_task_matrix()` / `_query_force_partner_elapsed_matrix()` 신규
+- `build_auto_close_summary()` force_closed dict +2키 / `_assert_invariants()` +2줄
+
+**Codex 라운드 1 (설계 단계)**: M-1~M-6 = 전부 "코드 미구현" 지적 (rg 로 코드 부재 확인). 설계 레벨 결함 0 — 각 M 의 요구 조치가 설계 §4-1~4-4·§6 과 1:1 일치 (특히 M-4 `started_at IS NULL` 우선 + `COALESCE(elapsed,0)` = §4-2 그대로). → 구현으로 자동 해소.
+
+**Codex 라운드 2 (실코드)**: **M-1 (Must)** — `force_count`(_query_kpi_counts) + 2 force 매트릭스가 READ COMMITTED 하 별도 SELECT → 사이 force-close 커밋 시 `grand_total != force_count` → `_assert_invariants` 거짓 500 + Sentry. (기존 auto 매트릭스 invariant 도 동일 노출, Sprint 81 이 검사 2개 추가로 노출 키움.) A-1 = 3자 동시정합 TC + 헬퍼 방어 TC 권고.
+
+**M-1 fix (방향 B — REPEATABLE READ snapshot)**: `build_auto_close_summary()` 를 `conn.rollback()` → `set_session(REPEATABLE READ)` → 전체 SELECT → `commit()` 단일 snapshot 으로 고정 → force_count == 두 매트릭스 grand_total 수학 보장 (read-only 라 conflict 0). 기존 auto invariant 노출도 동시 경화. finally 에서 `rollback()` → `set_session(DEFAULT)` 복원, 복원 실패 시 `conn.close()` 로 폐기 (A-1 hardening, put_conn 이 closed conn 자동 discard). A-1 TC 5개 추가.
+
+**Codex 라운드 3**: **DEPLOY_SAFE / GO (M=0)**. snapshot 고정·pool 복원·진입 제약·회귀 4 포인트 PASS. 잔여 advisory = `except: pass` 복원실패 삼킴 → 이미 conn 폐기로 해소.
+
+**검증**: pytest `test_sprint81_force_matrix.py` 23 GREEN (FM-01~10 + R2 3자정합 3 + 헬퍼방어 2) + 회귀 `test_sprint71_dashboard.py` 21 passed 1 skipped.
 
 ---
 

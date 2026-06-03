@@ -6,6 +6,42 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.23.0] - 2026-06-04 — Sprint 81 (#79) 강제 종료 협력사 2축 매트릭스
+
+> 자동 마감 매트릭스(v2.20.x)에 있는 협력사 분포를 **강제 종료(force_closed=TRUE)** 에도 동일 제공. `/auto-close-summary` 응답 `force_closed` block 에 additive 2키. VIEW MissedCloseAnalysisPage 소비. BE only (OPS 앱 변경 0).
+
+### 신규 응답 키 (additive — 기존 키 불변)
+- `force_closed.partner_task_matrix` — 협력사 × 공정 (어디서 강제 종료 많은지)
+- `force_closed.partner_elapsed_matrix` — 협력사 × 처리 기간 5버킷 (미시작/1일내/1~3일/3~7일/7일+) = 협력사 관리 즉응성
+
+### BE 변경 (`dashboard_service.py` 단일 파일)
+- `_assemble_company_matrix(raw, fixed_columns=None)` 공용 빌더 (동적 컬럼 / 고정 버킷 분기)
+- `_query_force_partner_task_matrix()` — auto 매트릭스 복제 + 모집단 `force_closed=TRUE` + `EXISTS(work_start_log)` 제거 (미시작 force 포함 → grand_total == force_count)
+- `_query_force_partner_elapsed_matrix()` — `started_at IS NULL` 최우선 분리 후 `COALESCE(elapsed_minutes,0)` 버킷 (원안 `elapsed IS NULL` 기준이면 미시작 elapsed=0 이 '1일내' 오분류되던 것 차단)
+- `_assert_invariants()` — 두 force 매트릭스 grand_total == force_closed.count 검증 2줄
+- 협력사 = 기존 `_COMPANY_SQL` 재사용 (auto 매트릭스 분류 정합, 신규 폴백 0)
+
+### 운영 DB 검증 (force_closed=TRUE 129건 기준)
+- 미시작 10건 중 8건이 `elapsed_minutes=0` → VIEW 원안 기준이면 '1일내' 오분류 → `started_at IS NULL` 기준으로 정정 (본 sprint 핵심 가치)
+- 협력사 task 126건 `_COMPANY_SQL` 만으로 100% 분류, '(미지정)' 3건 = GST 자사 QI/SI (정상)
+
+### Codex 교차 검증 3라운드 GO
+- 라운드 1 (설계): M-1~6 = 전부 "미구현" 지적 (설계 결함 0, 구현으로 자동 해소)
+- 라운드 2 (실코드): **M-1 = multi-SELECT snapshot invariant 거짓 위반** (force_count + 2 매트릭스가 READ COMMITTED 별도 SELECT → 사이 force-close 커밋 시 grand_total 불일치 → 500)
+- **M-1 fix**: `build_auto_close_summary()` 를 REPEATABLE READ 단일 snapshot 으로 고정 (force_count == 매트릭스 grand_total 수학적 보장 + 기존 auto invariant 노출도 동시 경화). isolation finally 복원 + 복원 실패 시 conn 폐기 (A-1 hardening)
+- 라운드 3: **DEPLOY_SAFE / GO (M=0)**
+
+### 검증
+- pytest `test_sprint81_force_matrix.py` 23 GREEN (FM-01~10 + Codex R2 3자 정합 3 + 헬퍼 방어 2). FM-04(미시작+elapsed=0→미시작 버킷) / FM-05(경계 1439/1440/4319/4320/10079/10080) / FM-09(manager 격리 invariant) 포함
+- 회귀 `test_sprint71_dashboard.py` 21 passed 1 skipped (auto 매트릭스 / KPI 3분류 불변)
+- DB/migration 변경 0 (기존 테이블 조회만). `/auto-close-details` 미변경
+- 설계: AGENT_TEAM_LAUNCH.md § Sprint 81 (#79)
+
+### VIEW 측 후속 (별 repo)
+- `force_closed` 타입에 `partner_task_matrix?` / `partner_elapsed_matrix?` optional 추가 + mock 조건부 fallback + PartnerTaskMatrix 제목 props 화 (force vs auto 구분)
+
+---
+
 ## [2.22.0] - 2026-06-03 — duration man-hour 재정의 (수동 일시정지 미반영 + 휴게 이중차감 fix)
 
 > 작업 완료 시 `duration_minutes`가 raw(완료−시작)로 덮어써져 **작업자 수동 일시정지가 전혀 반영되지 않던** 버그 (운영 210건). 사용자 결정 = 휴게/점심 차감 안 함(원본 적재) + 수동 일시정지만 차감.

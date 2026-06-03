@@ -25,6 +25,8 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
+import psycopg2.extensions
+
 from app.db_pool import put_conn
 from app.models.worker import get_db_connection
 
@@ -577,6 +579,150 @@ def _query_partner_task_matrix(
 
 
 # ---------------------------------------------------------------------------
+# Sprint 81 (#79) — 강제 종료(force_closed=TRUE) 협력사 2축 매트릭스
+# ---------------------------------------------------------------------------
+
+# elapsed 처리 기간 버킷 (고정 5칸, 의미 순서 — 동적 정렬 안 함).
+# 미시작(started_at IS NULL) 최우선 분리 → 원안 elapsed=0 "1일내" 오분류 차단.
+_ELAPSED_BUCKETS: List[tuple] = [
+    ("elapsed_unknown", "미시작"),
+    ("elapsed_1d", "1일내"),
+    ("elapsed_1_3d", "1~3일"),
+    ("elapsed_3_7d", "3~7일"),
+    ("elapsed_7d", "7일+"),
+]
+
+
+def _assemble_company_matrix(
+    raw: List[Dict[str, Any]], fixed_columns: Optional[List[tuple]] = None
+) -> Dict[str, Any]:
+    """raw rows [{company, col_key, col_name?, cnt}] → 매트릭스 dict.
+
+    fixed_columns=None → 동적 컬럼 (col_name, col_key 정렬, auto 매트릭스 정합).
+    fixed_columns=[(key,name),..] → 고정 컬럼 순서 + 빈 버킷 0 채움 (elapsed 용).
+    반환 스키마 = _query_partner_task_matrix 와 동일 (task_columns/rows/column_totals/grand_total).
+    """
+    if fixed_columns is not None:
+        col_columns = [{"task_id": k, "task_name": n} for k, n in fixed_columns]
+        col_order = [k for k, _ in fixed_columns]
+    else:
+        key_to_name = {r["col_key"]: r.get("col_name", r["col_key"]) for r in raw}
+        col_order = sorted(key_to_name.keys(), key=lambda k: (key_to_name[k], k))
+        col_columns = [{"task_id": k, "task_name": key_to_name[k]} for k in col_order]
+    col_idx = {k: i for i, k in enumerate(col_order)}
+
+    by_company: Dict[str, List[int]] = defaultdict(lambda: [0] * len(col_order))
+    for r in raw:
+        key = r["col_key"]
+        if key in col_idx:  # fixed_columns 밖 키 방어 (운영상 없음)
+            by_company[r["company"]][col_idx[key]] = int(r["cnt"])
+
+    column_totals = [
+        sum(counts[i] for counts in by_company.values())
+        for i in range(len(col_order))
+    ]
+    grand_total = sum(column_totals)
+
+    rows = []
+    for c in sorted(by_company.keys()):
+        counts = by_company[c]
+        total = sum(counts)
+        rows.append({
+            "company": c,
+            "counts": counts,
+            "total": total,
+            "alert": (total / grand_total >= 0.3) if grand_total else False,
+        })
+
+    return {
+        "task_columns": col_columns,
+        "rows": rows,
+        "column_totals": column_totals,
+        "grand_total": grand_total,
+    }
+
+
+def _query_force_partner_task_matrix(
+    cur, start, end, partner_sql, partner_params
+) -> Dict[str, Any]:
+    """Sprint 81 — 강제 종료 협력사 × 공정 매트릭스.
+
+    _query_partner_task_matrix 복제 + 모집단 교체:
+      - close_reason LIKE / force_closed=FALSE → force_closed=TRUE
+      - EXISTS(work_start_log) 조건 제거 (미시작 force 포함 → grand_total == force_count)
+      - 협력사 = _COMPANY_SQL (auto 매트릭스 분류 정합)
+    """
+    sql = f"""
+        WITH force_rows AS (
+            SELECT DISTINCT ON (t.id)
+                t.id, t.task_id, t.task_name,
+                {_COMPANY_SQL} AS company
+            FROM app_task_details t
+            LEFT JOIN plan.product_info pi ON pi.serial_number = t.serial_number
+            WHERE t.completed_at >= %s AND t.completed_at < %s
+              AND t.force_closed = TRUE
+              {partner_sql}
+        )
+        SELECT company, task_id AS col_key, task_name AS col_name, COUNT(*) AS cnt
+        FROM force_rows
+        GROUP BY company, task_id, task_name
+        ORDER BY company, col_key
+    """
+    params = [start, end] + partner_params
+    cur.execute(sql, params)
+    raw = [
+        {
+            "company": r["company"],
+            "col_key": r["col_key"],
+            "col_name": r["col_name"],
+            "cnt": r["cnt"],
+        }
+        for r in cur.fetchall()
+    ]
+    return _assemble_company_matrix(raw)  # 동적 컬럼
+
+
+def _query_force_partner_elapsed_matrix(
+    cur, start, end, partner_sql, partner_params
+) -> Dict[str, Any]:
+    """Sprint 81 — 강제 종료 협력사 × 처리 기간 버킷 매트릭스.
+
+    버킷 우선순위 = 미시작 먼저 (started_at IS NULL). 나머지는 COALESCE(elapsed,0) 로
+    started 있는데 elapsed NULL 인 잔여(운영 0건)도 '1일내' 귀속 → invariant 보존.
+    컬럼 = _ELAPSED_BUCKETS 고정 5칸 (데이터 없는 버킷도 0).
+    """
+    sql = f"""
+        WITH force_rows AS (
+            SELECT DISTINCT ON (t.id)
+                t.id,
+                {_COMPANY_SQL} AS company,
+                CASE
+                  WHEN t.started_at IS NULL THEN 'elapsed_unknown'
+                  WHEN COALESCE(t.elapsed_minutes, 0) < 1440 THEN 'elapsed_1d'
+                  WHEN COALESCE(t.elapsed_minutes, 0) < 4320 THEN 'elapsed_1_3d'
+                  WHEN COALESCE(t.elapsed_minutes, 0) < 10080 THEN 'elapsed_3_7d'
+                  ELSE 'elapsed_7d'
+                END AS elapsed_bucket
+            FROM app_task_details t
+            LEFT JOIN plan.product_info pi ON pi.serial_number = t.serial_number
+            WHERE t.completed_at >= %s AND t.completed_at < %s
+              AND t.force_closed = TRUE
+              {partner_sql}
+        )
+        SELECT company, elapsed_bucket AS col_key, COUNT(*) AS cnt
+        FROM force_rows
+        GROUP BY company, elapsed_bucket
+    """
+    params = [start, end] + partner_params
+    cur.execute(sql, params)
+    raw = [
+        {"company": r["company"], "col_key": r["col_key"], "cnt": r["cnt"]}
+        for r in cur.fetchall()
+    ]
+    return _assemble_company_matrix(raw, fixed_columns=_ELAPSED_BUCKETS)
+
+
+# ---------------------------------------------------------------------------
 # Invariant check (Codex Q-Freeze-3)
 # ---------------------------------------------------------------------------
 
@@ -622,6 +768,21 @@ def _assert_invariants(response: Dict[str, Any]) -> None:
         issues.append(
             f"unstarted_task_distribution sum {ud_sum} != unstarted_task_count "
             f"{ac['unstarted_task_count']}"
+        )
+
+    # Sprint 81 (#79): force 매트릭스 2개 grand_total == force_closed.count
+    # (task 매트릭스 EXISTS 제거 + elapsed '미시작' 버킷이 미시작 force 포함 → 정합)
+    fc_check = response.get("force_closed", {})
+    fc_cnt = fc_check.get("count", 0)
+    ftm = fc_check.get("partner_task_matrix", {}).get("grand_total", 0)
+    fem = fc_check.get("partner_elapsed_matrix", {}).get("grand_total", 0)
+    if ftm != fc_cnt:
+        issues.append(
+            f"force partner_task_matrix.grand_total {ftm} != force_closed.count {fc_cnt}"
+        )
+    if fem != fc_cnt:
+        issues.append(
+            f"force partner_elapsed_matrix.grand_total {fem} != force_closed.count {fc_cnt}"
         )
 
     # total_missed_close 4 invariant
@@ -688,6 +849,14 @@ def build_auto_close_summary(
 
     conn = get_db_connection()
     try:
+        # Sprint 81 (#79) Codex 라운드 2 M-1: KPI force_count + auto/force 매트릭스가
+        # 모두 동일 snapshot 을 보도록 REPEATABLE READ 로 고정. READ COMMITTED 하에서
+        # SELECT 사이에 force-close 가 커밋되면 grand_total != count → invariant 거짓 500.
+        # read-only 라 conflict 없음. 기존 auto 매트릭스 invariant 노출도 동시 경화.
+        conn.rollback()  # 이전 borrower 잔여 txn 방어 (HOTFIX-08 패턴)
+        conn.set_session(
+            isolation_level=psycopg2.extensions.ISOLATION_LEVEL_REPEATABLE_READ
+        )
         with conn.cursor() as cur:
             cur_kpi = _query_kpi_counts(cur, start, end, partner_sql, partner_params)
             prev_kpi = _query_kpi_counts(cur, prev_start, prev_end, partner_sql, partner_params)
@@ -715,7 +884,32 @@ def build_auto_close_summary(
             force_close_reason_distribution = _query_force_close_reason_distribution(
                 cur, start, end, partner_sql, partner_params
             )
+            # Sprint 81 (#79): 강제 종료 협력사 2축 매트릭스
+            force_partner_task_matrix = _query_force_partner_task_matrix(
+                cur, start, end, partner_sql, partner_params
+            )
+            force_partner_elapsed_matrix = _query_force_partner_elapsed_matrix(
+                cur, start, end, partner_sql, partner_params
+            )
+        conn.commit()  # read txn 종료 → snapshot 해제
     finally:
+        # isolation level 을 풀 반납 전 DEFAULT 로 복원 (put_conn 은 미복원 → 필수).
+        restored = False
+        try:
+            conn.rollback()
+            conn.set_session(
+                isolation_level=psycopg2.extensions.ISOLATION_LEVEL_DEFAULT
+            )
+            restored = True
+        except Exception:
+            pass
+        if not restored:
+            # Codex R3 A-1: 복원 실패 conn 은 REPEATABLE READ 가 남아 풀 오염 →
+            # 폐기 (put_conn 이 closed conn 을 자동 discard, 다음 getconn 시 새 생성).
+            try:
+                conn.close()
+            except Exception:
+                pass
         put_conn(conn)
 
     auto_count = cur_kpi["auto_count"]
@@ -750,6 +944,9 @@ def build_auto_close_summary(
             "trend": _trend(force_count, prev_kpi["force_count"]),
             "improvement_pct": _improvement_pct(force_count, prev_kpi["force_count"]),
             "by_reason": force_close_reason_distribution,
+            # Sprint 81 (#79): additive 2키 (협력사 평가 raw insight)
+            "partner_task_matrix": force_partner_task_matrix,
+            "partner_elapsed_matrix": force_partner_elapsed_matrix,
         },
         "total_missed_close": {
             "count": total_count,
