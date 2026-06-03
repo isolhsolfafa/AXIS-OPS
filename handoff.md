@@ -14,6 +14,40 @@
 
 ---
 
+## 📌 2026-06-03 KST — FIX-DURATION 운영검증 후 v12 GO (🚧 진행 중, 미배포)
+
+> 6-02 섹션(아래) 이후 진척. **운영 데이터 직접 비교(O/N 6873/6878/6770) + AUDIT_TRAIL_GUIDE §11 진단**에서 v8 공식의 실결함 발견 → v9~v12 보강 → **Codex 라운드 12 GO (M=0)**.
+
+### 운영 검증으로 발견된 v8 한계 (추상 8라운드가 못 잡음)
+- **crash**: `work_start_log.started_at > completed_at` 13건 → tstzrange 역전. 원인 = task 닫힌 뒤(FIRST_FINAL/auto/force) 작업자 **사후 재시작**(릴레이/재활성화). worker 본인 완료<시작 역전 = 0건.
+- **과다계상**: 완료로그 0건 자동마감(IF_1, 서로 다른 worker 각자 시작만) → 8일 뻥튀기.
+- 정상완료(완료로그≥1) = 정확 (멀티워커 man-hour + manual pause + 구0버그 복원).
+- §11: 추정의존도 13.2% / 0분 478건(24%) / **PREV_DAY_CAP 230중 192 완료로그 보유** / 3일+OPEN 244 / started_null 8.
+
+### 확정 설계 (v12 GO, AGENT_TEAM_LAUNCH.md §v9~v12)
+- **완료로그 유무 분기** (compute_task_manhour 내부): ≥1 → interval-union(세션상한=LEAST(완료기록,LEAD다음start,close_at)+started<close 가드) / 0 → 단일구간 `[MAX(last_started),close_at]−manual∩` (추정값).
+- **auto_close_relay_task**: 시그니처 유지, 내부 duration만 compute_task_manhour 위임 → 호출처 5곳(task_service 2 + checklist_service 3) 무변경. audit 보존.
+- **백필 E12**: 재계산=(완료로그≥1 & (force_false OR 정확3 AUTO_CLOSED)) OR (완료로그0 & AUTO_CLOSED_%) / 보존=(force_TRUE & close_reason NULL or NOT AUTO_CLOSED) OR (완료로그0 & force_false & SHIP/ADMIN_COMPLETE) / anomalous=preflight 중단. NULL-safe.
+- **§11 통합**: (나)0분=본fix핵심 / ①192=union정확 / ⑤force duration=현행보존 문서정정 / ③started_null=가드 / ④backstop244=별sprint.
+
+### 구현 완료분 (commit)
+- `12d6909` 헬퍼 보강 (LEAD capping + start<close 가드, pytest 15 GREEN 유지)
+- `8621cef` ship/admin 경로 연결 (complete_task_unified, test_ship_complete+test_admin_complete 25/25 GREEN) + v9~v12 설계
+
+### 남은 구현 (v12 GO 후)
+1. **compute_task_manhour C9 분기** — 완료로그 0건일 때 단일구간 `[MAX(last_started<close_at), close_at] − manual∩` SQL 추가 (현재 union 단일). EXISTS(work_completion_log) 분기.
+2. **auto_close_relay_task 내부 위임** — duration EXTRACT → compute_task_manhour(close_at). 시그니처/호출처 무변경. duration_minutes 인자 무시.
+3. **admin force-close** (admin.py:1229) started_at IS NOT NULL 가드 + `AUTO_CLOSED_` prefix 입력 400 차단.
+4. **migration 058** — E12 NULL-safe 분류 백필 + preflight(정확3패턴外 AUTO_CLOSED / logged인데 유효세션0 / 0-log force_false 비allowlist).
+5. **pytest DP-36~40** (start>close 제외 / 재시작 capping / 완료로그0 단일구간 / cap-but-logged / SHIP_COMPLETE 0-log 보존) + 회귀 전수.
+6. **v2.22.0** 배포 + 백필 + T+검증.
+
+### 우선 TC (Codex 권고): DP-40(SHIP_COMPLETE 0-log 보존) → DP-38/39(완료로그 분기) → DP-34(preflight 중단)
+
+### 롤백 지점: 93a5082(설계+헬퍼) / 39b0681(정상경로+15TC) / 12d6909(헬퍼보강) / 8621cef(ship/admin+v12)
+
+---
+
 ## 📌 2026-06-02 KST — FIX-DURATION-MANUAL-PAUSE-RAW (🚧 진행 중, 미배포)
 
 ### 버그 (사용자 접수)
