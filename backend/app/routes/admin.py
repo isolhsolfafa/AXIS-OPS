@@ -1132,6 +1132,14 @@ def force_close_task(task_id: int) -> Tuple[Dict[str, Any], int]:
             'message': 'close_reason(강제 종료 사유)은 필수입니다.'
         }), 400
 
+    # FIX-DURATION-MANUAL-PAUSE-RAW-20260602 (v2.22.0): 'AUTO_CLOSED_' 는 자동마감 예약 prefix
+    #   → 수동 강제종료 사유 입력 차단 (백필 분류 오염 방지, v12 E12)
+    if close_reason.startswith('AUTO_CLOSED_'):
+        return jsonify({
+            'error': 'INVALID_CLOSE_REASON',
+            'message': "close_reason은 'AUTO_CLOSED_'로 시작할 수 없습니다 (자동마감 예약어)."
+        }), 400
+
     completed_at_param = data.get('completed_at')
 
     # 협력사 관리자는 본인 company의 작업만 강제 종료 가능
@@ -1227,57 +1235,16 @@ def force_close_task(task_id: int) -> Tuple[Dict[str, Any], int]:
             }), 400
 
         if started_at is None:
-            # NOT_STARTED task: duration 계산 스킵
+            # NOT_STARTED task: 미시작 강제종료 — duration 계산 스킵 (의도된 동작)
             duration_minutes = 0
             elapsed_minutes = 0
         else:
             elapsed_minutes = int((completed_at - started_at).total_seconds() / 60)
-
-            # duration_minutes = man-hour (work_completion_log 합계 + 현재 작업자)
-            cur.execute(
-                """
-                SELECT COALESCE(SUM(duration_minutes), 0) AS duration_sum
-                FROM work_completion_log
-                WHERE task_id = %s
-                """,
-                (task_id,)
-            )
-            existing_duration = int(cur.fetchone()['duration_sum'])
-            # 아직 미완료인 작업자의 duration도 합산 (현재 시각 기준)
-            # BUG-9 Fix: _calculate_working_minutes로 휴게시간 자동 차감
-            cur.execute(
-                """
-                SELECT wsl.worker_id, wsl.started_at
-                FROM work_start_log wsl
-                LEFT JOIN work_completion_log wcl
-                       ON wsl.task_id = wcl.task_id AND wsl.worker_id = wcl.worker_id
-                WHERE wsl.task_id = %s AND wcl.id IS NULL
-                """,
-                (task_id,)
-            )
-            pending_workers = cur.fetchall()
-            pending_duration = 0
-            for pw in pending_workers:
-                if pw['started_at']:
-                    pending_duration += _calculate_working_minutes(pw['started_at'], completed_at)
-            duration_minutes = existing_duration + pending_duration
-
-            # BUG-9 Fix: 수동 pause만 차감 (break auto-pause는 _calculate_working_minutes에서 이미 차감)
-            cur.execute(
-                """
-                SELECT COALESCE(SUM(pause_duration_minutes), 0) AS manual_pause
-                FROM work_pause_log
-                WHERE task_detail_id = %s
-                  AND pause_type NOT IN ('break_morning', 'lunch', 'break_afternoon', 'dinner')
-                  AND resumed_at IS NOT NULL
-                """,
-                (task_id,)
-            )
-            manual_pause_minutes = int(cur.fetchone()['manual_pause'])
-            duration_minutes = max(0, duration_minutes - manual_pause_minutes)
-
-            if duration_minutes == 0 and elapsed_minutes > 0:
-                duration_minutes = elapsed_minutes  # fallback
+            # FIX-DURATION-MANUAL-PAUSE-RAW-20260602 (v2.22.0): 휴게 차감(_calculate_working_minutes) 제거.
+            #   man-hour = compute_task_manhour (완료로그 분기, 휴게 미차감 + manual pause 만 ∩ 차감).
+            #   close_at = completed_at (관리자 지정 종료 시각).
+            from app.models.task_detail import compute_task_manhour
+            duration_minutes = compute_task_manhour(cur, task_id, completed_at)
 
         # app_task_details 강제 종료 업데이트
         cur.execute(
