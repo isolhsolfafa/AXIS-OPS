@@ -41,6 +41,9 @@ def cleanup_dur(db_conn):
                 DELETE FROM work_pause_log WHERE task_detail_id IN (
                     SELECT id FROM app_task_details WHERE serial_number LIKE %s)
             """, (f'{_PREFIX}%',))
+            # attendance (test worker — 9000+ id, TEST_DUR_ email)
+            cur.execute("""DELETE FROM hr.partner_attendance WHERE worker_id IN (
+                SELECT id FROM workers WHERE email LIKE %s)""", (f'{_PREFIX}%',))
             for t in ('work_completion_log', 'work_start_log',
                       'app_task_details', 'completion_status', 'qr_registry'):
                 cur.execute(f"DELETE FROM {t} WHERE serial_number LIKE %s", (f'{_PREFIX}%',))
@@ -144,6 +147,17 @@ def _seed_pause(db_conn, tid, worker_id, paused_at, resumed_at, pause_type='manu
             (task_detail_id, worker_id, paused_at, resumed_at, pause_type, pause_duration_minutes)
         VALUES (%s, %s, %s, %s, %s, %s)
     """, (tid, worker_id, paused_at, resumed_at, pause_type, dur))
+    db_conn.commit()
+    cur.close()
+
+
+def _seed_attendance(db_conn, worker_id, check_time, check_type='out'):
+    _ensure_worker(db_conn, worker_id)
+    cur = db_conn.cursor()
+    cur.execute("""
+        INSERT INTO hr.partner_attendance (worker_id, check_type, check_time, method)
+        VALUES (%s, %s, %s, 'button')
+    """, (worker_id, check_type, check_time))
     db_conn.commit()
     cur.close()
 
@@ -383,3 +397,67 @@ def test_started_at_null_no_op(db_conn):
     sn = _sn('NULL'); qr = _seed_product(db_conn, sn); w = 9099
     tid = _seed_task(db_conn, sn, qr, w, started_at=None)
     assert complete_task_unified(tid, _dt(h=12)) is None
+
+
+# ─── 그룹 6: attendance-cap (v13) ──────────────────────────────
+
+def test_dp41_attendance_checkout_cap(db_conn):
+    """DP-41: 완료 없는 open 세션 → 본인 그날 check_out 으로 cap"""
+    sn = _sn('41'); qr = _seed_product(db_conn, sn); w = 9041
+    st = _dt(h=8)
+    close_at = _dt(h=23)  # close_at 은 늦게 (cap이 check_out 으로 binding 확인)
+    tid = _seed_task(db_conn, sn, qr, w, started_at=st)
+    _seed_wsl(db_conn, tid, sn, qr, w, st)
+    # 완료기록 없음 (open) + check_out 16:56
+    _seed_attendance(db_conn, w, _dt(h=16, mi=56), 'out')
+    # 세션 = 08:00 ~ 16:56 = 536분 (close_at 23시 무관)
+    assert _manhour(db_conn, tid, close_at) == 536
+
+
+def test_dp42_17_fallback_no_checkout(db_conn):
+    """DP-42: check_out 없으면 시작일 17:00 fallback"""
+    sn = _sn('42'); qr = _seed_product(db_conn, sn); w = 9042
+    st = _dt(h=8)
+    close_at = _dt(h=23)
+    tid = _seed_task(db_conn, sn, qr, w, started_at=st)
+    _seed_wsl(db_conn, tid, sn, qr, w, st)
+    # 완료기록 없음 + check_out 없음 → 17:00 fallback
+    assert _manhour(db_conn, tid, close_at) == 540  # 08:00~17:00
+
+
+def test_dp43_overnight_capped_to_startday(db_conn):
+    """DP-43: 저녁 시작 + 다음날 완료(밤샘) → 시작일 check_out 으로 cap (다음날분 손실)"""
+    sn = _sn('43'); qr = _seed_product(db_conn, sn); w = 9043
+    st = _dt(h=22)                       # 22:00 시작
+    comp = _dt(d=3, h=8)                 # 다음날 08:00 완료 (밤샘)
+    close_at = _dt(d=3, h=12)
+    tid = _seed_task(db_conn, sn, qr, w, started_at=st)
+    _seed_wsl(db_conn, tid, sn, qr, w, st)
+    _seed_wcl(db_conn, tid, sn, qr, w, comp)
+    _seed_attendance(db_conn, w, _dt(h=23), 'out')  # 그날 23:00 퇴근
+    # 세션 = 22:00 ~ MIN(완료 익일08:00, check_out 23:00) = 23:00 → 60분 (밤 시간 제외)
+    assert _manhour(db_conn, tid, close_at) == 60
+
+
+def test_dp44_completion_after_checkout_uses_checkout(db_conn):
+    """DP-44: 완료 > check_out (퇴근 후 작업) → check_out 으로 cap"""
+    sn = _sn('44'); qr = _seed_product(db_conn, sn); w = 9044
+    st, comp = _dt(h=8), _dt(h=18)       # 18:00 완료
+    tid = _seed_task(db_conn, sn, qr, w, started_at=st)
+    _seed_wsl(db_conn, tid, sn, qr, w, st)
+    _seed_wcl(db_conn, tid, sn, qr, w, comp)
+    _seed_attendance(db_conn, w, _dt(h=16, mi=56), 'out')  # 16:56 퇴근
+    # 세션 = 08:00 ~ MIN(완료18:00, check_out 16:56) = 16:56 → 536분
+    assert _manhour(db_conn, tid, comp) == 536
+
+
+def test_dp45_sameday_completion_unaffected_by_cap(db_conn):
+    """DP-45: 같은날 완료(17시 전) → cap 미binding, 완료시각 그대로 (회귀 불변)"""
+    sn = _sn('45'); qr = _seed_product(db_conn, sn); w = 9045
+    st, comp = _dt(h=10), _dt(h=12)
+    tid = _seed_task(db_conn, sn, qr, w, started_at=st)
+    _seed_wsl(db_conn, tid, sn, qr, w, st)
+    _seed_wcl(db_conn, tid, sn, qr, w, comp)
+    _seed_attendance(db_conn, w, _dt(h=16, mi=56), 'out')
+    # 완료 12:00 < check_out 16:56 < 17:00 → 완료시각 bind → 120분 (cap 영향 0)
+    assert _manhour(db_conn, tid, comp) == 120

@@ -182,6 +182,20 @@
 
 ## 🔴 지금 진행 중 / 미해결
 
+### 📋 FIX-DURATION-MANUAL-PAUSE-RAW 후속 (2026-06-03 등록)
+
+> v2.22.0 FIX-DURATION (duration man-hour 재정의, Codex 1~13 GO, 5월~ 백필 1002건 완료) 후속.
+> 설계: `AGENT_TEAM_LAUNCH.md` § FIX-DURATION v1~v13.
+
+| ID | 우선순위 | 내용 |
+|---|---|---|
+| `FEAT-MANHOUR-ESTIMATE-FLAG-20260603` | 🟡 LOW | attendance-cap/17:00 fallback 발동 세션을 duration_source '추정값'으로 per-session 표시 (MES exception flagging, Codex R13 Q4b) |
+| `BUG-WORKER-COUNT-UNDERCOUNT-20260602` | 🟡 LOW | worker_count 컬럼 9.2% vs work_start_log distinct 29% 괴리. man-hour 는 log 기반이라 무영향, 컬럼만 재계산 정정 |
+| `BACKLOG-AUTOCLOSE-BACKSTOP-20260603` | 🟡 LOW | 3일+ OPEN task 244건 (ELEC152/MECH86) backstop 자동 cap-close (AUDIT_TRAIL_GUIDE §11 우려④) |
+| `FEAT-DASHBOARD-SESSION-AGG-20260603` | 🟡 LOW | 대시보드 세션 중복 표시 — OPS BE `_enrich_tasks_with_workers` worker 단위 1행 집계 (재활성화 다중세션이 worker 행으로 중복 표시되는 catch, Codex Q-B) |
+| `DW-BREAK-DEDUCTION-20260603` | 🟢 INFO | 점심/저녁 휴게 차감 = DW transform (`_calculate_break_overlap` 이식). OPS=raw labor / DW=work time. 사장님 DW 환경 영역 |
+| (참조) `REF-TASK-DETAIL-CONN-INJECTION-20260602` | 🟠 MEDIUM | 전사 트랜잭션 conn 주입형 (위 🔧 리팩토링 섹션 등록됨) |
+
 ### 📋 Sprint 71 v3 Codex 라운드 2 A 등록 (2026-05-26)
 
 > Sprint 71 v3 옵션 X 채택 후 Codex A 8건 → 3건 BACKLOG (3건은 V4 영역 자동 해소).
