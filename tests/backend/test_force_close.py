@@ -624,14 +624,16 @@ class TestForceClosePauseDeduction:
         db_conn
     ):
         """
-        TC-FC-09: force-close가 미완료 작업자의 duration 계산에 _calculate_working_minutes 사용
+        TC-FC-09: force-close duration = compute_task_manhour (v2.22.0 — 휴게 미차감).
 
-        BUG-9 Fix: 단순 delta가 아닌 휴게시간 차감된 시간 사용
+        FIX-DURATION-MANUAL-PAUSE-RAW-20260602: 기존 _calculate_working_minutes(휴게 차감)
+        → compute_task_manhour(휴게 미차감, attendance-cap, manual pause 만). 휴게 차감 제거.
 
-        Expected:
-        - _calculate_working_minutes 호출 확인 (간접 검증: duration < raw delta)
+        Scenario(KST): 08:00 시작 → 17:00 force-close. check_out 없음 → 17:00 fallback.
+        Expected: 세션 08:00~17:00 = 540분, 휴게 미차감 (manual pause 없음) → duration = 540.
         """
         import time
+        _kst = timezone(timedelta(hours=9))
         suffix = int(time.time() * 1000) + 9
 
         admin_id = create_test_worker(
@@ -649,8 +651,8 @@ class TestForceClosePauseDeduction:
         create_test_product(qr_doc_id=qr_doc_id, serial_number=serial_number, model='GALLANT-50')
         create_test_completion_status(serial_number=serial_number)
 
-        # 08:00 시작 (work_start_log가 create_test_task에 의해 자동 생성됨)
-        started_at = datetime(2026, 3, 2, 8, 0, 0, tzinfo=timezone.utc)
+        # 08:00 KST 시작 (work_start_log 자동 생성)
+        started_at = datetime(2026, 3, 2, 8, 0, 0, tzinfo=_kst)
         task_id = create_test_task(
             worker_id=worker_id,
             serial_number=serial_number,
@@ -661,13 +663,13 @@ class TestForceClosePauseDeduction:
             started_at=started_at
         )
 
-        # 17:00 강제 종료 → raw delta 9시간=540분, 휴게시간 차감 시 더 적어야 함
+        # 17:00 KST 강제 종료
         token = get_auth_token(admin_id, role='ADMIN', is_admin=True)
         response = client.put(
             f'/api/admin/tasks/{task_id}/force-close',
             json={
-                'close_reason': 'BUG-9 working minutes test',
-                'completed_at': '2026-03-02T17:00:00+00:00',
+                'close_reason': 'v2.22.0 manhour test',
+                'completed_at': '2026-03-02T17:00:00+09:00',
             },
             headers={'Authorization': f'Bearer {token}'}
         )
@@ -678,12 +680,10 @@ class TestForceClosePauseDeduction:
         assert response.status_code == 200
         data = response.get_json()
         duration = data.get('duration_minutes', 0)
-
-        # raw delta = 540분, 휴게시간이 설정되어 있으면 차감될 수 있음
-        # 최소한 duration이 계산되었는지 확인 (0보다 크고 합리적 범위)
-        assert duration > 0, f"Duration should be positive, got {duration}"
-        # elapsed는 540분이어야 함
         elapsed = data.get('elapsed_minutes', 0)
+
+        # 휴게 미차감 — 세션 08:00~17:00 = 540분 (manual pause 없음)
+        assert duration == 540, f"Duration (휴게 미차감) should be 540, got {duration}"
         assert elapsed == 540 or abs(elapsed - 540) <= 1, (
             f"Elapsed should be ~540, got {elapsed}"
         )
@@ -1190,17 +1190,15 @@ class TestForceClosePauseDeduction:
         db_conn
     ):
         """
-        TC-FC-10: force-close 시 휴게시간 겹침이 duration에서 차감됨
+        TC-FC-10: force-close duration = attendance-cap (v2.22.0 — 휴게 미차감 + 17:00 cap).
 
-        Scenario: 작업 08:00~18:00 (10시간=600분)
-        BUG-9 Fix: _calculate_working_minutes로 계산 →
-        휴게시간이 설정되어 있으면 겹침 자동 차감
+        FIX-DURATION-MANUAL-PAUSE-RAW-20260602: 휴게 차감 제거. check_out 없으면 17:00 cap.
 
-        Expected:
-        - duration_minutes가 계산됨 (0이 아닌 양수)
-        - force_closed = True
+        Scenario(KST): 08:00 시작 → 18:00 force-close. check_out 없음 → 세션 17:00 cap.
+        Expected: 세션 08:00~17:00 = 540분 (18:00 완료시각보다 17:00 cap 우선), force_closed=True.
         """
         import time
+        _kst = timezone(timedelta(hours=9))
         suffix = int(time.time() * 1000) + 10
 
         admin_id = create_test_worker(
@@ -1218,7 +1216,7 @@ class TestForceClosePauseDeduction:
         create_test_product(qr_doc_id=qr_doc_id, serial_number=serial_number, model='GALLANT-50')
         create_test_completion_status(serial_number=serial_number)
 
-        started_at = datetime(2026, 3, 2, 8, 0, 0, tzinfo=timezone.utc)
+        started_at = datetime(2026, 3, 2, 8, 0, 0, tzinfo=_kst)
         task_id = create_test_task(
             worker_id=worker_id,
             serial_number=serial_number,
@@ -1233,8 +1231,8 @@ class TestForceClosePauseDeduction:
         response = client.put(
             f'/api/admin/tasks/{task_id}/force-close',
             json={
-                'close_reason': 'Break overlap test',
-                'completed_at': '2026-03-02T18:00:00+00:00',
+                'close_reason': '17:00 cap test',
+                'completed_at': '2026-03-02T18:00:00+09:00',
             },
             headers={'Authorization': f'Bearer {token}'}
         )
@@ -1245,9 +1243,9 @@ class TestForceClosePauseDeduction:
         assert response.status_code == 200
         data = response.get_json()
 
-        # duration 양수 확인
+        # 17:00 cap — 18:00 완료여도 세션 08:00~17:00 = 540분 (휴게 미차감)
         duration = data.get('duration_minutes', 0)
-        assert duration > 0, f"Duration should be positive, got {duration}"
+        assert duration == 540, f"Duration (17:00 cap, 휴게 미차감) should be 540, got {duration}"
 
         # DB 확인: force_closed = True
         cursor = db_conn.cursor()
