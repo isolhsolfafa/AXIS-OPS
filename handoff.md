@@ -14,7 +14,39 @@
 
 ---
 
-## 📌 2026-06-03 KST — FIX-DURATION 운영검증 후 v12 GO (🚧 진행 중, 미배포)
+## 📌 2026-06-03 KST — ✅ FIX-DURATION v2.22.0 완료 (배포 + 백필 + VIEW fix)
+
+> duration man-hour 재정의 — 수동 일시정지 미반영 + 휴게 이중차감 fix. **설계 v1~v13 + Codex 라운드 1~13 GO**. 운영 배포(Railway auto-deploy) + 5월~ 백필 1002건 + VIEW 중복표시 fix 까지 완료.
+
+### 최종 공식 (v13 attendance-cap, compute_task_manhour SSoT)
+```
+man-hour = Σ workers ( length(session_union) − (manual pause ∩ session_union) )
+세션 끝(cap) = LEAST(완료기록, 본인 그날 attendance check_out, [없으면]17:00, 다음start(LEAD), close_at)
+· 휴게 미차감 (원본 적재) / manual pause만 차감 / 협력사 실 check_out · GST 17:00 fallback / FLOOR
+```
+- 4경로 통일 단일 UPDATE (정상완료 complete_work / ship-admin / 자동마감 auto_close_relay_task 위임 / 수동강제 admin force_close)
+- 완료로그 분기 제거 (attendance-cap이 open 세션 통일 처리)
+
+### 완료 내역 (commit)
+- 핵심: `task_detail.py` compute_task_manhour + complete_task_unified / `task_service.py` 정상완료 / `shipment_service.py` ship-admin / `admin.py` 수동강제 + AUTO_CLOSED_ prefix 차단
+- v2.22.0 release (`d820f1f`) — version + CHANGELOG + CLAUDE.md
+- **백필 (`9a6d152`)**: 5월~ 1002건 정정 (net −353,617분), preflight clean, 단일워커 이상치 0, 수동강제 51 보존, 4월 베타 미변경
+- **VIEW 중복표시 fix (`23513a7`)**: work.py get_tasks_by_serial cross-join → LATERAL 세션 페어링 (TEST-1111 INSPECTION 9행→3행)
+- pytest 20 (test_fix_duration: attendance-cap 5 포함) + 회귀 GREEN (relay 38 / force_close 17 fc09-10 v13 갱신 / ship-admin 25)
+- 롤백 지점: 93a5082 / 39b0681 / 12d6909 / 8621cef / b1a0dd0 / 9a6d152 / 23513a7 / b046d0b
+
+### 핵심 교훈
+- **운영 데이터 dry-run이 추상 검증을 보완**: Codex 8라운드 GO 후에도 운영 비교(O/N 6873/6878/6770) + 백필 dry-run에서 실결함 3건(crash 13건 / 자동마감 8일 폭증 / 다일·밤샘 폭증) 발견 → v9~v13.
+- **MES 표준 정합**: attendance check_out = MES actual clock-out (Epicor/MachineMetrics shift-end auto clock-out).
+- **OPS=raw / DW=가공**: 점심·저녁 휴게 차감은 DW transform (사장님 영역, `_calculate_break_overlap` 이식).
+
+### 남은 후속 (별 BACKLOG, FIX-DURATION 핵심 아님 — 모두 🟡 LOW)
+- `FEAT-MANHOUR-ESTIMATE-FLAG` (cap 발동 세션 추정 표시) / `BUG-WORKER-COUNT-UNDERCOUNT` / `BACKLOG-AUTOCLOSE-BACKSTOP` (3일+OPEN 244) / `DW-BREAK-DEDUCTION` / `REF-TASK-DETAIL-CONN-INJECTION`
+- #79 강제종료 협력사 매트릭스 (설계 Sprint 81, 미구현)
+
+---
+
+## 📌 2026-06-03 KST — FIX-DURATION 운영검증 후 v12 GO (진행 trail, 위 섹션이 최종)
 
 > 6-02 섹션(아래) 이후 진척. **운영 데이터 직접 비교(O/N 6873/6878/6770) + AUDIT_TRAIL_GUIDE §11 진단**에서 v8 공식의 실결함 발견 → v9~v12 보강 → **Codex 라운드 12 GO (M=0)**.
 
