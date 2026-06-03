@@ -432,23 +432,30 @@ def start_task(task_detail_id: int, started_at: datetime) -> bool:
 
 
 # ──────────────────────────────────────────────────────────────
-# FIX-DURATION-MANUAL-PAUSE-RAW-20260602 (v2.22.0)
+# FIX-DURATION-MANUAL-PAUSE-RAW-20260602 (v2.22.0) — v13 attendance-cap 통일
 # man-hour = per-worker interval-union(세션) − (수동 pause ∩ session_union)
-#   · 휴게(break_*) 미차감 (원본 데이터 적재 — 사용자 결정)
-#   · pause_type='manual' 만 차감 (positive 필터)
-#   · auto-close 미완 세션/미완 pause 는 close_at 으로 clamp
-#   · worker 별 FLOOR 후 합산 (분 단위 인플레 방지, 과거 truncation 일치)
-# 설계: AGENT_TEAM_LAUNCH.md § FIX-DURATION-MANUAL-PAUSE-RAW (Codex 라운드 1~8 GO)
+#   세션 끝(cap) = LEAST(완료기록, 본인 그날 attendance check_out,
+#                        [check_out 없으면] 시작일 17:00, 다음 start(LEAD), close_at)
+#   · 휴게(break_*) 미차감 (원본 적재 — 사용자 결정). pause_type='manual' 만 차감.
+#   · attendance check_out = MES actual clock-out 표준 (협력사) / 미기록 → 17:00 fallback (GST/교대없음)
+#   · 다일/밤샘/방치 세션을 근무일 경계로 cap (MES shift-end auto clock-out 정합)
+#   · worker 별 FLOOR 후 합산. start > close_at / cap <= start 가드.
+# 설계: AGENT_TEAM_LAUNCH.md § FIX-DURATION v1~v13 (Codex 라운드 1~12 GO + v13 재검증)
 # ──────────────────────────────────────────────────────────────
 
 _TASK_MANHOUR_SQL = """
 WITH starts AS (
-  -- 세션 상한 = 완료기록 / 다음 start / close_at 중 가장 빠른 것 (LEAD capping)
-  --   · 정상: 완료기록이 세션을 닫음
-  --   · 버려진 재시작: 다음 start 가 닫음 (open 세션 과다계상 방지)
-  --   · 최종 open: close_at 이 닫음
   SELECT ws.worker_id, ws.started_at,
-         LEAD(ws.started_at) OVER (PARTITION BY ws.worker_id ORDER BY ws.started_at) AS next_start
+         LEAD(ws.started_at) OVER (PARTITION BY ws.worker_id ORDER BY ws.started_at) AS next_start,
+         -- 실 완료기록 (>= start 중 최초)
+         (SELECT MIN(wc.completed_at) FROM work_completion_log wc
+            WHERE wc.task_id = %(tid)s AND wc.worker_id = ws.worker_id
+              AND wc.completed_at >= ws.started_at) AS comp,
+         -- 본인 그날 attendance check_out (협력사 실 퇴근)
+         (SELECT MAX(pa.check_time) FROM hr.partner_attendance pa
+            WHERE pa.worker_id = ws.worker_id AND pa.check_type = 'out'
+              AND DATE(pa.check_time AT TIME ZONE 'Asia/Seoul')
+                  = DATE(ws.started_at AT TIME ZONE 'Asia/Seoul')) AS checkout
   FROM work_start_log ws
   WHERE ws.task_id = %(tid)s
     AND ws.started_at < %(close_at)s          -- start > close_at 역전 방지 (crash 가드)
@@ -457,16 +464,17 @@ sessions AS (
   SELECT worker_id,
          tstzrange(
            started_at,
-           LEAST(
-             COALESCE(
-               (SELECT MIN(wc.completed_at) FROM work_completion_log wc
-                WHERE wc.task_id = %(tid)s AND wc.worker_id = s.worker_id
-                  AND wc.completed_at >= s.started_at),
-               'infinity'::timestamptz
-             ),
+           GREATEST(started_at, LEAST(
+             COALESCE(comp, 'infinity'::timestamptz),
+             COALESCE(checkout, 'infinity'::timestamptz),
+             -- check_out 없으면 시작일 17:00 fallback (KST)
+             CASE WHEN checkout IS NULL
+                  THEN (date_trunc('day', started_at AT TIME ZONE 'Asia/Seoul')
+                        + interval '17 hours') AT TIME ZONE 'Asia/Seoul'
+                  ELSE 'infinity'::timestamptz END,
              COALESCE(next_start, 'infinity'::timestamptz),
              %(close_at)s
-           ),
+           )),
            '[)'
          ) AS sess
   FROM starts s
@@ -498,61 +506,26 @@ FROM per_worker
 """
 
 
-# 완료로그 0건(순수 open 자동마감) — 단일구간 추정값
-#   man-hour = [MAX(last_started < close_at), close_at] − (수동 pause ∩ 단일구간)
-#   v9 C9: 완료기록 없는 task 는 작업 종료 시각을 알 수 없어 union 부적용 → 구 auto-close 동치(단일구간) + manual-only.
-#   추정값 (실측 아님) — duration_source(PREV_DAY_CAP/FALLBACK_17 등)로 추정 표시.
-_TASK_MANHOUR_SINGLE_SQL = """
-WITH ls AS (
-  SELECT MAX(started_at) AS s FROM work_start_log
-  WHERE task_id = %(tid)s AND started_at < %(close_at)s
-),
-sess AS (
-  SELECT tstzrange(s, %(close_at)s, '[)') AS r FROM ls WHERE s IS NOT NULL
-),
-pauses AS (
-  SELECT tstzrange(wpl.paused_at, COALESCE(wpl.resumed_at, %(close_at)s), '[)') AS pr
-  FROM work_pause_log wpl
-  WHERE wpl.task_detail_id = %(tid)s AND wpl.pause_type = 'manual'
-    AND wpl.paused_at < %(close_at)s
-    AND COALESCE(wpl.resumed_at, %(close_at)s) > wpl.paused_at
-),
-pu AS (SELECT range_agg(pr) AS mr FROM pauses)
-SELECT COALESCE(FLOOR(GREATEST(0,
-  COALESCE((SELECT EXTRACT(EPOCH FROM (upper(r)-lower(r)))/60 FROM sess), 0)
-  - COALESCE((
-      SELECT SUM(EXTRACT(EPOCH FROM (upper(x)-lower(x)))/60)
-      FROM sess s,
-           unnest(tstzmultirange(s.r) * COALESCE((SELECT mr FROM pu), '{}'::tstzmultirange)) x
-    ), 0)
-)), 0)::int AS manhour
-"""
-
-
 def compute_task_manhour(cur, task_detail_id: int, close_at: datetime) -> int:
-    """man-hour(분) 산출 — 완료로그 유무 분기 (v9 C9).
+    """man-hour(분) 산출 — attendance-cap 통일 공식 (v13).
 
-    · 완료로그 ≥1건 → interval-union(세션) − (수동 pause ∩ session_union)  [실측]
-    · 완료로그 0건  → 단일구간 [MAX(last_started), close_at] − (manual pause ∩ 단일구간)  [추정값]
+    man-hour = Σ over workers ( length(session_union) − (manual pause ∩ session_union) )
+      세션 끝(cap) = LEAST(완료기록, 본인 그날 attendance check_out,
+                          [check_out 없으면] 시작일 17:00, 다음 start(LEAD), close_at)
+
+    · 협력사: 실 check_out 으로 다일/밤샘/방치 세션 cap (MES actual clock-out 표준)
+    · GST/미기록: 17:00 fallback (교대 없음)
+    · 휴게 미차감 (cap 은 근무시간 경계). FLOOR + cap<=start 가드.
 
     Args:
         cur: 활성 커서 (호출부 트랜잭션 공유)
         task_detail_id: app_task_details.id
-        close_at: 미완 세션/미완 pause clamp 시각
+        close_at: 미완 세션/미완 pause 최종 clamp 시각
                   (정상완료=completed_at / 자동마감=calculate_close_at() 결과)
     Returns:
         man-hour 분 (int, 최소 0). work_start_log 없으면 0.
     """
-    # 완료로그 유무 분기 (v9 C9 — 완료로그 0건은 작업 종료시각 미상 → 단일구간 추정)
-    cur.execute(
-        "SELECT EXISTS(SELECT 1 FROM work_completion_log WHERE task_id = %s) AS has_comp",
-        (task_detail_id,),
-    )
-    row = cur.fetchone()
-    has_comp = (row['has_comp'] if isinstance(row, dict) else row[0]) if row else False
-
-    sql = _TASK_MANHOUR_SQL if has_comp else _TASK_MANHOUR_SINGLE_SQL
-    cur.execute(sql, {'tid': task_detail_id, 'close_at': close_at})
+    cur.execute(_TASK_MANHOUR_SQL, {'tid': task_detail_id, 'close_at': close_at})
     row = cur.fetchone()
     if row is None:
         return 0

@@ -47524,3 +47524,73 @@ anomalous(preflight 중단) = 완료로그 0 AND force_closed=FALSE
 3. GO 후 — compute_task_manhour C9 분기 + auto_close_relay_task 내부 위임(시그니처 유지) + admin started 가드 + prefix 가드 + migration 058(E12 분류) + DP-36~40
 4. 회귀 전수 GREEN + v2.22.0 + 백필
 5. 별 BACKLOG: REF-TASK-DETAIL-CONN-INJECTION / worker_count / AUTOCLOSE-BACKSTOP / 대시보드 세션집계
+
+---
+
+## v13 갱신 (운영 dry-run 발견 — attendance-cap 세션 경계, 공식 통일)
+
+> v12 GO 후 **백필 dry-run에서 발견**: 여러 날 걸친 open/밤샘 세션이 close_at까지 늘어나 man-hour 폭증 (td57335 15524분=7.5일). 원인 = "휴게 미차감(raw)"이 같은 날엔 OK지만 다일/밤샘엔 깨짐. **MES 업계 표준(Epicor/MachineMetrics 등 shift-end auto clock-out) + 사용자 결정 = attendance check_out 활용 + 17:00 fallback**.
+
+### A13. 발견 (dry-run, read-only)
+
+5월~ 재계산 dry-run 1696건 중 900 변경 — 상위 변동이 비현실적 (td57335 0→15524 = 7.5일, td69625 332→16169). 원인: 작업자가 시작만 하고 완료 안 누른 세션 / 저녁 시작 다음날 완료(밤샘) → close_at clamp가 며칠. raw(휴게 미차감)가 다일에서 폭증.
+
+### B13. 공장 근무 구조 (사용자 확인)
+
+- 정규 08:00~17:00 / 연장 ~20:00 / 실질 ~24:00 (예외) / **교대 없음** (단일 주간)
+- 협력사(MECH/ELEC/TMS)는 `hr.partner_attendance` check_out 보유 / GST(PI/QI/SI)는 그룹웨어 근태(없음)
+
+### C13. attendance-cap 세션 경계 (확정 공식)
+
+```
+세션 끝(cap) = LEAST(
+   완료시각(완료기록 >= start),               -- 실 완료 (있으면)
+   본인 그날 attendance check_out,            -- 실제 퇴근 (협력사, 있으면) ← MES actual clock-out
+   [check_out 없으면] 시작일 17:00 fallback,   -- GST/미기록 (사용자 결정)
+   다음 start (LEAD),                          -- 재시작
+   close_at
+)
+session = tstzrange(start, GREATEST(start, cap))   -- cap <= start 면 empty(0)
+worker_manhour = length(session_union) − length(manual_pause ∩ session_union), FLOOR, 최소 0
+task.duration = Σ workers
+```
+- check_out = `hr.partner_attendance WHERE worker_id AND check_type='out' AND DATE(check_time KST)=DATE(start KST)` 의 MAX.
+- 휴게는 여전히 미차감 (cap은 근무시간 경계지 휴게차감 아님 — 사용자 원칙 유지).
+- cap 발동 세션 → duration_source '추정' (MES exception flagging).
+
+### D13. 공식 통일 (완료로그 분기 제거)
+
+attendance-cap이 open 세션을 cap 처리 → **v9 C9 완료로그 ≥1/0 분기 불필요.** cap된 union 단일 공식으로 통일. `compute_task_manhour` 의 EXISTS(completion_log) 분기 + `_TASK_MANHOUR_SINGLE_SQL` 제거.
+
+### E13. 검증 (read-only 프로토타입)
+
+| task | 구 | raw신 | **attendance-cap 신** |
+|---|---|---|---|
+| td57335 (6명 일주일 간헐) | 0 | 15524 | **1321** ✅ |
+| td69625 | 332 | 16169 | **1184** ✅ |
+| TEST-1111 (같은날 3세션) | 13 | 13 | **13** 불변 ✅ |
+| td73819 (정상완료) | 8 | 8 | **8** 불변 ✅ |
+
+→ 비현실 다일값 → 현실화 / 같은날 케이스 불변 (pytest 15 영향 0 예상).
+
+### F13. attendance 커버리지 (5월~ 운영)
+
+| category | 세션 | check_out 커버리지 |
+|---|---|---|
+| ELEC | 1710 | 81% |
+| MECH | 1148 | 77% |
+| TMS | 411 | 19% |
+| PI/QI/SI | 215 | 0% (그룹웨어 → 17:00 fallback) |
+
+→ 협력사(다일 문제 주범 UTIL_LINE 등)는 실 check_out / GST 검사(짧은 같은날 task)는 17:00 fallback (거의 안 binding).
+
+### MES 업계 표준 근거
+상용 MES/ERP(Epicor "end of day auto clock out", MachineMetrics clock-in/out)가 동일하게 **미마감 작업을 교대 종료/실 퇴근시각으로 auto-close**. attendance 기반 cap = MES actual clock-out 표준 정합.
+
+### 진행 순서 (v13)
+1. ✅ dry-run 발견 + MES 표준 + attendance-cap 프로토타입 검증
+2. compute_task_manhour → attendance-cap 통일 공식 (완료로그 분기 제거)
+3. **Codex 라운드 13** (attendance-cap + 공식 통일 + 백필 영향)
+4. pytest 15 재확인 + DP 추가(attendance-cap/밤샘/check_out없음 17:00) + 회귀
+5. dry-run 재확인 (5월~) → 백필
+6. (검토) PREV_DAY_CAP 17:00 도 본 cap 과 정합 — duration_calculator 별 확인
