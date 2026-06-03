@@ -374,9 +374,11 @@ def test_ff18_concurrent_start_race_returning_id():
     completed_at = datetime(2026, 5, 14, 17, 0, tzinfo=Config.KST)
 
     with patch.object(task_detail, 'get_db_connection') as mock_conn, \
-         patch.object(task_detail, 'put_conn'):
+         patch.object(task_detail, 'put_conn'), \
+         patch.object(task_detail, 'compute_task_manhour', return_value=120):
         mock_cur = MagicMock()
         # 첫 번째 호출: RETURNING id 1건 / 두 번째: None
+        # (compute_task_manhour mock → UPDATE RETURNING fetchone 만 side_effect 소비)
         mock_cur.fetchone.side_effect = [(123,), None]
         mock_conn.return_value.cursor.return_value = mock_cur
 
@@ -608,6 +610,8 @@ def test_ff01d_single_final_not_blocked_normal_close():
          patch('app.services.task_service._finalize_task_multi_worker',
                return_value={'duration_minutes': 120, 'elapsed_minutes': 120, 'worker_count': 1}), \
          patch('app.services.task_service.complete_task', return_value=True), \
+         patch('app.services.task_service.complete_task_unified',
+               return_value={'duration_minutes': 120, 'elapsed_minutes': 120, 'worker_count': 1}), \
          patch('app.services.duration_validator.validate_duration', return_value={'warnings': []}), \
          patch.object(service, '_trigger_second_close'):
         response, status_code = service.complete_work(
@@ -743,6 +747,8 @@ def test_ff_v2153_second_final_self_inspection_normal_close():
          patch('app.services.task_service._finalize_task_multi_worker',
                return_value={'duration_minutes': 60, 'elapsed_minutes': 60, 'worker_count': 1}), \
          patch('app.services.task_service.complete_task', return_value=True), \
+         patch('app.services.task_service.complete_task_unified',
+               return_value={'duration_minutes': 120, 'elapsed_minutes': 120, 'worker_count': 1}), \
          patch('app.services.duration_validator.validate_duration', return_value={'warnings': []}), \
          patch('app.services.task_service.check_category_close_eligible', return_value=True), \
          patch.object(service, '_trigger_second_close'):

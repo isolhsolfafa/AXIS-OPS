@@ -498,8 +498,42 @@ FROM per_worker
 """
 
 
+# 완료로그 0건(순수 open 자동마감) — 단일구간 추정값
+#   man-hour = [MAX(last_started < close_at), close_at] − (수동 pause ∩ 단일구간)
+#   v9 C9: 완료기록 없는 task 는 작업 종료 시각을 알 수 없어 union 부적용 → 구 auto-close 동치(단일구간) + manual-only.
+#   추정값 (실측 아님) — duration_source(PREV_DAY_CAP/FALLBACK_17 등)로 추정 표시.
+_TASK_MANHOUR_SINGLE_SQL = """
+WITH ls AS (
+  SELECT MAX(started_at) AS s FROM work_start_log
+  WHERE task_id = %(tid)s AND started_at < %(close_at)s
+),
+sess AS (
+  SELECT tstzrange(s, %(close_at)s, '[)') AS r FROM ls WHERE s IS NOT NULL
+),
+pauses AS (
+  SELECT tstzrange(wpl.paused_at, COALESCE(wpl.resumed_at, %(close_at)s), '[)') AS pr
+  FROM work_pause_log wpl
+  WHERE wpl.task_detail_id = %(tid)s AND wpl.pause_type = 'manual'
+    AND wpl.paused_at < %(close_at)s
+    AND COALESCE(wpl.resumed_at, %(close_at)s) > wpl.paused_at
+),
+pu AS (SELECT range_agg(pr) AS mr FROM pauses)
+SELECT COALESCE(FLOOR(GREATEST(0,
+  COALESCE((SELECT EXTRACT(EPOCH FROM (upper(r)-lower(r)))/60 FROM sess), 0)
+  - COALESCE((
+      SELECT SUM(EXTRACT(EPOCH FROM (upper(x)-lower(x)))/60)
+      FROM sess s,
+           unnest(tstzmultirange(s.r) * COALESCE((SELECT mr FROM pu), '{}'::tstzmultirange)) x
+    ), 0)
+)), 0)::int AS manhour
+"""
+
+
 def compute_task_manhour(cur, task_detail_id: int, close_at: datetime) -> int:
-    """man-hour(분) 산출 — interval-union(세션) − (수동 pause ∩ session_union).
+    """man-hour(분) 산출 — 완료로그 유무 분기 (v9 C9).
+
+    · 완료로그 ≥1건 → interval-union(세션) − (수동 pause ∩ session_union)  [실측]
+    · 완료로그 0건  → 단일구간 [MAX(last_started), close_at] − (manual pause ∩ 단일구간)  [추정값]
 
     Args:
         cur: 활성 커서 (호출부 트랜잭션 공유)
@@ -509,7 +543,16 @@ def compute_task_manhour(cur, task_detail_id: int, close_at: datetime) -> int:
     Returns:
         man-hour 분 (int, 최소 0). work_start_log 없으면 0.
     """
-    cur.execute(_TASK_MANHOUR_SQL, {'tid': task_detail_id, 'close_at': close_at})
+    # 완료로그 유무 분기 (v9 C9 — 완료로그 0건은 작업 종료시각 미상 → 단일구간 추정)
+    cur.execute(
+        "SELECT EXISTS(SELECT 1 FROM work_completion_log WHERE task_id = %s) AS has_comp",
+        (task_detail_id,),
+    )
+    row = cur.fetchone()
+    has_comp = (row['has_comp'] if isinstance(row, dict) else row[0]) if row else False
+
+    sql = _TASK_MANHOUR_SQL if has_comp else _TASK_MANHOUR_SINGLE_SQL
+    cur.execute(sql, {'tid': task_detail_id, 'close_at': close_at})
     row = cur.fetchone()
     if row is None:
         return 0
@@ -957,46 +1000,32 @@ def auto_close_relay_task(
     conn = get_db_connection()
     try:
         cur = conn.cursor()
-        # duration_minutes 결정 — 명시 전달 시 그대로 사용, 미전달 시 EXTRACT(EPOCH) 자동 계산
-        if duration_minutes is not None:
-            cur.execute("""
-                UPDATE app_task_details
-                SET completed_at = %s,
-                    duration_minutes = %s,
-                    elapsed_minutes = EXTRACT(EPOCH FROM (%s - started_at)) / 60,
-                    worker_count = %s,
-                    force_closed = %s,
-                    closed_by = %s,
-                    close_reason = %s,
-                    duration_source = %s,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = %s
-                  AND completed_at IS NULL
-                  AND force_closed = FALSE
-                RETURNING id
-            """, (last_completion_at, duration_minutes, last_completion_at,
-                  worker_count, force_closed, closed_by_worker_id, close_reason, duration_source,
-                  task_detail_id))
-        else:
-            # Sprint 41-B legacy 호환 — duration_minutes EXTRACT(EPOCH) 자동 계산
-            cur.execute("""
-                UPDATE app_task_details
-                SET completed_at = %s,
-                    duration_minutes = EXTRACT(EPOCH FROM (%s - started_at)) / 60,
-                    elapsed_minutes = EXTRACT(EPOCH FROM (%s - started_at)) / 60,
-                    worker_count = %s,
-                    force_closed = %s,
-                    closed_by = %s,
-                    close_reason = %s,
-                    duration_source = %s,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = %s
-                  AND completed_at IS NULL
-                  AND force_closed = FALSE
-                RETURNING id
-            """, (last_completion_at, last_completion_at, last_completion_at,
-                  worker_count, force_closed, closed_by_worker_id, close_reason, duration_source,
-                  task_detail_id))
+        # FIX-DURATION-MANUAL-PAUSE-RAW-20260602 (v2.22.0): duration = compute_task_manhour 단일 SSoT (v9 D11).
+        #   기존 duration_minutes 인자 / EXTRACT(EPOCH) 자동계산 폐기 — compute_task_manhour(완료로그 분기) 위임.
+        #   · 완료로그 ≥1 → interval-union / 완료로그 0 → 단일구간 추정 (close_at clamp)
+        #   close_at = last_completion_at (calculate_close_at 결과). race guard + audit 컬럼 현행 보존.
+        #   ⚠️ duration_minutes 인자는 호환 위해 유지하나 무시 (호출처 5곳 무변경).
+        manhour = compute_task_manhour(cur, task_detail_id, last_completion_at)
+        cur.execute("""
+            UPDATE app_task_details
+            SET completed_at = %s,
+                duration_minutes = %s,
+                elapsed_minutes = GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (%s - started_at))/60))::int,
+                worker_count = GREATEST(1, (
+                    SELECT COUNT(DISTINCT worker_id) FROM work_start_log WHERE task_id = %s
+                )),
+                force_closed = %s,
+                closed_by = %s,
+                close_reason = %s,
+                duration_source = %s,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+              AND completed_at IS NULL
+              AND force_closed = FALSE
+            RETURNING id
+        """, (last_completion_at, manhour, last_completion_at, task_detail_id,
+              force_closed, closed_by_worker_id, close_reason, duration_source,
+              task_detail_id))
         result = cur.fetchone()
         conn.commit()
         if result is None:
