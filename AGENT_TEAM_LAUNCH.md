@@ -47302,3 +47302,225 @@ per_worker AS (
 SELECT COALESCE(SUM(FLOOR(GREATEST(0, sess_min - pause_min))),0)::int AS manhour FROM per_worker
 ```
 → `close_at` = 정상완료 completed_at / 자동마감 calculate_close_at(). 멀티레인지 교집합 `*` 연산자. worker별 FLOOR 후 합산.
+
+---
+
+## v9 갱신 (운영 3 O/N + §11 진단 검증 — 완료로그 유무 분기 + 세션 모델 보강)
+
+> v8(Codex 8라운드 GO) 후 **운영 데이터 직접 비교(O/N 6873/6878/6770) + AUDIT_TRAIL_GUIDE §11 진단**에서 interval-union 의 한계(완료로그 0건 자동마감 과다계상 + crash) 발견. 세션 모델 보강 + 완료로그 유무 분기 + §11 우려 통합. Codex 라운드 9 대상.
+
+### A9. 검증으로 드러난 v8 공식의 한계 (운영 데이터)
+
+v8 공식 `union(세션) ∩ pause` 를 운영 전체에 돌린 결과:
+- **crash**: `work_start_log.started_at > close_at` 13건 → tstzrange 역전. 원인 = task 가 먼저 닫힌 뒤(FIRST_FINAL/auto-close/force) 작업자가 **사후 재시작**(릴레이/재활성화). worker 본인 "완료<시작" 역전은 **0건**(세션 건전).
+- **과다계상**: 완료로그 **0건** 자동마감(IF_1 류, 서로 다른 worker 각자 시작만) → 모든 open start 가 close_at 으로 늘어나 8일짜리 세션.
+- 정상완료(완료로그 ≥1): **정확** (멀티워커 man-hour + manual pause + 구 0버그 복원 — O/N 6770 UTIL_LINE_1 0→11306 등).
+
+### B9. 세션 모델 보강 (구현 완료 — commit 12d6909)
+
+`_TASK_MANHOUR_SQL` 세션 상한 = **LEAST(완료기록, 다음 start(LEAD), close_at)**:
+- 정상: 완료기록이 닫음
+- 버려진 재시작: 다음 start 가 닫음 (open 세션 과다 방지)
+- 최종 open: close_at
++ `started_at < close_at` 가드 (사후 재시작 제외, crash 차단) + pause `paused_at < close_at` 가드.
+→ pytest 15 GREEN 유지 + O/N 3건 정상완료 정확.
+
+### C9. 완료로그 유무 분기 (핵심 — Codex 라운드 9 판정)
+
+운영 분류 (90일):
+- 완료로그 ≥1건 (정상완료 + cap-but-logged) → **compute_task_manhour (interval-union)** 정확
+- 완료로그 0건 (순수 open, 379건 중 multi-worker) → interval-union 부적용 → **단일 `[MAX(last_started), close_at] − manual` (구 auto-close 유지)**
+
+§11 우려 ① 재발견: PREV_DAY_CAP 230건 중 **192건이 완료로그 보유** → interval-union 이 17:00 cap 보다 정확(실 완료시각 사용 + 열린 꼬리만 cap). 즉 "자동마감=union 부적용"이 아니라 **"완료로그 0건만 부적용"**.
+
+**확정 분기**:
+```
+compute_task_manhour(tid, close_at):
+   IF EXISTS(work_completion_log WHERE task_id=tid):   -- 완료로그 ≥1
+        return interval-union (B9 보강 SQL)
+   ELSE:                                                 -- 완료로그 0건
+        return GREATEST(0, FLOOR(EXTRACT(EPOCH(close_at − MAX(last_started)))/60)) − manual_pause∩
+        (= 구 calculate_auto_close_duration 동치, 단 manual-only)
+```
+
+### D9. 경로별 적용 (v8 D8 + 분기 반영)
+
+- **정상완료 / ship / admin** (이미 연결): 완료로그 ≥1 보장 → interval-union. ✅
+- **자동마감 (auto_close_relay_task)**: compute_task_manhour 호출 시 C9 분기가 자동 처리 — 완료로그 있으면 union, 없으면 단일구간. → **auto_close_relay_task 의 duration 계산을 compute_task_manhour(virtual_close_at=close_at) 로 위임** 가능 (C9 분기가 open 세션 안전 처리). duration_calculator.calculate_auto_close_duration 은 호출부에서 close_at 산정만 담당(PREV_DAY_CAP 등), duration 값은 compute_task_manhour.
+- **수동강제 (admin force-close)**: 완료로그 유무에 따라 C9 분기. audit 현행 보존(force_closed=TRUE + 자유입력 close_reason).
+
+### E9. 백필 범위 (v6 C6 + 완료로그 분기)
+
+```
+재계산 O = (force_closed=FALSE OR close_reason 정확3패턴 AUTO_CLOSED_*)  AND  완료로그 ≥1건
+         → interval-union 재계산
+재계산 O = 완료로그 0건 AND (close_reason AUTO_CLOSED_* OR force_closed)
+         → 단일구간 재계산 (manual-only — §11 우려 ② 잔업 일부 정정)
+보존     = 수동강제(force_closed=TRUE AND close_reason NOT IN auto/ship/admin allowlist)
+preflight = 정확3패턴 외 'AUTO_CLOSED_%' 행 탐지 시 중단 (v6)
+```
+
+### F9. §11 (AUDIT_TRAIL_GUIDE) 우려 통합 trail
+
+| §11 우려 | FIX-DURATION 처리 |
+|---|---|
+| (나) 음수/0 duration (pause 이중차감) | ✅ **본 fix 핵심** — 478건 0분 중 상당수 정정 (구 0버그 복원) |
+| ① cross-day cap 이 완료로그 덮음 (192건) | ✅ interval-union 이 실 완료시각 사용 (cap 보다 정확) |
+| ② 17:00 cap 잔업 깎음 | △ 완료로그 있으면 실측 반영 / 0건은 close_at 한계 (별 — admin_settings 교대시간) |
+| ⑤ force_closed 인데 duration 계산됨 (116건) | ✅ D8 "audit/duration 현행 보존" 명문화 — AUDIT_TRAIL_GUIDE 문서 정정 |
+| ③ started_null 완료 (8건) | 가드 — started_at IS NOT NULL WHERE (complete_task_unified) |
+| ④ 3일+ OPEN backstop (244건) | ❌ duration 무관 — 별 sprint `BACKLOG-AUTOCLOSE-BACKSTOP` |
+
+### G9. pytest 추가 (B9/C9 분기)
+
+| TC | 시나리오 | 기대 |
+|---|---|---|
+| DP-36 | start > close_at (사후 재시작) | 제외, crash 0 |
+| DP-37 | 같은 worker 재시작(완료 없이) → 다음 start capping | 끊김 없이 정확 |
+| DP-38 | 완료로그 0건 (순수 open, multi-worker) | 단일 [last_started, close_at] − manual (8일 뻥튀기 0) |
+| DP-39 | 완료로그 ≥1 + 일부 open 세션 (cap-but-logged) | interval-union + 열린 꼬리 close_at cap |
+
+### 진행 순서 (v9)
+
+1. ✅ DB 검증 (3 O/N + §11 진단 + start>close 13건 원인) + 헬퍼 보강 (commit 12d6909)
+2. **Codex 라운드 9** (C9 완료로그 분기 + D9 자동마감 위임 + E9 백필 + §11 통합 최종 판정)
+3. GO 후 — C9 분기 구현 (완료로그 0건 단일구간) + auto_close_relay_task 위임 + admin prefix 가드 + migration 058 + DP-36~39
+4. 회귀 + v2.22.0 배포 + 백필
+5. 별 BACKLOG: REF-TASK-DETAIL-CONN-INJECTION / worker_count / AUTOCLOSE-BACKSTOP(244) / 대시보드 세션 집계(Q-B)
+
+---
+
+## v10 갱신 (Codex 라운드 9 반영 — M=2 + A 4건)
+
+> v9 대비: D9-M(자동마감 위임 audit 파라미터 명시) + F9-M(admin force-close started 가드 통일) 해소. A 4건(0-log 명명/단일구간 pause 교집합/preflight 보강/회귀목록) 반영.
+
+### D10. 자동마감 위임 — audit 파라미터 명시 (Codex 라운드 9 D9-M)
+
+`auto_close_relay_task()` (task_detail.py:723) duration 계산 → **`complete_task_unified()` 위임**, audit 전부 명시 전달:
+```python
+complete_task_unified(
+    task_detail_id,
+    completed_at = close_at,            # auto-close 시각
+    close_at     = close_at,            # man-hour clamp 동일
+    force_closed = force_closed,        # 호출부 현행값 (v2.15.16 이후 False)
+    closed_by    = closed_by_worker_id, # orphan worker (현행)
+    close_reason = resolved_close_reason, # AUTO_CLOSED_BY_{FIRST|SECOND}_FINAL_TRIGGER:{trigger} / AUTO_CLOSED_LEGACY
+    duration_source = duration_source,  # calculate_close_at() 결과 (PREV_DAY_CAP 등)
+    race_guard   = True,                # completed_at IS NULL AND force_closed=FALSE 보존
+)
+```
+- `_trigger_first_close()` / `_trigger_second_close()` (task_service.py): `calculate_auto_close_duration()` 사전계산 + `duration_minutes=` 전달 **제거**. duration 은 compute_task_manhour 가 단독 산출(C9 분기).
+- `calculate_close_at()` 은 **close_at + duration_source 산정만** 담당 (PREV_DAY_CAP 등). 책임 분리 명확.
+- `calculate_auto_close_duration()` 은 폐기 또는 미사용 (compute_task_manhour 단일 SSoT). dead 시 제거 — 호출처 전수 확인 후.
+
+### F10. admin force-close started 가드 통일 (Codex 라운드 9 F9-M)
+
+§11 ③ (started_null 완료) 전 경로 보장: admin force-close (admin.py:1229 부근) 도 **`started_at IS NOT NULL` 가드** 적용 — `complete_task_unified()` 위임(WHERE started_at IS NOT NULL 내장) 또는 동일 가드. 수동강제 audit 보존(force_closed=TRUE / 자유입력 close_reason / closed_by).
+
+### C10. 0-log 분기 명명 + pause 교집합 (Codex 라운드 9 A-1/A-2)
+
+- 완료로그 0건 단일구간 = **man-hour 실측 아님 → "추정값(estimate)"** 명명. duration_source 로 추정 표시(기존 PREV_DAY_CAP/FALLBACK_17 유지 = 추정 신호).
+- 단일구간 manual pause = `[MAX(last_started), close_at]` **구간과 교집합만** 차감:
+```sql
+-- 완료로그 0건 분기
+session = tstzrange(MAX(last_started), close_at)   -- last_started = MAX(work_start_log.started_at < close_at)
+manhour = FLOOR(GREATEST(0,
+   length(session) − length(session ∩ range_agg(manual pause))))
+```
+- C9 양분 보강: "완료로그 ≥1 이지만 유효 세션(completed_at>=started_at) 0" 케이스 = preflight 진단(운영 0건 예상, worker 역전 0 확인됨).
+
+### E10. 백필 preflight 보강 (Codex 라운드 9 A-3)
+
+migration 058 preflight 탐지 항목:
+- 정확3패턴 외 'AUTO_CLOSED_%' close_reason (v6)
+- **logged 분기인데 유효 completion 세션 0건** (anomalous)
+- **완료로그 0 + force_closed=FALSE + close_reason NOT IN (AUTO/SHIP/ADMIN allowlist)** (anomalous closed row)
+→ 위 탐지 시 백필 중단 + 수동 검토.
+
+### G10. 회귀 목록 (Codex 라운드 9 A — "0 보장" 과표현 정정)
+
+DP-36~39 + **기존 회귀 전수 실행 (GREEN 확인 — "회귀 0" 단정 X, 실행 후 판정)**:
+`test_fix_duration_manual_pause`(15) / `test_relay_first_final`(현행) / `test_sprint41b_auto_close`(있으면) / `test_force_close` / `test_ship_complete`(11) / `test_admin_complete`(14) / `test_v2_15_16` / `test_v2_15_18` / `test_hotfix04_orphan` / `test_working_hours`(의미 갱신).
+
+### 진행 순서 (v10)
+
+1. ✅ DB 검증 + 헬퍼 보강 (B9, commit 12d6909) + ship/admin 연결 (commit 대기)
+2. **Codex 라운드 10** (D10 위임 audit + F10 admin 가드 + C10 0-log 명명/pause + E10 preflight 최종 GO)
+3. GO 후 — C9 분기 SQL(완료로그 0 단일구간) + auto_close_relay_task 위임 + admin 가드 + prefix 가드 + migration 058 + DP-36~39
+4. 회귀 전수 GREEN + v2.22.0 배포 + 백필
+5. 별 BACKLOG: REF-TASK-DETAIL-CONN-INJECTION / worker_count / AUTOCLOSE-BACKSTOP(244) / 대시보드 세션집계(Q-B)
+
+---
+
+## v11 갱신 (Codex 라운드 10 반영 — M=2 NULL-safe + 호출처 전수)
+
+> v10 대비: E10 preflight NULL-safe(M-1) + auto_close_relay_task 호출처 전수 갱신 명시(M-2). 이번이 GO 직전.
+
+### E11. preflight NULL-safe (Codex 라운드 10 M-1)
+
+정상완료 audit 은 `close_reason = NULL` 이라 `NOT IN (allowlist)` 가 NULL → 3-valued logic 으로 anomalous row 미탐지. **NULL-safe 명시**:
+```sql
+-- 백필 "보존(수동강제/anomalous)" 식별 — NULL 명시
+preflight anomalous = 완료로그 0
+   AND force_closed = FALSE
+   AND (close_reason IS NULL
+        OR (close_reason NOT LIKE 'AUTO_CLOSED_%'
+            AND close_reason NOT IN ('SHIP_COMPLETE','ADMIN_COMPLETE')))
+   → 백필 중단 + 수동 검토 (완료로그0 인데 정상완료/미분류 = 비정상)
+
+-- 백필 재계산 대상 (E10 + NULL-safe)
+재계산 = (완료로그 ≥1 AND (force_closed=FALSE OR close_reason 정확3 AUTO_CLOSED))
+       OR (완료로그 0 AND close_reason LIKE 'AUTO_CLOSED_%')  -- 자동마감만 단일구간 재계산
+보존   = force_closed=TRUE AND (close_reason IS NULL OR close_reason NOT LIKE 'AUTO_CLOSED_%')  -- 수동강제
+```
+→ `close_reason IS NULL` 을 모든 분기에서 명시 처리.
+
+### D11. auto_close_relay_task 호출처 전수 (Codex 라운드 10 M-2)
+
+`auto_close_relay_task()` 위임(D10) 시 시그니처/내부 변경 → **호출처 전수 갱신 필수**:
+- `task_service.py` `_trigger_first_close()` / `_trigger_second_close()` (2곳) — calculate_auto_close_duration 사전계산 제거
+- **`checklist_service.py` 3곳** (`_try_mech_close()` / `_try_elec_close()` 등 — auto_close_relay_task 직접 호출) — 구버전 시그니처 잔존 시 runtime 오류
+- 구현 전 `grep -rn "auto_close_relay_task(" backend/app/` 전수 확인 → 5곳(task_service 2 + checklist_service 3) 모두 갱신 or wrapper 호환 유지.
+- **안전책**: auto_close_relay_task 시그니처는 **유지**하고 내부 duration 계산만 compute_task_manhour 위임으로 교체 (호출처 무변경) → M-2 회피. duration_minutes 인자는 무시 or 제거. ← **채택 (호출처 영향 0)**
+
+### 진행 순서 (v11)
+
+1. ✅ DB 검증 + 헬퍼 보강(B9) + ship/admin 연결
+2. **Codex 라운드 11** (E11 NULL-safe + D11 호출처 안전책 최종 GO)
+3. GO 후 — compute_task_manhour C9 분기(완료로그0 단일구간) + auto_close_relay_task 내부 위임(시그니처 유지) + admin started 가드 + prefix 가드 + migration 058 preflight + DP-36~39
+4. 회귀 전수 GREEN + v2.22.0 + 백필
+5. 별 BACKLOG: REF-TASK-DETAIL-CONN-INJECTION / worker_count / AUTOCLOSE-BACKSTOP / 대시보드 세션집계
+
+---
+
+## v12 갱신 (Codex 라운드 11 반영 — M=1 SHIP_COMPLETE 0-log 보존)
+
+> v11 대비: E11 백필 보존 분류에 SHIP_COMPLETE/ADMIN_COMPLETE 0-log 케이스 추가(M-1). D11(시그니처 유지 안전책)·완료로그 분기 공식 = 라운드 11 GO 확인.
+
+### E12. 백필 보존 분류 완결 (Codex 라운드 11 M-1)
+
+근거: SI_SHIPMENT 는 `complete_single_action()` (task_detail.py L658) — work_completion_log INSERT 안 함 + duration=0 + `_set_close_audit(close_reason='SHIP_COMPLETE', force_closed=FALSE)`. → **완료로그0 + force_closed=FALSE + close_reason='SHIP_COMPLETE'** 가 정상 운영 케이스. v11 분류표에서 재계산/보존 어디에도 안 들어가 누락.
+
+**확정 백필 분류 (NULL-safe + SINGLE_ACTION)**:
+```sql
+재계산 = (완료로그 ≥1 AND (force_closed=FALSE OR close_reason 정확3 AUTO_CLOSED))
+       OR (완료로그 0 AND close_reason LIKE 'AUTO_CLOSED_%')          -- 자동마감 단일구간
+
+보존   = (force_closed=TRUE AND (close_reason IS NULL OR close_reason NOT LIKE 'AUTO_CLOSED_%'))  -- 수동강제
+       OR (완료로그 0 AND force_closed=FALSE AND close_reason IN ('SHIP_COMPLETE','ADMIN_COMPLETE'))  -- ⬅ 추가: SINGLE_ACTION 출하/admin완료(duration=0 정상)
+
+anomalous(preflight 중단) = 완료로그 0 AND force_closed=FALSE
+       AND (close_reason IS NULL OR (close_reason NOT LIKE 'AUTO_CLOSED_%'
+            AND close_reason NOT IN ('SHIP_COMPLETE','ADMIN_COMPLETE')))   -- 정상완료인데 완료로그0 = 비정상
+```
+→ `ADMIN_COMPLETE` 0-log 는 현행 admin_complete() 가 complete_task_unified 경유라 실발생 0 기대지만 완결성 위해 allowlist 포함.
+
+**TC 추가**: DP-40 — 완료로그0 + force_closed=FALSE + SHIP_COMPLETE + SINGLE_ACTION(duration=0) → 백필 **보존**(재계산 안 함, duration=0 유지).
+
+### 진행 순서 (v12)
+
+1. ✅ DB 검증 + 헬퍼 보강(B9) + ship/admin 연결
+2. **Codex 라운드 12** (E12 SHIP_COMPLETE 보존 — M=0 GO 기대)
+3. GO 후 — compute_task_manhour C9 분기 + auto_close_relay_task 내부 위임(시그니처 유지) + admin started 가드 + prefix 가드 + migration 058(E12 분류) + DP-36~40
+4. 회귀 전수 GREEN + v2.22.0 + 백필
+5. 별 BACKLOG: REF-TASK-DETAIL-CONN-INJECTION / worker_count / AUTOCLOSE-BACKSTOP / 대시보드 세션집계

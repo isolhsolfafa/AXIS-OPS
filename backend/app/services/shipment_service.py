@@ -17,7 +17,7 @@ from typing import Dict, Any, Tuple, Optional
 from app.config import Config
 from app.models.task_detail import (
     get_tasks_by_serial_number,
-    complete_task,
+    complete_task_unified,
     complete_single_action,
 )
 from app.models.completion_status import update_process_completion
@@ -185,18 +185,19 @@ def ship_complete(
                 'error': 'INVALID_COMPLETED_AT_BEFORE_START',
                 'message': '완료 시각이 마무리공정 시작 시각보다 빠를 수 없습니다.'
             }, 400
-        # 미완료 작업자 backfill (force_closed 아닌 정상 완료)
+        # 미완료 작업자 backfill (force_closed 아닌 정상 완료) — 세션 보강 (compute_task_manhour 전 필수)
         _backfill_orphan_completion_logs(finishing, completed_at)
-        # 멀티작업자 집계 (duration/elapsed/worker_count)
-        from app.services.task_service import _finalize_task_multi_worker
-        _finalize_task_multi_worker(finishing.id, completed_at)
-        # completed_at set
-        if not complete_task(finishing.id, completed_at):
+        # FIX-DURATION-MANUAL-PAUSE-RAW-20260602 (v2.22.0): _finalize+complete_task+_set_close_audit 3단계 →
+        #   complete_task_unified 단일 UPDATE (man-hour interval-union + audit 원자). audit = SHIP_COMPLETE/force_closed FALSE.
+        if not complete_task_unified(
+            finishing.id, completed_at,
+            force_closed=False, closed_by=admin_worker_id,
+            close_reason='SHIP_COMPLETE', duration_source=None,
+        ):
             return {
                 'error': 'SHIP_COMPLETE_FAILED',
                 'message': 'SI 마무리공정 완료 처리에 실패했습니다.'
             }, 500
-        _set_close_audit(finishing.id, admin_worker_id)
         completed_tasks.append(SI_FINISHING)
 
     # ── SI_SHIPMENT (SINGLE_ACTION task) ──
@@ -294,18 +295,20 @@ def admin_complete(
                 'message': f'완료 시각이 {t.task_name} 시작 시각보다 빠를 수 없습니다.'
             }, 400
 
-    # 미완료 task 전수 완료 (PI/QI = NORMAL task — 멀티작업자 backfill + 집계)
-    from app.services.task_service import _finalize_task_multi_worker
+    # 미완료 task 전수 완료 (PI/QI = NORMAL task — 멀티작업자 backfill + 단일 UPDATE)
+    # FIX-DURATION-MANUAL-PAUSE-RAW-20260602 (v2.22.0): _finalize+complete_task+_set_close_audit → complete_task_unified.
     completed_tasks = []
     for t in incomplete:
         _backfill_orphan_completion_logs(t, completed_at)
-        _finalize_task_multi_worker(t.id, completed_at)
-        if not complete_task(t.id, completed_at):
+        if not complete_task_unified(
+            t.id, completed_at,
+            force_closed=False, closed_by=admin_worker_id,
+            close_reason='ADMIN_COMPLETE', duration_source=None,
+        ):
             return {
                 'error': 'ADMIN_COMPLETE_FAILED',
                 'message': f'{t.task_name} 완료 처리에 실패했습니다.'
             }, 500
-        _set_close_audit(t.id, admin_worker_id, 'ADMIN_COMPLETE')
         completed_tasks.append(t.task_id)
 
     # 공정 전체 완료 → completion_status 갱신
