@@ -34,17 +34,21 @@
 - `12d6909` 헬퍼 보강 (LEAD capping + start<close 가드, pytest 15 GREEN 유지)
 - `8621cef` ship/admin 경로 연결 (complete_task_unified, test_ship_complete+test_admin_complete 25/25 GREEN) + v9~v12 설계
 
-### 남은 구현 (v12 GO 후)
-1. **compute_task_manhour C9 분기** — 완료로그 0건일 때 단일구간 `[MAX(last_started<close_at), close_at] − manual∩` SQL 추가 (현재 union 단일). EXISTS(work_completion_log) 분기.
-2. **auto_close_relay_task 내부 위임** — duration EXTRACT → compute_task_manhour(close_at). 시그니처/호출처 무변경. duration_minutes 인자 무시.
-3. **admin force-close** (admin.py:1229) started_at IS NOT NULL 가드 + `AUTO_CLOSED_` prefix 입력 400 차단.
-4. **migration 058** — E12 NULL-safe 분류 백필 + preflight(정확3패턴外 AUTO_CLOSED / logged인데 유효세션0 / 0-log force_false 비allowlist).
+### 구현 완료분 (4/6 — 모든 완료 경로 신공식 연결 + 회귀 GREEN)
+1. ✅ **compute_task_manhour C9 분기** (`0b7c3fa`) — 완료로그 ≥1 union / 0 단일구간 추정. 검증: IF_1 451−338pause=113.
+2. ✅ **auto_close_relay_task 위임** (`0b7c3fa`) — 시그니처 유지 내부 compute_task_manhour. test_relay 38 GREEN.
+3. ✅ **admin force-close 위임 + prefix 차단** (`c2eac0c`) — compute_task_manhour + AUTO_CLOSED_ 400. test_force_close 17 GREEN. (미시작 강제종료 started_null→0 의도 유지)
+   - (정상완료 `39b0681` + ship/admin `8621cef` 는 이미 연결)
+   - 회귀 누적 GREEN: test_fix_duration 15 + relay 38 + force_close 17 + ship/admin 25 = 95
+
+### 남은 구현 (2/6)
+4. **migration 058 백필** — E12 NULL-safe 분류 (재계산=완료로그≥1&(force_false OR 정확3 AUTO) OR 완료로그0&AUTO_CLOSED / 보존=force_TRUE非AUTO OR 완료로그0&force_false&SHIP/ADMIN_COMPLETE / anomalous=preflight 중단). preflight 3종(정확3패턴外 AUTO_CLOSED / logged인데 유효세션0 / 0-log force_false 비allowlist). 운영 210+건 정정 — 가장 신중.
 5. **pytest DP-36~40** (start>close 제외 / 재시작 capping / 완료로그0 단일구간 / cap-but-logged / SHIP_COMPLETE 0-log 보존) + 회귀 전수.
-6. **v2.22.0** 배포 + 백필 + T+검증.
+6. **v2.22.0** 배포 + 백필(preflight 먼저) + T+검증.
 
 ### 우선 TC (Codex 권고): DP-40(SHIP_COMPLETE 0-log 보존) → DP-38/39(완료로그 분기) → DP-34(preflight 중단)
 
-### 롤백 지점: 93a5082(설계+헬퍼) / 39b0681(정상경로+15TC) / 12d6909(헬퍼보강) / 8621cef(ship/admin+v12)
+### 롤백 지점: 93a5082(설계+헬퍼) / 39b0681(정상경로+15TC) / 12d6909(헬퍼보강) / 8621cef(ship/admin+v12) / 0b7c3fa(완료로그분기+auto위임) / c2eac0c(admin force위임+prefix)
 
 ---
 
