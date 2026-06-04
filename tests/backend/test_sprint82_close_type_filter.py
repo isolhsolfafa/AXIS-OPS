@@ -274,3 +274,15 @@ class TestRouteCloseTypeValidation:
             headers={"Authorization": f"Bearer {token}"})
         # 대문자 → lower 정규화 → 200
         assert resp.status_code == 200
+
+    def test_ct11_quarter_period_supported(self, client, db_conn, create_test_worker, get_auth_token):
+        """v2.24.1 (#80 후속) — details 가 quarter 지원 (summary 매트릭스 기간 정합)."""
+        if db_conn is None:
+            pytest.skip("DB not available")
+        token = self._admin_token(client, get_auth_token, db_conn, create_test_worker)
+        resp = client.get(
+            "/api/admin/dashboard/auto-close-details?period=quarter&close_type=force&per_page=500",
+            headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 200   # 이전엔 400 INVALID_PERIOD
+        body = resp.get_json()
+        assert "items" in body and "total" in body

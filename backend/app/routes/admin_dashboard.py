@@ -32,7 +32,9 @@ admin_dashboard_bp = Blueprint("admin_dashboard", __name__, url_prefix="/api/adm
 
 
 _VALID_PERIODS_SUMMARY = {"today", "week", "month", "quarter"}
-_VALID_PERIODS_DETAILS = {"today", "week", "month"}
+# v2.24.1 (#80 후속): quarter 추가 — summary 매트릭스(분기) ↔ details 상세 기간 정합.
+# 서비스 _resolve_period_range 는 이미 quarter 지원 → 화이트리스트만 summary 와 통일.
+_VALID_PERIODS_DETAILS = {"today", "week", "month", "quarter"}
 
 
 def _parse_reference_date(raw: Optional[str]) -> Optional[date]:

@@ -6,6 +6,27 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.24.1] - 2026-06-04 — auto-close-details quarter period 지원 (#80 후속)
+
+> VIEW 강제 종료 분포도(분기 매트릭스) ↔ 상세 패널 기간 불일치 fix. VIEW catch: 매트릭스는 `quarter`로 표시(force 분기 130/55건)인데 상세 조회는 `period=quarter`가 **400 INVALID_PERIOD**로 거부돼 VIEW가 `month`로 다운그레이드 → 6월 BAT 거의 0 → 매트릭스 ↔ 상세 불일치.
+
+### 원인 — summary/details period 화이트리스트 비대칭
+- `_VALID_PERIODS_SUMMARY = {today, week, month, quarter}` (quarter ✅)
+- `_VALID_PERIODS_DETAILS = {today, week, month}` (quarter ❌ → 400)
+- 서비스 `_resolve_period_range` 는 quarter 이미 완전 지원 → **라우트 화이트리스트 1곳만 막던 것** (데이터/로직 문제 0)
+
+### Fix (BE 1줄)
+- `admin_dashboard.py` `_VALID_PERIODS_DETAILS` 에 `"quarter"` 추가 (summary 와 통일)
+
+### 검증
+- pytest `test_sprint82_close_type_filter.py` CT-11 신규 (`period=quarter&close_type=force&per_page=500` → 200, items/total 존재) + 기존 12 TC GREEN
+- 응답 스키마 불변 / DB·migration 0 / 회귀 0 (화이트리스트 확장만)
+
+### VIEW 측 후속 (별 repo)
+- `detailsPeriod = period==='quarter' ? 'month' : period` 다운그레이드 제거 → 매트릭스와 동일 기간 그대로 전달
+
+---
+
 ## [2.24.0] - 2026-06-04 — Sprint 82 (#80) auto-close-details close_type/task_id 필터
 
 > VIEW 강제 종료 상세 패널이 union-50 client-filter 대신 "특정 협력사 force 전수" 를 서버에서 정확히 조회하도록 `/auto-close-details` 에 필터 파라미터 추가. **응답 스키마 0 변경 (요청 파라미터 additive)**. BE only.
