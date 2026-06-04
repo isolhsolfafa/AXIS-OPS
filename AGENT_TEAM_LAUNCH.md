@@ -47811,3 +47811,144 @@ if task_id:
 4. version bump v2.24.0 + 문서 동기화 + 배포
 5. T+ 검증 (운영 `/auto-close-details?close_type=force&per_page=200` force count == summary force count 대조)
 6. VIEW 측 #80 후속 (별 세션)
+
+---
+
+# Sprint 83 — FEAT-FACTORY-COMPLETION-ROLLUP-20260605 (공장 대시보드 공정별 완료율 정합)
+
+> **본질**: 공장 대시보드 "공정별 완료율"이 `completion_status` 옛 플래그를 보는데, 이 플래그가 실제 작업 완료를 못 따라감(lag) + SI 정의 불일치. → 대시보드 계산을 **실제 task 완료(app_task_details) + 하위완료→상위 rollup**으로 재계산. **근본 data 무변경 (read-time 표면 처리, DB/migration 0).**
+
+**날짜**: 2026-06-05
+**우선순위**: 🟠 MEDIUM (공장 대시보드 정확도 — 경영 지표 신뢰성)
+**연관**: OPS `factory.py` get_weekly_kpi / get_monthly_detail / `_calc_progress` / `_get_task_progress_by_serial` / VIEW 공장 대시보드 (주간 완료율 + 공정별 완료율 그래프)
+**버전**: v2.25.0 (minor — 응답 값 정확도 개선, 스키마 불변)
+**Codex 이관 체크리스트**: ✅ 클린 코어 데이터 원칙 영향(completion 판정) + 3+ 함수 touch → **자동 Codex 이관 대상**
+
+---
+
+## 1. 배경 — 운영 데이터로 확정된 문제 3종 (2026-06-04~05)
+
+W23(06-01~07, 34개 제품) 기준, 대시보드 플래그 vs 실제 task 완료 대조:
+
+| 공정 | 대시보드(플래그) | 실제 task 전부완료 | 판정 |
+|---|---|---|---|
+| MECH(기구) | 0 | 0 | ✅ 일치 (체크리스트 미완) |
+| ELEC(전장) | 19 | 19 | ✅ 일치 |
+| **TM(반제품)** | **3** | **19** | 🔴 플래그 lag (16건 누락) |
+| PI(가압) | 27 | 27 | ✅ 일치 |
+| QI | 0 | 0 | ✅ 일치 |
+| **SI(마무리)** | **0** | (SI_FINISHING 완료분 누락) | 🟡 정의 불일치 |
+
+**문제 1 — TM 플래그 lag**: `tm_completed`가 실제 TMS task 완료(TANK_MODULE/PRESSURE_TEST)를 못 따라감. 실제 19 vs 플래그 3.
+
+**문제 2 — SI 정의**: `si_completed` = SI_FINISHING + SI_SHIPMENT 둘 다 완료해야 TRUE. 하지만 SI_SHIPMENT(출하)는 물류 단계지 공정 아님. → **마무리 완료율 = SI_FINISHING 기준이어야** (사용자 확정). 예: GBWS-7163 SI_FINISHING 06-04 17:44 완료인데 출하 안 돼 si_completed=FALSE → 대시보드 누락.
+
+**문제 3 — 출하완료 제품의 상위 플래그 통째 누락**: si_completed=TRUE 12건 중 상위 플래그 = mech 0 / elec 1 / tm 2 / pi 3 / qi 0. **출하까지 끝낸 제품인데 상위 공정 플래그가 거의 다 FALSE.** 플래그가 사실상 유지 안 됨.
+
+→ 셋 다 같은 뿌리: **대시보드가 lag 나는 completion_status 플래그를 봄.** 해법도 하나.
+
+---
+
+## 2. 해법 — task 실제 완료 + rollup (read-time, 근본 data 무변경)
+
+대시보드 계산 시점에:
+1. **flag → 실제 task 완료 전환**: 카테고리별 "applicable task 전부 완료"로 판정 (`app_task_details.completed_at`). → TM lag 자동 해소 (이미 `_get_task_progress_by_serial`가 이 데이터 계산 중).
+2. **SI = SI_FINISHING 기준**: SI 카테고리 완료 = `SI_FINISHING` task 완료 (SI_SHIPMENT 제외). 출하완료율 필요 시 별 지표.
+3. **하위완료 → 상위 rollup**: 도달한 최종 공정 기준으로 상위 공정 100% 간주. 출하/마무리한 제품의 상위 플래그 누락(문제 3) 해소.
+
+**⚠️ 근본 data(`completion_status` / `app_task_details`)는 안 건드림.** 대시보드 응답 만들 때만 재해석 = read-time 표면 처리. DB write 0, migration 0.
+
+### 공정 순서 + rollup 규칙
+
+```
+[MECH, ELEC, TM] (병렬 조립) → PI(가압) → QI(공정검사) → SI(=SI_FINISHING 마무리)
+```
+- SI 완료 → MECH/ELEC/TM/PI/QI 전부 100%
+- QI 완료 → MECH/ELEC/TM/PI 100%
+- PI 완료 → MECH/ELEC/TM 100%
+
+> ✅ **결정 확정 (사용자 2026-06-05) = 옵션 B (전체 cascade, 체크리스트 무관)**:
+> - **배경**: 공장 대시보드 = 외부 손님 보여주기용 첫 화면. 정확한 확인은 생산현황/실적 페이지에서. → 대시보드는 "체크리스트(행정) 상관없이 하위 공정 100%" 표시 요구.
+> - **규칙**: 각 제품이 **도달한 가장 뒤 공정** 기준 → 그보다 앞 공정 전부 100% (task 1개 미완/체크리스트 미완 무시). 현재 진행 중 공정만 실제 진도.
+>   - 도달 판정 = 해당 카테고리에 **완료된 task 1건 이상** 있으면 그 공정 "도달/진행"으로 봄 → 뒤 공정 도달 시 앞 공정 강제 100%.
+>   - 예) GBWS-7163: SI(SI_FINISHING) 도달 → MECH/ELEC/TM/PI/QI 전부 100% (MECH 5/6·체크리스트 미완 무시).
+> - **물리적 정당성**: 뒤 공정(가압/검사/마무리) 진행 = 앞 조립 물리적 완료의 증거. 체크리스트(행정)만 미완 → 보여주기 + 사실 부합.
+> - **범위 한정**: 이 cascade는 **공장 대시보드(get_weekly_kpi / get_monthly_detail by_stage)만**. 생산현황/실적/S/N 상세뷰는 정밀 유지(rollup 미적용 — 정확 확인용). 책임 분리: 대시보드=보여주기 / 상세=정밀.
+>
+> (참고 운영 데이터: PI완료인데 MECH 플래그 FALSE 71건 / QI완료인데 PI FALSE 0건 — cascade로 전부 100% 처리됨.)
+
+---
+
+## 3. BE 변경 명세 (`factory.py` 단일 파일)
+
+### 3-1. 신규 helper `_compute_stage_completion(cur, serial_numbers, models)`
+- 각 S/N별 카테고리 완료 판정: applicable task 전부 `completed_at` 있으면 완료
+- SI 카테고리 = `SI_FINISHING` task 완료 기준 (task_id 분기). ⚠️ `_get_task_progress_by_serial`은 category GROUP BY라 task_id 분기 불가 → 신규 helper는 **SI만 task_id 레벨 별도 조회** (또는 전체 task_id 레벨 조회 후 집계).
+- TM = GAIA 모델만 해당 (non-GAIA는 None). 기존 분모 gaia_count(L476-484) 정합 유지.
+- **rollup (옵션 B 확정)**: 도달한 가장 뒤 공정 → 앞 공정 전부 100%. 병렬 tier [MECH,ELEC,TM]는 PI 도달 시 셋 다 100%.
+- 반환: `{sn: {'mech': bool, 'elec': bool, 'tm': bool|None, 'pi': bool, 'qi': bool, 'si': bool}}`
+- ⚠️ **Codex R1 A-5 — 기존 함수 미파괴**: `_get_task_progress_by_serial`(L133)이 다른 endpoint(생산현황 등)에 공유되는지 확인. 공유되면 **수정 금지 → 신규 별도 helper로 분리** (by_category 의미 보존). DRY는 SQL 패턴 참고 수준만.
+- ⚠️ **Codex R1 A-3 — DUAL TM L/R 처리**: GAIA/IVAS DUAL(탱크 2개 L/R)에서 TMS task가 L/R 별도 row면, TM 완료 = **applicable TMS task 전부 완료**(L+R 둘 다)로 통일(category-level 자연 처리). 구현 시 운영 데이터로 L/R row 구조 확인 후 확정.
+
+### 3-2. 적용 지점
+- `get_weekly_kpi` `by_stage` (L478) — flag 합산 → helper 결과 합산
+- `get_weekly_kpi` `completion_rate` (`_calc_progress` L123) — helper 기반 재계산
+- `get_monthly_detail` per-item stages (L364-367) — helper 결과로 교체
+- `_calc_progress` — flag stages → helper 결과 (또는 helper에 흡수)
+
+### 3-3. 무변경
+- `completion_status` 테이블 / `app_task_details` — **쓰기 0**
+- 응답 스키마 (`by_stage` / `completion_rate` / per-item stages 키) — **불변** (값만 정확)
+- `_count_shipped` / production_count / by_model — 무관 (touch 0)
+
+---
+
+## 4. 응답 영향 (값 상승, 스키마 불변)
+
+- TM 완료율 ↑ (W23 ~10% → ~61%)
+- SI 완료율 ↑ (SI_FINISHING 완료분 반영)
+- 출하완료 제품 상위 공정 100% 정상 표시
+- ⚠️ VIEW 공장 대시보드 숫자가 **눈에 띄게 상승** — 정상(정확해진 것). VIEW 코드 변경 0 (값만 바뀜).
+
+---
+
+## 5. pytest TC (`test_sprint83_completion_rollup.py` 신규)
+
+| TC | 시나리오 | 검증 |
+|---|---|---|
+| CR-01 | TMS task 전부 완료 + tm_completed=FALSE | TM 완료로 카운트 (flag lag 무시) |
+| CR-02 | SI_FINISHING 완료 + SI_SHIPMENT 미완 | SI 완료로 카운트 (출하 무관) |
+| CR-03 | SI_FINISHING 도달 + MECH 1 task 미완 | cascade → MECH 100% (체크리스트 무관) |
+| CR-04 | PI 도달(가압 완료 task 有) + MECH/ELEC 일부 미완 | cascade → MECH/ELEC/TM 100% / PI는 실제 진도 / QI·SI 0 (앞만 채움) |
+| CR-05 | 미착수~MECH만 진행 (뒤 공정 미도달) | cascade 미발동 → 실제 task 진도 그대로 (over-marking 0) |
+| CR-06 | non-GAIA | TM=None (해당 없음) |
+| CR-07 | GBWS-7163 재현 | SI_FINISHING 도달 → 마무리+상위 전부 100% |
+| CR-08 | 회귀 | by_stage/completion_rate 스키마 키 불변 + production_count 무변경 + 생산현황 API 무영향 |
+| CR-09 | DUAL TM (L/R 2탱크) | applicable TMS task 전부 완료 시 TM 완료 (Codex A-3) |
+| CR-10 | PI 도달 시 병렬 tier | MECH/ELEC/TM 3종 동시 100% assert (Codex A-7) |
+
+---
+
+## 6. 회귀 위험 / 영향 범위
+
+| 영역 | 변경 |
+|---|---|
+| `factory.py` helper + 4 적용지점 | 완료 판정 소스 flag→task+rollup (값 정확화) |
+| `completion_status` / `app_task_details` | **쓰기 0** (read-time only) |
+| 응답 스키마 | 불변 (값만 상승) |
+| DB / migration | 없음 |
+| VIEW | 코드 0 (값 자동 반영) |
+| 다른 화면(S/N 상세뷰 등) | **본 sprint 범위 밖** — 같은 flag 쓰면 거긴 별도 검토 (표면 처리 한계) |
+
+→ read-time only, 스키마 불변 → 회귀 위험 낮음. 단 "완료율 숫자 상승"은 의도된 변화.
+
+---
+
+## 7. 진행 순서
+
+1. 결정 포인트(§2 옵션 A/B) 사용자 확정
+2. 본 설계서 → Codex 라운드 1 (클린코어 + 3파일 자동 이관)
+3. `_compute_stage_completion` helper + 4 적용지점 구현
+4. pytest CR-01~07 + 회귀 test_factory GREEN
+5. version v2.25.0 + 문서 + 배포
+6. T+ 검증 (운영 weekly-kpi TM/SI 완료율 정상 + GBWS-7163 100%)

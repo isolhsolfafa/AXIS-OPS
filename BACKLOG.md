@@ -196,6 +196,14 @@
 | `DW-BREAK-DEDUCTION-20260603` | 🟢 INFO | 점심/저녁 휴게 차감 = DW transform (`_calculate_break_overlap` 이식). OPS=raw labor / DW=work time. 사장님 DW 환경 영역 |
 | (참조) `REF-TASK-DETAIL-CONN-INJECTION-20260602` | 🟠 MEDIUM | 전사 트랜잭션 conn 주입형 (위 🔧 리팩토링 섹션 등록됨) |
 
+### 📋 Sprint 83 (공장 대시보드 완료율 rollup) 후속 — 실제(정확) 진도 표시 위치 (2026-06-05 등록)
+
+> Sprint 83 (FEAT-FACTORY-COMPLETION-ROLLUP, v2.25.0)가 공장 대시보드를 "보여주기(cascade rollup, 체크리스트 무관 하위 100%)"로 만듦. → 사용자(Twin파파)는 **별개로 실제(정확) 공정별 완료율/실제 task 진도**를 보고 싶은데, 현재 분석/생산현황 페이지엔 그런 "정확 진도" 뷰가 명확히 없음. **어디에 넣을지 위치 고민 단계.**
+
+| ID | 우선순위 | 내용 |
+|---|---|---|
+| `FEAT-FACTORY-ACTUAL-COMPLETION-VIEW-20260605` | 🟡 LOW (위치 미정, 고민 단계) | **공장 대시보드 rollup(보여주기)과 별개로, 실제 task 완료 기준 "정확 진도" 표시 위치 결정.** 배경: Sprint 83 후 대시보드 = 낙관적(하위 100% cascade). 내부용 정확값(체크리스트 미완 포함 실제 task 완료율 / 공정별 raw %) 볼 화면 필요. **후보 위치**: ① 생산현황 상세뷰 (S/N별 공정 진도 — 이미 task 기반?) ② 실적 페이지 ③ 신규 "정밀 진도" 위젯/탭 ④ 대시보드에 admin-only 보조 표시 (단 글로벌 토글은 per-user 문제로 기각됨 — 2026-06-05). **결정 필요**: 어느 페이지가 가장 자연스러운가 + 정밀값 정의(체크리스트 포함/제외 / SI=FINISHING vs SHIPMENT). **연관**: Sprint 83 (대시보드 rollup) / CT_ANALYSIS_ROADMAP §14 (신뢰도 맵) / 책임 분리 (대시보드=보여주기 / 상세=정밀). 설계 trail: AGENT_TEAM_LAUNCH.md § Sprint 83. |
+
 ### 📋 Sprint 71 v3 Codex 라운드 2 A 등록 (2026-05-26)
 
 > Sprint 71 v3 옵션 X 채택 후 Codex A 8건 → 3건 BACKLOG (3건은 V4 영역 자동 해소).
