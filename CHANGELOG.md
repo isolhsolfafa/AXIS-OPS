@@ -6,6 +6,36 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.24.0] - 2026-06-04 — Sprint 82 (#80) auto-close-details close_type/task_id 필터
+
+> VIEW 강제 종료 상세 패널이 union-50 client-filter 대신 "특정 협력사 force 전수" 를 서버에서 정확히 조회하도록 `/auto-close-details` 에 필터 파라미터 추가. **응답 스키마 0 변경 (요청 파라미터 additive)**. BE only.
+
+### 신규 요청 파라미터 (additive — 미지정 시 현행 동일)
+- `close_type` = `auto` | `manual` | `force` (미지정 = 현행 union 하위호환)
+- `task_id` = 마감된 `t.task_id` (매트릭스 공정 셀). 기존 `trigger_task_id`(close_reason 접미사 = 트리거 task)와 별개 컬럼
+
+### BE 변경
+- `dashboard_service.py build_auto_close_details()` — 시그니처 +2(`close_type`/`task_id`) / `close_filter` 를 close_type 별 분기(force→force_closed=TRUE, auto→AUTO_CLOSED_BY_% AND force=FALSE, manual→MANUAL_FORCE_CLOSE AND force=FALSE, None→union) / `task_sql`(`t.task_id=%s`) / **per_page cap 100→500** (운영 Q2 force 125건 이미 100 초과 → 전수 보장)
+- `admin_dashboard.py` — `close_type` 화이트리스트 검증(400 INVALID_CLOSE_TYPE) + 빈 문자열/대소문자 정규화(empty→None=union) + `task_id` 파싱
+
+### Catch (설계 대조 — VIEW 요청의 숨은 전제)
+- per_page=200 이 현재 cap 100 에 silent clamp → close_type=force 만으론 100건+ 여전히 truncate → cap 500 상향 필수
+- task_id 는 기존 trigger_task_id(트리거 task)와 다른 컬럼(마감 공정) → 신규 파라미터
+
+### Codex 라운드 1 — DEPLOY_SAFE (M=0 / A=4 전건 반영)
+- A4(per_page 비용) → CT-07 total/total_pages/len 동시 검증 / A5(manager 미시작 force 제외 = Sprint 81 격리 정책 정합) → §6 + CT-10 명기 / A7(route 빈문자열 empty→None) → 반영 / A8(empty-as-None TC) → CT-09 반영
+
+### 검증
+- pytest `test_sprint82_close_type_filter.py` 12 GREEN (CT-01~10: close_type별 모집단 + partner/task_id AND + per_page>100 + union 하위호환 + manager 격리 미시작 force 제외 + route 400/대소문자/empty)
+- 응답 스키마 불변 (VIEW 타입 0) / DB·migration 변경 0 / `build_auto_close_summary`·매트릭스·invariant 무변경
+- 미지정 호출(기존 소비처) 현행 union 동일 → 회귀 0
+- 설계: AGENT_TEAM_LAUNCH.md § Sprint 82 (#80)
+
+### VIEW 측 후속 (별 repo)
+- force 셀/협력사 선택 시 `useAutoCloseDetails({ partner, close_type:'force', task_id?, per_page:200 })` 별 호출 → 전수 보장 (현재 union client-filter degrade fallback)
+
+---
+
 ## [2.23.0] - 2026-06-04 — Sprint 81 (#79) 강제 종료 협력사 2축 매트릭스
 
 > 자동 마감 매트릭스(v2.20.x)에 있는 협력사 분포를 **강제 종료(force_closed=TRUE)** 에도 동일 제공. `/auto-close-summary` 응답 `force_closed` block 에 additive 2키. VIEW MissedCloseAnalysisPage 소비. BE only (OPS 앱 변경 0).

@@ -114,6 +114,17 @@ def get_auto_close_details():
     if trigger_task_id:
         trigger_task_id = trigger_task_id.strip() or None
 
+    # Sprint 82 (#80): close_type 필터 (auto|manual|force). 빈 문자열/공백 → None(현행 union)
+    close_type = (request.args.get("close_type") or "").strip().lower() or None
+    if close_type and close_type not in ("auto", "manual", "force"):
+        return jsonify({
+            "error": "INVALID_CLOSE_TYPE",
+            "message": "close_type must be one of auto|manual|force",
+        }), 400
+
+    # Sprint 82 (#80): 마감 공정(t.task_id) 필터 — trigger_task_id 와 별개
+    task_id = (request.args.get("task_id") or "").strip() or None
+
     try:
         page = int(request.args.get("page", 1))
     except (TypeError, ValueError):
@@ -142,6 +153,8 @@ def get_auto_close_details():
             is_admin=is_admin,
             worker_company=worker_company,
             reference_date=reference_date,
+            close_type=close_type,
+            task_id=task_id,
         )
     except Exception as exc:
         logger.exception("[Sprint71] auto-close-details failed: %s", exc)

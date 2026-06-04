@@ -976,8 +976,16 @@ def build_auto_close_details(
     is_admin: bool = False,
     worker_company: Optional[str] = None,
     reference_date: Optional[date] = None,
+    close_type: Optional[str] = None,
+    task_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """`/auto-close-details` 응답 본문 구성 (drill-down 상세 카드)."""
+    """`/auto-close-details` 응답 본문 구성 (drill-down 상세 카드).
+
+    Sprint 82 (#80): close_type / task_id 필터 추가.
+    - close_type = 'auto' | 'manual' | 'force' | None(현행 union 하위호환)
+    - task_id = 마감된 t.task_id (매트릭스 공정 셀). 기존 trigger_task_id(close_reason
+      접미사 = 트리거 task)와 별개 컬럼.
+    """
     start, end, _, _, _ = _resolve_period_range(period, reference_date)
     partner_sql, partner_params = _build_partner_filter(partner, is_admin, worker_company)
 
@@ -987,18 +995,37 @@ def build_auto_close_details(
         trigger_sql = " AND t.close_reason LIKE %s "
         trigger_params = [f"%:{trigger_task_id}"]
 
+    # Sprint 82 (#80): 마감 공정(t.task_id) 필터 — trigger_task_id 와 별개
+    task_sql = ""
+    task_params: List[Any] = []
+    if task_id:
+        task_sql = " AND t.task_id = %s "
+        task_params = [task_id]
+
     page = max(1, page)
-    per_page = max(1, min(100, per_page))
+    # Sprint 82 (#80): cap 100 → 500 (force 전수 보장 — 운영 Q2 force 125건 이미 100 초과)
+    per_page = max(1, min(500, per_page))
     offset = (page - 1) * per_page
 
     # v2.20.7 (#77): 분류 영역 — auto / manual / force 합집합 (총 종료 누락)
-    # close_filter: (AUTO_CLOSED_BY_% AND force=FALSE) OR (MANUAL_FORCE_CLOSE AND force=FALSE) OR (force=TRUE)
-    close_filter = (
-        "((t.close_reason LIKE %s AND t.force_closed = FALSE) "
-        "OR (t.close_reason = %s AND t.force_closed = FALSE) "
-        "OR t.force_closed = TRUE)"
-    )
-    close_filter_params = [_AUTO_LIKE, _MANUAL_EQ]
+    # Sprint 82 (#80): close_type 지정 시 해당 모집단만 (미지정 = 현행 union 하위호환)
+    if close_type == "auto":
+        close_filter = "(t.close_reason LIKE %s AND t.force_closed = FALSE)"
+        close_filter_params: List[Any] = [_AUTO_LIKE]
+    elif close_type == "manual":
+        close_filter = "(t.close_reason = %s AND t.force_closed = FALSE)"
+        close_filter_params = [_MANUAL_EQ]
+    elif close_type == "force":
+        close_filter = "(t.force_closed = TRUE)"
+        close_filter_params = []
+    else:
+        # 미지정 → 현행 union (AUTO_CLOSED_BY_% AND force=FALSE) OR (MANUAL AND force=FALSE) OR (force=TRUE)
+        close_filter = (
+            "((t.close_reason LIKE %s AND t.force_closed = FALSE) "
+            "OR (t.close_reason = %s AND t.force_closed = FALSE) "
+            "OR t.force_closed = TRUE)"
+        )
+        close_filter_params = [_AUTO_LIKE, _MANUAL_EQ]
 
     conn = get_db_connection()
     try:
@@ -1011,10 +1038,11 @@ def build_auto_close_details(
                   AND {close_filter}
                   {partner_sql}
                   {trigger_sql}
+                  {task_sql}
             """
             cur.execute(
                 count_sql,
-                [start, end] + close_filter_params + partner_params + trigger_params,
+                [start, end] + close_filter_params + partner_params + trigger_params + task_params,
             )
             total = int(cur.fetchone()["total"] or 0)
 
@@ -1054,12 +1082,14 @@ def build_auto_close_details(
                   AND {close_filter}
                   {partner_sql}
                   {trigger_sql}
+                  {task_sql}
                 ORDER BY t.completed_at DESC
                 LIMIT %s OFFSET %s
             """
             cur.execute(
                 item_sql,
-                [start, end] + close_filter_params + partner_params + trigger_params + [per_page, offset],
+                [start, end] + close_filter_params + partner_params + trigger_params
+                + task_params + [per_page, offset],
             )
             rows = cur.fetchall()
     finally:
