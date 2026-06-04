@@ -380,3 +380,59 @@ Q2 — 30일 고정 + confidence='low' 안전
 | 2026-05-22 | § 0.5 보강 — Sprint 71 자동 마감 분석 페이지의 4단계 사이클 (작업자 개선 → 시간 정합성 → 교육 → app update). 사용자 catch: "이부분을 더관리해서 시간에 대한 정합성을 올릴수 있게 교육 및 문제점을 분석해서 편의사항 개선 (app update)" |
 | 2026-05-25 | § 11 신규 — 책임 분리 원칙 (App / View / Admin 3 카테고리) trail. CLAUDE.md 명문화 완료. CT 분석 페이지 영역 정합 + Sprint 75 (가칭) VIEW input 점진 OPS 회귀 후보 등록. Sprint 71 적용 trail (`[복원]` 제거) |
 | 2026-05-26 | § 12 신규 — Sprint 71 v3 옵션 X 채택. V4 IQR / outlier_workers / statistics_service 이전 + Codex 라운드 2 결과 보존 + 재진입 trigger. 사용자 catch: "ct분석은 현재 load된 데이터들로는 Insight까지 가기에는 deep한 영역" |
+| 2026-06-04 | § 14 신규 — 운영 DB 직접 탐험(v2.22.0 후 첫 실측). 데이터 신뢰도 맵 + CT 표본 94% 도달(§12 판정 갱신) + validator man-hour 방향 확정. 협력사 평가 영구 보류 결정. 사용자 catch: "협력사 평가는 활용할 데가 없음 — 물량배분 advan 불가 + 금전보상 권한 밖" |
+
+---
+
+## 14. 운영 DB 데이터 탐험 결론 (2026-06-04) — 신뢰도 맵 + validator 방향 + CT 표본 갱신
+
+> **트리거**: 사용자 "v2.22.0 어느 정도 보완했고, 모니터링 가능한 데이터가 뭔지 / CT 신뢰데이터 아니지만 쿼리 조회로 유의미한 데이터 확인해보자". 운영 DB(Railway) 읽기 전용 직접 탐험. **메모리: `~/.claude/projects/.../memory/project_duration_data_reliability.md`**
+
+### 14.1 데이터 신뢰도 맵 (어느 작업시간을 믿나)
+
+| 구분 | 신뢰 | 처리 | 근거 (운영 90일 실측) |
+|---|---|---|---|
+| **TMS(M) — TANK_MODULE / PRESSURE_TEST(가압검사)** | 🔴 최하 | **시간 미추적, progress(`completion_status.tm_completed`)만**. 시간 추적은 추후 | TANK_MODULE 234건 = 즉시탭(<2분) 65% + 8h+방치 26%, 같은 분 배치태깅 ≈31%. 1인 몰아 태깅 → 시간이 실작업 미반영 |
+| 기구 MECH (BAT/FNI) | 🟢 | 표준시간·분석 사용 | 다수 작업자(16/21명) |
+| 전장 ELEC (C&A/P&S/**TMS(E)**) | 🟢 | 사용 | TMS(E)도 17명 다수, 깨끗 (TMS는 회사로 M/E 갈림 — 더러운 건 TMS(M) 모듈뿐) |
+| GST 검사 (PI/QI/SI) | 🟢 | 사용 | GST 자체 공정 (사용자 확인) |
+
+→ 신뢰 필터 = `task_id NOT IN ('TANK_MODULE','PRESSURE_TEST')`.
+
+### 14.2 깨끗한 표준 작업시간 테이블 (man-hour, Tukey 클리핑, TMS모듈 제외)
+
+| task | 중앙(분) | Q1~Q3 | validator상한(Q3+1.5IQR) |
+|---|---|---|---|
+| MECH SELF_INSPECTION | 44 | 30~56 | 95 |
+| PI PI_LNG_UTIL | 70 | 50~89 | 148 |
+| PI PI_CHAMBER | 52 | 29~92 | 186 |
+| ELEC WIRING | 228 | 150~394 | 758 |
+| ELEC PANEL_WORK | 533 | 300~1169 | 2472 |
+| MECH UTIL_LINE_1 | 456 | 202~1007 | 2214 |
+| SI SI_FINISHING | 478 | 460~499 | 558 |
+
+(14개 task 신뢰. 클리핑 제거 이상치 task당 0~10개 = 소수 → 본질 깨끗)
+
+### 14.3 validator 방향 — man-hour 기준 확정 (실행 가능 레버)
+
+- **현재 갭**: `duration_validator.py` L25 `MAX_DURATION_MINUTES = 840`(14h) = **모든 task 단일 임계**. → 44분 작업이 5h 걸려도 침묵(둔감) + 도킹 task(PANEL_WORK 41h 정상) 오경보.
+- **정답**: task별 man-hour 임계(위 표). 단일 840 → task별.
+- **man-hour vs 실경과 결정 = man-hour 채택**: 실경과(wall-clock)는 도킹 대기·다음날 이어하기 포함 → IF_1/UTIL_LINE 임계가 13일까지 늘어 변별력 죽음. man-hour는 실노동시간이라 짧고 일관.
+  - 예: IF_1 man중앙 120 vs 실경과중앙 740(6배) / UTIL_LINE_1 man 498 vs 실경과 3023(6배, 실경과상한 19487분=13.5일)
+- 알림 2종 분리: 완료 task 비정상(DURATION_EXCEEDED) = man-hour / 미완료 너무 오래(UNFINISHED_AT_CLOSING) = wall-clock 이되 도킹 task 관대.
+- **sprint 후보**: `FEAT-DURATION-VALIDATOR-PER-TASK-THRESHOLD` (임계 테이블 위치 = 정적 seed vs admin_settings vs 주기 자동산출 미결). 레버 확실(본인 권한 + 기존 기능), §0.5 4차(app update) 사이클.
+
+### 14.4 CT 표본 성숙도 — §12 재진입 판정 갱신
+
+- 17개 task종류 중 16개(**94%**)가 깨끗표본 n>=30 도달 → §12 재진입 조건(70%) **이미 초과**. 5-26 "데이터 부족" 판정 outdated.
+- 남은 장벽 = "데이터 부족" 아님 → "outlier 정리"(Tukey) 한 가지. CT V4 IQR가 정확히 그 설계.
+- 단 **협력사 평가는 영구 보류** (§0.5 1·3차 협력사 미팅/보상 트랙) — **레버 부재**: 물량 풀가동이라 물량배분 advan 불가 + 금전보상 권한 밖. 평가 점수 나와도 actionable 0. → 데이터 값어치는 **본인이 고칠 수 있는 OPS 앱 self-improvement(§0.5 4차)** 쪽으로.
+
+### 14.5 다음 진입 시 (재개 순서)
+
+```
+1. 본 §14 + 메모리 project_duration_data_reliability.md 읽기
+2. FEAT-DURATION-VALIDATOR-PER-TASK-THRESHOLD 설계서 (임계 위치 결정)
+3. CT 재진입은 outlier 정리(Tukey) + statistics_service 분리 시점 (§12 trail)
+4. 협력사 평가 = 레버 생길 때까지 재제안 금지
+```
