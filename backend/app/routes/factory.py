@@ -125,7 +125,9 @@ def _count_shipped(conn, start, end, basis: str) -> int:
 # 실제 task 완료(app_task_details) + 하위완료→상위 cascade rollup 으로 재계산.
 # 근본 data 무변경(read-time). 생산현황/실적/S/N 상세뷰는 미적용(정밀 유지).
 # tier: 작을수록 앞 공정. 도달한 가장 뒤 tier 보다 앞 공정은 강제 100%(체크리스트 무관).
-_STAGE_TIER = {'mech': 0, 'elec': 0, 'tm': 0, 'pi': 1, 'qi': 2, 'si': 3}
+# 실제 공정 순서 (사용자 확정 2026-06-05): 전장외부 → 반제품(TM) → 기구(MECH) → 전장(ELEC)
+#   → 가압(PI) → 공정검사(QI) → 마무리(SI). 반제품이 기구/전장보다 선행 (병렬 아님).
+_STAGE_TIER = {'tm': 0, 'mech': 1, 'elec': 2, 'pi': 3, 'qi': 4, 'si': 5}
 _CAT_TO_STAGE = {'MECH': 'mech', 'ELEC': 'elec', 'TMS': 'tm',
                  'PI': 'pi', 'QI': 'qi', 'SI': 'si'}
 _STAGE_ORDER = ('mech', 'elec', 'tm', 'pi', 'qi', 'si')

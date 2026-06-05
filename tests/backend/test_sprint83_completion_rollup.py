@@ -259,7 +259,7 @@ def test_cr09_dual_tms_both_sides(db_conn, w):
 
 
 def test_cr10_pi_reached_parallel_tier_all(db_conn, w):
-    """PI 도달 시 병렬 tier(MECH/ELEC/TM) 3종 동시 True."""
+    """PI 도달 시 앞 공정(TM/MECH/ELEC) 전부 True."""
     sn = "S83-CR10"
     try:
         _seed_product(db_conn, sn, 'GAIA-I')
@@ -271,5 +271,20 @@ def test_cr10_pi_reached_parallel_tier_all(db_conn, w):
         assert r['mech'] is True
         assert r['elec'] is True
         assert r['tm'] is True
+    finally:
+        _cleanup(db_conn, [sn])
+
+
+def test_cr11_mech_reached_forces_tm(db_conn, w):
+    """실 공정 순서(반제품→기구) — 기구 도달 시 반제품(TM) 강제 100%."""
+    sn = "S83-CR11"
+    try:
+        _seed_product(db_conn, sn, 'GAIA-I')
+        _seed_task(db_conn, w, sn, 'TMS', 'TANK_MODULE', done=False)   # 반제품 미완(플래그)
+        _seed_task(db_conn, w, sn, 'MECH', 'PANEL_WORK', done=True)    # 기구 도달
+        r = _compute(db_conn, sn, 'GAIA-I')
+        assert r['tm'] is True   # 반제품(tier0) < 기구(tier1) → 강제 100%
+        # 반대로 ELEC 만 도달, 기구는 furthest 보다 앞 → 강제
+        assert r['mech'] is True  # PANEL_WORK 완료 = 기구 실제 완료
     finally:
         _cleanup(db_conn, [sn])

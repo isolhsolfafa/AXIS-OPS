@@ -6,6 +6,20 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.25.1] - 2026-06-05 — Sprint 83 공정 순서 정정 (반제품 선행)
+
+> v2.25.0 의 cascade tier 순서 정정. 사용자 catch: "반제품은 다 끝났어야 정상" — 반제품(TM)을 기구/전장과 병렬(tier 0)로 뒀으나, 실제 공정 순서는 **전장외부 → 반제품(TM) → 기구(MECH) → 전장(ELEC) → 가압(PI) → 공정(QI) → 마무리(SI)** 로 반제품이 기구/전장보다 선행.
+
+### Fix (factory.py 1줄)
+- `_STAGE_TIER` = `{tm:0, mech:1, elec:2, pi:3, qi:4, si:5}` (기존 `{mech:0,elec:0,tm:0,pi:1,qi:2,si:3}` 병렬 → 순차)
+- 효과: 기구/전장/가압 등 후속 공정 도달 시 반제품(TM)이 강제 100% (운영 W23 tm 83.9→100.0, mech 82.4→88.2)
+
+### 검증
+- pytest `test_sprint83_completion_rollup.py` 11 GREEN (CR-11 신규: 기구 도달 → 반제품 강제 100%) + 회귀 test_factory 21
+- 응답 스키마 불변 / read-time / 회귀 0
+
+---
+
 ## [2.25.0] - 2026-06-05 — Sprint 83 (FEAT-FACTORY-COMPLETION-ROLLUP) 공장 대시보드 공정별 완료율 정합
 
 > 공장 대시보드 "공정별 완료율"이 `completion_status` 옛 플래그(lag)를 봐서 실제보다 낮게 표시되던 문제. → 실제 task 완료(app_task_details) + 하위완료→상위 cascade rollup 으로 재계산. **근본 data 무변경(read-time, DB/migration 0)**. 외부 손님 보여주기용 대시보드만 적용, 생산현황/실적/S/N 상세는 무변경(정밀).
