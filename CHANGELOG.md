@@ -6,6 +6,33 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.25.0] - 2026-06-05 — Sprint 83 (FEAT-FACTORY-COMPLETION-ROLLUP) 공장 대시보드 공정별 완료율 정합
+
+> 공장 대시보드 "공정별 완료율"이 `completion_status` 옛 플래그(lag)를 봐서 실제보다 낮게 표시되던 문제. → 실제 task 완료(app_task_details) + 하위완료→상위 cascade rollup 으로 재계산. **근본 data 무변경(read-time, DB/migration 0)**. 외부 손님 보여주기용 대시보드만 적용, 생산현황/실적/S/N 상세는 무변경(정밀).
+
+### 운영 데이터로 확정된 문제 3종 (W23 34개)
+- TM(반제품): `tm_completed` 플래그 3 vs 실제 task 전부완료 19 (lag)
+- SI(마무리): `si_completed`=SI_FINISHING+SI_SHIPMENT 둘 다 요구 → 마무리공정만 완료한 건 누락 (GBWS-7163: SI_FINISHING 완료인데 출하 안 돼 미완 표시)
+- 출하완료(si=TRUE) 12건 중 상위 플래그 mech 0/elec 1/tm 2/pi 3/qi 0 (통째 lag)
+
+### 해법 (옵션 B = 체크리스트 무관 cascade, 사용자 확정)
+- 신규 `factory.py _compute_stage_completion(cur, serial_numbers, model_by_sn)` — 카테고리 완료=applicable task 전부 completed / SI=SI_FINISHING task 기준 / 도달=완료 task ≥1 / rollup=도달한 가장 뒤 tier보다 앞 공정 강제 100% / TM=GAIA만 / DUAL=L+R 둘 다 완료
+- `_progress_from_stages` (기존 `_calc_progress` 대체)
+- 적용: `get_weekly_kpi` by_stage + completion_rate / `get_monthly_detail` per-item completion + progress_pct
+- ⚠️ `_get_task_progress_by_serial`(생산현황 백킹) 무수정 — 신규 별도 helper 분리 (Codex A-5)
+- 토글 미채택 (admin_settings 글로벌 = per-user 불가, 대시보드는 항상 보여주기)
+
+### 검증
+- 운영 W23 스모크: by_stage mech 0→82.4 / tm 10→83.9 / qi·si 0→64.7. GBWS-7163 전 공정 100%
+- pytest `test_sprint83_completion_rollup.py` 10 GREEN (CR-01~10: TMS lag 무시 / SI=FINISHING / cascade / PI 병렬 tier / non-GAIA / DUAL L/R / GBWS-7163) + 회귀 test_factory 21 GREEN
+- **Codex R1 GO (M=0/A=3 전건 반영)** — A-3 DUAL / A-5 별도 helper / A-7 CR-09·10
+- 응답 스키마 불변(값만 상승), DB·migration 0 → 회귀 0. VIEW 코드 0(값 자동 반영, 숫자 상승은 정확화)
+
+### 후속 (별 BACKLOG)
+- `FEAT-FACTORY-ACTUAL-COMPLETION-VIEW-20260605` — 실제(정밀) 공정별 완료율 표시 위치 고민
+
+---
+
 ## [2.24.1] - 2026-06-04 — auto-close-details quarter period 지원 (#80 후속)
 
 > VIEW 강제 종료 분포도(분기 매트릭스) ↔ 상세 패널 기간 불일치 fix. VIEW catch: 매트릭스는 `quarter`로 표시(force 분기 130/55건)인데 상세 조회는 `period=quarter`가 **400 INVALID_PERIOD**로 거부돼 VIEW가 `month`로 다운그레이드 → 6월 BAT 거의 0 → 매트릭스 ↔ 상세 불일치.

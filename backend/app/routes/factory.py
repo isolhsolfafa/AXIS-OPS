@@ -120,14 +120,98 @@ def _count_shipped(conn, start, end, basis: str) -> int:
     return row['cnt'] if isinstance(row, dict) else row[0]
 
 
-def _calc_progress(row: dict) -> float:
-    """완료 단계 수 / 해당 단계 수 * 100 (공정 단위)"""
-    is_gaia = (row.get('model') or '').upper().startswith('GAIA')
-    stages = ['mech_completed', 'elec_completed', 'pi_completed', 'qi_completed', 'si_completed']
-    if is_gaia:
-        stages.append('tm_completed')
-    completed = sum(1 for s in stages if row.get(s))
-    return round(completed / len(stages) * 100, 1)
+# ── Sprint 83 (FEAT-FACTORY-COMPLETION-ROLLUP): 공정별 완료율 ──
+# 공장 대시보드(외부 손님 보여주기) 전용. completion_status 플래그 lag 무력화 —
+# 실제 task 완료(app_task_details) + 하위완료→상위 cascade rollup 으로 재계산.
+# 근본 data 무변경(read-time). 생산현황/실적/S/N 상세뷰는 미적용(정밀 유지).
+# tier: 작을수록 앞 공정. 도달한 가장 뒤 tier 보다 앞 공정은 강제 100%(체크리스트 무관).
+_STAGE_TIER = {'mech': 0, 'elec': 0, 'tm': 0, 'pi': 1, 'qi': 2, 'si': 3}
+_CAT_TO_STAGE = {'MECH': 'mech', 'ELEC': 'elec', 'TMS': 'tm',
+                 'PI': 'pi', 'QI': 'qi', 'SI': 'si'}
+_STAGE_ORDER = ('mech', 'elec', 'tm', 'pi', 'qi', 'si')
+# SI 완료 판정 = 출하(SI_SHIPMENT) 제외, 마무리공정(SI_FINISHING) 기준 (사용자 확정 2026-06-05)
+_SI_FINISH_TASK_ID = 'SI_FINISHING'
+
+
+def _compute_stage_completion(cur, serial_numbers: list, model_by_sn: dict) -> dict:
+    """Sprint 83 — 실제 task 완료 + cascade rollup 기반 공정별 완료 판정 (read-time, 보여주기).
+
+    근본 data 무변경. 공장 대시보드 전용 (생산현황 백킹 `_get_task_progress_by_serial` 과 별개).
+      · 카테고리 완료 = applicable task 전부 completed (SI 는 SI_FINISHING task 기준)
+      · 도달 = 카테고리에 완료 task ≥1
+      · rollup = 도달한 가장 뒤 tier 보다 앞 공정 전부 True (체크리스트/잔여 task 무관)
+      · TM = GAIA 모델만 (non-GAIA None)
+      · DUAL(L/R) = task_id 동일 2행이 카테고리 집계에서 합산 → L+R 둘 다 완료여야 완료
+
+    Returns: {sn: {'mech':bool,'elec':bool,'tm':bool|None,'pi':bool,'qi':bool,'si':bool}}
+    """
+    if not serial_numbers:
+        return {}
+    cur.execute(
+        """SELECT serial_number, task_category, task_id,
+                  COUNT(*) FILTER (WHERE is_applicable) AS appl,
+                  COUNT(*) FILTER (WHERE is_applicable AND completed_at IS NOT NULL) AS done
+           FROM app_task_details
+           WHERE serial_number = ANY(%s)
+           GROUP BY serial_number, task_category, task_id""",
+        (serial_numbers,),
+    )
+    agg: dict = {}
+    for r in cur.fetchall():
+        stage = _CAT_TO_STAGE.get(r['task_category'])
+        if stage is None:
+            continue
+        appl = r['appl'] or 0
+        done = r['done'] or 0
+        c = agg.setdefault(r['serial_number'], {}).setdefault(
+            stage, {'appl': 0, 'done': 0, 'si_finish_appl': 0, 'si_finish_done': 0})
+        c['appl'] += appl
+        c['done'] += done
+        if stage == 'si' and r['task_id'] == _SI_FINISH_TASK_ID:
+            c['si_finish_appl'] += appl
+            c['si_finish_done'] += done
+
+    result: dict = {}
+    for sn in serial_numbers:
+        cats = agg.get(sn, {})
+        is_gaia = (model_by_sn.get(sn) or '').upper().startswith('GAIA')
+
+        done_map: dict = {}
+        reached_map: dict = {}
+        for stage in _STAGE_ORDER:
+            c = cats.get(stage)
+            if not c or c['appl'] == 0:
+                done_map[stage] = False
+                reached_map[stage] = False
+                continue
+            reached_map[stage] = c['done'] >= 1
+            if stage == 'si':
+                done_map[stage] = (c['si_finish_appl'] > 0
+                                   and c['si_finish_done'] == c['si_finish_appl'])
+            else:
+                done_map[stage] = (c['done'] == c['appl'])
+
+        furthest = -1
+        for stage, reached in reached_map.items():
+            if reached:
+                furthest = max(furthest, _STAGE_TIER[stage])
+
+        final: dict = {}
+        for stage in _STAGE_ORDER:
+            if stage == 'tm' and not is_gaia:
+                final['tm'] = None
+                continue
+            final[stage] = True if _STAGE_TIER[stage] < furthest else done_map[stage]
+        result[sn] = final
+    return result
+
+
+def _progress_from_stages(stages: dict) -> float:
+    """공정 완료 dict → 진행률 % (None=해당없음 제외). 기존 _calc_progress 대체."""
+    vals = [v for v in stages.values() if v is not None]
+    if not vals:
+        return 0.0
+    return round(sum(1 for v in vals if v) / len(vals) * 100, 1)
 
 
 def _get_task_progress_by_serial(cur, serial_numbers: list) -> dict:
@@ -333,14 +417,19 @@ def get_monthly_detail() -> Tuple[Dict[str, Any], int]:
         )
         by_customer = [{'customer': r['customer'], 'count': r['count']} for r in cur.fetchall()]
 
-        # Sprint 31B: 태스크 레벨 진행률 조회
+        # Sprint 31B: 태스크 레벨 진행률 조회 (생산현황 백킹 — 정밀, rollup 미적용)
         serial_numbers = [row['serial_number'] for row in rows if row.get('serial_number')]
         task_progress = _get_task_progress_by_serial(cur, serial_numbers)
+
+        # Sprint 83: completion/progress_pct 는 대시보드 보여주기(rollup) — task_progress(정밀)와 별개
+        model_by_sn = {row['serial_number']: row.get('model')
+                       for row in rows if row.get('serial_number')}
+        stage_comp = _compute_stage_completion(cur, serial_numbers, model_by_sn)
 
         # items 변환
         items = []
         for row in rows:
-            is_gaia = (row.get('model') or '').upper().startswith('GAIA')
+            sc = stage_comp.get(row.get('serial_number'), {})
             items.append({
                 'sales_order': row.get('sales_order'),
                 'product_code': row.get('product_code'),
@@ -359,14 +448,14 @@ def get_monthly_detail() -> Tuple[Dict[str, Any], int]:
                 'si_start': _date_to_iso(row.get('si_start')),
                 'ship_plan_date': _date_to_iso(row.get('ship_plan_date')),
                 'completion': {
-                    'mech': bool(row.get('mech_completed')),
-                    'elec': bool(row.get('elec_completed')),
-                    'tm': bool(row.get('tm_completed')) if is_gaia else None,
-                    'pi': bool(row.get('pi_completed')),
-                    'qi': bool(row.get('qi_completed')),
-                    'si': bool(row.get('si_completed')),
+                    'mech': bool(sc.get('mech')),
+                    'elec': bool(sc.get('elec')),
+                    'tm': sc.get('tm'),  # 헬퍼가 non-GAIA 는 None 반환
+                    'pi': bool(sc.get('pi')),
+                    'qi': bool(sc.get('qi')),
+                    'si': bool(sc.get('si')),
                 },
-                'progress_pct': _calc_progress(row),
+                'progress_pct': _progress_from_stages(sc),
                 'task_progress': task_progress.get(row.get('serial_number'), {
                     'total': 0, 'completed': 0, 'progress_pct': 0.0, 'by_category': {}
                 }),
@@ -455,9 +544,16 @@ def get_weekly_kpi() -> Tuple[Dict[str, Any], int]:
 
         production_count = len(rows)
 
-        # completion_rate: 각 S/N의 progress_pct 평균
+        # Sprint 83: 실제 task 완료 + cascade rollup (보여주기). completion_status 플래그 미사용.
+        serial_numbers = [r['serial_number'] for r in rows if r.get('serial_number')]
+        model_by_sn = {r['serial_number']: r.get('model')
+                       for r in rows if r.get('serial_number')}
+        stage_comp = _compute_stage_completion(cur, serial_numbers, model_by_sn)
+
+        # completion_rate: 각 S/N의 progress_pct 평균 (rollup 기반)
         if production_count > 0:
-            total_progress = sum(_calc_progress(r) for r in rows)
+            total_progress = sum(
+                _progress_from_stages(stage_comp.get(sn, {})) for sn in serial_numbers)
             completion_rate = round(total_progress / production_count, 1)
         else:
             completion_rate = 0.0
@@ -472,19 +568,28 @@ def get_weekly_kpi() -> Tuple[Dict[str, Any], int]:
             key=lambda x: x['count'], reverse=True
         )
 
-        # by_stage 집계
+        # by_stage 집계 (Sprint 83: rollup 기반 — 플래그 lag 무력화)
         gaia_count = sum(1 for r in rows if (r.get('model') or '').upper().startswith('GAIA'))
+
+        def _stage_pct(key: str) -> float:
+            return round(
+                sum(1 for sn in serial_numbers if stage_comp.get(sn, {}).get(key))
+                / production_count * 100, 1)
+
         if production_count > 0:
             by_stage = {
-                'mech': round(sum(1 for r in rows if r.get('mech_completed')) / production_count * 100, 1),
-                'elec': round(sum(1 for r in rows if r.get('elec_completed')) / production_count * 100, 1),
+                'mech': _stage_pct('mech'),
+                'elec': _stage_pct('elec'),
+                # tm 은 GAIA 만 해당 → 분모 gaia_count (기존 의미 보존)
                 'tm': round(
-                    sum(1 for r in rows if r.get('tm_completed') and (r.get('model') or '').upper().startswith('GAIA'))
+                    sum(1 for sn in serial_numbers
+                        if (model_by_sn.get(sn) or '').upper().startswith('GAIA')
+                        and stage_comp.get(sn, {}).get('tm'))
                     / gaia_count * 100, 1
                 ) if gaia_count > 0 else 0.0,
-                'pi': round(sum(1 for r in rows if r.get('pi_completed')) / production_count * 100, 1),
-                'qi': round(sum(1 for r in rows if r.get('qi_completed')) / production_count * 100, 1),
-                'si': round(sum(1 for r in rows if r.get('si_completed')) / production_count * 100, 1),
+                'pi': _stage_pct('pi'),
+                'qi': _stage_pct('qi'),
+                'si': _stage_pct('si'),
             }
         else:
             by_stage = {'mech': 0.0, 'elec': 0.0, 'tm': 0.0, 'pi': 0.0, 'qi': 0.0, 'si': 0.0}
