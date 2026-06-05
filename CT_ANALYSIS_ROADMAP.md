@@ -502,3 +502,52 @@ IF_1 18.1 / 판넬 27.7 / WasteGas1 28.1 / Util LINE 1 80.6h(IQR126h) ⚠️
 - 데이터 품질의 진짜 레버 = **교육**(이미 6/2 완료) → 시간이 시계를 돌리는 중.
 - **권장 경로**: ① 지금 = 모니터링하며 6/2+ 누적(현 방식 유지) / ② 병행 선택 = active-span BE foundation 미리 구축(`compute_task_manhour` 확장, man-hour 기반이라 교육 데이터와 정합) / ③ 4~8주 후 = 표본 충분 시 M/H+병렬효율 페이지 launch.
 - active-span 단독으론 도킹 내부 idle 미해결 → man-hour(v2.22.0, 수동 pause 차감)가 현재 최선 지표이고 6/2+ 데이터에서 실측에 수렴.
+
+---
+
+## 15. CT 분석 페이지 ↔ BE 연동 — 동결 결정 (2026-06-05)
+
+> **트리거**: VIEW 목업이 concept HTML → 실제 React 페이지(`app/src/pages/ct/`, 13 컴포넌트 4섹션)로 발전. mock data → OPS BE 실데이터 연동 전 결정 게이트. Claude 검토 8건 + **Codex 라운드 1 독립 교차검증**(반박/보강 다수) + 사용자 4건 결정 완료.
+
+### 15.1 목업 4섹션 구조 + 데이터 준비도
+
+| 섹션 | 위젯 | 준비도 |
+|---|---|---|
+| ① 데이터 신뢰도 | DataQualityGate / AutoCloseTrend / TrainingImpact | 🟢 지금 (duration_source[1]·자동마감[2] 운영쿼리 존재, 교육효과 판넬만 실측) |
+| ② CT 표준(IQR) | TaskBoxPlot / 카테고리카드 / ConfidenceMatrix | 🟢 70~80% (percentile_cont, 단 기준대비 제외) |
+| ③ 공수·병렬·협력사 | MHScatter / ParallelEfficiency(Amdahl) / PartnerMHCompare | 🔴 raw elapsed 도킹오염(§14.7) + 다인표본 부족 + 협력사 레버부재 |
+| ④ M/M·APS 허브 | MMGapQuadrant / APSReadiness / APSExport | 🟡 current_mh_standard DB 소스 부재 |
+
+### 15.2 사용자 4건 결정 (동결)
+
+- **D-범위**: MVP = **①+②(기준대비 제외)만**. ③④ 후속.
+- **D-③**: **관리자 전용 preview(B)** — 6/2+ clean·interval-union만, "표본부족" badge, 의사결정 금지 명시. 4~8주 후 정식 승격.
+- **D-표준값**: current_mh_standard **지금은 보류** — ② 기준대비% 컬럼 숨김, ④ 보류. 표준 운영 준비되면 별도 sprint.
+- **D-TM**: TMS(M) 모듈 **기본 차트 제외 + 별도 "품질 낮음" 섹션**(progress + duration_source breakdown만).
+
+### 15.3 통계 정합성 기본값 (Claude 확정 — 비결정 항목)
+
+> Codex 라운드 1 보강 반영. 사용자 판단 불요, BE 구현 시 이 기준 적용.
+
+- **man_hours = v2.22.0 `compute_task_manhour`(interval-union) SSoT** — mock 평균×인원 폐기(도킹오염 회귀 차단).
+- **box plot 단위 = man-hour 고정** (elapsed 금지).
+- **sample_size 모집단 = 완료 + TEST 제외 + clean(duration_source NULL/NORMAL)** — PREV_DAY_CAP(12.1%)/FALLBACK_17 은 ① breakdown 표시만, ② 통계 제외.
+- **diff_pct → 제거 또는 `mean_median_gap_pct`로 개명** — mockData `(mean−iqr_width)/mean` 은 단위 불일치/의미 모호. "기준대비"는 current_mh_standard 부재로 D-표준값 확정 전 불가.
+- **카테고리 `total_iqr_hours`(IQR 단순합) 폐기** — IQR은 더할 수 없는 통계량. median 합 / p75 / clean 건수 중 재정의.
+- **Tukey 클리핑 on 기본** (평균 신뢰). 6/2 교육 전 제외는 **전역 옵션 아님** → ③ M/H·병렬 전용 필터(전역 제외 시 ② IQR 표본 n=9 붕괴).
+- **기간 필터 기본 = 90일 기간합산 + 전체모델**, 응답 meta에 모델 분포·sample_size 병기. 모델 드롭다운은 GAIA만 충분(354~423건).
+- **DUAL L/R 중복집계 정책 명시** 필요 (독립 샘플 vs 좌우 묶음 → sample_size/IQR 변동).
+- **산출 시점 = cron/캐시 권장** (as_of·lookback·clean filter 고정, 매호출 percentile_cont 비용 + 기준 흔들림 방지).
+- **권한 = admin + GST manager** (페이지 이미 적용).
+
+### 15.4 다음 단계 (BE sprint 진입)
+
+```
+1. 본 §15 + mockData.ts(TaskCtItem/CategoryCtSummary 등 계약) 기준
+2. Sprint 작성 — MVP ①+② BE endpoint (statistics_service 분리 §6.① / V4 IQR 재사용)
+   · ① duration_source 분포 + 자동마감 추이 + 교육 전후 (운영쿼리 이관)
+   · ② task별 box plot(man-hour, clean 모집단, Tukey) + 카테고리 요약(median화) + confidence
+   · ③ skeleton만(관리자 preview, 표본부족 badge) / ④ 미구현
+3. Codex 교차검증 → 구현 → 배포
+```
+

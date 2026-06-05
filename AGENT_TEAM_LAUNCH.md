@@ -48060,3 +48060,151 @@ item['phase'] = _build_phase(sc)
 - additive 2필드(`phase`) + helper 1개. 기존 필드/엔드포인트 무변경 → 회귀 0. read-time, DB 0.
 - VIEW: progress_pct(rollup) 채택 + phase 마커/뱃지 렌더 (별 세션).
 - 진행: ① Codex 라운드 1 (자동 이관) → ② 구현 → ③ pytest PH-01~06 + 회귀 test_factory → ④ v2.26.0 배포 → ⑤ T+ 검증.
+
+---
+
+# Sprint 85 — FEAT-CT-ANALYSIS-HUB-BE-MVP-20260605 (CT 분석 허브 BE 연동 — ①데이터신뢰도 + ②CT표준 IQR)
+
+> **본질**: VIEW CT 분석 페이지(`app/src/pages/ct/`, 13 컴포넌트 4섹션)의 mock data → OPS BE 실데이터 연동. MVP = **①데이터신뢰도 + ②CT표준(IQR, 기준대비 제외)** 만. ③(M/H·병렬·협력사)=관리자 preview skeleton, ④(M/M·APS)=미구현. **read-time, DB/migration 0** (기존 `app_task_details.duration_minutes`=man-hour SSoT 조회).
+
+**날짜**: 2026-06-05
+**우선순위**: 🟠 MEDIUM (CT 데이터 신뢰성 hub, 사용자 "급함")
+**연관**: VIEW `app/src/pages/ct/CtAnalysisPage.tsx` + `mockData.ts`(데이터 계약) / OPS `dashboard_service.py`(Sprint 71 자동마감 분류 재사용) / `factory.py`(`_TEST_EXCLUDE_SQL` 패턴) / 결정 동결 `CT_ANALYSIS_ROADMAP.md §15`
+**버전**: v2.27.0 (minor — 신규 endpoint)
+**Codex 이관 체크리스트**: ✅ 신규 service+route 파일(3+ touch) + 통계 산출 로직 → **자동 Codex 이관**
+
+---
+
+## 1. 배경 — 결정 동결 (CT_ANALYSIS_ROADMAP §15)
+
+Claude 검토 8건 + Codex 라운드 1 독립 교차검증 + 사용자 4건 결정 완료:
+- **D-범위**: MVP = ①+②(기준대비 제외)만. ③④ 후속.
+- **D-③**: 관리자 전용 preview(B) — skeleton + "표본부족" badge, 의사결정 금지.
+- **D-표준값**: current_mh_standard 보류 → ② 기준대비% 숨김, ④ 보류.
+- **D-TM**: TMS(M) 모듈 기본 차트 제외 + 별도 "품질 낮음" 섹션.
+
+## 2. ⚠️ 핵심 정합 catch — man-hour SSoT 충돌 (목업 공식 폐기)
+
+목업 `mockData.ts`: `man_hours = mean_hours × concurrent_workers_avg` (평균 elapsed × 인원).
+**우리 SSoT**: `app_task_details.duration_minutes` = v2.22.0 `compute_task_manhour`(작업자 interval-union 합, 수동 pause 차감) = **이미 man-hour**.
+→ box plot 을 `duration_minutes` 로 그리면 그 값 자체가 man-hour. 다시 ×인원 = **이중계산**.
+
+**확정 (CT 표준 ② = man-hour 분포)**:
+- box plot 5통계 = `percentile_cont` over `duration_minutes/60.0` (시간 단위, man-hour).
+- `mean_hours` = AVG(duration_minutes)/60 = mean man-hour.
+- **목업의 `man_hours`/`concurrent_workers_avg`/`current_mh_standard`/`diff_pct` 컬럼은 MVP ②에서 제외** (man_hours·concurrent = ③ elapsed 기반 territory / 기준대비 = D-표준값 보류). VIEW FE 가 해당 컬럼 숨김 (별 세션).
+- 정의 한 줄: **"CT 작업시간 = man-hour(실노동, pause 차감), 벽시계(elapsed) 아님."**
+
+## 3. 모집단·필터 정의 (CT_ANALYSIS_ROADMAP §15.3)
+
+```
+clean 표본 모집단 (② 통계 base):
+  completed_at IS NOT NULL
+  AND (duration_source IS NULL OR duration_source = 'NORMAL_COMPLETION')   ← clean only
+  AND task_id NOT IN ('TANK_MODULE','PRESSURE_TEST')                       ← TMS(M) 더러움 제외(D-TM)
+  AND <TEST 제외>  (serial_number NOT LIKE 'TEST%' + plan.product_info.customer<>'TEST CUSTOMER')
+  AND completed_at >= now() - lookback(기본 90일)
+  [+ 모델 필터 시 plan.product_info.model JOIN]
+
+'ATTENDANCE_OUT' = ② 제외 확정 (Codex M-Q3 — 정상완료 아님, 출근부 cap 추정성). ① breakdown 에만 표시.
+Tukey 클리핑: clean 표본 raw 분포의 Q1/Q3 로 1-pass fence(Q3+1.5IQR / Q1−1.5IQR) 산출 → fence 내 재집계. 반복 X (Codex A-Q2, NIST EDA 표준). 응답 min/max = fence 내 **실측값**(fence 값 아님).
+6/2 교육 전 데이터: ② 에서는 제외 안 함(전역 제외 시 표본 붕괴) — ③ 전용 필터.
+DUAL L/R: task instance = (serial_number, qr_doc_id, task_category, task_id) UNIQUE 행 단위 = 독립 샘플로 집계(L/R 각각 1건). task별 box plot 은 instance 단위 OK. **카테고리/제품 표준의 L/R·모델 상관은 MVP 범위 밖**(Codex M-Q5 → §4.1 참조).
+```
+
+## 4. BE 변경 명세 (신규 2 파일 + blueprint 등록)
+
+> CLAUDE.md L545 분리 정책: 신규 service + route 파일. 기존 dashboard_service/factory touch 0.
+
+### 4.1 `backend/app/services/statistics_service.py` (신규, ~250 LOC)
+- `_CLEAN_SQL` 상수 (위 모집단 정의) + `_TUKEY` helper
+- `get_task_ct_stats(lookback_days=90, model=None, category=None) -> List[dict]`:
+  - task별 `percentile_cont(ARRAY[0,0.25,0.5,0.75,1.0]) WITHIN GROUP (ORDER BY duration_minutes/60.0)` + AVG + COUNT
+  - Tukey 1-pass: raw 분포 Q1/Q3 로 fence 산출 → fence 내 재집계. min/max = fence 내 실측값.
+  - `iqr_hours = q3 - q1`, `confidence = high(n>=100)/medium(n>=30)/low` (전체모델 90일 기준 임시값 명시)
+  - task_name = task_seed 템플릿 매핑 (`TaskTemplate.task_name`)
+- `get_category_summaries(...)` : **Σ median 폐기 (Codex M-Q5 — DUAL L/R 2배 중복 + 모델별 applicable task 차이로 Σ 변동).** MVP 카테고리 카드 = `{category, label_ko, task_count, sample_size, confidence, median_hours(카테고리 clean 인스턴스 pooled 중앙 — 참고용, "표준 공수 합" 아님 명시)}`. 카테고리/제품 표준 공수(모델·L/R 상관 반영)는 ④ M/M 단계 별 sprint.
+- `get_data_quality() -> dict`: ① 3블록
+  - `duration_source_dist`: 90일 source별 COUNT + pct + clean bool (NULL/NORMAL=clean, 나머지 false)
+  - `auto_close_trend`: 월별 total/normal/auto/force/auto_rate — `date_trunc('month', completed_at AT TIME ZONE 'Asia/Seoul')` (Codex M-Q8 KST 경계) + dashboard_service `_AUTO_LIKE`/force 분류 재사용
+  - `training_impact`: 6/2 cut = `completed_at AT TIME ZONE 'Asia/Seoul' >= '2026-06-02 00:00:00'`(KST 자정 literal, Codex R2 A) 전후 task별 AVG(man-hour) + n. **post n<30 → `confidence:'insufficient_sample'` 표기 필수**(Codex M-Q8, 판넬 post n=9)
+- `_response_meta`: `as_of`(산출시각 KST), `lookback_days`, `model_distribution`(모델별 건수), `total_sample`, `excluded_by_source`(PREV_DAY_CAP/FALLBACK 등 제외 건수)+`excluded_pct`(Codex A-Q4 편향 노출), 모델 필터 시 `confidence_scope:'filtered'`+`low_sample_warning`(Codex A-Q6). 카테고리 `median_basis:'pooled_clean_instances'`(표준공수합 아님 명시, Codex R2 A)
+
+### 4.2 `backend/app/routes/ct_analysis.py` (신규, ~90 LOC)
+| HTTP | endpoint | 설명 | 권한 |
+|---|---|---|---|
+| GET | `/api/ct/data-quality` | ① duration_source 분포 + 자동마감 추이 + 교육 전후 | `@jwt_required + @gst_or_admin_required` |
+| GET | `/api/ct/task-stats?period=&model=&category=` | ② task별 box plot + 카테고리 요약 + meta | `@jwt_required + @gst_or_admin_required` |
+- 권한 = admin OR GST manager (페이지 정합, gst_or_admin_required = Sprint 27 표준)
+- `period` = `last_90d`(기본, 최근 90일 합산 — Codex M-Q9 `all` 모호성 제거) | 단일월(`YYYY-MM`). 화이트리스트 검증. ("전체기간"은 표본·시즌 혼재로 MVP 미지원)
+- 캐싱: 모듈 레벨 TTL 캐시(1h) 키=(endpoint,period,model,category) — `as_of` 응답. percentile_cont 비용 작으나 기준 흔들림 방지(§15.3). materialized table 은 비용 증가 시 후속.
+
+### 4.3 `__init__.py`
+- `ct_analysis` blueprint import + register (1줄)
+
+### 무변경
+- DB/migration 0 (기존 컬럼 조회만). dashboard_service/factory/task_service touch 0.
+- ③④ endpoint 미구현 (VIEW 가 mock 유지 or skeleton).
+
+## 5. 응답 스키마 (VIEW mockData 계약 정합)
+
+```jsonc
+// GET /api/ct/task-stats?period=last_90d&model=전체+모델
+{
+  "tasks": [
+    { "task_id":"PANEL_WORK","task_name":"판넬 제작 작업","category":"MECH",
+      "min_hours":6.5,"q1_hours":8.4,"median_hours":9.2,"q3_hours":10.3,"max_hours":13.8,
+      "mean_hours":9.5,"iqr_hours":1.9,"sample_size":42,"confidence":"high" }
+    // man_hours/concurrent_workers_avg/current_mh_standard/diff_pct 제외 (MVP)
+  ],
+  "categories": [
+    { "category":"MECH","label_ko":"기구","task_count":5,"sample_size":148,"confidence":"high","pooled_median_hours":4.2 }
+    // Σ median 폐기(중복/모델변동) → pooled_median_hours = 카테고리 clean 인스턴스 pooled 중앙(참고용, Codex R2 A 필드명). 표준공수합 = ④ 별 sprint
+  ],
+  "meta": { "as_of":"2026-06-05T14:00:00+09:00","lookback_days":90,"total_sample":444,
+            "model_distribution":[{"model":"GAIA-I","n":354}],
+            "excluded_by_source":{"PREV_DAY_CAP":257,"FALLBACK_TRIGGER_DATE_17":34},"excluded_pct":13.7,
+            "confidence_scope":"all", "low_sample_warning":false }
+}
+// GET /api/ct/data-quality
+{ "duration_source_dist":[...], "auto_close_trend":[...], "training_impact":[{"task":"판넬 작업","pre_mh":24.4,"post_mh":8.4,"pre_n":122,"post_n":9,"confidence":"insufficient_sample"}], "meta":{...} }
+```
+
+## 6. pytest TC (`test_sprint85_ct_stats.py`)
+
+| TC | 검증 |
+|---|---|
+| CT-01 | task-stats clean 모집단 — TMS(M)/TEST/미완료/PREV_DAY_CAP 제외 확인 |
+| CT-02 | box plot 단조성 min≤q1≤median≤q3≤max + man-hour 단위(elapsed 아님) |
+| CT-03 | Tukey 클리핑 — fence 밖 outlier 제거 후 표본 감소 + 평균 안정 |
+| CT-04 | confidence 임계 (n<30 low / 30~99 medium / 100+ high) |
+| CT-05 | DUAL L/R 독립 샘플 집계 (qr_doc_id 행 단위) — instance 단위 확인 |
+| CT-06 | 카테고리 summary = pooled median + task_count/sample_size (Σ median 아님, 중복 방지) |
+| CT-07 | meta as_of/lookback/model_distribution/excluded_by_source/excluded_pct 존재 + 캐시 TTL hit |
+| CT-08 | data-quality duration_source 분포 합=100% + clean bool (NULL/NORMAL=true) |
+| CT-09 | auto_close_trend 월별 auto_rate = auto/total + **KST 월 경계**(AT TIME ZONE) — 월말 자정 인스턴스 정확 귀속 |
+| CT-10 | training_impact 6/2 전후 분리(KST) + post n<30 → confidence='insufficient_sample' 표기 |
+| CT-11 | 권한 — 협력사 manager 403 / GST manager·admin 200 |
+| CT-12 | model 필터 시 plan.product_info JOIN 정확 + low_sample_warning/confidence_scope='filtered' |
+| CT-13 | ATTENDANCE_OUT ② 통계 제외 확인 (clean = NULL/NORMAL only) |
+| CT-14 | period — `last_90d` 정상 / 미지원 값(`all` 등) 400 화이트리스트 |
+| CT-15 | excluded_pct = 추정 source(PREV_DAY_CAP/FALLBACK) 제외 비율 정확 (편향 노출 meta) |
+
+## 7. 회귀 위험 / 진행 순서
+
+- 신규 2 파일 + blueprint 1줄. 기존 endpoint/service touch 0 / DB·migration 0 → 회귀 0. read-time.
+- VIEW FE(별 세션): mock → API 교체 + MVP 제외 컬럼(man_hours/기준대비) 숨김 + ③ skeleton badge + ④ 보류.
+- 진행: ① Codex 라운드 1(자동 이관, man-hour 정합·모집단·Tukey·캐시 검증) → ② 구현 → ③ pytest CT-01~15 + 회귀 → ④ v2.27.0 배포 → ⑤ 운영 표본 검증(GAIA 박스플롯 vs §14.2 표준시간 표 대조).
+
+## 8. Codex 라운드 1 NO-GO(M=5) 해소 trail (2026-06-05)
+
+- **M-Q3 (ATTENDANCE_OUT)**: ② clean = NULL/NORMAL_COMPLETION only 확정, ATTENDANCE_OUT 제외(①에만 표시). §3 미결 문구 제거. CT-13.
+- **M-Q5 (카테고리 Σ median 결함)**: DUAL L/R 2배 중복 + 모델 applicable 차이 → Σ median 폐기. MVP 카테고리 = pooled median + task_count/sample_size/confidence. 표준공수합(모델·L/R 상관)은 ④ 별 sprint. §4.1/§5/CT-06.
+- **M-Q8 (KST 경계 + 표본 표기)**: auto_close_trend/training_impact `date_trunc/cut AT TIME ZONE 'Asia/Seoul'`. training post n<30 → `confidence:'insufficient_sample'`. CT-09/CT-10.
+- **M-Q9 (period 명세 + TC)**: `all` → `last_90d` 개명(전체기간 미지원). 추가 TC CT-13~15 (ATTENDANCE_OUT/period 화이트리스트/excluded_pct).
+- **A 반영**: A-Q2(min/max=fence 실측), A-Q4(excluded_by_source/excluded_pct meta), A-Q6(model 필터 confidence_scope/low_sample_warning). GO 방향(Q1 man-hour 이중계산 catch 정합 / Q7 DUAL instance OK)는 유지.
+
+### Codex 라운드 2 (2026-06-05) — **DEPLOY_SAFE / GO** (M=0, A=2)
+- M=5 전건 해소 확인. KST `date_trunc('month', completed_at AT TIME ZONE 'Asia/Seoul')` 정확 검증.
+- A 2건 반영: ① 카테고리 `median_hours`→`pooled_median_hours` + `median_basis:'pooled_clean_instances'` meta(표준공수합 오해 방지) / ② training cut KST 자정 literal `'2026-06-02 00:00:00'` 명시.
+- **구현 진입 가능.**

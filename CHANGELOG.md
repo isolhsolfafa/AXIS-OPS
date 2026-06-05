@@ -6,6 +6,32 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.27.0] - 2026-06-05 — Sprint 85 (FEAT-CT-ANALYSIS-HUB-BE-MVP) CT 분석 허브 BE 연동 (①데이터신뢰도 + ②CT표준 IQR)
+
+> VIEW CT 분석 페이지(13 컴포넌트 4섹션) mock → OPS BE 실데이터 연동 MVP. **①데이터신뢰도 + ②CT표준(IQR, man-hour)** 만. ③(M/H·병렬·협력사)=관리자 preview skeleton, ④(M/M·APS)=미구현. **DB·migration 0, read-time**. 결정 동결: CT_ANALYSIS_ROADMAP §15.
+
+### 신규 (BE 2파일 + blueprint 1줄)
+- `statistics_service.py` — `get_task_ct_stats()`(② box plot + 카테고리 + meta) + `get_data_quality()`(① 3블록)
+- `routes/ct_analysis.py` — `GET /api/ct/task-stats?period=last_90d&model=&category=` + `GET /api/ct/data-quality`. 권한 `@jwt_required + @gst_or_admin_required`(admin OR GST manager)
+
+### 핵심 정합
+- **man-hour SSoT**: box plot = `percentile_cont(duration_minutes/60)` = v2.22.0 interval-union man-hour. 목업 `mean×인원` 이중계산 폐기.
+- **clean 모집단**: `duration_source IS NULL OR 'NORMAL_COMPLETION'` only + TMS(M)(TANK_MODULE/PRESSURE_TEST)·TEST 제외 + Tukey 1-pass(raw fence→fence 내 재집계, min/max 실측).
+- **카테고리** Σmedian 폐기(DUAL 중복/모델변동) → pooled_median + median_basis meta. confidence high(n≥100)/medium(≥30)/low.
+- **KST**: 자동마감 추이/교육 cut `AT TIME ZONE 'Asia/Seoul'`(training cut '2026-06-02' literal), post n<30 → insufficient_sample.
+- **meta**: as_of/lookback/model_distribution/excluded_by_source/excluded_pct/confidence_scope/low_sample_warning. TTL 캐시 1h.
+
+### Codex 교차검증 (3라운드)
+- 설계 라운드 1 NO-GO(M=5: ATTENDANCE_OUT/카테고리Σ/KST/period) → 라운드 2 GO(M=0/A=2) → 구현 라운드 3 **DEPLOY_SAFE/GO(M=0/A=4)**.
+- A 처리: A-2(추이 6mo 고정 의도) 주석 / A-1(AUTO_CLOSED LIKE drift) BACKLOG / A-3·A-4 무영향.
+
+### 검증
+- pytest 15/15 GREEN (CT-01~15, 테스트 DB seed 기반) + 회귀 test_factory 21.
+- 운영 스모크: ② 17 task(§14.2 표준시간 일치, TMS 제외), ① 판넬 교육 전 18.9h→후 7.0h, excluded_pct 17.7%.
+- 신규 2파일+blueprint, 기존 service/DB/migration touch 0 → 회귀 0. **VIEW FE: mock→API 교체 별 세션**(MVP 제외 컬럼 숨김 + ③ skeleton + ④ 보류).
+
+---
+
 ## [2.26.0] - 2026-06-05 — Sprint 84 (FEAT-FACTORY-PHASE-1-2-PROGRESS) 생산현황 상세 1차/2차 마일스톤
 
 > 생산현황 상세 표의 진행률을 손님용 rollup(보여주기) 기준 + **1차(가압 PI까지) / 2차(마무리 SI) 마일스톤** 으로 그룹핑. monthly-detail 응답에 `phase` 필드 additive. 근본 data 무변경(read-time, DB/migration 0). Sprint 83 `_compute_stage_completion` rollup helper 재사용.
