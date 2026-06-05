@@ -6,6 +6,35 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.26.0] - 2026-06-05 — Sprint 84 (FEAT-FACTORY-PHASE-1-2-PROGRESS) 생산현황 상세 1차/2차 마일스톤
+
+> 생산현황 상세 표의 진행률을 손님용 rollup(보여주기) 기준 + **1차(가압 PI까지) / 2차(마무리 SI) 마일스톤** 으로 그룹핑. monthly-detail 응답에 `phase` 필드 additive. 근본 data 무변경(read-time, DB/migration 0). Sprint 83 `_compute_stage_completion` rollup helper 재사용.
+
+### 1차/2차 모델 (A안 — 사용자 확정)
+- **1차** = 전장외부 → 반제품(TM) → 기구(MECH) → 전장(ELEC) → **가압(PI)**. 1차완료 = `pi`.
+- **2차** = 공정(QI) → **마무리(SI)**. 2차완료 = `si`(SI_FINISHING 기준).
+- ⚠️ QI는 app 미입력(검사자동화시스템 별 시스템, 추후 API 연동) → 2차 진행률은 **SI binary**. QI 연동 시 키 1개 추가로 자동 확장.
+
+### BE 변경 (factory.py additive)
+- 신규 helper `_phase_pct(stages, keys)` (None 제외 완료 비율) + `_build_phase(sc)` (p1_done/p2_done/p1_pct/p2_pct/status)
+- `get_monthly_detail` per-item 에 `'phase': _build_phase(sc)` additive — 기존 completion/progress_pct/task_progress 무변경
+- `_compute_stage_completion` 0-applicable stage → `None` 일반화 (기존 is_gaia tm 특수분기 제거) — non-standard 모델 분모 정확
+
+### 응답 스키마 (additive)
+- `"phase": {"p1_done": bool, "p2_done": bool, "p1_pct": float, "p2_pct": float, "status": "1차진행중|2차진행중|2차완료"}`
+
+### Codex 교차검증 (라운드 1 NO-GO M=2 → 라운드 2 GO M=0/A=1)
+- M-2 (p2_pct SI_SHIPMENT-only 오염 50%) → `_PHASE2_KEYS=['si']` binary 고정
+- M-3 (non-standard 모델 absent stage False 분모 왜곡) → present_map None 일반화
+- A-1 (QI 연동 시 SI reached를 SI_FINISHING 기준 제한 별 sprint) → BACKLOG 등록
+
+### 검증
+- pytest 39 passed: sprint83 11 (CR-04/05/07 absent→None seed 보정) + sprint84 8 (PH-01~06 + PH-04b SI_SHIPMENT-only p2=0 + PH-05 non-GAIA tm None) + test_factory 19 회귀 0
+- 운영 W23 스모크 by_stage 불변 (mech 88.2 / elec 82.4 / tm 100 / pi 79.4 / qi 64.7 / si 64.7), phase 분포 34건 (2차완료 22 / 2차진행중 5 / 1차진행중 7)
+- additive 2필드 + helper 2개. 기존 필드/엔드포인트 무변경 → 회귀 0. read-time, DB 0.
+
+---
+
 ## [2.25.1] - 2026-06-05 — Sprint 83 공정 순서 정정 (반제품 선행)
 
 > v2.25.0 의 cascade tier 순서 정정. 사용자 catch: "반제품은 다 끝났어야 정상" — 반제품(TM)을 기구/전장과 병렬(tier 0)로 뒀으나, 실제 공정 순서는 **전장외부 → 반제품(TM) → 기구(MECH) → 전장(ELEC) → 가압(PI) → 공정(QI) → 마무리(SI)** 로 반제품이 기구/전장보다 선행.

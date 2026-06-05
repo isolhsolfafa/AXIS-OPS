@@ -202,6 +202,7 @@
 
 | ID | 우선순위 | 내용 |
 |---|---|---|
+| `FEAT-FACTORY-PHASE2-QI-SI-REACHED-LIMIT-20260605` | 🟡 LOW (QI API 연동 시 선행) | **Sprint 84 Codex 라운드 2 A-1.** 현재 2차 진행률 = `_PHASE2_KEYS=['si']` SI binary (QI app 미입력). 향후 검사자동화시스템 QI API 연동 시 `_PHASE2_KEYS=['qi','si']` 로 단순 확장하면 **SI_SHIPMENT-only 엣지 재발 가능** — `reached_map[si]=c['done']>=1` 이 SI_SHIPMENT 완료도 "SI 도달"로 처리 → furthest=SI → qi rollup True → p2_pct 50% 오염. **선행 작업**: QI 확장 sprint 에서 SI reached 판정을 `SI_FINISHING` task 기준으로 별도 제한(현재 si 완료 판정과 동일 기준). **연관**: Sprint 84 (v2.26.0) / `_compute_stage_completion` reached_map. 설계 trail: AGENT_TEAM_LAUNCH.md § Sprint 84 Codex 라운드 1 NO-GO 해소. |
 | `FEAT-FACTORY-ACTUAL-COMPLETION-VIEW-20260605` | 🟡 LOW (위치 미정, 고민 단계) | **공장 대시보드 rollup(보여주기)과 별개로, 실제 task 완료 기준 "정확 진도" 표시 위치 결정.** 배경: Sprint 83 후 대시보드 = 낙관적(하위 100% cascade). 내부용 정확값(체크리스트 미완 포함 실제 task 완료율 / 공정별 raw %) 볼 화면 필요. **후보 위치**: ① 생산현황 상세뷰 (S/N별 공정 진도 — 이미 task 기반?) ② 실적 페이지 ③ 신규 "정밀 진도" 위젯/탭 ④ 대시보드에 admin-only 보조 표시 (단 글로벌 토글은 per-user 문제로 기각됨 — 2026-06-05). **결정 필요**: 어느 페이지가 가장 자연스러운가 + 정밀값 정의(체크리스트 포함/제외 / SI=FINISHING vs SHIPMENT). **연관**: Sprint 83 (대시보드 rollup) / CT_ANALYSIS_ROADMAP §14 (신뢰도 맵) / 책임 분리 (대시보드=보여주기 / 상세=정밀). 설계 trail: AGENT_TEAM_LAUNCH.md § Sprint 83. |
 
 ### 📋 Sprint 71 v3 Codex 라운드 2 A 등록 (2026-05-26)

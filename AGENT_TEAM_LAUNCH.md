@@ -47952,3 +47952,111 @@ W23(06-01~07, 34개 제품) 기준, 대시보드 플래그 vs 실제 task 완료
 4. pytest CR-01~07 + 회귀 test_factory GREEN
 5. version v2.25.0 + 문서 + 배포
 6. T+ 검증 (운영 weekly-kpi TM/SI 완료율 정상 + GBWS-7163 100%)
+
+---
+
+# Sprint 84 — FEAT-FACTORY-PHASE-1-2-PROGRESS-20260605 (생산현황 상세 1차/2차 진행률 + 손님용 rollup 바)
+
+> **본질**: 생산현황 상세 표의 진행률 바를 ① **rollup(보여주기) 기준**으로 채우고 ② **1차(가압 PI까지) / 2차(공정 QI+마무리 SI) 마일스톤** 으로 그룹핑. 근본 data 무변경(read-time). Sprint 83 `_compute_stage_completion` 재사용.
+
+**날짜**: 2026-06-05
+**우선순위**: 🟠 MEDIUM (생산현황 상세 손님용 표현)
+**연관**: OPS `factory.py get_monthly_detail` (per-item) / VIEW 생산현황 상세 표(progress bar + 공정별 미니바) / Sprint 83 (rollup helper)
+**버전**: v2.26.0 (minor — 응답 additive 필드)
+**Codex 이관 체크리스트**: ✅ 클린코어(completion 판정 파생) + API 응답 additive → **자동 Codex 이관**
+
+---
+
+## 1. 배경 — 사용자 결정 (2026-06-05)
+
+생산현황 상세 표(스크린샷): 모델/SN/시작일/출하예정/**진행률 바**/상태/기구·전장업체. 진행률 바 = 큰 막대(전체 %) + 공정별 미니바(MECH 0/6, ELEC 0/6, TMS 0/4).
+
+**사용자 요구**:
+1. 진행률 바를 **rollup(보여주기)** 로 — 가압/마무리 도달 시 앞 공정 자동 100% (손님용, 체크리스트 미완 무시).
+2. **1차/2차 마일스톤 관리** (A안 확정):
+   - **1차** = 전장외부 → 반제품(TM) → 기구(MECH) → 전장(ELEC) → **가압(PI)**. 1차 완료 = PI 완료.
+   - **2차** = 공정검사(QI) → **마무리(SI)**. 2차 완료 = SI 완료.
+3. ⚠️ **QI(공정검사)는 app 미입력** — 검사자동화시스템(별 시스템) 담당, 추후 API 연동 예정. → 현재 2차 진행률은 **SI 기준만** (QI는 항상 0이나 rollup 으로 SI 도달 시 자동 100%).
+
+---
+
+## 2. 1차/2차 모델 (A안)
+
+```
+1차 (조립~가압):  TM → MECH → ELEC → PI        (tier 0~3)
+   · 1차 완료 = completion.pi (Sprint 83 rollup)
+   · 1차 진행률 = {tm,mech,elec,pi} 중 완료 비율
+
+2차 (검사~마무리): QI → SI                       (tier 4~5)
+   · 2차 완료 = completion.si
+   · 2차 진행률 = {si} 기준 (QI 미입력 — rollup 으로 SI 완료 시 qi 자동 100%)
+   · QI API 연동 후: {qi,si} 합산으로 자동 확장 (코드 변경 0, 데이터만 유입)
+
+phase 상태 = '1차 진행중' / '1차 완료(2차 진행중)' / '2차 완료'
+```
+
+> QI 처리 핵심: app_task_details 에 QI task 는 존재(seed)하나 completed_at 가 안 채워짐(자동화시스템 미연동). rollup 에서 SI(tier5) 도달 시 qi(tier4)가 강제 100% 되므로 손님용 화면 정합. 정밀(task_progress)에서는 QI 0 유지(별 시스템 영역).
+
+---
+
+## 3. BE 변경 명세 (`factory.py get_monthly_detail` per-item, additive)
+
+기존 `completion`(rollup bool) + `progress_pct`(rollup %) + `task_progress`(정밀) 는 **그대로 유지**. 신규 필드 2개 additive:
+
+```python
+# Sprint 83 stage_comp(sc) 재사용 (이미 get_monthly_detail 에서 호출 중)
+_PHASE1_KEYS = ['tm','mech','elec','pi']
+_PHASE2_KEYS = ['si']   # QI app 미입력 → SI binary. QI API 연동 시 ['qi','si']
+item['phase'] = _build_phase(sc)
+# _build_phase(sc) =
+#   p1_done = bool(sc.get('pi'))                  # 1차 완료(가압)
+#   p2_done = bool(sc.get('si'))                  # 2차 완료(마무리)
+#   p1_pct  = _phase_pct(sc, _PHASE1_KEYS)        # 1차 진행률 (None 제외 분모)
+#   p2_pct  = _phase_pct(sc, _PHASE2_KEYS)        # 2차 진행률 (SI binary)
+#   status  = '2차완료' if p2_done else ('2차진행중' if p1_done else '1차진행중')
+```
+- 신규 helper `_phase_pct(stages, keys)` — 지정 키 중 **None 제외** 완료 비율 (`_progress_from_stages` 변형)
+- `progress_pct`(전체 rollup) 는 손님용 큰 바 그대로 사용 (이미 Sprint 83 에서 rollup)
+
+### ⚠️ Codex 라운드 1 NO-GO (M=2) 해소 (2026-06-05)
+
+- **M-2 (p2_pct 오염)**: `p2_pct=_phase_pct(['qi','si'])` 가 SI_SHIPMENT만 완료된 엣지에서 50%로 표시될 수 있음 (rollup qi 강제 100% + si False → 1/2). **해소**: `_PHASE2_KEYS=['si']` 로 **SI binary** 고정 — SI=`SI_FINISHING` 기준이므로 0/100만 가능. QI API 연동 시 키 1개 추가로 자동 확장(코드 0). (검증 TC: PH-04b — SI_SHIPMENT-only → p2_pct=0)
+- **M-3 (non-standard 모델 분모 왜곡)**: TMS/MECH 없는 모델(예: O3 Destructor)에서 해당 없는 stage 가 `False` 로 잡혀 p1_pct 분모를 부풀림. **해소**: `_compute_stage_completion` 이 **0-applicable stage 를 `None` 으로 반환**(일반 `present_map` — 기존 `is_gaia tm` 특수분기 제거). `_phase_pct` 는 None 을 분모에서 제외 → non-GAIA 도 정확. (검증 TC: PH-05 — non-GAIA tm None 제외 → p1_pct 100)
+- **부수 영향**: Sprint 83 `by_stage`(W23) **불변** 확인 (mech 88.2 / elec 82.4 / tm 100 / pi 79.4 / qi 64.7 / si 64.7). sprint83 회귀 TC 중 absent stage 단정 케이스(CR-04/05/07)는 해당 stage seed 추가로 present-but-incomplete 보정.
+- ⚠️ 공정별 미니바(0/6) rollup 채움 = **VIEW 가 `completion`(stage bool) 로 "도달 시 full" 표시** 선택 가능 → BE 추가 0 (옵션). 카운트(N/M)까지 rollup 하려면 별 필드 필요(본 sprint 제외, 필요 시 후속).
+
+### 무변경
+- `completion` / `progress_pct` / `task_progress`(정밀) — 유지
+- get_weekly_kpi / by_stage — touch 0
+- DB / migration — 없음. QI 데이터 유입 시 자동 반영(코드 0).
+
+---
+
+## 4. 응답 스키마 (additive)
+
+```json
+"phase": { "p1_done": true, "p2_done": false, "p1_pct": 100.0, "p2_pct": 0.0, "status": "2차진행중" }
+```
+→ VIEW: 큰 진행률 바 = `progress_pct`(rollup) / 1차·2차 구간 마커 = `phase.p1_pct`·`p2_pct` / 상태 뱃지 = `phase.status`.
+
+---
+
+## 5. pytest TC (`test_sprint84_phase_progress.py`)
+
+| TC | 시나리오 | 검증 |
+|---|---|---|
+| PH-01 | 가압(PI) 완료 | p1_done=True, p1_pct=100, status='2차진행중' |
+| PH-02 | 마무리(SI) 완료 | p2_done=True, status='2차완료' |
+| PH-03 | 기구만 진행 | p1_done=False, status='1차진행중', p1_pct 부분 |
+| PH-04 | QI 미입력 + SI 완료 | p2_pct=100 (QI 무관, SI binary) |
+| PH-04b | SI_SHIPMENT-only (M-2) | p2_done=False, p2_pct=0 (오염 없음) |
+| PH-05 | non-GAIA (TM 없음, M-3) | p1_pct 에 tm None 제외 → 100 |
+| PH-06 | 회귀 | phase 5키 구조 + 기존 필드 불변 |
+
+---
+
+## 6. 회귀 위험 / 진행 순서
+
+- additive 2필드(`phase`) + helper 1개. 기존 필드/엔드포인트 무변경 → 회귀 0. read-time, DB 0.
+- VIEW: progress_pct(rollup) 채택 + phase 마커/뱃지 렌더 (별 세션).
+- 진행: ① Codex 라운드 1 (자동 이관) → ② 구현 → ③ pytest PH-01~06 + 회귀 test_factory → ④ v2.26.0 배포 → ⑤ T+ 검증.

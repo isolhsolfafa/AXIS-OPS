@@ -163,11 +163,12 @@ def test_cr04_pi_reached_assembly_cascade_only(db_conn, w):
         _seed_task(db_conn, w, sn, 'TMS', 'TANK_MODULE', done=False)
         _seed_task(db_conn, w, sn, 'PI', 'PI_CHAMBER', done=True)     # PI 도달
         _seed_task(db_conn, w, sn, 'QI', 'QI_INSPECTION', done=False)
+        _seed_task(db_conn, w, sn, 'SI', 'SI_FINISHING', done=False)  # SI present (미완)
         r = _compute(db_conn, sn, 'GAIA-I')
-        # PI(tier1) 도달 → 앞 tier0 (mech/elec/tm) 강제 True
+        # PI(tier3) 도달 → 앞 (tm/mech/elec) 강제 True
         assert r['mech'] is True and r['elec'] is True and r['tm'] is True
         assert r['pi'] is True   # PI 자체 완료
-        assert r['qi'] is False and r['si'] is False  # 뒤 공정 미도달
+        assert r['qi'] is False and r['si'] is False  # 뒤 공정 미도달 (present)
     finally:
         _cleanup(db_conn, [sn])
 
@@ -179,6 +180,7 @@ def test_cr05_mech_only_no_rollup(db_conn, w):
         _seed_task(db_conn, w, sn, 'MECH', 'PANEL_WORK', done=True)
         _seed_task(db_conn, w, sn, 'MECH', 'SELF_INSPECTION', done=False)  # MECH 미완
         _seed_task(db_conn, w, sn, 'ELEC', 'WIRING', done=False)
+        _seed_task(db_conn, w, sn, 'PI', 'PI_CHAMBER', done=False)  # PI present (미도달)
         r = _compute(db_conn, sn, 'GAIA-I')
         # 뒤 공정 미도달 → rollup 없음 → 실제 진도
         assert r['mech'] is False   # MECH 1개 미완 = 실제 미완
@@ -203,10 +205,12 @@ def test_cr07_gbws7163_full_rollup(db_conn, w):
     sn = "S83-CR07"
     try:
         _seed_product(db_conn, sn, 'GAIA-I')
-        # GBWS-7163 재현: MECH 5/6, ELEC 5/6, TMS 2/2, PI 2/2, QI 0/1, SI_FINISHING 완료
+        # GBWS-7163 재현: MECH 5/6, TMS 2/2, PI 2/2, QI 0/1, SI_FINISHING 완료
         _seed_task(db_conn, w, sn, 'MECH', 'PANEL_WORK', done=True)
         _seed_task(db_conn, w, sn, 'MECH', 'SELF_INSPECTION', done=False)  # 1개 미완
-        _seed_task(db_conn, w, sn, 'QI', 'QI_INSPECTION', done=False)      # QI 미완
+        _seed_task(db_conn, w, sn, 'TMS', 'TANK_MODULE', done=True)        # 반제품 present
+        _seed_task(db_conn, w, sn, 'PI', 'PI_CHAMBER', done=True)          # 가압 present
+        _seed_task(db_conn, w, sn, 'QI', 'QI_INSPECTION', done=False)      # QI 미완(present)
         _seed_task(db_conn, w, sn, 'SI', 'SI_FINISHING', done=True)
         _seed_task(db_conn, w, sn, 'SI', 'SI_SHIPMENT', done=False)
         r = _compute(db_conn, sn, 'GAIA-I')

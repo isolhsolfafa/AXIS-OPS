@@ -176,16 +176,20 @@ def _compute_stage_completion(cur, serial_numbers: list, model_by_sn: dict) -> d
     result: dict = {}
     for sn in serial_numbers:
         cats = agg.get(sn, {})
-        is_gaia = (model_by_sn.get(sn) or '').upper().startswith('GAIA')
 
         done_map: dict = {}
         reached_map: dict = {}
+        present_map: dict = {}
         for stage in _STAGE_ORDER:
             c = cats.get(stage)
             if not c or c['appl'] == 0:
+                # 모델에 해당 공정 task 없음(seed 안 됨) → 해당 없음.
+                # non-GAIA 의 TM(TMS 미생성) + O3 등 비표준(MECH/ELEC 일부 없음) 자연 처리.
+                present_map[stage] = False
                 done_map[stage] = False
                 reached_map[stage] = False
                 continue
+            present_map[stage] = True
             reached_map[stage] = c['done'] >= 1
             if stage == 'si':
                 done_map[stage] = (c['si_finish_appl'] > 0
@@ -200,8 +204,8 @@ def _compute_stage_completion(cur, serial_numbers: list, model_by_sn: dict) -> d
 
         final: dict = {}
         for stage in _STAGE_ORDER:
-            if stage == 'tm' and not is_gaia:
-                final['tm'] = None
+            if not present_map[stage]:
+                final[stage] = None  # 해당 없음 (분모/카운트 제외)
                 continue
             final[stage] = True if _STAGE_TIER[stage] < furthest else done_map[stage]
         result[sn] = final
@@ -214,6 +218,37 @@ def _progress_from_stages(stages: dict) -> float:
     if not vals:
         return 0.0
     return round(sum(1 for v in vals if v) / len(vals) * 100, 1)
+
+
+# Sprint 84: 1차/2차 마일스톤 (A안, 사용자 확정 2026-06-05)
+#   1차 = 전장외부→반제품(TM)→기구(MECH)→전장(ELEC)→가압(PI). 1차완료 = pi.
+#   2차 = 공정검사(QI)→마무리(SI). 2차완료 = si(SI_FINISHING).
+#   ⚠️ QI 는 app 미입력(검사자동화시스템 별 시스템, 추후 API) → 2차 진행률은 현재 SI binary.
+#      QI API 연동 시 _PHASE2_KEYS 에 'qi' 추가 (코드 1줄).
+_PHASE1_KEYS = ['tm', 'mech', 'elec', 'pi']
+_PHASE2_KEYS = ['si']  # QI 미입력 → SI 기준. QI 연동 시 ['qi','si']
+
+
+def _phase_pct(stages: dict, keys: list) -> float:
+    """지정 공정 키 중 None(해당없음) 제외 완료 비율 %."""
+    vals = [stages.get(k) for k in keys]
+    vals = [v for v in vals if v is not None]
+    if not vals:
+        return 0.0
+    return round(sum(1 for v in vals if v) / len(vals) * 100, 1)
+
+
+def _build_phase(sc: dict) -> dict:
+    """Sprint 84 — 1차/2차 마일스톤 진행 dict (rollup 기반, 보여주기)."""
+    p1_done = bool(sc.get('pi'))
+    p2_done = bool(sc.get('si'))
+    return {
+        'p1_done': p1_done,
+        'p2_done': p2_done,
+        'p1_pct': _phase_pct(sc, _PHASE1_KEYS),
+        'p2_pct': _phase_pct(sc, _PHASE2_KEYS),
+        'status': '2차완료' if p2_done else ('2차진행중' if p1_done else '1차진행중'),
+    }
 
 
 def _get_task_progress_by_serial(cur, serial_numbers: list) -> dict:
@@ -458,6 +493,8 @@ def get_monthly_detail() -> Tuple[Dict[str, Any], int]:
                     'si': bool(sc.get('si')),
                 },
                 'progress_pct': _progress_from_stages(sc),
+                # Sprint 84: 1차/2차 마일스톤 (rollup 기반 보여주기, additive)
+                'phase': _build_phase(sc),
                 'task_progress': task_progress.get(row.get('serial_number'), {
                     'total': 0, 'completed': 0, 'progress_pct': 0.0, 'by_category': {}
                 }),
