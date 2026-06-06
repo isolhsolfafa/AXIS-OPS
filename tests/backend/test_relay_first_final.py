@@ -261,7 +261,8 @@ def test_ff16_legacy_compat_3_args_default_close_reason():
     completed_at = datetime(2026, 5, 14, 17, 0, tzinfo=Config.KST)
 
     with patch.object(task_detail, 'get_db_connection') as mock_conn, \
-         patch.object(task_detail, 'put_conn'):
+         patch.object(task_detail, 'put_conn'), \
+         patch.object(task_detail, 'compute_task_work', return_value={'manhour': 120, 'active': 100}):
         mock_cur = MagicMock()
         mock_cur.fetchone.return_value = (123,)  # RETURNING id success
         mock_conn.return_value.cursor.return_value = mock_cur
@@ -289,7 +290,8 @@ def test_ff_close_reason_first_final_format():
     completed_at = datetime(2026, 5, 14, 17, 0, tzinfo=Config.KST)
 
     with patch.object(task_detail, 'get_db_connection') as mock_conn, \
-         patch.object(task_detail, 'put_conn'):
+         patch.object(task_detail, 'put_conn'), \
+         patch.object(task_detail, 'compute_task_work', return_value={'manhour': 180, 'active': 150}):
         mock_cur = MagicMock()
         mock_cur.fetchone.return_value = (123,)
         mock_conn.return_value.cursor.return_value = mock_cur
@@ -319,7 +321,8 @@ def test_ff_close_reason_second_final_format():
     completed_at = datetime(2026, 5, 14, 17, 0, tzinfo=Config.KST)
 
     with patch.object(task_detail, 'get_db_connection') as mock_conn, \
-         patch.object(task_detail, 'put_conn'):
+         patch.object(task_detail, 'put_conn'), \
+         patch.object(task_detail, 'compute_task_work', return_value={'manhour': 240, 'active': 200}):
         mock_cur = MagicMock()
         mock_cur.fetchone.return_value = (456,)
         mock_conn.return_value.cursor.return_value = mock_cur
@@ -375,10 +378,10 @@ def test_ff18_concurrent_start_race_returning_id():
 
     with patch.object(task_detail, 'get_db_connection') as mock_conn, \
          patch.object(task_detail, 'put_conn'), \
-         patch.object(task_detail, 'compute_task_manhour', return_value=120):
+         patch.object(task_detail, 'compute_task_work', return_value={'manhour': 120, 'active': 100}):
         mock_cur = MagicMock()
         # 첫 번째 호출: RETURNING id 1건 / 두 번째: None
-        # (compute_task_manhour mock → UPDATE RETURNING fetchone 만 side_effect 소비)
+        # (Sprint 86: compute_task_work mock → UPDATE RETURNING fetchone 만 side_effect 소비)
         mock_cur.fetchone.side_effect = [(123,), None]
         mock_conn.return_value.cursor.return_value = mock_cur
 

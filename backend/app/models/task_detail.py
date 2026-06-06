@@ -443,95 +443,144 @@ def start_task(task_detail_id: int, started_at: datetime) -> bool:
 # 설계: AGENT_TEAM_LAUNCH.md § FIX-DURATION v1~v13 (Codex 라운드 1~12 GO + v13 재검증)
 # ──────────────────────────────────────────────────────────────
 
-_TASK_MANHOUR_SQL = """
+# Sprint 86 (FEAT-ACTIVE-TIME-PURE-WORK-20260606): man-hour + active-time 결합 산출.
+#   man-hour 부분 = 기존 v13 공식 그대로 (배포값 일치 검증). active = 순수 작업시간:
+#     active = Σ_w FLOOR(GREATEST(0, len(sess∩BH) − len((manual_pause∪breaks)∩sess∩BH)))
+#     BH_day = attendance[MIN(in),MAX(out)] 우선(in&out+MIN<MAX) / fallback 평일[08,20]·주말[08,17] KST
+#     breaks = 일별 [10:00-10:20, 11:20-12:20, 15:00-15:20, 17:00-18:00] (admin 표준 시간표)
+#     저장 active = LEAST(active_raw, manhour) (불변식 active ≤ man-hour, Codex R2 M-Q5)
+#   설계: AGENT_TEAM_LAUNCH.md § Sprint 86 (Codex 5라운드 GO)
+_TASK_WORK_SQL = """
 WITH starts AS (
   SELECT ws.worker_id, ws.started_at,
          LEAD(ws.started_at) OVER (PARTITION BY ws.worker_id ORDER BY ws.started_at) AS next_start,
-         -- 실 완료기록 (>= start 중 최초)
          (SELECT MIN(wc.completed_at) FROM work_completion_log wc
             WHERE wc.task_id = %(tid)s AND wc.worker_id = ws.worker_id
               AND wc.completed_at >= ws.started_at) AS comp,
-         -- 본인 그날 attendance check_out (협력사 실 퇴근)
          (SELECT MAX(pa.check_time) FROM hr.partner_attendance pa
             WHERE pa.worker_id = ws.worker_id AND pa.check_type = 'out'
               AND DATE(pa.check_time AT TIME ZONE 'Asia/Seoul')
                   = DATE(ws.started_at AT TIME ZONE 'Asia/Seoul')) AS checkout
   FROM work_start_log ws
-  WHERE ws.task_id = %(tid)s
-    AND ws.started_at < %(close_at)s          -- start > close_at 역전 방지 (crash 가드)
+  WHERE ws.task_id = %(tid)s AND ws.started_at < %(close_at)s
 ),
 sessions AS (
   SELECT worker_id,
-         tstzrange(
-           started_at,
+         tstzrange(started_at,
            GREATEST(started_at, LEAST(
              COALESCE(comp, 'infinity'::timestamptz),
              COALESCE(checkout, 'infinity'::timestamptz),
-             -- check_out 없으면 시작일 17:00 fallback (KST)
              CASE WHEN checkout IS NULL
-                  THEN (date_trunc('day', started_at AT TIME ZONE 'Asia/Seoul')
-                        + interval '17 hours') AT TIME ZONE 'Asia/Seoul'
+                  THEN (date_trunc('day', started_at AT TIME ZONE 'Asia/Seoul') + interval '17 hours') AT TIME ZONE 'Asia/Seoul'
                   ELSE 'infinity'::timestamptz END,
              COALESCE(next_start, 'infinity'::timestamptz),
              %(close_at)s
-           )),
-           '[)'
-         ) AS sess
+           )), '[)') AS sess
   FROM starts s
 ),
-sess_union AS (
-  SELECT worker_id, range_agg(sess) AS mr FROM sessions GROUP BY worker_id
-),
+sess_union AS (SELECT worker_id, range_agg(sess) AS mr FROM sessions GROUP BY worker_id),
 pauses AS (
-  SELECT wpl.worker_id,
-         tstzrange(wpl.paused_at, COALESCE(wpl.resumed_at, %(close_at)s), '[)') AS pr
+  SELECT wpl.worker_id, tstzrange(wpl.paused_at, COALESCE(wpl.resumed_at, %(close_at)s), '[)') AS pr
   FROM work_pause_log wpl
   WHERE wpl.task_detail_id = %(tid)s AND wpl.pause_type = 'manual'
-    AND wpl.paused_at < %(close_at)s          -- pause start > close_at 역전 방지
-    AND COALESCE(wpl.resumed_at, %(close_at)s) > wpl.paused_at
+    AND wpl.paused_at < %(close_at)s AND COALESCE(wpl.resumed_at, %(close_at)s) > wpl.paused_at
 ),
-pause_union AS (
-  SELECT worker_id, range_agg(pr) AS mr FROM pauses GROUP BY worker_id
+pause_union AS (SELECT worker_id, range_agg(pr) AS mr FROM pauses GROUP BY worker_id),
+-- ── Sprint 86 active 확장: worker×day BH(attendance 우선 + fallback) + breaks ──
+days AS (
+  SELECT su.worker_id,
+         generate_series(date_trunc('day', lower(su.mr) AT TIME ZONE 'Asia/Seoul'),
+                         date_trunc('day', upper(su.mr) AT TIME ZONE 'Asia/Seoul'),
+                         interval '1 day')::date AS d
+  FROM sess_union su
 ),
+att_day AS (
+  SELECT dd.worker_id, dd.d,
+    MIN(pa.check_time) FILTER (WHERE pa.check_type='in')  AS cin,
+    MAX(pa.check_time) FILTER (WHERE pa.check_type='out') AS cout
+  FROM days dd
+  LEFT JOIN hr.partner_attendance pa
+    ON pa.worker_id = dd.worker_id
+   AND DATE(pa.check_time AT TIME ZONE 'Asia/Seoul') = dd.d
+  GROUP BY dd.worker_id, dd.d
+),
+bh_day AS (
+  SELECT worker_id,
+    CASE
+      WHEN cin IS NOT NULL AND cout IS NOT NULL AND cin < cout THEN tstzrange(cin, cout, '[)')
+      WHEN extract(dow from d) IN (0,6)
+        THEN tstzrange((d + time '08:00') AT TIME ZONE 'Asia/Seoul', (d + time '17:00') AT TIME ZONE 'Asia/Seoul', '[)')
+      ELSE tstzrange((d + time '08:00') AT TIME ZONE 'Asia/Seoul', (d + time '20:00') AT TIME ZONE 'Asia/Seoul', '[)')
+    END AS bhr
+  FROM att_day
+),
+bh_union AS (SELECT worker_id, range_agg(bhr) AS mr FROM bh_day GROUP BY worker_id),
+breaks_day AS (
+  SELECT worker_id, unnest(ARRAY[
+    tstzrange((d + time '10:00') AT TIME ZONE 'Asia/Seoul', (d + time '10:20') AT TIME ZONE 'Asia/Seoul','[)'),
+    tstzrange((d + time '11:20') AT TIME ZONE 'Asia/Seoul', (d + time '12:20') AT TIME ZONE 'Asia/Seoul','[)'),
+    tstzrange((d + time '15:00') AT TIME ZONE 'Asia/Seoul', (d + time '15:20') AT TIME ZONE 'Asia/Seoul','[)'),
+    tstzrange((d + time '17:00') AT TIME ZONE 'Asia/Seoul', (d + time '18:00') AT TIME ZONE 'Asia/Seoul','[)')
+  ]) AS br
+  FROM days
+),
+breaks_union AS (SELECT worker_id, range_agg(br) AS mr FROM breaks_day GROUP BY worker_id),
 per_worker AS (
   SELECT su.worker_id,
-    (SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (upper(r)-lower(r)))/60),0)
-       FROM unnest(su.mr) r) AS sess_min,
+    (SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (upper(r)-lower(r)))/60),0) FROM unnest(su.mr) r) AS sess_min,
     COALESCE((SELECT SUM(EXTRACT(EPOCH FROM (upper(r)-lower(r)))/60)
-              FROM unnest(su.mr * COALESCE(pu.mr, '{}'::tstzmultirange)) r),0) AS pause_min
-  FROM sess_union su LEFT JOIN pause_union pu USING(worker_id)
+              FROM unnest(su.mr * COALESCE(pu.mr, '{}'::tstzmultirange)) r),0) AS pause_min,
+    COALESCE((SELECT SUM(EXTRACT(EPOCH FROM (upper(r)-lower(r)))/60)
+              FROM unnest(su.mr * COALESCE(bh.mr, '{}'::tstzmultirange)) r),0) AS sess_bh_min,
+    COALESCE((SELECT SUM(EXTRACT(EPOCH FROM (upper(r)-lower(r)))/60)
+              FROM unnest( (COALESCE(pu.mr,'{}'::tstzmultirange) + COALESCE(bk.mr,'{}'::tstzmultirange))
+                           * su.mr * COALESCE(bh.mr,'{}'::tstzmultirange) ) r),0) AS inactive_min
+  FROM sess_union su
+  LEFT JOIN pause_union pu USING(worker_id)
+  LEFT JOIN bh_union bh USING(worker_id)
+  LEFT JOIN breaks_union bk USING(worker_id)
 )
-SELECT COALESCE(SUM(FLOOR(GREATEST(0, sess_min - pause_min))),0)::int AS manhour
+SELECT
+  COALESCE(SUM(FLOOR(GREATEST(0, sess_min - pause_min))),0)::int AS manhour,
+  LEAST(
+    COALESCE(SUM(FLOOR(GREATEST(0, sess_bh_min - inactive_min))),0)::int,
+    COALESCE(SUM(FLOOR(GREATEST(0, sess_min - pause_min))),0)::int
+  ) AS active
 FROM per_worker
 """
 
 
+def compute_task_work(cur, task_detail_id: int, close_at: datetime) -> Dict[str, int]:
+    """man-hour + active-time(순수 작업시간) 단일 산출 (Sprint 86).
+
+    man-hour = Σ_w (session_union − manual_pause∩session) — 기존 v13 공식 (불변).
+    active   = Σ_w FLOOR(GREATEST(0, len(sess∩BH) − len((manual_pause∪breaks)∩sess∩BH)))
+               BH = attendance[MIN(in),MAX(out)] 우선 / fallback 평일[08,20]·주말[08,17] KST.
+               저장값 active = LEAST(active_raw, manhour) — 불변식 active ≤ man-hour.
+
+    Returns:
+        {'manhour': int, 'active': int} (work_start_log 없으면 {0,0}).
+    """
+    cur.execute(_TASK_WORK_SQL, {'tid': task_detail_id, 'close_at': close_at})
+    row = cur.fetchone()
+    if row is None:
+        return {'manhour': 0, 'active': 0}
+    if isinstance(row, dict):
+        return {'manhour': int(row['manhour'] or 0), 'active': int(row['active'] or 0)}
+    return {'manhour': int(row[0] or 0), 'active': int(row[1] or 0)}
+
+
 def compute_task_manhour(cur, task_detail_id: int, close_at: datetime) -> int:
-    """man-hour(분) 산출 — attendance-cap 통일 공식 (v13).
+    """man-hour(분) 산출 — compute_task_work 위임 (Sprint 86, drift 방지).
 
     man-hour = Σ over workers ( length(session_union) − (manual pause ∩ session_union) )
       세션 끝(cap) = LEAST(완료기록, 본인 그날 attendance check_out,
                           [check_out 없으면] 시작일 17:00, 다음 start(LEAD), close_at)
+    · 협력사: 실 check_out cap / GST·미기록: 17:00 fallback / 휴게 미차감 / FLOOR + 가드.
 
-    · 협력사: 실 check_out 으로 다일/밤샘/방치 세션 cap (MES actual clock-out 표준)
-    · GST/미기록: 17:00 fallback (교대 없음)
-    · 휴게 미차감 (cap 은 근무시간 경계). FLOOR + cap<=start 가드.
-
-    Args:
-        cur: 활성 커서 (호출부 트랜잭션 공유)
-        task_detail_id: app_task_details.id
-        close_at: 미완 세션/미완 pause 최종 clamp 시각
-                  (정상완료=completed_at / 자동마감=calculate_close_at() 결과)
-    Returns:
-        man-hour 분 (int, 최소 0). work_start_log 없으면 0.
+    Returns: man-hour 분 (int, 최소 0). work_start_log 없으면 0.
     """
-    cur.execute(_TASK_MANHOUR_SQL, {'tid': task_detail_id, 'close_at': close_at})
-    row = cur.fetchone()
-    if row is None:
-        return 0
-    # RealDictCursor / tuple cursor 양쪽 호환
-    val = row['manhour'] if isinstance(row, dict) else row[0]
-    return int(val or 0)
+    return compute_task_work(cur, task_detail_id, close_at)['manhour']
 
 
 def complete_task_unified(
@@ -566,13 +615,17 @@ def complete_task_unified(
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        manhour = compute_task_manhour(cur, task_detail_id, close_at)
+        # Sprint 86: man-hour + active-time 동시 산출 (동일 close_at·데이터 → active ≤ man-hour 자동 정합)
+        work = compute_task_work(cur, task_detail_id, close_at)
+        manhour = work['manhour']
+        active = work['active']
         guard_sql = " AND completed_at IS NULL AND force_closed = FALSE" if race_guard else ""
         cur.execute(
             f"""
             UPDATE app_task_details
             SET completed_at     = %(completed_at)s,
                 duration_minutes = %(manhour)s,
+                active_time_minutes = %(active)s,
                 elapsed_minutes  = GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (%(completed_at)s - started_at))/60))::int,
                 worker_count     = GREATEST(1, (
                     SELECT COUNT(DISTINCT worker_id) FROM work_start_log WHERE task_id = %(tid)s
@@ -586,7 +639,7 @@ def complete_task_unified(
             RETURNING duration_minutes, elapsed_minutes, worker_count
             """,
             {
-                'completed_at': completed_at, 'manhour': manhour, 'tid': task_detail_id,
+                'completed_at': completed_at, 'manhour': manhour, 'active': active, 'tid': task_detail_id,
                 'force_closed': force_closed, 'closed_by': closed_by,
                 'close_reason': close_reason, 'duration_source': duration_source,
             },
@@ -978,11 +1031,15 @@ def auto_close_relay_task(
         #   · 완료로그 ≥1 → interval-union / 완료로그 0 → 단일구간 추정 (close_at clamp)
         #   close_at = last_completion_at (calculate_close_at 결과). race guard + audit 컬럼 현행 보존.
         #   ⚠️ duration_minutes 인자는 호환 위해 유지하나 무시 (호출처 5곳 무변경).
-        manhour = compute_task_manhour(cur, task_detail_id, last_completion_at)
+        # Sprint 86: man-hour + active-time 동시 산출 (동일 close_at → active ≤ man-hour 자동 정합)
+        work = compute_task_work(cur, task_detail_id, last_completion_at)
+        manhour = work['manhour']
+        active = work['active']
         cur.execute("""
             UPDATE app_task_details
             SET completed_at = %s,
                 duration_minutes = %s,
+                active_time_minutes = %s,
                 elapsed_minutes = GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (%s - started_at))/60))::int,
                 worker_count = GREATEST(1, (
                     SELECT COUNT(DISTINCT worker_id) FROM work_start_log WHERE task_id = %s
@@ -996,7 +1053,7 @@ def auto_close_relay_task(
               AND completed_at IS NULL
               AND force_closed = FALSE
             RETURNING id
-        """, (last_completion_at, manhour, last_completion_at, task_detail_id,
+        """, (last_completion_at, manhour, active, last_completion_at, task_detail_id,
               force_closed, closed_by_worker_id, close_reason, duration_source,
               task_detail_id))
         result = cur.fetchone()

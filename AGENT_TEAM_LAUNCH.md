@@ -48208,3 +48208,128 @@ DUAL L/R: task instance = (serial_number, qr_doc_id, task_category, task_id) UNI
 - M=5 전건 해소 확인. KST `date_trunc('month', completed_at AT TIME ZONE 'Asia/Seoul')` 정확 검증.
 - A 2건 반영: ① 카테고리 `median_hours`→`pooled_median_hours` + `median_basis:'pooled_clean_instances'` meta(표준공수합 오해 방지) / ② training cut KST 자정 literal `'2026-06-02 00:00:00'` 명시.
 - **구현 진입 가능.**
+
+---
+
+# Sprint 86 — FEAT-ACTIVE-TIME-PURE-WORK-20260606 (순수 작업시간 active-time 지표 + CT 표준 격상)
+
+> **본질**: man-hour(현 CT 표준)는 "세션−수동pause"라 **휴게(160분/일)·영업시간 밖 idle(주말/야간)** 을 안 깎음 → 주말/도킹 걸친 task 부풀음. **active-time = 세션 ∩ 영업시간 − (pause union ∩ 영업시간) − (휴게 ∩ 영업시간)** = 순수 작업시간. CT 표준을 man-hour → active-time 격상. **man-hour(duration_minutes)는 불변(additive)** — 신규 컬럼만 추가. v2.22.0 `compute_task_manhour` 패턴 확장.
+
+**날짜**: 2026-06-06
+**우선순위**: 🟠 MEDIUM (CT 표준 정밀화, VIEW L42 CT-ACTIVE-TIME-PAUSE-INTEGRITY)
+**연관**: VIEW BACKLOG L42 / `task_detail.py compute_task_manhour`(패턴 원본) / Sprint 85 CT box plot(표준 소스) / v2.22.0 duration SSoT
+**버전**: v2.28.0 (minor — 신규 컬럼 + 산출 함수)
+**Codex 이관 체크리스트**: ✅ DB 스키마 변경(migration) + 클린코어 duration 파생 + 3개+ 파일 → **자동 Codex 이관**
+
+---
+
+## 0. 진단 (포렌식 2026-06-06 — 코드+운영DB 확정)
+
+- **CT box plot(`duration_minutes`)은 오염 0** — `auto_close_relay_task`(v2.22.0) `duration_minutes 인자 무시, compute_task_manhour 재계산`. 정상완료·자동마감 전 경로 work_pause_log 재계산. 운영 372 중단 task neg_dur=0.
+- **`total_pause_minutes` 컬럼은 깨짐** — resume마다 작업자별 `+= pause_duration`(union 아닌 SUM) → 동시 pause 이중합산(id=87480: 3790+3785=7575) + 거대 주말 pause. 단 소비처는 ① work.py L103 API 노출 ② calculate_auto_close_duration(결과 **무시**=dead) → **duration·CT 영향 0**.
+- **휴게는 pause 미기록** — work_pause_log: manual 1442 / break_morning 3 / lunch 1. 휴게 자동 pause 사실상 안 쌓임 → 휴게는 **admin_settings 시간표로 계산** 필요.
+
+→ 결론: man-hour는 "벽시계"가 아니라 이미 "세션−수동pause man-hour". active-time 은 그 위에 **영업시간 클리핑 + 휴게 차감**을 더한 **신규·additive 지표**(버그 fix 아닌 정밀화). total_pause_minutes 정리는 부수 cleanup.
+
+## 1. active-time 정의 (D1~D4 확정 + Codex R1 M=3 반영)
+
+```
+영업창(BH_day) — worker × day 단위 (사용자 확정: attendance 우선 + fallback):
+  · attendance check_in & check_out 둘다 (운영 86%) → [MIN(check_in), MAX(check_out)] (요일 무관 실재실 — 주말 근무도 실측 반영)
+  · 누락/전무 (14%) + GST 검사(PI/QI/SI, attendance 없음) fallback (자동, GST 특수분기 없음):
+       - 평일(월~금) → [08:00, 20:00] KST (잔업 포함)
+       - 주말(토/일) → [08:00, 17:00] KST (주말 잔업 없음 — 사용자 확정 2026-06-06)
+  · ⚠️ 주말 fallback 이 work-eligible → attendance 없는 주말에 task 가 열려있으면 과대계상 가능. 단 성실 작업자는 주말 전 manual pause → inactive 가 흡수(pause ∩ session ∩ BH). 미pause+무attendance+주말 edge 만 과대(소수, Codex 검증).
+휴게(BREAKS)  = 일별 [10:00-10:20, 11:20-12:20, 15:00-15:20, 17:00-18:00] (admin_settings break_*/lunch_*/dinner_* — 일 160분)
+
+inactive_w = ( manual_pause_union_w  ∪  BREAKS )  ∩  session_w  ∩  BH_day_w     ← (Codex R1 M-Q1: union 후 1회 차감, 휴게∩pause 이중차감 방지)
+active_time(task) = Σ over workers  FLOOR( GREATEST(0,  length(session_w ∩ BH_day_w) − length(inactive_w)  ) )
+                                    └─ (Codex R2 M-Q5: man-hour 와 동일 구조 — 작업자별 FLOOR 후 SUM. FLOOR(Σ) 금지)
+   + 저장 가드: active_time_minutes = LEAST(위 합, duration_minutes)  ← 불변식 active ≤ man-hour 이중 보장
+   · 증명: active_w = len(sess∩BH) − len((pause∪break)∩sess∩BH) ≤ len(sess) − len(pause∩sess) = manhour_w (per worker, sess∩BH⊆sess + break≥0). 작업자별 FLOOR 보존 → Σ 보존.
+
+· session_w = compute_task_manhour 의 session_union 재사용 ∩ BH_day_w (Codex R1 M-Q4: man-hour session(완료기록/LEAD/close_at cap) ∩ BH 추가 클리핑. BH 상한은 추가 제약일 뿐 모순 아님 — auto-close 17:00 cap ⊂ BH 자동 정합)
+· manual_pause_union_w = work_pause_log pause_type='manual' range_agg(per worker) — 이중합산 자동 해소
+· 항상 active_time ≤ man-hour(duration_minutes) (additive 정밀화)
+```
+
+### D1~D4 확정 (2026-06-06 사용자)
+- **D1 영업창 = attendance 우선([MIN(in),MAX(out)]) + 평일 08:00~20:00 fallback** (운영 커버리지 86%/14% 검증). GST = fallback 자동 흡수(별도 관리 불요). ⚠️ attendance 하루 여러 in/out = [MIN(in),MAX(out)] 단순화(외출 중간 idle 은 미차감 — manual pause/휴게로 일부 흡수, Codex 검증).
+- **D2 공휴일**: MVP 무시(주말만 제외, 공휴일 근무 과대계상 소수). 후속 holiday calendar.
+- **D3 저장 = 신규 컬럼 `active_time_minutes`**(완료 시 산출 + 백필). man-hour 불변 additive → 회귀 저. on-read 는 BH/attendance/휴게 range 행당 무거움 → 컬럼.
+- **D4 CT = man_hour + active 병행** (Codex R1 M-Q6): Sprint 85 `median_hours`(=man-hour) **유지**(VIEW 회귀 0) + 신규 `active_median_hours`/`active_q1/q3` 등 **별 필드**. meta `standard_basis:'active_time'`(VIEW 우선 표시 권고). VIEW 가 명시 필드로 구분 → 오판 없음.
+
+## 2. BE 변경 명세
+
+### 2.1 `task_detail.py` 신규 `compute_task_active_time(cur, task_detail_id, close_at)` (~80 LOC)
+- **compute_task_manhour 와 단일 CTE 통합 권고**(Codex A-Q3b): `compute_task_work(cur, tid, close_at) → {manhour, active}` 한 함수가 둘 다 반환 → 완료 1건당 쿼리 1회. (man-hour 기존 함수는 호환 유지 or 위임)
+- CTE 구성 (PG16 tstzrange/range_agg/multirange):
+  - `sess` = compute_task_manhour session_union (per worker) — 재사용
+  - `att_bh` = worker×day attendance 창: `... GROUP BY worker_id, day HAVING MIN(in) IS NOT NULL AND MAX(out) IS NOT NULL AND MIN(in) < MAX(out)` (Codex R2 A-Q2: in&out 둘다 + 정상 순서일 때만 — partial(in만/out만) 은 fallback)
+  - `fallback_bh` = sess span 의 일별 generate_series 로 평일[08:00,20:00]/주말[08:00,17:00] 생성, **att_bh 없는 (worker,day) 만** (att 우선 머지 per day)
+  - `bh = att_bh ∪ fallback_bh` (worker×day 별 우선순위 머지)
+  - `breaks` = sess span 일별 [10:00-10:20,11:20-12:20,15:00-15:20,17:00-18:00] generate_series
+  - **`inactive = (pause_union ∪ breaks) ∩ sess ∩ bh`** (Codex M-Q1 union 후 1회)
+  - `active = Σ_w FLOOR( GREATEST(0, length(sess ∩ bh) − length(inactive)) )` ← **작업자별 FLOOR 후 SUM**(Codex R2 M-Q5/R5 A-1, man-hour 구조 동일, FLOOR(Σ) 금지) + 저장 `LEAST(active, duration_minutes)`
+  - ⚠️ admin 근무/휴게 시간표 변경 시 = 운영 runbook 에 "active_time 전체 재백필" 연결(Codex R5 A-2, BACKLOG REBACKFILL-ACTIVE-TIME-ON-SETTINGS-CHANGE)
+- WORK_START/WORK_END/주말END/break times = admin_settings 조회(기본값 fallback). **generate_series KST 명시**(Codex A-Q2) — `(d::date + WORK_START) AT TIME ZONE 'Asia/Seoul'`.
+
+### 2.2 `migrations/059_add_active_time.sql` (신규)
+- ⚠️ **059 사용** (Codex R3 M-R3-1): v2.22.0 가 `058`(man-hour duration 백필) 예약 → 충돌 회피. 본 sprint 백필은 v2.22.0 058 과 **별도**(active_time_minutes 만 채움, duration_minutes 불간섭).
+- `ALTER TABLE app_task_details ADD COLUMN active_time_minutes INTEGER` (nullable, additive)
+- 백필: 완료 task 전수 **id range 배치 + preflight 카운트**(Codex A-Q3). 읽기 산출이라 운영 무중단(행 lock 짧음). man-hour 무변경 검증(전후 duration_minutes SUM 대조).
+- ⚠️ **백필·신규 완료 모두 현재 admin_settings(근무/휴게 시간표) 균일 적용**(Codex R4 M-R4-1): 시간표가 운영상 고정(변경 이력 없음)이라 "완료 시점 스냅샷"이 아니라 **단일 기준** → 백필 row·신규 row 동일 기준 합산 정합. 향후 시간표 변경 시에만 전체 재백필(BACKLOG `REBACKFILL-ACTIVE-TIME-ON-SETTINGS-CHANGE`).
+
+### 2.3 완료 경로 3곳 — active_time 동봉 (man-hour 불변, additive)
+- `complete_task_unified`(task_detail.py 단일 UPDATE) SET 절에 `active_time_minutes = %(active)s` 추가
+- `auto_close_relay_task` 동일 (compute_task_active_time 호출 1줄)
+- ship/admin(shipment_service) 동일
+- ⚠️ duration_minutes/close/audit 로직 **전부 불변** — active_time 컬럼만 추가 set → 회귀 표면 최소
+
+### 2.4 부수 cleanup (total_pause_minutes)
+- work.py L103 응답에 `active_time_minutes` 추가(기존 total_pause_minutes 유지 — 호환). 
+- (선택) total_pause_minutes 노출 deprecated 주석 + dead calculate_auto_close_duration 정리는 별 후속(범위 외).
+
+### 2.5 Sprint 85 CT 연동 (`statistics_service.py`) — Codex M-Q6 필드 분리
+- 기존 box plot 필드(`min/q1/median/q3/max/mean/iqr_hours`)는 **man-hour 유지**(Sprint 85 호환, VIEW 회귀 0).
+- 신규 **별 필드** (Sprint 85 `*_hours` 네이밍 통일, Codex R4 A-2): `active_min_hours/active_q1_hours/active_median_hours/active_q3_hours/active_max_hours/active_mean_hours/active_iqr_hours` (active_time_minutes/60).
+- ⚠️ **active box plot 도 Sprint 85 동일 clean 모집단**(Codex R3 M-R3-3): `_CLEAN_WHERE`(duration_source NULL/NORMAL_COMPLETION + TMS(M)/TEST 제외 + lookback) + 동일 Tukey 1-pass. 추가로 `active_time_minutes IS NOT NULL`(백필 전 행 제외). `active_sample_size` = 그 모집단 수.
+- meta `standard_basis:'active_time'` + `active_available`(active_time_minutes 채워진 비율) + **`active_basis_note`**(Codex R4 M-R4-1 — 백필/스냅샷 불일치 해소 = 옵션 ①): "active_time 은 **운영 표준 근무/휴게 시간표(현재 admin_settings) 기준** — 백필·신규 완료 **동일 적용**. 시간표는 운영상 고정(변경 이력 없음). 향후 시간표 변경 시 전체 재백필(BACKLOG)". → 백필 row·신규 row 가 **동일 기준**이라 합산 정합(과거 설정 이력 불요). VIEW 가 명시 필드로 man/active 구분 → 오판 없음. VIEW active 우선 표시(별 세션).
+- ⚠️ GST(PI/QI/SI) active = fallback 산출(짧은 task → man-hour 근사). active_sample_size 로 신뢰 노출.
+
+## 3. pytest TC (`test_sprint86_active_time.py`)
+
+| TC | 검증 |
+|---|---|
+| AT-01 | 평일 주간 단일 세션 무pause무휴게 (attendance fallback) → active = session ∩ [08,20] 길이 |
+| AT-02 | 평일 야간(20:00~익08:00) 걸친 세션, attendance 없음 → 야간 제거(fallback 20:00 cap) |
+| AT-03 | 주말 걸친 세션, attendance 없음 → 주말 [08,17] fallback 적용(평일 20 vs 주말 17 분기) |
+| AT-04 | attendance [in,out] 있는 day → session ∩ [in,out] (fallback 무시, 실재실 우선) |
+| AT-05 | 휴게(점심 11:20-12:20) 포함 → 60분 차감 |
+| AT-06 | **휴게 ∩ manual pause 겹침 → union 1회 차감(이중차감 0)** (Codex M-Q1) |
+| AT-07 | 동시 pause 다중작업자 union — 이중차감 없음 (id=87480 패턴) |
+| AT-08 | active_time ≤ duration_minutes(man-hour) 항상 |
+| AT-09 | 다중작업자 Σ_worker, DUAL L/R 독립 행 |
+| AT-10 | GREATEST(0,·) — 휴게>세션 음수 차단 |
+| AT-11 | 완료 경로 3곳(정상/자동마감/ship) active_time 동봉, **duration_minutes 불변** |
+| AT-12 | 백필 멱등 + man-hour SUM 전후 무변경 |
+| AT-13 | GST(PI/QI/SI, attendance 없음) → fallback 산출, NULL 아님 |
+| AT-11b | admin_complete 경로(shipment_service) active_time 저장 + duration_minutes 불변 (Codex R2 M-Q6) |
+| AT-14 | 다중작업자 소수분 — 작업자별 FLOOR 후 SUM → active ≤ duration_minutes (Codex R2 M-Q5) |
+| AT-15 | partial attendance(in만) → fallback 적용 (HAVING 가드) |
+| AT-16 | 주말 fallback [08:00,17:00] 경계 — 17:00 이후 task 구간 0분 |
+
+## 5. Codex 교차검증 trail
+- **라운드 1 (2026-06-06) NO-GO M=3**: Q1(휴게∩pause 이중차감) → inactive=(pause∪breaks) union 1회 / Q4(session cap 모순) → session=man-hour session ∩ BH 명확화 / Q6(CT median man/active 혼재) → 기존 man-hour 필드 유지 + active_* 별 필드. A: KST gs / 배치 백필 / 단일 CTE / 재계산 정책.
+- **라운드 2 (2026-06-06) NO-GO M=2**: Q5(per-worker FLOOR 불변식 — FLOOR(Σ) 시 active>man-hour 반례) → 작업자별 FLOOR 후 SUM + LEAST(active,duration) 가드 / Q6(누락 TC) → AT-11b/14/15/16 추가. A: partial att HAVING 가드 / compute_task_work wrapper(기존 compute_task_manhour 는 .manhour 위임, drift 방지). 불변식 active≤man-hour 수학 증명 확인(per-worker).
+- **라운드 3 (2026-06-06) NO-GO M=3**: M-R3-1(migration 058 = v2.22.0 예약 충돌) → **059** 사용 + v2.22.0 별도 명시 / M-R3-2(admin_settings 스냅샷 meta 미기술) → CT meta `settings_snapshot_note` 추가 / M-R3-3(active box plot clean filter 미기술) → Sprint 85 `_CLEAN_WHERE` + Tukey 동일 + `active_time_minutes IS NOT NULL` 명시. (Q1/Q2/Q3/Q5 충분 확인, active≤man-hour 증명 OK, wrapper int 위임 안전)
+- **라운드 4 (2026-06-06) NO-GO M=1**: M-R4-1(백필이 과거 admin_settings 이력 없이 현재 설정 사용 → "완료 시점 스냅샷" meta 와 의미 불일치) → 옵션 ① 채택: **백필·신규 동일 현재 시간표 기준**(시간표 운영상 고정 → 단일 기준, 합산 정합). meta `active_basis_note` 재서술. A: 필드명 `active_*_hours` 통일(반영) / TC AT-01~16 + § 순서(반영). R3-1·R3-3 충분 확인.
+- **라운드 5 (2026-06-06) DEPLOY_SAFE/GO (M=0, A=2)**: R1~R4 누적 M 9건 전부 해소 확인. A: §2.1 FLOOR 재명기(반영) / settings 변경 runbook 연결(반영). **구현 진입.**
+- **구현 검증 (운영 DB SQL)**: 결합 SQL man-hour 부분 = 배포 compute_task_manhour 와 **완전 일치**(238673 둘 다 1071) + active ≤ man-hour **위반 0**. ⚠️ stored duration_minutes 는 완료 시점 스냅샷(late checkout 시 fresh > stored) → **백필 active = LEAST(fresh_active, 기존 duration_minutes)** 클램프(CT 표시 일관). 완료 경로는 동시 산출이라 자동 일관.
+- **라운드 6 (2026-06-07) 구현 검증 NO-GO M=2 → 해소**: M-1(force_complete_task admin.py raw-elapsed 우회 = active 누락 + CT man-hour 오염) → **compute_task_work 전환**(완료 4경로 통일, raw-elapsed→man-hour 정합) / M-2(active_available = man/active Tukey clipped 비율, 채움% 아님) → **fill_sql 신규**(clean 모집단 전체 COUNT FILTER active NOT NULL = 91.3% 운영). 백필 set-based=per-task 일치(87480→265). active 중앙 PANEL 8.9→6.1h / CABINET 5.2→3.9h. pytest active 12 + 회귀 relay 38·CT 15·duration/v2.15.16/hotfix04 GREEN. **완료 경로 = 4곳**(complete_task_unified·auto_close_relay_task·force_close_task·force_complete_task), _finalize_task_multi_worker=dead.
+
+## 4. 회귀 위험 / 진행 순서
+
+- man-hour(duration_minutes)·close·audit **전부 불변** → additive 컬럼만. 완료 경로 회귀 표면 = 1 SET 절 추가 + 1 함수 호출.
+- migration = ADD COLUMN(nullable) + 백필 UPDATE(읽기 산출, 운영 무중단). v2.22.0 백필 패턴 정합.
+- 진행: ① Codex 검증(D1~D4 + SQL range + 완료경로 회귀) → ② 사용자 D1~D4 확정 ✅ → ③ 구현 → ④ pytest AT-01~16 + 회귀(test_relay/test_factory) → ⑤ 백필 preflight → ⑥ v2.28.0 배포 → ⑦ CT 운영 검증(active vs man-hour 갭).

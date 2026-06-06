@@ -974,13 +974,19 @@ def force_complete_task(task_id: int) -> Tuple[Dict[str, Any], int]:
             completed_at = completed_at.replace(tzinfo=Config.KST)
 
         # duration 계산 (started_at이 있을 경우)
+        # Sprint 86 (Codex R6 M-1): raw elapsed → compute_task_work (man-hour + active SSoT 통일).
+        #   기존 raw elapsed 는 man-hour 가 아니라 CT 오염 + active 누락 → 다른 완료 경로와 정합.
         started_at = row['started_at']
         if started_at and started_at.tzinfo is None:
             started_at = started_at.replace(tzinfo=Config.KST)
         if started_at:
-            duration_minutes = int((completed_at - started_at).total_seconds() / 60)
+            from app.models.task_detail import compute_task_work
+            _work = compute_task_work(cur, task_id, completed_at)
+            duration_minutes = _work['manhour']
+            active_minutes = _work['active']
         else:
             duration_minutes = 0
+            active_minutes = 0
 
         # 작업 완료 처리
         cur.execute(
@@ -988,10 +994,11 @@ def force_complete_task(task_id: int) -> Tuple[Dict[str, Any], int]:
             UPDATE app_task_details
             SET completed_at = %s,
                 duration_minutes = %s,
+                active_time_minutes = %s,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = %s
             """,
-            (completed_at, duration_minutes, task_id)
+            (completed_at, duration_minutes, active_minutes, task_id)
         )
 
         conn.commit()
@@ -1238,13 +1245,17 @@ def force_close_task(task_id: int) -> Tuple[Dict[str, Any], int]:
             # NOT_STARTED task: 미시작 강제종료 — duration 계산 스킵 (의도된 동작)
             duration_minutes = 0
             elapsed_minutes = 0
+            active_minutes = 0
         else:
             elapsed_minutes = int((completed_at - started_at).total_seconds() / 60)
             # FIX-DURATION-MANUAL-PAUSE-RAW-20260602 (v2.22.0): 휴게 차감(_calculate_working_minutes) 제거.
             #   man-hour = compute_task_manhour (완료로그 분기, 휴게 미차감 + manual pause 만 ∩ 차감).
             #   close_at = completed_at (관리자 지정 종료 시각).
-            from app.models.task_detail import compute_task_manhour
-            duration_minutes = compute_task_manhour(cur, task_id, completed_at)
+            # Sprint 86: man-hour + active-time 동시 산출.
+            from app.models.task_detail import compute_task_work
+            _work = compute_task_work(cur, task_id, completed_at)
+            duration_minutes = _work['manhour']
+            active_minutes = _work['active']
 
         # app_task_details 강제 종료 업데이트
         cur.execute(
@@ -1252,6 +1263,7 @@ def force_close_task(task_id: int) -> Tuple[Dict[str, Any], int]:
             UPDATE app_task_details
             SET completed_at    = %s,
                 duration_minutes = %s,
+                active_time_minutes = %s,
                 elapsed_minutes  = %s,
                 force_closed     = TRUE,
                 closed_by        = %s,
@@ -1259,7 +1271,7 @@ def force_close_task(task_id: int) -> Tuple[Dict[str, Any], int]:
                 updated_at       = CURRENT_TIMESTAMP
             WHERE id = %s
             """,
-            (completed_at, duration_minutes, elapsed_minutes,
+            (completed_at, duration_minutes, active_minutes, elapsed_minutes,
              g.worker_id, close_reason, task_id)
         )
 

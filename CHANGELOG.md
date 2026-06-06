@@ -6,6 +6,34 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.28.0] - 2026-06-07 — Sprint 86 (FEAT-ACTIVE-TIME-PURE-WORK) 순수 작업시간 active-time + CT 표준 격상
+
+> man-hour(현 CT 표준)는 "세션−수동pause"라 **휴게(160분/일)·영업시간 밖 idle** 미차감 → 주말/도킹 task 부풀음. **active-time = 세션 ∩ 영업창 − (수동pause ∪ 휴게) ∩ 세션 ∩ 영업창** = 순수 작업시간. CT 표준 man-hour → active 격상. **man-hour(duration_minutes) 불변(additive 컬럼만 추가)**. VIEW BACKLOG L42 CT-ACTIVE-TIME-PAUSE-INTEGRITY 대응.
+
+### 진단 (포렌식 2026-06-06)
+- CT box plot(duration_minutes)은 오염 0 — auto_close_relay_task가 compute_task_manhour 재계산, 운영 neg=0. `total_pause_minutes` 컬럼만 깨짐(작업자별 += SUM 이중합산, id=87480=3790+3785) — duration·CT 영향 0(소비처=API 노출+dead 함수). 휴게는 work_pause_log 미기록 → admin_settings 시간표로 계산.
+
+### active-time 정의 (Codex 5라운드 GO)
+- `active = Σ_w FLOOR(GREATEST(0, len(session∩BH) − len((manual_pause ∪ breaks) ∩ session ∩ BH)))`, 저장 `LEAST(active, duration_minutes)`. 항상 active ≤ man-hour(증명).
+- **영업창(BH_day)**: attendance `[MIN(in),MAX(out)]` 우선(운영 86%) / fallback 평일 `[08:00,20:00]`·주말 `[08:00,17:00]` KST (GST 검사 자동 흡수).
+- **휴게(breaks)**: `[10:00-10:20, 11:20-12:20, 15:00-15:20, 17:00-18:00]` (admin 표준, 일 160분). pause∪break union 1회 차감(이중차감 0).
+
+### BE 변경 (additive — man-hour/close/audit 전부 불변)
+- `task_detail.py` 신규 `compute_task_work()`(man-hour + active 단일 CTE, PG16 tstzrange/range_agg/multirange) + 기존 `compute_task_manhour`는 `.manhour` 위임(drift 방지).
+- `migrations/059_add_active_time.sql` — `active_time_minutes` 컬럼(nullable) + 백필(set-based, duration 불간섭).
+- 완료 3경로 active 동봉: `complete_task_unified`(정상/ship/admin-complete) + `auto_close_relay_task`(자동마감) + `admin.force_close_task`(수동강제).
+- `statistics_service.py` CT — man-hour 필드 유지 + `active_*_hours` 별 필드(동일 clean+Tukey) + meta `standard_basis='active_time'`/`active_available`/`active_basis_note`.
+
+### Codex 교차검증 (5라운드 + 구현)
+- 설계 R1 NO-GO(M=3: 이중차감/session cap/CT스키마) → R2 NO-GO(M=2: per-worker FLOOR/TC) → R3 NO-GO(M=3: migration번호/스냅샷/clean filter) → R4 NO-GO(M=1: 백필 스냅샷) → R5 **DEPLOY_SAFE/GO(M=0)**. migration 059(058=v2.22.0 예약 회피), 백필·신규 동일 현재 시간표 기준.
+
+### 검증
+- **운영 DB SQL 검증**: compute_task_work man-hour = 배포 compute_task_manhour 완전 일치(238673 둘 다 1071) + active ≤ man-hour 위반 0. 백필 set-based = per-task 완전 일치(87480→265). active 중앙 = PANEL 8.9h→6.1h / CABINET 5.2h→3.9h(휴게+idle 차감).
+- pytest: Sprint 86 active 12 (AT-01~16) + 회귀 test_relay 38(man-hour 위임, mock 4건 갱신) + test_sprint85_ct 15 + test_fix_duration/v2_15_16/hotfix04 GREEN.
+- man-hour(duration_minutes)·close·audit 불변 → 회귀 0. **VIEW FE 후속**(별 세션): active 우선 표시 + man-hour 비교.
+
+---
+
 ## [2.27.0] - 2026-06-05 — Sprint 85 (FEAT-CT-ANALYSIS-HUB-BE-MVP) CT 분석 허브 BE 연동 (①데이터신뢰도 + ②CT표준 IQR)
 
 > VIEW CT 분석 페이지(13 컴포넌트 4섹션) mock → OPS BE 실데이터 연동 MVP. **①데이터신뢰도 + ②CT표준(IQR, man-hour)** 만. ③(M/H·병렬·협력사)=관리자 preview skeleton, ④(M/M·APS)=미구현. **DB·migration 0, read-time**. 결정 동결: CT_ANALYSIS_ROADMAP §15.

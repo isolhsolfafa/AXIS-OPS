@@ -167,6 +167,33 @@ def get_task_ct_stats(
         GROUP BY category, task_id
         ORDER BY category, task_id
     """
+    # Sprint 86: active-time(순수 작업시간) box plot — 동일 clean 모집단 + Tukey, active_time_minutes IS NOT NULL
+    active_cte = f"""
+        WITH base AS (
+            SELECT td.task_id, td.active_time_minutes / 60.0 AS dh
+            FROM app_task_details td
+            JOIN plan.product_info p ON p.serial_number = td.serial_number
+            WHERE {_CLEAN_WHERE}{mc}{cc} AND td.active_time_minutes IS NOT NULL
+        ),
+        fence AS (
+            SELECT task_id,
+                   percentile_cont(0.25) WITHIN GROUP (ORDER BY dh) AS q1,
+                   percentile_cont(0.75) WITHIN GROUP (ORDER BY dh) AS q3
+            FROM base GROUP BY task_id
+        ),
+        clipped AS (
+            SELECT b.task_id, b.dh FROM base b JOIN fence f ON f.task_id = b.task_id
+            WHERE b.dh BETWEEN (f.q1 - 1.5*(f.q3-f.q1)) AND (f.q3 + 1.5*(f.q3-f.q1))
+        )
+    """
+    active_task_sql = active_cte + """
+        SELECT task_id, COUNT(*) AS n,
+               MIN(dh) AS min_h, MAX(dh) AS max_h, AVG(dh) AS mean_h,
+               percentile_cont(0.25) WITHIN GROUP (ORDER BY dh) AS q1,
+               percentile_cont(0.5)  WITHIN GROUP (ORDER BY dh) AS median,
+               percentile_cont(0.75) WITHIN GROUP (ORDER BY dh) AS q3
+        FROM clipped GROUP BY task_id
+    """
     # 카테고리 pooled median (Σ median 폐기 — Codex M-Q5)
     cat_sql = cte + """
         SELECT category,
@@ -184,6 +211,14 @@ def get_task_ct_stats(
         JOIN plan.product_info p ON p.serial_number = td.serial_number
         WHERE {_CLEAN_WHERE}{mc}{cc}
         GROUP BY p.model ORDER BY n DESC
+    """
+    # Sprint 86 (Codex R6 M-2): active 채움 비율 — clean 모집단 전체(Tukey 전) 대비 active_time_minutes NOT NULL
+    fill_sql = f"""
+        SELECT COUNT(*) AS clean_total,
+               COUNT(*) FILTER (WHERE td.active_time_minutes IS NOT NULL) AS active_filled
+        FROM app_task_details td
+        JOIN plan.product_info p ON p.serial_number = td.serial_number
+        WHERE {_CLEAN_WHERE}{mc}{cc}
     """
     excl_sql = f"""
         SELECT COALESCE(td.duration_source, 'NULL') AS source, COUNT(*) AS n
@@ -204,20 +239,27 @@ def get_task_ct_stats(
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(task_sql, params)
             task_rows = cur.fetchall()
+            cur.execute(active_task_sql, params)
+            active_rows = cur.fetchall()
             cur.execute(cat_sql, params)
             cat_rows = cur.fetchall()
             cur.execute(model_dist_sql, params)
             model_rows = cur.fetchall()
+            cur.execute(fill_sql, params)
+            fill_row = cur.fetchone()
             cur.execute(excl_sql, params)
             excl_rows = cur.fetchall()
     finally:
         put_conn(conn)
 
+    # task_id → active box plot 매핑 (Sprint 86)
+    active_by_task = {r["task_id"]: r for r in active_rows}
+
     tasks: List[Dict[str, Any]] = []
     for r in task_rows:
         n = int(r["n"])
         q1, q3 = _r(r["q1"]), _r(r["q3"])
-        tasks.append({
+        item = {
             "task_id": r["task_id"],
             "task_name": _TASK_NAME.get(r["task_id"], r["task_id"]),
             "category": r["category"],
@@ -230,7 +272,23 @@ def get_task_ct_stats(
             "iqr_hours": _r(q3 - q1),
             "sample_size": n,
             "confidence": _confidence(n),
-        })
+        }
+        # Sprint 86: active-time box plot (별 필드, active_time_minutes 채워진 task 만)
+        a = active_by_task.get(r["task_id"])
+        if a:
+            an = int(a["n"])
+            aq1, aq3 = _r(a["q1"]), _r(a["q3"])
+            item.update({
+                "active_min_hours": _r(a["min_h"]),
+                "active_q1_hours": aq1,
+                "active_median_hours": _r(a["median"]),
+                "active_q3_hours": aq3,
+                "active_max_hours": _r(a["max_h"]),
+                "active_mean_hours": _r(a["mean_h"]),
+                "active_iqr_hours": _r(aq3 - aq1),
+                "active_sample_size": an,
+            })
+        tasks.append(item)
 
     categories: List[Dict[str, Any]] = []
     for r in cat_rows:
@@ -245,6 +303,9 @@ def get_task_ct_stats(
         })
 
     total_sample = sum(t["sample_size"] for t in tasks)
+    # active 채움 비율 = clean 모집단 전체 대비 active_time_minutes NOT NULL (Tukey 무관, Codex R6 M-2)
+    _clean_total = int(fill_row["clean_total"]) if fill_row else 0
+    _active_filled = int(fill_row["active_filled"]) if fill_row else 0
     excluded_by_source = {
         r["source"]: int(r["n"]) for r in excl_rows if r["source"] in _ESTIMATED_SOURCES
     }
@@ -267,6 +328,14 @@ def get_task_ct_stats(
             "median_basis": "pooled_clean_instances",  # 표준공수합 아님 (Codex R2 A)
             "confidence_scope": "filtered" if is_filtered else "all",
             "low_sample_warning": is_filtered and total_sample < 100,
+            # Sprint 86: active-time(순수 작업시간) 표준 — man-hour 와 병행 (VIEW active 우선 권고)
+            "standard_basis": "active_time",
+            "active_available": _r((_active_filled / _clean_total * 100) if _clean_total else 0.0),
+            "active_basis_note": (
+                "active_time 은 운영 표준 근무/휴게 시간표(현재 admin_settings) 기준 — "
+                "백필·신규 완료 동일 적용. 시간표는 운영상 고정(변경 이력 없음). "
+                "향후 변경 시 전체 재백필 필요."
+            ),
         },
     }
     _cache_put(cache_key, result)
