@@ -6,6 +6,25 @@
 
 ---
 
+## 📊 CT 분석 후속 (VIEW #82, S-1 완료 후 — 2026-06-08 등록)
+
+> **S-1(ⓐ) v2.29.0 완료** (basis=active + 미추적 제외 + 신뢰컷오프 + 월범위). 14개 운영 쿼리 검증 + Codex 설계 2라운드 + 구현 2라운드(DEPLOY_SAFE M=0). 설계: `CT_S1_BASIS_ACTIVE_DESIGN.md` v3.
+
+### S-2 ⓑ 진짜 CT(union) + 동시작업자 🟠 MEDIUM
+> **본질**: 현 active_time_minutes = M/H(across-worker SUM)이지 CT(cycle time) 아님. 진짜 CT = 작업자 세션 across-worker **UNION**(겹침 합산 안 함). 다중작업자 24~28%(act>0 24%/전체 28%, 추적개선 시 상승)에서 CT<M/H 갈라짐.
+> **범위**: 새 `ct_time_minutes` 컬럼 + 백필 migration(Sprint 86 active 패턴) — **읽기만 하는 S-1과 달리 새 컬럼 필요라 분리**. Codex M-Q1: union 전 작업자별 pause/BH/break clip 먼저 → 정제 multirange UNION. + 동시작업자 `COUNT(DISTINCT worker_id)`(worker_count 컬럼 신뢰 확인됨). elapsed_minutes 재활용 금지(밤샘·주말 갭 포함 raw span). `CT = M/H ÷ concurrency` 역산 금지(순환).
+
+### S-3 ⓒ 선후행 garbage 하드 제외 + 무결성 KPI 🟡 LOW
+> **검증 발견**: CT 최대 오염원 = 선후행 모순(소수)이 아니라 **act=0 미추적**(이미 S-1에서 제외). DAG는 부차. TMS 가압 모순 124건은 이미 TMS-dirty 제외 → 무결성 KPI 전용. MECH docking 모순 = 26/29가 "도킹 마커(one-action)만 누락"이라 false positive → 진짜 garbage 3건뿐.
+> **범위**: ⓒ-1 task-level DAG(TMS `TANK_MODULE→PRESSURE_TEST`, MECH `PRE(util1/gas1)→POST(util2/gas2)`, side(qr_doc_id) 매칭, **TANK_DOCKING one-action anchor 금지·스테이지 cross-category 금지**, 3소스 evidence). ⓒ-2 무결성 KPI(CT 분리 별 endpoint): **act=0율(시간추적 준수, 협력사별 월추세 — BAT 적응 추적)** + 선후행 모순율.
+> **PI 가압 ≠ TMS 가압**: PI_CHAMBER/PI_LNG_UTIL(완제품, GST 검사)는 tank-module 선행 룰 적용 금지(독립 유효). category+task_id 정확 매칭 필수.
+
+### 후속 운영 KPI 권고 (사용자 catch)
+- **BAT 시간추적 교육**: 완료율 100%지만 act=0율 59%(시작=완료 즉시태깅, 실 timing 부재). FNI 7%. BAT 늦게 온보딩 → 적응 중. 월별 act=0율 추세로 개선 추적.
+- **tank module 일괄 시작/종료 편의 기능 삭제 예정**: 삭제 후 TMS timing 신뢰 회복 → CT 모집단 복원 검토.
+
+---
+
 ## 🔧 리팩토링 Sprint 계획 (2026-04-21 등록)
 
 > **근거**: CLAUDE.md § 📏 코드 크기 원칙 + 🛡️ 리팩토링 안전 규칙 7원칙
