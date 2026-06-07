@@ -179,9 +179,12 @@ def test_ct07_meta_keys_and_cache(db_conn, worker):
         ss._cache.clear()
         r1 = ss.get_task_ct_stats()
         m = r1["meta"]
-        for k in ("as_of", "lookback_days", "total_sample", "model_distribution",
+        # S-1: lookback_days 제거 → basis/trust_start/window. (period 제거)
+        for k in ("as_of", "basis", "trust_start", "window", "total_sample", "model_distribution",
                   "excluded_by_source", "excluded_pct", "median_basis", "confidence_scope"):
             assert k in m, k
+        assert m["trust_start"] == "2026-05-01"
+        assert m["window"]["from"] == "2026-05"
         assert m["median_basis"] == "pooled_clean_instances"
         assert ss.get_task_ct_stats()["meta"]["as_of"] == r1["meta"]["as_of"]  # 캐시 hit
     finally:
@@ -321,10 +324,15 @@ def test_ct11_authz(client, db_conn, create_test_worker, create_test_admin, get_
     assert client.get("/api/ct/task-stats", headers=h(get_auth_token(partner))).status_code == 403
 
 
-def test_ct14_period_whitelist(client, db_conn, create_test_admin, get_admin_auth_token):
+def test_ct14_period_removed_ignored(client, db_conn, create_test_admin, get_admin_auth_token):
+    """S-1 (M-6): period 파라미터 제거 → 전달돼도 무시(200), 검증은 basis/from/to 로 이관."""
     if db_conn is None:
         pytest.skip("DB 없음")
     admin = create_test_admin
     h = {"Authorization": f"Bearer {get_admin_auth_token(admin['id'])}"}
+    # period 는 더 이상 화이트리스트 없음 — 무엇이 오든 무시하고 200
     assert client.get("/api/ct/task-stats?period=last_90d", headers=h).status_code == 200
-    assert client.get("/api/ct/task-stats?period=all", headers=h).status_code == 400
+    assert client.get("/api/ct/task-stats?period=all", headers=h).status_code == 200
+    # 신 검증: invalid basis / from>to → 400
+    assert client.get("/api/ct/task-stats?basis=bogus", headers=h).status_code == 400
+    assert client.get("/api/ct/task-stats?from=2026-07&to=2026-05", headers=h).status_code == 400

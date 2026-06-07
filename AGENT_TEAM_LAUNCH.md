@@ -48333,3 +48333,32 @@ active_time(task) = Σ over workers  FLOOR( GREATEST(0,  length(session_w ∩ BH
 - man-hour(duration_minutes)·close·audit **전부 불변** → additive 컬럼만. 완료 경로 회귀 표면 = 1 SET 절 추가 + 1 함수 호출.
 - migration = ADD COLUMN(nullable) + 백필 UPDATE(읽기 산출, 운영 무중단). v2.22.0 백필 패턴 정합.
 - 진행: ① Codex 검증(D1~D4 + SQL range + 완료경로 회귀) → ② 사용자 D1~D4 확정 ✅ → ③ 구현 → ④ pytest AT-01~16 + 회귀(test_relay/test_factory) → ⑤ 백필 preflight → ⑥ v2.28.0 배포 → ⑦ CT 운영 검증(active vs man-hour 갭).
+
+---
+
+# Sprint S-1 (ⓐ) — CT basis=active + 미추적 제외 + 신뢰컷오프 + 월범위 (FEAT-CT-BASIS-ACTIVE-TRUSTCUTOFF)
+
+> VIEW OPS_API_REQUESTS #82 ⓐ. BE only (statistics_service.py + ct_analysis.py), DB/migration 0 (기존 active_time_minutes 컬럼 read-time).
+> 상세 설계서: `CT_S1_BASIS_ACTIVE_DESIGN.md` (v3). Codex 라운드 1(M=4/A=4) + 라운드 2(M-5/M-6 CONDITIONAL_GO) 반영.
+> 분리: ⓑ 진짜 CT(union)=S-2(새 ct_time_minutes 컬럼+migration), ⓒ DAG+무결성KPI=S-3.
+
+## 1. 검증 근거 (14개 쿼리, 2026-06-08, 전부 5월+)
+- 현 CT = M/H(across-worker SUM) — 진짜 CT는 S-2.
+- **act=0 = 미추적**(작업자 시작=완료 즉시태깅, work_completion_log d=0): MECH 배관 ~50% / ELEC ~10%. 원본 로그 추적 확인(계산정상·데이터부재).
+- act 분포 **이봉형**(0 vs ≥10분) → floor=`act>0` 충분. act=0 제외 시 MECH WASTE_GAS_2 0.5h→2.2h.
+- **미추적율 BAT 59% vs FNI 7%**(완료율 둘다 100%) → act>0 제외 시 FNI 편중 생존편향 → coverage 노출.
+- duration 058 미적용 → 6월+만 man-hour 신뢰. active 059/060 전구간 clean → basis=active 당위.
+- 다중작업자 act>0 24%/전체 28%(천장).
+
+## 2. 핵심 규칙
+- `basis` = duration(기본) | active. CT페이지 FE = active 명시.
+- **act>0 필터 = active 전용**(duration silent 변경 금지).
+- **신뢰 기준 = 2026-05-01 단일**(사용자 확정). basis=duration 만 meta `duration_stale_before='2026-06-01'` 경고.
+- `from`/`to`(YYYY-MM, KST 반열림 경계). 무파라미터=5월~현재월. 부분지정 빈쪽 기본. **period 제거**(M-6).
+- 생존편향 방어: `tracking_coverage_by_partner`(표시통계 동일 슬라이스, act>0·Tukey 전, M-5).
+- basis별 n 분리 / Tukey 1-pass(base_n,clipped_n) / n<30 = standard_status='provisional' / 캐시키 전파라미터.
+
+## 3. Codex trail
+- 라운드 1 NO-GO M=4: M-1(생존편향)→coverage / M-2(period충돌)→우선순위 / M-3(캐시키) / M-4(KST경계 SQL). A-1~4 반영.
+- 라운드 2 CONDITIONAL_GO: M-2/3/4 CLOSED, 5/1 단일 A급 승인. 잔여 M-5(coverage 슬라이스정렬)·M-6(period 미정의) → v3 반영(period 제거 + coverage 슬라이스 명시).
+- 진행: ③ 구현(statistics_service.py + ct_analysis.py) → ④ pytest TC-S1-01~14 + 회귀(test_sprint85_ct_stats) → ⑤ 배포 전 Codex 최종 → ⑥ v2.x 배포.

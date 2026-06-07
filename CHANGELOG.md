@@ -6,6 +6,33 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.29.0] - 2026-06-08 — Sprint S-1 (ⓐ) CT basis=active + 미추적 제외 + 신뢰컷오프 + 월범위 (VIEW #82 ⓐ)
+
+> **BE only minor — statistics_service.py + ct_analysis.py, DB/migration 0 (기존 active_time_minutes read-time).** CT 분석 페이지 실데이터 정밀화 1단계. ⓑ(진짜 CT union)=S-2 / ⓒ(DAG+무결성KPI)=S-3 분리.
+
+### 배경 — 운영 데이터 14개 쿼리 검증 (전부 2026-05+)
+- 현 "CT" = M/H(across-worker SUM). **act=0 = 미추적**(작업자 시작=완료 즉시태깅, work_completion_log d=0): MECH 배관 ~50% / ELEC ~10%. 원본 로그 추적 확인(계산정상·데이터부재). act 분포 이봉형(0 vs ≥10분).
+- act=0 제외 시 MECH CT 정상화(WASTE_GAS_2 0.5h→2.2h). 미추적율 **BAT 59% vs FNI 7%**(완료율 둘다 100% — 완료율이 숨김) → 생존편향 방어 필요.
+- duration migration 058 미적용 → 6월+만 man-hour 신뢰. active 059/060 전구간 clean → basis=active 당위.
+
+### 변경 (additive, 기존 basis=duration 동작 보존)
+- `GET /api/ct/task-stats` — 신규 `basis`(duration 기본|active) / `from`/`to`(YYYY-MM, KST 반열림 윈도우). **`period` 제거**(Codex M-6, 소비처 CT페이지뿐).
+- `basis=active` → `active_time_minutes > 0` 모집단(미추적 제외, 이봉형 floor). `basis=duration` → 현행(act 필터 없음) + meta `duration_stale_before='2026-06-01'`(윈도우가 6월 이전 포함 시).
+- **신뢰 기준 = `CT_TRUST_START_MONTH='2026-05'` 단일**(사용자 확정). 무파라미터 = 5월~현재월. 부분 from/to 빈쪽 기본.
+- **생존편향 방어**: `tracking_coverage_by_partner`(basis=active 전용, 표시통계 동일 슬라이스, act>0·Tukey 전, 협력사별 tracked_rate). FNI 0.71 / BAT 0.34 운영 노출.
+- basis별 n 분리(n_total/n_used/excluded_zero_active/excluded_null_active) / Tukey base_n·clipped_n → tukey_clipped / n<30 = `standard_status='provisional'` / 캐시키 전파라미터 / 입력검증(INVALID_BASIS/INVALID_MONTH 01~12/INVALID_RANGE → 400).
+- 기존 `active_*` 보조필드 population `IS NOT NULL`→`>0` 정합.
+
+### Codex 교차검증 trail
+- 설계 라운드 1 NO-GO M=4(생존편향/period충돌/캐시키/KST경계) → 라운드 2 CONDITIONAL_GO M-5(coverage 슬라이스)·M-6(period 미정의) → v3 반영(period 제거 + coverage 슬라이스 명시).
+- 구현 라운드 1 NO-GO M=2(duration_stale_before 무조건 부착 / _MONTH_RE 2026-13 통과 → 500) → fix(조건부 + regex 01~12 강화) → **재검증 DEPLOY_SAFE/GO M=0**.
+
+### 검증
+- pytest 신규 `test_sprint_s1_ct_basis.py` 18 TC(basis/윈도우/coverage/provisional/입력검증/duration_stale) GREEN + 회귀 `test_sprint85_ct_stats` 16 GREEN(test_ct07 메타키·test_ct14 period 제거 정합 수정). 실데이터 스모크: MECH active 중앙 UTIL_1 6.6h, coverage FNI 0.71/BAT 0.34, KST 윈도우 정합.
+- 회귀 위험 0(additive, basis=duration 기존 동작 보존, DB/migration 변경 0). 설계: `CT_S1_BASIS_ACTIVE_DESIGN.md` v3 + `AGENT_TEAM_LAUNCH.md § Sprint S-1`.
+
+---
+
 ## [2.28.2] - 2026-06-07 — active-time 식사시간만 제외 정정 (오전/오후 휴게 = 작업시간 인정)
 
 > 사용자 catch: Sprint 86(v2.28.0) active-time이 4개 휴게(오전 10:00-10:20 / 점심 11:20-12:20 / 오후 15:00-15:20 / 저녁 17:00-18:00)를 모두 제외했으나, **오전·오후 20분 휴게는 작업시간으로 인정** = **식사시간(점심·저녁)만 제외**해야 함.

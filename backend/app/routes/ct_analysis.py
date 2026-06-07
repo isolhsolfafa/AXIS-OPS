@@ -15,6 +15,7 @@ from flask import Blueprint, jsonify, request
 
 from app.middleware.jwt_auth import gst_or_admin_required, jwt_required
 from app.services.statistics_service import (
+    CtParamError,
     get_data_quality,
     get_task_ct_stats,
 )
@@ -22,9 +23,6 @@ from app.services.statistics_service import (
 logger = logging.getLogger(__name__)
 
 ct_analysis_bp = Blueprint("ct_analysis", __name__, url_prefix="/api/ct")
-
-_VALID_PERIODS = {"last_90d"}  # MVP: 90일 합산만
-_PERIOD_LOOKBACK = {"last_90d": 90}
 
 
 @ct_analysis_bp.route("/data-quality", methods=["GET"])
@@ -43,17 +41,15 @@ def data_quality():
 @jwt_required
 @gst_or_admin_required
 def task_stats():
-    """② task별 box plot(man-hour) + 카테고리 요약 + meta."""
-    period = (request.args.get("period") or "last_90d").strip()
-    if period not in _VALID_PERIODS:
-        return jsonify({
-            "error": "INVALID_PERIOD",
-            "message": f"period 는 {sorted(_VALID_PERIODS)} 중 하나여야 합니다.",
-        }), 400
+    """② task별 box plot(basis=duration|active) + 카테고리 요약 + meta.
 
+    S-1 (VIEW #82 ⓐ): period 제거 → basis/from/to(YYYY-MM, KST 윈도우).
+    """
+    basis = (request.args.get("basis") or "duration").strip().lower()
+    from_month = request.args.get("from")
+    to_month = request.args.get("to")
     model = request.args.get("model")
     category = request.args.get("category")
-    lookback = _PERIOD_LOOKBACK[period]
 
     # VIEW #81: dual = dual/single (미지정 = 합산 하위호환). 화이트리스트.
     dual = (request.args.get("dual") or "").strip().lower() or None
@@ -64,7 +60,12 @@ def task_stats():
         }), 400
 
     try:
-        return jsonify(get_task_ct_stats(lookback_days=lookback, model=model, category=category, dual=dual)), 200
+        return jsonify(get_task_ct_stats(
+            basis=basis, from_month=from_month, to_month=to_month,
+            model=model, category=category, dual=dual,
+        )), 200
+    except CtParamError as e:
+        return jsonify({"error": e.code, "message": e.message}), 400
     except Exception:
         logger.exception("[ct] task-stats 산출 실패")
         return jsonify({"error": "INTERNAL_ERROR", "message": "CT 표준 산출 실패"}), 500
