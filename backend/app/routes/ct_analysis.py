@@ -29,9 +29,16 @@ ct_analysis_bp = Blueprint("ct_analysis", __name__, url_prefix="/api/ct")
 @jwt_required
 @gst_or_admin_required
 def data_quality():
-    """① duration_source 분포 + 자동마감 추이 + 교육 전후."""
+    """① duration_source 분포 + 자동마감 추이 + 교육 전후.
+
+    S-1 정합(VIEW #82): from/to(YYYY-MM, KST 트러스트 윈도우). 미지정=2026-05~현재월.
+    """
+    from_month = request.args.get("from")
+    to_month = request.args.get("to")
     try:
-        return jsonify(get_data_quality()), 200
+        return jsonify(get_data_quality(from_month=from_month, to_month=to_month)), 200
+    except CtParamError as e:
+        return jsonify({"error": e.code, "message": e.message}), 400
     except Exception:
         logger.exception("[ct] data-quality 산출 실패")
         return jsonify({"error": "INTERNAL_ERROR", "message": "데이터 신뢰도 산출 실패"}), 500

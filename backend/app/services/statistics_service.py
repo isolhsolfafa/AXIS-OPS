@@ -468,15 +468,20 @@ def get_task_ct_stats(
     return result
 
 
-def get_data_quality(lookback_days: int = 90) -> Dict[str, Any]:
-    """① 데이터 신뢰도 — duration_source 분포 + 자동마감 추이(월별 KST) + 교육 전후."""
-    cache_key = f"data_quality:{lookback_days}"
+def get_data_quality(from_month: Optional[str] = None, to_month: Optional[str] = None) -> Dict[str, Any]:
+    """① 데이터 신뢰도 — duration_source 분포 + 자동마감 추이(월별 KST) + 교육 전후.
+
+    S-1 정합(VIEW #82): lookback_days(90일) → CT_TRUST_START_MONTH 윈도우([from,to] 반열림 KST).
+    duration_source 분포만 윈도우 적용(task-stats reliability 와 동일 구간). 추이(6mo 고정)·교육 전후(전기간)는 의도상 유지.
+    """
+    from_month, to_month = _resolve_window(from_month, to_month)
+    cache_key = f"data_quality:{from_month}:{to_month}"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
 
-    # [1] duration_source 분포 (완료, TMS(M)·TEST 제외, lookback)
-    src_sql = """
+    # [1] duration_source 분포 (완료, TMS(M)·TEST 제외, 트러스트 윈도우 [from,to])
+    src_sql = f"""
         SELECT COALESCE(td.duration_source, 'NULL') AS source, COUNT(*) AS n
         FROM app_task_details td
         JOIN plan.product_info p ON p.serial_number = td.serial_number
@@ -484,7 +489,7 @@ def get_data_quality(lookback_days: int = 90) -> Dict[str, Any]:
           AND td.task_id NOT IN ('TANK_MODULE','PRESSURE_TEST')
           AND COALESCE(p.customer, '') <> 'TEST CUSTOMER'
           AND td.serial_number NOT LIKE 'TEST%%'
-          AND td.completed_at >= now() - (%(lookback_days)s || ' days')::interval
+          {_WINDOW_WHERE}
         GROUP BY COALESCE(td.duration_source, 'NULL')
         ORDER BY n DESC
     """
@@ -532,7 +537,7 @@ def get_data_quality(lookback_days: int = 90) -> Dict[str, Any]:
         LIMIT 10
     """
 
-    params = {"lookback_days": lookback_days}
+    params = {"from_month": from_month, "to_month": to_month}
     conn = get_db_connection()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -590,7 +595,9 @@ def get_data_quality(lookback_days: int = 90) -> Dict[str, Any]:
         "training_impact": training_impact,
         "meta": {
             "as_of": datetime.now(_KST).isoformat(),
-            "lookback_days": lookback_days,
+            "window": {"from": from_month, "to": to_month},   # S-1 정합 — FE 동적 라벨용
+            "trust_start": "2026-05-01",
+            "immature_window": from_month < CT_TRUST_START_MONTH,
             "training_cut_kst": _TRAINING_CUT_KST,
         },
     }

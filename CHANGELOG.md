@@ -6,6 +6,19 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.29.1] - 2026-06-08 — get_data_quality 트러스트 윈도우 통일 (VIEW #82 ⓐ 후속)
+
+> **BE only patch — statistics_service.py + ct_analysis.py, DB/migration 0**. S-1(v2.29.0)이 `task-stats`만 트러스트 윈도우(`CT_TRUST_START_MONTH='2026-05'`) 적용 → `data-quality`는 옛 `lookback_days=90` 잔존. 6/8 기준 90일 = ~3/10부터라 **미성숙 3·4월이 clean%/자동마감율에 섞여** CT 신뢰도 카드의 `clean%`(90일) vs reliability(트러스트 [5월~]) 윈도우 혼용.
+
+### 변경
+- `get_data_quality(lookback_days=90)` → `get_data_quality(from_month=None, to_month=None)` — `_resolve_window()`/`_WINDOW_WHERE`(S-1 재사용)로 duration_source 분포 윈도우 통일(미지정=2026-05~현재월 KST 반열림).
+- meta `lookback_days` → `window{from,to}` + `trust_start` + `immature_window`(FE 동적 라벨용).
+- 라우트 `/data-quality?from=&to=` + CtParamError → 400.
+- ⚠️ **자동마감 추이(6mo 고정)·교육 전후(전기간)는 의도상 윈도우 미적용 유지** — duration_source 분포만 통일(task-stats reliability 와 동일 구간).
+- 검증: 스모크 window 2026-05~06 / lookback_days 제거 / 2026-13 차단(400). pytest data-quality 5 GREEN. 회귀 0(additive, 추이·교육 무변경).
+
+---
+
 ## [2.29.0] - 2026-06-08 — Sprint S-1 (ⓐ) CT basis=active + 미추적 제외 + 신뢰컷오프 + 월범위 (VIEW #82 ⓐ)
 
 > **BE only minor — statistics_service.py + ct_analysis.py, DB/migration 0 (기존 active_time_minutes read-time).** CT 분석 페이지 실데이터 정밀화 1단계. ⓑ(진짜 CT union)=S-2 / ⓒ(DAG+무결성KPI)=S-3 분리.
