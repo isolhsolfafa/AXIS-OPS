@@ -55,8 +55,16 @@ def task_stats():
     category = request.args.get("category")
     lookback = _PERIOD_LOOKBACK[period]
 
+    # VIEW #81: dual = dual/single (미지정 = 합산 하위호환). 화이트리스트.
+    dual = (request.args.get("dual") or "").strip().lower() or None
+    if dual is not None and dual not in ("dual", "single"):
+        return jsonify({
+            "error": "INVALID_DUAL",
+            "message": "dual 은 'dual' | 'single' 중 하나여야 합니다.",
+        }), 400
+
     try:
-        return jsonify(get_task_ct_stats(lookback_days=lookback, model=model, category=category)), 200
+        return jsonify(get_task_ct_stats(lookback_days=lookback, model=model, category=category, dual=dual)), 200
     except Exception:
         logger.exception("[ct] task-stats 산출 실패")
         return jsonify({"error": "INTERNAL_ERROR", "message": "CT 표준 산출 실패"}), 500

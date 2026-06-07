@@ -6,6 +6,22 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.28.1] - 2026-06-07 — CT task-stats `dual` 파라미터 (DUAL/단일 분리, VIEW #81)
+
+> CT ②(IQR 표준)가 DUAL/단일을 합산해 산출 → 작업시간 2배 차이(PANEL 단일 5.6h vs DUAL 11.8h)로 표준 왜곡. `dual` 파라미터로 분리.
+
+### BE 변경 (statistics_service + ct_analysis, additive 필터)
+- `GET /api/ct/task-stats?dual=dual|single` (미지정=합산 하위호환). 라우트 화이트리스트(`INVALID_DUAL` 400).
+- `_dual_clause()` 신규 — `AND p.model ILIKE '%DUAL%'`(dual) / `NOT ILIKE '%DUAL%'`(single). **접미사(%DUAL) 대신 포함(%DUAL%)** — `iVAS GAIA-I DUAL PUMP RACK 3CH`(8행) 등 DUAL 중간 명 정확 분류(요청안 `%DUAL` 접미사 보강).
+- meta `dual_scope`(dual/single/all) 추가. 응답 스키마 불변 → VIEW 타입 영향 0 (FE v1.59.x 선반영).
+
+### 검증
+- 운영 스모크: PANEL_WORK 단일 man 5.6h/active 4.0h vs DUAL man 11.8h/active 7.4h (2배 갭 확인). dual/single 모두 active_*_hours 동반.
+- pytest CT-16(dual 분리) + CT-14(period 화이트리스트) GREEN. DB·migration 0. ②단계 자동 Codex 이관 0항목(2파일, 스키마/DB 무변경) → Opus 자가 리뷰.
+- **연계**: VIEW #81 로드맵 active-time(2번째)은 v2.28.0(Sprint 86)으로 이미 완료.
+
+---
+
 ## [2.28.0] - 2026-06-07 — Sprint 86 (FEAT-ACTIVE-TIME-PURE-WORK) 순수 작업시간 active-time + CT 표준 격상
 
 > man-hour(현 CT 표준)는 "세션−수동pause"라 **휴게(160분/일)·영업시간 밖 idle** 미차감 → 주말/도킹 task 부풀음. **active-time = 세션 ∩ 영업창 − (수동pause ∪ 휴게) ∩ 세션 ∩ 영업창** = 순수 작업시간. CT 표준 man-hour → active 격상. **man-hour(duration_minutes) 불변(additive 컬럼만 추가)**. VIEW BACKLOG L42 CT-ACTIVE-TIME-PAUSE-INTEGRITY 대응.

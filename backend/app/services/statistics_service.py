@@ -110,6 +110,15 @@ def _category_clause(category: Optional[str]) -> str:
     return ""
 
 
+def _dual_clause(dual: Optional[str]) -> str:
+    # Sprint 86-FU (VIEW #81): DUAL/단일 분리. model 명에 'DUAL' 포함(중간 포함, iVAS...DUAL... 엣지 커버).
+    if dual == "dual":
+        return " AND p.model ILIKE '%%DUAL%%'"
+    if dual == "single":
+        return " AND p.model NOT ILIKE '%%DUAL%%'"
+    return ""  # 미지정 = 합산 (하위호환)
+
+
 def _stats_params(lookback_days: int, model: Optional[str], category: Optional[str]) -> Dict[str, Any]:
     p: Dict[str, Any] = {"lookback_days": lookback_days}
     if model and model not in ("전체 모델", "ALL", ""):
@@ -123,15 +132,19 @@ def get_task_ct_stats(
     lookback_days: int = 90,
     model: Optional[str] = None,
     category: Optional[str] = None,
+    dual: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """② CT 표준 — task별 box plot(man-hour, Tukey) + 카테고리 pooled median + meta."""
-    cache_key = f"task_stats:{lookback_days}:{model}:{category}"
+    """② CT 표준 — task별 box plot(man-hour, Tukey) + 카테고리 pooled median + meta.
+
+    dual: 'dual'(DUAL 모델만) / 'single'(단일만) / None(합산, 하위호환) — VIEW #81.
+    """
+    cache_key = f"task_stats:{lookback_days}:{model}:{category}:{dual}"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
 
     params = _stats_params(lookback_days, model, category)
-    mc = _model_clause(model)
+    mc = _model_clause(model) + _dual_clause(dual)
     cc = _category_clause(category)
 
     # Tukey 1-pass CTE: base → fence(raw Q1/Q3) → clipped(fence 내) → 집계
@@ -328,6 +341,8 @@ def get_task_ct_stats(
             "median_basis": "pooled_clean_instances",  # 표준공수합 아님 (Codex R2 A)
             "confidence_scope": "filtered" if is_filtered else "all",
             "low_sample_warning": is_filtered and total_sample < 100,
+            "dual_scope": dual or "all",  # VIEW #81 — dual/single/all
+
             # Sprint 86: active-time(순수 작업시간) 표준 — man-hour 와 병행 (VIEW active 우선 권고)
             "standard_basis": "active_time",
             "active_available": _r((_active_filled / _clean_total * 100) if _clean_total else 0.0),

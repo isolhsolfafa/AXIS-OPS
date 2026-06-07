@@ -188,6 +188,30 @@ def test_ct07_meta_keys_and_cache(db_conn, worker):
         _cleanup(db_conn)
 
 
+def test_ct16_dual_filter(db_conn, worker):
+    """VIEW #81 — dual/single 분리 (model ILIKE '%DUAL%')."""
+    try:
+        for i in range(5):  # 단일 모델
+            _seed_product(db_conn, f"{_PREFIX}-S{i}", model="GAIA-I")
+            _seed_task(db_conn, worker, f"{_PREFIX}-S{i}", _FAKE, 120)
+        for i in range(5):  # DUAL 모델
+            _seed_product(db_conn, f"{_PREFIX}-U{i}", model="GAIA-I DUAL")
+            _seed_task(db_conn, worker, f"{_PREFIX}-U{i}", _FAKE, 300)
+        ss._cache.clear()
+        single = _find(ss.get_task_ct_stats(dual="single")["tasks"], _FAKE)
+        ss._cache.clear()
+        dual = _find(ss.get_task_ct_stats(dual="dual")["tasks"], _FAKE)
+        ss._cache.clear()
+        allr = ss.get_task_ct_stats(dual=None)
+        # single=GAIA-I 5건만 / dual=GAIA-I DUAL 5건만 / 합산 meta dual_scope
+        assert single is not None and single["sample_size"] == 5
+        assert dual is not None and dual["sample_size"] == 5
+        assert single["median_hours"] < dual["median_hours"]  # 단일(2h) < DUAL(5h)
+        assert allr["meta"]["dual_scope"] == "all"
+    finally:
+        _cleanup(db_conn)
+
+
 def test_ct12_model_filter(db_conn, worker):
     try:
         for i in range(4):
