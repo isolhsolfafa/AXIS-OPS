@@ -6,6 +6,21 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.28.2] - 2026-06-07 — active-time 식사시간만 제외 정정 (오전/오후 휴게 = 작업시간 인정)
+
+> 사용자 catch: Sprint 86(v2.28.0) active-time이 4개 휴게(오전 10:00-10:20 / 점심 11:20-12:20 / 오후 15:00-15:20 / 저녁 17:00-18:00)를 모두 제외했으나, **오전·오후 20분 휴게는 작업시간으로 인정** = **식사시간(점심·저녁)만 제외**해야 함.
+
+### 변경 (additive 정정, man-hour 불변)
+- `task_detail.py compute_task_work` breaks_day: `[11:20-12:20, 17:00-18:00]` 만 (오전/오후 휴게 제거) → 신규 완료부터 정합.
+- `migrations/060_active_time_meals_only_rebackfill.sql` — active_time **전체 재백필**(IS NULL 가드 없이 OVERWRITE, 식사만 제외). duration_minutes 불간섭.
+- 영향: active 값 상승(휴게 40분/일 미제외). 운영 PANEL 중앙 6.1h→**6.7h** (man 8.9h, active ≤ man-hour 유지). 일 제외 160분→120분.
+
+### 검증
+- pytest active 12(AT-01~16) GREEN — AT-03(320→360)/AT-04(220→240)/AT-15(280→300) 식사만 반영 갱신.
+- 운영 dry-run: PANEL active 6.1h(4휴게)→6.7h(식사만), active≤man 유지. DB 재백필은 migration 060 자동(배포 시).
+
+---
+
 ## [2.28.1] - 2026-06-07 — CT task-stats `dual` 파라미터 (DUAL/단일 분리, VIEW #81)
 
 > CT ②(IQR 표준)가 DUAL/단일을 합산해 산출 → 작업시간 2배 차이(PANEL 단일 5.6h vs DUAL 11.8h)로 표준 왜곡. `dual` 파라미터로 분리.

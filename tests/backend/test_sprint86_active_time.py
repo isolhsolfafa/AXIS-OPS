@@ -168,8 +168,8 @@ def test_at04_attendance_window(db_conn, w):
         tid, *_ = _seed_task(db_conn, w, s, c)
         _seed_att(db_conn, w, _kst(_MON, 9), _kst(_MON, 18))   # 출근 09:00 / 퇴근 18:00
         r = _work(db_conn, tid, c)
-        # session=[07,14], att BH=[09,18] → 09~14 (300) − breaks(10:00-10:20=20, lunch 60) = 220
-        assert r['active'] == 220, f"active={r['active']}"
+        # session=[07,14], att BH=[09,18] → 09~14 (300) − 식사(lunch 60, 오전휴게 미제외) = 240
+        assert r['active'] == 240, f"active={r['active']}"
     finally:
         _cleanup(db_conn, [w])
 
@@ -181,8 +181,8 @@ def test_at15_partial_attendance_fallback(db_conn, w):
         tid, *_ = _seed_task(db_conn, w, s, c)
         _seed_att(db_conn, w, _kst(_MON, 9), None)   # in만
         r = _work(db_conn, tid, c)
-        # fallback [08,20] → session[07,14]∩[08,20]=08~14 (360) − breaks(20+60)=280
-        assert r['active'] == 280, f"active={r['active']}"
+        # fallback [08,20] → session[07,14]∩[08,20]=08~14 (360) − 식사(lunch 60만) → 300
+        assert r['active'] == 300, f"active={r['active']}"
     finally:
         _cleanup(db_conn, [w])
 
@@ -194,8 +194,8 @@ def test_at03_weekend_fallback(db_conn, w):
         tid, *_ = _seed_task(db_conn, w, s, c)
         _seed_att(db_conn, w, _kst(_SUN, 9), _kst(_SUN, 16))  # 주말 출퇴근
         r = _work(db_conn, tid, c)
-        # [09,16] (420) − breaks(10:00-10:20=20, lunch 60, 15:00-15:20=20)=100 → 320
-        assert r['active'] == 320, f"active={r['active']}"
+        # [09,16] (420) − 식사(lunch 60만; 오전/오후 휴게 미제외, 저녁 17:00~ 범위밖) → 360
+        assert r['active'] == 360, f"active={r['active']}"
     finally:
         _cleanup(db_conn, [w])
 

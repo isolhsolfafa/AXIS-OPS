@@ -447,7 +447,7 @@ def start_task(task_detail_id: int, started_at: datetime) -> bool:
 #   man-hour 부분 = 기존 v13 공식 그대로 (배포값 일치 검증). active = 순수 작업시간:
 #     active = Σ_w FLOOR(GREATEST(0, len(sess∩BH) − len((manual_pause∪breaks)∩sess∩BH)))
 #     BH_day = attendance[MIN(in),MAX(out)] 우선(in&out+MIN<MAX) / fallback 평일[08,20]·주말[08,17] KST
-#     breaks = 일별 [10:00-10:20, 11:20-12:20, 15:00-15:20, 17:00-18:00] (admin 표준 시간표)
+#     breaks = 식사시간만 [11:20-12:20 점심, 17:00-18:00 저녁] (오전/오후 20분 휴게는 작업시간 인정 — 사용자 확정 2026-06-07)
 #     저장 active = LEAST(active_raw, manhour) (불변식 active ≤ man-hour, Codex R2 M-Q5)
 #   설계: AGENT_TEAM_LAUNCH.md § Sprint 86 (Codex 5라운드 GO)
 _TASK_WORK_SQL = """
@@ -516,10 +516,9 @@ bh_day AS (
 ),
 bh_union AS (SELECT worker_id, range_agg(bhr) AS mr FROM bh_day GROUP BY worker_id),
 breaks_day AS (
+  -- 식사시간만 제외(점심 11:20-12:20 / 저녁 17:00-18:00). 오전(10:00-10:20)·오후(15:00-15:20) 휴게는 작업시간 인정 (사용자 확정 2026-06-07)
   SELECT worker_id, unnest(ARRAY[
-    tstzrange((d + time '10:00') AT TIME ZONE 'Asia/Seoul', (d + time '10:20') AT TIME ZONE 'Asia/Seoul','[)'),
     tstzrange((d + time '11:20') AT TIME ZONE 'Asia/Seoul', (d + time '12:20') AT TIME ZONE 'Asia/Seoul','[)'),
-    tstzrange((d + time '15:00') AT TIME ZONE 'Asia/Seoul', (d + time '15:20') AT TIME ZONE 'Asia/Seoul','[)'),
     tstzrange((d + time '17:00') AT TIME ZONE 'Asia/Seoul', (d + time '18:00') AT TIME ZONE 'Asia/Seoul','[)')
   ]) AS br
   FROM days
