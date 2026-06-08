@@ -10,8 +10,9 @@
 
 > **S-1(ⓐ) v2.29.0 완료** (basis=active + 미추적 제외 + 신뢰컷오프 + 월범위). 14개 운영 쿼리 검증 + Codex 설계 2라운드 + 구현 2라운드(DEPLOY_SAFE M=0). 설계: `CT_S1_BASIS_ACTIVE_DESIGN.md` v3.
 
-### S-2 ⓑ 진짜 CT(union) + 동시작업자 🟠 MEDIUM
-> **본질**: 현 active_time_minutes = M/H(across-worker SUM)이지 CT(cycle time) 아님. 진짜 CT = 작업자 세션 across-worker **UNION**(겹침 합산 안 함). 다중작업자 24~28%(act>0 24%/전체 28%, 추적개선 시 상승)에서 CT<M/H 갈라짐.
+### S-2 ⓑ 진짜 CT(union) + 동시작업자 ✅ 완료 (v2.30.0, 2026-06-08)
+> migration 061 ct_time_minutes + compute_task_work ct + basis=ct + effective_concurrency_median. Codex 설계 R3 GO + 구현 DEPLOY_SAFE M=0. 배포 검증 백필 갭 0·CT≤M/H 위반 0. **추가 발견**: 다중작업자 ≠ 병렬 — 세션 겹침(병렬)만 CT<M/H(ELEC 49%/MECH 13%/전체 ~9%), 릴레이는 CT=M/H. **후속**: VIEW FE basis=ct 연동(별 세션).
+> ~~**본질**: 현 active_time_minutes = M/H(across-worker SUM)이지 CT(cycle time) 아님. 진짜 CT = 작업자 세션 across-worker **UNION**(겹침 합산 안 함). 다중작업자 24~28%(act>0 24%/전체 28%, 추적개선 시 상승)에서 CT<M/H 갈라짐.~~
 > **범위**: 새 `ct_time_minutes` 컬럼 + 백필 migration(Sprint 86 active 패턴) — **읽기만 하는 S-1과 달리 새 컬럼 필요라 분리**. Codex M-Q1: union 전 작업자별 pause/BH/break clip 먼저 → 정제 multirange UNION. + 동시작업자 `COUNT(DISTINCT worker_id)`(worker_count 컬럼 신뢰 확인됨). elapsed_minutes 재활용 금지(밤샘·주말 갭 포함 raw span). `CT = M/H ÷ concurrency` 역산 금지(순환).
 
 ### S-3 ⓒ 선후행 garbage 하드 제외 + 무결성 KPI 🟡 LOW
