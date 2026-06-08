@@ -24,6 +24,12 @@
 ### #83 협력사×모델×task×dual 분해 (partner-breakdown) ✅ 완료 (v2.31.0, 2026-06-08)
 > 신규 `GET /api/ct/partner-breakdown` read-only. rows(4축) + rollups(partner×task/partner×model) + meta. vs_task_standard_ratio((task,dual) 표준 — DUAL +18% 보정) + tracking_coverage(속도+추적 짝, BAT 61% 생존편향) + instant_completion(화이트리스트 제외). Codex 설계 R2 GO / 구현 M→A 2자합의 DEPLOY_SAFE. pytest 14+회귀 33 GREEN. **후속**: VIEW FE 연동(CtPartnerModelMatrix/협력사 평가 mock→실데이터).
 
+### FEAT-CT-MONTHLY-TREND (월별 변화폭/학습곡선 endpoint) 🟡 LOW (2026-06-08 등록 — 데이터 축적 대기)
+> **배경**: VIEW CT 분석 "월별 변화폭(학습곡선)" 컴포넌트(CtMonthlyVariabilityCard)가 mock. 월별 CT median 추세 by task/group endpoint 부재. (data-quality 에 교육전후 training_impact·마감유형 auto_close_trend 는 있으나 "월별 CT median 추세"는 아님)
+> **범위**: 신규 `GET /api/ct/monthly-trend?task=&group_by=&basis=ct` (또는 task-stats 에 monthly 차원 추가) — 월별 median/iqr/var_ratio/n + 학습곡선(전월 대비 개선율). basis=ct(S-2)·트러스트 윈도우·게이트(월당 n<30 provisional) 재사용.
+> **⏳ 2중 대기 조건**: ① **데이터 축적** — 신뢰 데이터 5월1일+ 라 현재 2개월(5월 full / 6월 부분)뿐 → 학습곡선 점 2개. **7~8월 누적되면 의미**(3~4개월+ 추세). ② endpoint 신규 구현. **현재는 "데이터 축적중" 배지가 정답** — 표본/추세 길이 부족이 본질, 조급 구현 무의미.
+> **재개 조건**: 신뢰 윈도우 3개월+ (≥2026-08) 또는 사용자 요청.
+
 ### REF-CT-PARTNER-BREAKDOWN-ROLLUP-GROUPING-SETS 🟢 INFO (2026-06-08, Codex M→A advisory)
 > #83 rollup median을 raw pull + Python 버킷화로 산출(시맨틱 정확, ~1500행 성능 무관). 설계서는 SQL GROUP BY/GROUPING SETS 권장 → 모집단 대폭 증가 시 SQL 전환 검토. 현재 불필요(2자 합의 A 강등).
 
