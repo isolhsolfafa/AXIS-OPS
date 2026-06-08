@@ -664,3 +664,448 @@ def get_data_quality(from_month: Optional[str] = None, to_month: Optional[str] =
     }
     _cache_put(cache_key, result)
     return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #83 (FEAT-CT-PARTNER-BREAKDOWN, VIEW OPS_API_REQUESTS #83)
+#   협력사 × 모델 × task × 구분(dual) CT 분해 집계 (read-only).
+#   설계서: CT_PARTNER_BREAKDOWN_DESIGN.md (Codex 2라운드 GO).
+#   상속: S-1(_resolve_window/_WINDOW_WHERE) + S-2(basis=ct + active 병기).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# partner 정규화 표준 식 — dashboard_service._COMPANY_SQL (v2.20.11) 과 1:1 정합.
+#   alias td=app_task_details, p=plan.product_info (statistics_service 컨벤션).
+#   mech_partner/module_outsourcing='TMS' → TMS(M) / elec_partner='TMS' → TMS(E).
+#   그 외 raw 그대로. NULL/PI·QI·SI → '(미지정)'.
+# partner_raw = TMS(M)/TMS(E) 변환 전의 category별 raw (mech/elec/module → 'GST').
+_PARTNER_RAW_SQL = (
+    "CASE td.task_category "
+    "WHEN 'MECH' THEN p.mech_partner "
+    "WHEN 'ELEC' THEN p.elec_partner "
+    "WHEN 'TMS'  THEN p.module_outsourcing "
+    "ELSE 'GST' END"
+)
+_PARTNER_DISPLAY_SQL = (
+    "COALESCE(NULLIF(TRIM(CASE "
+    "WHEN td.task_category = 'MECH' THEN "
+    "CASE WHEN p.mech_partner = 'TMS' THEN 'TMS(M)' ELSE p.mech_partner END "
+    "WHEN td.task_category = 'ELEC' THEN "
+    "CASE WHEN p.elec_partner = 'TMS' THEN 'TMS(E)' ELSE p.elec_partner END "
+    "WHEN td.task_category = 'TMS' THEN "
+    "CASE WHEN p.module_outsourcing = 'TMS' THEN 'TMS(M)' ELSE p.module_outsourcing END "
+    "ELSE NULL END), ''), '(미지정)')"  # PI/QI/SI 및 partner NULL → '(미지정)' (_COMPANY_SQL 정합)
+)
+_DUAL_SQL = "CASE WHEN p.model ILIKE '%%DUAL%%' THEN 'DUAL' ELSE 'SINGLE' END"
+
+# one-click 화이트리스트 — 즉시완료가 정상인 task (즉시완료율 평가 제외).
+#   TANK_DOCKING(트리거 마커) / SI_SHIPMENT(출하 단일액션) / SELF_INSPECTION / INSPECTION(자주검사).
+_INSTANT_WHITELIST = frozenset({"TANK_DOCKING", "SI_SHIPMENT", "SELF_INSPECTION", "INSPECTION"})
+# side(L/R) 분리가 유의미한 task — TMS/TANK_MODULE 한정 (그 외 false, A5).
+_SIDE_APPLICABLE_TASKS = frozenset({"TANK_MODULE"})
+_INSTANT_THRESHOLD_MIN = 1  # active_time_minutes <= 1 → 즉시완료
+_TUKEY_MIN_N = 30           # Tukey 1-pass 적용 최소 표본 (M1)
+_STD_REJECT_N = 5           # standard_status reject 경계
+_STD_STANDARD_N = 30        # standard_status standard 경계
+_VS_STD_MIN_N = 5           # vs_task_standard 표준 산출 최소 표본 (M-2)
+_CALENDAR_VER = "v1"
+_EXCLUSION_VER = "v1"
+
+
+def _standard_status(n: int) -> str:
+    if n < _STD_REJECT_N:
+        return "reject"
+    if n < _STD_STANDARD_N:
+        return "provisional"
+    return "standard"
+
+
+def _tukey_clip(values: List[float]) -> tuple:
+    """1-pass Tukey: raw Q1/Q3 fence → fence 내 재집계.
+
+    Returns (kept_values, clipped_count). n<30 이면 미적용(원본 반환, clipped=0).
+    """
+    n = len(values)
+    if n < _TUKEY_MIN_N:
+        return values, 0
+    s = sorted(values)
+
+    def _pct(p: float) -> float:
+        if not s:
+            return 0.0
+        idx = p * (len(s) - 1)
+        lo = int(idx)
+        hi = min(lo + 1, len(s) - 1)
+        frac = idx - lo
+        return s[lo] * (1 - frac) + s[hi] * frac
+
+    q1 = _pct(0.25)
+    q3 = _pct(0.75)
+    iqr = q3 - q1
+    lo_fence = q1 - 1.5 * iqr
+    hi_fence = q3 + 1.5 * iqr
+    kept = [v for v in s if lo_fence <= v <= hi_fence]
+    return kept, n - len(kept)
+
+
+def _median(values: List[float]) -> Optional[float]:
+    if not values:
+        return None
+    s = sorted(values)
+    m = len(s)
+    if m % 2:
+        return s[m // 2]
+    return (s[m // 2 - 1] + s[m // 2]) / 2.0
+
+
+def _quartile(values: List[float], p: float) -> Optional[float]:
+    if not values:
+        return None
+    s = sorted(values)
+    if len(s) == 1:
+        return s[0]
+    idx = p * (len(s) - 1)
+    lo = int(idx)
+    hi = min(lo + 1, len(s) - 1)
+    frac = idx - lo
+    return s[lo] * (1 - frac) + s[hi] * frac
+
+
+def get_partner_breakdown(
+    from_month: Optional[str] = None,
+    to_month: Optional[str] = None,
+    category: Optional[str] = None,
+    model: Optional[str] = None,
+) -> Dict[str, Any]:
+    """#83 — 협력사 × 모델 × task × dual CT 분해 집계.
+
+    반환 = {rows, rollups: {partner_task, partner_model}, meta}.
+      - basis=ct (ct_time_minutes>0) box plot + active median 병기.
+      - partner 정규화 = _COMPANY_SQL (TMS(M)/TMS(E)) — M-2/M-3.
+      - rollup median = 독립 GROUP BY (raw 합산 금지, M-1).
+      - vs_task_standard_ratio = (task, dual) pooled median 기준 (표준 n<5 → null, M-2).
+      - tracking_coverage = n_used(ct>0) / n_total(clean eligible, basis 필터 전) — 생존편향(검증 BAT).
+      - Tukey 1-pass = n>=30 셀만 (M1).
+      - BE composite 미합성 (A-3) — 단독 지표만 노출, 통합 score 부재.
+    """
+    from_month, to_month = _resolve_window(from_month, to_month)
+    cache_key = f"partner_breakdown:{from_month}:{to_month}:{category}:{model}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    params = _stats_params(from_month, to_month, model, category)
+    mc = _model_clause(model)
+    cc = _category_clause(category)
+
+    # ── ① raw instance pull (basis=ct: ct>0) — Python 집계 (3벌 독립 GROUP BY) ──
+    #    rows/rollups 모두 동일 모집단에서 키만 달리 그룹핑 → percentile 독립 산출(M-1).
+    rows_sql = f"""
+        SELECT {_PARTNER_DISPLAY_SQL} AS partner_display,
+               {_PARTNER_RAW_SQL}     AS partner_raw,
+               td.task_category       AS partner_scope,
+               p.model                AS model,
+               td.task_id             AS task_id,
+               {_DUAL_SQL}            AS dual,
+               (td.ct_time_minutes / 60.0)::float       AS ct_h,
+               (td.active_time_minutes / 60.0)::float   AS active_h
+        FROM app_task_details td
+        JOIN plan.product_info p ON p.serial_number = td.serial_number
+        WHERE {_CLEAN_WHERE}{mc}{cc}
+          AND td.ct_time_minutes > 0
+    """
+
+    # ── ② tracking coverage (생존편향) — basis 필터 전 clean eligible 모집단 ──
+    #    n_total = clean eligible 전체 / n_used = ct>0. GROUP BY partner_display.
+    coverage_sql = f"""
+        SELECT {_PARTNER_DISPLAY_SQL} AS partner_display,
+               COUNT(*) AS n_total,
+               COUNT(*) FILTER (WHERE td.ct_time_minutes > 0) AS n_used
+        FROM app_task_details td
+        JOIN plan.product_info p ON p.serial_number = td.serial_number
+        WHERE {_CLEAN_WHERE}{mc}{cc}
+        GROUP BY 1
+    """
+
+    # ── ③ 즉시완료 (substantive task만, one-click 제외) — basis 필터 전 clean eligible ──
+    #    active_time_minutes <= 1 = 즉시완료. instant rate = instant / substantive_n.
+    #    coverage 와 동일 모집단(basis 필터 전)에서 GROUP BY partner_display.
+    instant_sql = f"""
+        SELECT {_PARTNER_DISPLAY_SQL} AS partner_display,
+               td.task_id AS task_id,
+               COUNT(*) AS n,
+               COUNT(*) FILTER (
+                   WHERE td.active_time_minutes IS NOT NULL
+                     AND td.active_time_minutes <= {_INSTANT_THRESHOLD_MIN}
+               ) AS instant_n
+        FROM app_task_details td
+        JOIN plan.product_info p ON p.serial_number = td.serial_number
+        WHERE {_CLEAN_WHERE}{mc}{cc}
+        GROUP BY 1, 2
+    """
+
+    # ── ④ meta 진단 — partner NULL 자연제외 vs 품질누락 + ct null/zero ──
+    #    excluded_partner_missing: partner_display='(미지정)' (자연 제외 — PI/QI/SI 또는 협력사 NULL)
+    #    excluded_quality_missing: applicable인데 work_start_log 없음 (시작 안 됨 = 미입력)
+    #    excluded_null_ct / excluded_zero_ct: clean eligible 중 ct NULL/0
+    meta_sql = f"""
+        SELECT
+            COUNT(*) AS clean_total,
+            COUNT(*) FILTER (WHERE td.ct_time_minutes IS NULL) AS ct_null,
+            COUNT(*) FILTER (WHERE td.ct_time_minutes = 0)     AS ct_zero,
+            COUNT(*) FILTER (WHERE {_PARTNER_DISPLAY_SQL} = '(미지정)') AS partner_missing
+        FROM app_task_details td
+        JOIN plan.product_info p ON p.serial_number = td.serial_number
+        WHERE {_CLEAN_WHERE}{mc}{cc}
+    """
+    # 품질누락: applicable & 미완료(work_start_log 없음 = 작업 시작 자체가 없음).
+    #   window/필터 동일 슬라이스 — completed_at 조건만 제거하고 started_at NULL.
+    quality_missing_sql = f"""
+        SELECT COUNT(*) AS quality_missing
+        FROM app_task_details td
+        JOIN plan.product_info p ON p.serial_number = td.serial_number
+        WHERE td.is_applicable = TRUE
+          AND td.started_at IS NULL
+          AND td.task_id NOT IN ('TANK_MODULE','PRESSURE_TEST')
+          AND COALESCE(p.customer, '') <> 'TEST CUSTOMER'
+          AND td.serial_number NOT LIKE 'TEST%%'
+          AND td.created_at IS NOT NULL
+          {mc}{cc}
+    """
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(rows_sql, params)
+            raw_rows = cur.fetchall()
+            cur.execute(coverage_sql, params)
+            cov_rows = cur.fetchall()
+            cur.execute(instant_sql, params)
+            instant_rows = cur.fetchall()
+            cur.execute(meta_sql, params)
+            meta_row = cur.fetchone()
+            cur.execute(quality_missing_sql, params)
+            qm_row = cur.fetchone()
+    finally:
+        put_conn(conn)
+
+    # ── coverage / instant by partner ──
+    coverage_by_partner: Dict[str, Dict[str, int]] = {}
+    for r in cov_rows:
+        coverage_by_partner[r["partner_display"]] = {
+            "n_total": int(r["n_total"]),
+            "n_used": int(r["n_used"]),
+        }
+
+    # 즉시완료 — substantive task만(화이트리스트 제외) 합산, partner_display 단위.
+    instant_by_partner: Dict[str, Dict[str, int]] = {}
+    for r in instant_rows:
+        if r["task_id"] in _INSTANT_WHITELIST:
+            continue
+        pd = r["partner_display"]
+        acc = instant_by_partner.setdefault(pd, {"n": 0, "instant_n": 0})
+        acc["n"] += int(r["n"])
+        acc["instant_n"] += int(r["instant_n"])
+
+    # ── Python 집계 버킷 (3벌 독립) ──
+    # rows: (partner_display, partner_raw, partner_scope, model, task_id, dual)
+    rows_buckets: Dict[tuple, Dict[str, Any]] = {}
+    # partner_task rollup: (partner_display, task_id, dual)
+    pt_buckets: Dict[tuple, Dict[str, Any]] = {}
+    # partner_model rollup: (partner_display, model)
+    pm_buckets: Dict[tuple, Dict[str, Any]] = {}
+    # (task, dual) 표준 모집단 — vs_task_standard_ratio 기준 (M-2)
+    std_buckets: Dict[tuple, List[float]] = {}
+
+    for r in raw_rows:
+        pd = r["partner_display"]
+        praw = r["partner_raw"]
+        scope = r["partner_scope"]
+        mdl = r["model"]
+        tid = r["task_id"]
+        dual = r["dual"]
+        ct_h = float(r["ct_h"])
+        active_h = float(r["active_h"]) if r["active_h"] is not None else None
+
+        rk = (pd, praw, scope, mdl, tid, dual)
+        rb = rows_buckets.setdefault(rk, {"ct": [], "active": [], "categories": set()})
+        rb["ct"].append(ct_h)
+        if active_h is not None:
+            rb["active"].append(active_h)
+        rb["categories"].add(scope)
+
+        ptk = (pd, tid, dual)
+        ptb = pt_buckets.setdefault(ptk, {"ct": [], "active": [], "categories": set()})
+        ptb["ct"].append(ct_h)
+        if active_h is not None:
+            ptb["active"].append(active_h)
+        ptb["categories"].add(scope)
+
+        pmk = (pd, mdl)
+        pmb = pm_buckets.setdefault(pmk, {"ct": [], "active": [], "categories": set()})
+        pmb["ct"].append(ct_h)
+        if active_h is not None:
+            pmb["active"].append(active_h)
+        pmb["categories"].add(scope)
+
+        std_buckets.setdefault((tid, dual), []).append(ct_h)
+
+    # (task, dual) 표준 median (Tukey 동일 적용) — vs_std 기준.
+    std_median: Dict[tuple, Dict[str, Any]] = {}
+    for k, vals in std_buckets.items():
+        kept, _clip = _tukey_clip(vals)
+        std_median[k] = {"median": _median(kept), "n": len(vals)}
+
+    def _box(ct_vals: List[float], active_vals: List[float]) -> Dict[str, Any]:
+        """ct box plot(Tukey) + active median 병기 + 게이트."""
+        n_raw = len(ct_vals)
+        kept, clipped = _tukey_clip(ct_vals)
+        applied = n_raw >= _TUKEY_MIN_N
+        med = _median(kept)
+        q1 = _quartile(kept, 0.25)
+        q3 = _quartile(kept, 0.75)
+        iqr = (q3 - q1) if (q1 is not None and q3 is not None) else None
+        var_ratio = (iqr / med) if (iqr is not None and med) else None
+        active_med = _median(active_vals) if active_vals else None
+        return {
+            "ct_median_hours": _r(med),
+            "ct_q1_hours": _r(q1),
+            "ct_q3_hours": _r(q3),
+            "ct_iqr_hours": _r(iqr),
+            "ct_var_ratio": _r(var_ratio, 2) if var_ratio is not None else None,
+            "active_median_hours": _r(active_med) if active_med is not None else None,
+            "n_raw": n_raw,
+            "n_after_tukey": len(kept),
+            "tukey_clipped_count": clipped,
+            "tukey_applied": applied,
+            "standard_status": _standard_status(n_raw),
+        }
+
+    # ── rows ──
+    rows: List[Dict[str, Any]] = []
+    for (pd, praw, scope, mdl, tid, dual), b in rows_buckets.items():
+        item = _box(b["ct"], b["active"])
+        instant_applicable = tid not in _INSTANT_WHITELIST
+        item.update({
+            "partner_display": pd,
+            "partner_raw": praw,
+            "partner_scope": scope,
+            "model": mdl,
+            "task_id": tid,
+            "task_name": _TASK_NAME.get(tid, tid),
+            "dual": dual,
+            # 즉시완료 보조값 (A4) — rows 셀의 ct>0 instance 기준 즉시완료 카운트는
+            #   active median 으로 대체 표현 불가 → instant_n = 셀 내 active<=1 카운트.
+            "instant_n": sum(1 for v in b["active"] if v is not None and v * 60.0 <= _INSTANT_THRESHOLD_MIN),
+            "instant_completion_applicable": instant_applicable,
+            "instant_excluded_reason": None if instant_applicable else "one_click_whitelist",
+            "side_applicable": tid in _SIDE_APPLICABLE_TASKS,
+        })
+        rows.append(item)
+    rows.sort(key=lambda x: (x["partner_display"], x["model"], x["task_id"], x["dual"]))
+
+    # ── partner_task rollups ──
+    partner_task: List[Dict[str, Any]] = []
+    for (pd, tid, dual), b in pt_buckets.items():
+        box = _box(b["ct"], b["active"])
+        std = std_median.get((tid, dual), {"median": None, "n": 0})
+        std_n = std["n"]
+        if std_n < _VS_STD_MIN_N or not std["median"]:
+            vs_ratio = None
+            vs_status = "insufficient_standard"
+        else:
+            med = box["ct_median_hours"]
+            vs_ratio = _r(med / std["median"], 2) if std["median"] else None
+            vs_status = "ok"
+        cov = coverage_by_partner.get(pd, {"n_total": 0, "n_used": 0})
+        ip = instant_by_partner.get(pd, {"n": 0, "instant_n": 0})
+        partner_task.append({
+            "partner_display": pd,
+            "task_id": tid,
+            "task_name": _TASK_NAME.get(tid, tid),
+            "dual": dual,
+            "ct_median_hours": box["ct_median_hours"],
+            "ct_iqr_hours": box["ct_iqr_hours"],
+            "ct_var_ratio": box["ct_var_ratio"],
+            "active_median_hours": box["active_median_hours"],
+            "n": box["n_raw"],
+            "standard_status": box["standard_status"],
+            "vs_task_standard_ratio": vs_ratio,
+            "vs_task_standard_status": vs_status,
+            "standard_n": std_n,
+            "instant_completion_rate": (
+                _r(ip["instant_n"] / ip["n"], 2) if ip["n"] else None
+            ),
+            "tracking_coverage": {
+                "n_total": cov["n_total"],
+                "n_used": cov["n_used"],
+                "tracked_rate": round(cov["n_used"] / cov["n_total"], 2) if cov["n_total"] else 0.0,
+            },
+            "category_mix": sorted(b["categories"]),
+        })
+    partner_task.sort(key=lambda x: (x["partner_display"], x["task_id"], x["dual"]))
+
+    # ── partner_model rollups ──
+    partner_model: List[Dict[str, Any]] = []
+    for (pd, mdl), b in pm_buckets.items():
+        box = _box(b["ct"], b["active"])
+        cov = coverage_by_partner.get(pd, {"n_total": 0, "n_used": 0})
+        ip = instant_by_partner.get(pd, {"n": 0, "instant_n": 0})
+        partner_model.append({
+            "partner_display": pd,
+            "model": mdl,
+            "ct_median_hours": box["ct_median_hours"],
+            "ct_iqr_hours": box["ct_iqr_hours"],
+            "ct_var_ratio": box["ct_var_ratio"],
+            "active_median_hours": box["active_median_hours"],
+            "n": box["n_raw"],
+            "standard_status": box["standard_status"],
+            # task 무관 rollup — vs_std 미산출 (M-2)
+            "vs_task_standard_ratio": None,
+            "vs_task_standard_status": "not_applicable",
+            "instant_completion_rate": (
+                _r(ip["instant_n"] / ip["n"], 2) if ip["n"] else None
+            ),
+            "tracking_coverage": {
+                "n_total": cov["n_total"],
+                "n_used": cov["n_used"],
+                "tracked_rate": round(cov["n_used"] / cov["n_total"], 2) if cov["n_total"] else 0.0,
+            },
+            "category_mix": sorted(b["categories"]),
+        })
+    partner_model.sort(key=lambda x: (x["partner_display"], x["model"]))
+
+    # ── meta ──
+    _clean_total = int(meta_row["clean_total"]) if meta_row else 0
+    _ct_null = int(meta_row["ct_null"]) if meta_row else 0
+    _ct_zero = int(meta_row["ct_zero"]) if meta_row else 0
+    _partner_missing = int(meta_row["partner_missing"]) if meta_row else 0
+    _quality_missing = int(qm_row["quality_missing"]) if qm_row else 0
+
+    meta: Dict[str, Any] = {
+        "as_of": datetime.now(_KST).isoformat(),
+        "basis": "ct",
+        "trust_start": "2026-05-01",
+        "window": {"from": from_month, "to": to_month},
+        "immature_window": from_month < CT_TRUST_START_MONTH,
+        "excluded_partner_missing": _partner_missing,   # 자연 제외 ('(미지정)')
+        "excluded_quality_missing": _quality_missing,   # 품질 누락 (applicable인데 미시작)
+        "excluded_null_ct": _ct_null,
+        "excluded_zero_ct": _ct_zero,
+        "exclusion_ver": _EXCLUSION_VER,
+        "dag_ver": "none",          # S-3 후 갱신
+        "garbage_excluded": False,  # S-3 ⓒ 미적용 명시
+        "calendar_ver": _CALENDAR_VER,
+        "n_used": _clean_total - _ct_null - _ct_zero,  # ct>0 모집단 (산출 대상)
+        "n_clean_eligible": _clean_total,              # basis 필터 전 (coverage 분모)
+    }
+
+    result = {
+        "rows": rows,
+        "rollups": {
+            "partner_task": partner_task,
+            "partner_model": partner_model,
+        },
+        "meta": meta,
+    }
+    _cache_put(cache_key, result)
+    return result

@@ -6,6 +6,28 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.31.0] - 2026-06-08 — #83 CT 협력사×모델×task×dual 분해 집계 (partner-breakdown)
+
+> **BE only minor — 신규 `GET /api/ct/partner-breakdown`(read-only) + statistics_service.py 신규 함수, DB/migration 0**. CT 분석의 본질=협력사 평가. 현 task-stats는 task-pooled(partner 차원 전무) → VIEW CtPartnerModelMatrix·협력사 평가 페이지 mock. partner 분해 축 추가.
+
+### 검증 (운영 6개, 5월+ basis=ct)
+- 4축(partner×model×task×dual) 57% n<5 → rollup(partner×task 72% 쓸만) 병행 필수. 즉시완료율 BAT 61% vs FNI 11%(태깅 KPI). vs_std TMS(E) PANEL 0.65/P&S 1.07. BAT 61%미추적=생존편향. DUAL +18%(현업 ~1.5배 병렬제작) → vs_std (task,dual) 표준.
+
+### 변경 (additive, task-stats/data-quality 불변)
+- `get_partner_breakdown(from,to,category,model)` → `{rows(4축), rollups{partner_task, partner_model}, meta}`. 트러스트 윈도우(S-1)·basis=ct(S-2)·dual(#81)·partner 정규화(`_COMPANY_SQL` v2.20.11 TMS(M)/(E)) 재사용.
+- **rows**: ct median/q1/q3/iqr/var_ratio + active median + n_raw/n_after_tukey + standard_status(n<5 reject/5~29 prov/30+ std) + instant_n/applicable + side_applicable(TMS만).
+- **rollups(평가용)**: 독립 pooled median(raw 합산 ❌) + **vs_task_standard_ratio**((task,dual) 표준, 표준 n<5→null+insufficient_standard+standard_n) + instant_completion_rate(one-click 화이트리스트 제외) + **tracking_coverage**(속도+추적 짝, 생존편향) + category_mix. GROUP BY partner_display(TMS(M)/(E) 분리, GST만 다중 category).
+- meta: excluded_partner_missing/quality_missing/null_ct + exclusion_ver/dag_ver='none'/garbage_excluded=false(S-3 전 명시). BE composite 미합성(가중=VIEW).
+
+### Codex trail
+- 설계 R1 NO-GO M=3(rollup 독립median/vs_std n<5/partner rollup 키)→R2 GO.
+- 구현 R1 M=1(rollup raw-pull+Python 버킷화 vs SQL GROUP BY) → **M→A 2자 합의**(median 시맨틱 정확·~1500행 성능 무관·FE 재집계 금지 충족) → **DEPLOY_SAFE**.
+
+### 검증
+- pytest 신규 test_partner_breakdown 14(rollup 독립median≠raw합산·vs_std (task,dual)·TMS정규화·composite 미합성) + 회귀 33(S-1 18·S-2 15, task-stats 불변) GREEN. 실데이터 스모크: TMS(E) PANEL vs_std 0.65, dual 분리, 속도+coverage 짝. read-only, 회귀 0. 설계: `CT_PARTNER_BREAKDOWN_DESIGN.md`. **잔여 A**: rollup SQL GROUPING SETS 전환(성능 무관, 별 BACKLOG).
+
+---
+
 ## [2.30.0] - 2026-06-08 — Sprint S-2 (ⓑ) 진짜 CT(across-worker union) + 동시작업자 (VIEW #82 ⓑ)
 
 > **BE minor — migration 061(ct_time_minutes 컬럼+백필) + task_detail.py + admin.py + statistics_service.py + ct_analysis.py**. 현 active_time_minutes·duration_minutes 둘 다 M/H(across-worker SUM)이지 CT 아님. 진짜 CT = 작업자 정제세션 across-worker **UNION**(겹침 합산 안 함, 벽시계).

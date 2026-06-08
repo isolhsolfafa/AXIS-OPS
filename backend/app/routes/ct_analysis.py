@@ -17,6 +17,7 @@ from app.middleware.jwt_auth import gst_or_admin_required, jwt_required
 from app.services.statistics_service import (
     CtParamError,
     get_data_quality,
+    get_partner_breakdown,
     get_task_ct_stats,
 )
 
@@ -78,3 +79,32 @@ def task_stats():
     except Exception:
         logger.exception("[ct] task-stats 산출 실패")
         return jsonify({"error": "INTERNAL_ERROR", "message": "CT 표준 산출 실패"}), 500
+
+
+@ct_analysis_bp.route("/partner-breakdown", methods=["GET"])
+@jwt_required
+@gst_or_admin_required
+def partner_breakdown():
+    """#83 — 협력사 × 모델 × task × 구분(dual) CT 분해 집계 (read-only).
+
+    응답 = {rows, rollups: {partner_task, partner_model}, meta}.
+      - basis=ct (ct_time_minutes>0) + active median 병기.
+      - partner 정규화 = _COMPANY_SQL (TMS(M)/TMS(E)).
+      - rollup median = 독립 GROUP BY (raw 합산 금지, M-1).
+      - vs_task_standard_ratio = (task, dual) pooled median 기준 (표준 n<5 → null, M-2).
+    from/to(YYYY-MM, KST 윈도우, 미지정=2026-05~현재월) + category + model.
+    """
+    from_month = request.args.get("from")
+    to_month = request.args.get("to")
+    category = request.args.get("category")
+    model = request.args.get("model")
+    try:
+        return jsonify(get_partner_breakdown(
+            from_month=from_month, to_month=to_month,
+            category=category, model=model,
+        )), 200
+    except CtParamError as e:
+        return jsonify({"error": e.code, "message": e.message}), 400
+    except Exception:
+        logger.exception("[ct] partner-breakdown 산출 실패")
+        return jsonify({"error": "INTERNAL_ERROR", "message": "협력사 분해 집계 실패"}), 500
