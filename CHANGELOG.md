@@ -6,6 +6,30 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.30.0] - 2026-06-08 — Sprint S-2 (ⓑ) 진짜 CT(across-worker union) + 동시작업자 (VIEW #82 ⓑ)
+
+> **BE minor — migration 061(ct_time_minutes 컬럼+백필) + task_detail.py + admin.py + statistics_service.py + ct_analysis.py**. 현 active_time_minutes·duration_minutes 둘 다 M/H(across-worker SUM)이지 CT 아님. 진짜 CT = 작업자 정제세션 across-worker **UNION**(겹침 합산 안 함, 벽시계).
+
+### 배경 — ① 검증 (5월+ 운영)
+- union SQL dry-run 검증(M/H 합 = 저장 active 일치). **다중작업자 ≠ 병렬**: 세션 겹침(병렬)만 CT<M/H. PANEL_WORK 4명 동시 1885분→944분(2.0x) / UTIL_LINE 6명 교대 409→410(1.0x). 정량화: ELEC 다중 49% 병렬 / MECH 13% / 전체 ~9%.
+
+### 변경 (additive — man-hour/active/duration 불변)
+- **migration 061**: `ct_time_minutes INTEGER`(nullable) + 백필. 산식 = 작업자별 정제 multirange `(session∩BH − pause∪식사)` → across-worker `range_agg` union 길이 → `LEAST(FLOOR(union), active_time_minutes)`(A-1 불변식 CT≤M/H). active=0→ct=0(LEFT JOIN COALESCE) / active NULL(TANK_DOCKING)→ct NULL. 멱등(`ct IS NULL`).
+- `compute_task_work` 반환 `{manhour,active}` → `{manhour,active,ct}`. 완료 4경로(complete_task_unified·auto_close_relay_task·force_close_task·force_complete_task) ct 동봉.
+- `statistics_service` `basis` = duration|active|**ct**(ct_time_minutes>0 모집단). 응답 `effective_concurrency_median`(instance별 active/NULLIF(ct,0) median) + `avg_workers` + meta `ct_available`/`basis_label`. coverage `basis in (active,ct)` 일반화(n_total=clean eligible/n_used=basis>0). meta `n_used`=Tukey-전 모집단 + `n_sample`=Tukey-후.
+- S-1 상속 전부(신뢰컷오프 5/1, from/to, Tukey base_n/clipped_n, provisional, 캐시키 basis 포함).
+
+### Codex trail
+- 설계 R1 NO-GO M=3(effective_concurrency ratio-of-medians/basis=ct coverage/union 엣지 TC) → R2 M=1(coverage denominator) → **R3 GO M=0**.
+- 구현 R1 NO-GO M=2(meta.n_used Tukey-후 오염 / 백필 active=0→ct NULL 방치) → fix → **재검증 DEPLOY_SAFE/GO M=0**.
+
+### 검증
+- pytest 신규 test_sprint_s2_ct_union 15(부분겹침 active240/ct180·완전겹침 ct=active/2·릴레이·캡·멀티데이·basis=ct·effective_concurrency·백필 set-based) + 회귀 67(test_sprint86_active 16·test_sprint_s1 18·test_relay 38, active/man-hour/duration 불변) GREEN. 회귀 0(additive).
+- migration 061 배포 시 migration_runner 자동 백필(읽기 산출, 무중단, A-2 preflight RAISE NOTICE). 설계: `CT_S2_TRUE_CT_UNION_DESIGN.md` v2.
+- **분리**: ⓒ DAG garbage 제외 + 무결성 KPI = S-3.
+
+---
+
 ## [2.29.1] - 2026-06-08 — get_data_quality 트러스트 윈도우 통일 (VIEW #82 ⓐ 후속)
 
 > **BE only patch — statistics_service.py + ct_analysis.py, DB/migration 0**. S-1(v2.29.0)이 `task-stats`만 트러스트 윈도우(`CT_TRUST_START_MONTH='2026-05'`) 적용 → `data-quality`는 옛 `lookback_days=90` 잔존. 6/8 기준 90일 = ~3/10부터라 **미성숙 3·4월이 clean%/자동마감율에 섞여** CT 신뢰도 카드의 `clean%`(90일) vs reliability(트러스트 [5월~]) 윈도우 혼용.

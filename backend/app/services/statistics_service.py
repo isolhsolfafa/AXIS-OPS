@@ -182,12 +182,15 @@ def get_task_ct_stats(
 
     S-1 (VIEW #82 ⓐ):
       - basis='duration'(기본, man-hour) / 'active'(active_time_minutes, act>0만).
+    S-2 (VIEW #82 ⓑ):
+      - basis='ct'(ct_time_minutes, 진짜 CT=across-worker union, ct>0만).
       - 윈도우 = KST 월경계 반열림 [from월, to월+1). 기본 [2026-05, 현재월].
-      - 생존편향 방어: basis=active 시 tracking_coverage_by_partner 동반 노출.
+      - 생존편향 방어: basis in (active,ct) 시 tracking_coverage_by_partner 동반 노출.
+      - basis=ct meta: ct_available + effective_concurrency_median + avg_workers.
     dual: 'dual'(DUAL 모델만) / 'single'(단일만) / None(합산, 하위호환) — VIEW #81.
     """
-    if basis not in ("duration", "active"):
-        raise CtParamError("INVALID_BASIS", "basis 는 duration|active 중 하나여야 합니다.")
+    if basis not in ("duration", "active", "ct"):
+        raise CtParamError("INVALID_BASIS", "basis 는 duration|active|ct 중 하나여야 합니다.")
     from_month, to_month = _resolve_window(from_month, to_month)
 
     cache_key = f"task_stats:{basis}:{from_month}:{to_month}:{model}:{category}:{dual}"
@@ -199,9 +202,16 @@ def get_task_ct_stats(
     mc = _model_clause(model) + _dual_clause(dual)
     cc = _category_clause(category)
 
-    # basis 분기 — 값 식 + 모집단 추가 필터(active 시 act>0)
-    val_expr = "td.active_time_minutes / 60.0" if basis == "active" else "td.duration_minutes / 60.0"
-    pop_extra = " AND td.active_time_minutes > 0" if basis == "active" else ""
+    # basis 분기 — 값 식 + 모집단 추가 필터(active 시 act>0, ct 시 ct>0)
+    if basis == "active":
+        val_expr = "td.active_time_minutes / 60.0"
+        pop_extra = " AND td.active_time_minutes > 0"
+    elif basis == "ct":
+        val_expr = "td.ct_time_minutes / 60.0"
+        pop_extra = " AND td.ct_time_minutes > 0"
+    else:
+        val_expr = "td.duration_minutes / 60.0"
+        pop_extra = ""
 
     # Tukey 1-pass CTE: base → fence(raw Q1/Q3) → clipped(fence 내) → 집계.
     # base_n(Tukey 전) 보존하여 tukey_clipped 판정 (A-3).
@@ -284,12 +294,17 @@ def get_task_ct_stats(
         WHERE {_CLEAN_WHERE}{mc}{cc}{pop_extra}
         GROUP BY p.model ORDER BY n DESC
     """
-    # active 채움 비율 + active=0/NULL 카운트 — clean 모집단 전체(window/필터 적용, Tukey 전)
+    # active/ct 채움 비율 + zero/NULL 카운트 — clean 모집단 전체(window/필터 적용, Tukey 전).
+    #   M-1: n_used = basis별 모집단(Tukey 전). basis=duration → clean_total /
+    #        basis=active → clean_total − active_zero − active_null (active>0) /
+    #        basis=ct → clean_total − ct_zero − ct_null (ct>0).
     fill_sql = f"""
         SELECT COUNT(*) AS clean_total,
                COUNT(*) FILTER (WHERE td.active_time_minutes IS NOT NULL) AS active_filled,
                COUNT(*) FILTER (WHERE td.active_time_minutes = 0) AS active_zero,
-               COUNT(*) FILTER (WHERE td.active_time_minutes IS NULL) AS active_null
+               COUNT(*) FILTER (WHERE td.active_time_minutes IS NULL) AS active_null,
+               COUNT(*) FILTER (WHERE td.ct_time_minutes = 0) AS ct_zero,
+               COUNT(*) FILTER (WHERE td.ct_time_minutes IS NULL) AS ct_null
         FROM app_task_details td
         JOIN plan.product_info p ON p.serial_number = td.serial_number
         WHERE {_CLEAN_WHERE}{mc}{cc}
@@ -308,8 +323,10 @@ def get_task_ct_stats(
           {mc}{cc}
         GROUP BY COALESCE(td.duration_source, 'NULL')
     """
-    # M-1/M-5: 협력사별 추적 커버리지 (basis=active 전용) — 표시통계와 동일 슬라이스
-    #   (model/category/dual + clean/TMS/TEST/window 적용, act>0 제외 전 + Tukey 전).
+    # M-1/M-5/M-2: 협력사별 추적 커버리지 (basis in active,ct) — 표시통계와 동일 슬라이스
+    #   (model/category/dual + clean/TMS/TEST/window 적용, basis>0 제외 전 + Tukey 전).
+    #   n_total = clean eligible 전체(basis 필터 전, 생존편향 방어) / n_used = basis>0.
+    used_col = "td.ct_time_minutes" if basis == "ct" else "td.active_time_minutes"
     coverage_sql = f"""
         SELECT COALESCE(
                    CASE td.task_category
@@ -319,12 +336,27 @@ def get_task_ct_stats(
                        ELSE 'GST'
                    END, '(미지정)') AS partner,
                COUNT(*) AS n_total,
-               COUNT(*) FILTER (WHERE td.active_time_minutes > 0) AS n_used
+               COUNT(*) FILTER (WHERE {used_col} > 0) AS n_used
         FROM app_task_details td
         JOIN plan.product_info p ON p.serial_number = td.serial_number
         WHERE {_CLEAN_WHERE}{mc}{cc}
         GROUP BY 1
         ORDER BY n_total DESC
+    """
+    # S-2 (basis=ct): effective_concurrency_median (M-1: instance별 active/NULLIF(ct,0) median)
+    #   + avg_workers (task별 AVG worker_count) + ct_available(clean 중 ct NOT NULL %).
+    #   표시통계와 동일 슬라이스 (model/category/dual + clean/window), ct>0 필터 + 0div 가드.
+    concurrency_sql = f"""
+        SELECT
+            percentile_cont(0.5) WITHIN GROUP (
+                ORDER BY td.active_time_minutes::numeric / NULLIF(td.ct_time_minutes, 0)
+            ) FILTER (WHERE td.ct_time_minutes > 0) AS eff_concurrency_median,
+            AVG(GREATEST(1, td.worker_count)) FILTER (WHERE td.ct_time_minutes > 0) AS avg_workers,
+            COUNT(*) AS clean_total,
+            COUNT(*) FILTER (WHERE td.ct_time_minutes IS NOT NULL) AS ct_filled
+        FROM app_task_details td
+        JOIN plan.product_info p ON p.serial_number = td.serial_number
+        WHERE {_CLEAN_WHERE}{mc}{cc}
     """
 
     conn = get_db_connection()
@@ -343,9 +375,13 @@ def get_task_ct_stats(
             cur.execute(excl_sql, params)
             excl_rows = cur.fetchall()
             coverage_rows = []
-            if basis == "active":
+            if basis in ("active", "ct"):
                 cur.execute(coverage_sql, params)
                 coverage_rows = cur.fetchall()
+            concurrency_row = None
+            if basis == "ct":
+                cur.execute(concurrency_sql, params)
+                concurrency_row = cur.fetchone()
     finally:
         put_conn(conn)
 
@@ -404,11 +440,20 @@ def get_task_ct_stats(
             "pooled_median_hours": _r(r["pooled_median"]),
         })
 
-    total_sample = sum(t["sample_size"] for t in tasks)  # n_used = 산출 모집단(Tukey 후)
+    total_sample = sum(t["sample_size"] for t in tasks)  # n_sample = 산출 표본(Tukey 후)
     _clean_total = int(fill_row["clean_total"]) if fill_row else 0
     _active_filled = int(fill_row["active_filled"]) if fill_row else 0
     _active_zero = int(fill_row["active_zero"]) if fill_row else 0
     _active_null = int(fill_row["active_null"]) if fill_row else 0
+    _ct_zero = int(fill_row["ct_zero"]) if fill_row else 0
+    _ct_null = int(fill_row["ct_null"]) if fill_row else 0
+    # M-1: n_used = basis별 모집단(Tukey 전). n_total = clean eligible(basis 필터 전).
+    if basis == "active":
+        _n_used = _clean_total - _active_zero - _active_null  # active>0
+    elif basis == "ct":
+        _n_used = _clean_total - _ct_zero - _ct_null          # ct>0
+    else:
+        _n_used = _clean_total                                # duration 전체
     excluded_by_source = {
         r["source"]: int(r["n"]) for r in excl_rows if r["source"] in _ESTIMATED_SOURCES
     }
@@ -422,12 +467,17 @@ def get_task_ct_stats(
         "trust_start": "2026-05-01",
         "window": {"from": from_month, "to": to_month},
         "immature_window": from_month < CT_TRUST_START_MONTH,
-        "basis_label": "active_time(순수 작업시간)" if basis == "active" else "man-hour(공수)",
+        "basis_label": (
+            "true CT(union)" if basis == "ct"
+            else "순수작업(M/H)" if basis == "active"
+            else "전체시간"
+        ),
         "trust_reason": "운영 정착 2026-05+ 단일 기준 (5월 이전 = 베타 연습)",
-        "n_total": _clean_total,    # clean 모집단 전체(window/필터 적용, Tukey 전)
-        "n_used": total_sample,     # 산출 모집단(Tukey 후 Σ sample_size)
+        "n_total": _clean_total,    # clean eligible 전체(basis 필터 전, Tukey 전)
+        "n_used": _n_used,          # M-1: basis별 모집단(active>0 / ct>0 / duration 전체), Tukey 전
+        "n_sample": total_sample,   # M-1: 산출 표본(Tukey 후 Σ sample_size)
         "tukey_clipped": tukey_clipped,  # A-3
-        "total_sample": total_sample,
+        "total_sample": total_sample,  # 하위호환 (= n_sample)
         "model_distribution": [
             {"model": r["model"], "n": int(r["n"])} for r in model_rows
         ],
@@ -453,6 +503,7 @@ def get_task_ct_stats(
     if basis == "active":
         meta["excluded_zero_active"] = _active_zero
         meta["excluded_null_active"] = _active_null
+    if basis in ("active", "ct"):
         meta["tracking_coverage_by_partner"] = [
             {
                 "partner": r["partner"],
@@ -462,6 +513,16 @@ def get_task_ct_stats(
             }
             for r in coverage_rows
         ]
+    if basis == "ct":
+        # S-2: ct_available(clean 중 ct NOT NULL %) + 동시작업자 지표
+        _ct_clean_total = int(concurrency_row["clean_total"]) if concurrency_row else 0
+        _ct_filled = int(concurrency_row["ct_filled"]) if concurrency_row else 0
+        _eff = concurrency_row["eff_concurrency_median"] if concurrency_row else None
+        _avg_w = concurrency_row["avg_workers"] if concurrency_row else None
+        meta["ct_available"] = _r((_ct_filled / _ct_clean_total * 100) if _ct_clean_total else 0.0)
+        # M-1: instance별 active/NULLIF(ct,0) 의 median (1.0=순차/릴레이, 2.0=완전병렬)
+        meta["effective_concurrency_median"] = _r(_eff, 2) if _eff is not None else None
+        meta["avg_workers"] = _r(_avg_w, 2) if _avg_w is not None else None
 
     result = {"tasks": tasks, "categories": categories, "meta": meta}
     _cache_put(cache_key, result)

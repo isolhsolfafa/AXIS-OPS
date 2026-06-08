@@ -533,40 +533,64 @@ per_worker AS (
               FROM unnest(su.mr * COALESCE(bh.mr, '{}'::tstzmultirange)) r),0) AS sess_bh_min,
     COALESCE((SELECT SUM(EXTRACT(EPOCH FROM (upper(r)-lower(r)))/60)
               FROM unnest( (COALESCE(pu.mr,'{}'::tstzmultirange) + COALESCE(bk.mr,'{}'::tstzmultirange))
-                           * su.mr * COALESCE(bh.mr,'{}'::tstzmultirange) ) r),0) AS inactive_min
+                           * su.mr * COALESCE(bh.mr,'{}'::tstzmultirange) ) r),0) AS inactive_min,
+    -- S-2 (FEAT-CT-TRUE-UNION): 작업자별 정제 multirange = (sess ∩ BH) − (pause ∪ break)
+    ( (su.mr * COALESCE(bh.mr, '{}'::tstzmultirange))
+      - (COALESCE(pu.mr,'{}'::tstzmultirange) + COALESCE(bk.mr,'{}'::tstzmultirange)) ) AS active_mr
   FROM sess_union su
   LEFT JOIN pause_union pu USING(worker_id)
   LEFT JOIN bh_union bh USING(worker_id)
   LEFT JOIN breaks_union bk USING(worker_id)
+),
+-- S-2: 작업자별 정제 multirange 를 across-worker UNION → 진짜 CT(벽시계). clip 먼저 → union 나중.
+ct_ranges AS (SELECT r FROM per_worker, unnest(active_mr) r),
+agg AS (
+  SELECT
+    COALESCE(SUM(FLOOR(GREATEST(0, sess_min - pause_min))),0)::int AS manhour,
+    LEAST(
+      COALESCE(SUM(FLOOR(GREATEST(0, sess_bh_min - inactive_min))),0)::int,
+      COALESCE(SUM(FLOOR(GREATEST(0, sess_min - pause_min))),0)::int
+    ) AS active
+  FROM per_worker
+),
+ct_agg AS (
+  SELECT COALESCE(FLOOR((SELECT SUM(EXTRACT(EPOCH FROM (upper(g)-lower(g)))/60)
+                         FROM unnest(range_agg(r)) g)),0)::int AS ct_raw
+  FROM ct_ranges
 )
-SELECT
-  COALESCE(SUM(FLOOR(GREATEST(0, sess_min - pause_min))),0)::int AS manhour,
-  LEAST(
-    COALESCE(SUM(FLOOR(GREATEST(0, sess_bh_min - inactive_min))),0)::int,
-    COALESCE(SUM(FLOOR(GREATEST(0, sess_min - pause_min))),0)::int
-  ) AS active
-FROM per_worker
+SELECT a.manhour, a.active,
+       -- A-1 가드: 저장값 = LEAST(FLOOR(union), active) — 불변식 CT ≤ M/H(active)
+       LEAST(COALESCE(c.ct_raw, 0), a.active) AS ct
+FROM agg a CROSS JOIN ct_agg c
 """
 
 
 def compute_task_work(cur, task_detail_id: int, close_at: datetime) -> Dict[str, int]:
-    """man-hour + active-time(순수 작업시간) 단일 산출 (Sprint 86).
+    """man-hour + active-time(순수 작업시간) + CT(진짜 벽시계) 단일 산출 (Sprint 86 + S-2).
 
     man-hour = Σ_w (session_union − manual_pause∩session) — 기존 v13 공식 (불변).
     active   = Σ_w FLOOR(GREATEST(0, len(sess∩BH) − len((manual_pause∪breaks)∩sess∩BH)))
                BH = attendance[MIN(in),MAX(out)] 우선 / fallback 평일[08,20]·주말[08,17] KST.
                저장값 active = LEAST(active_raw, manhour) — 불변식 active ≤ man-hour.
+    ct       = FLOOR(length( across-worker UNION of 작업자별 정제 multirange )) — 진짜 CT(벽시계).
+               작업자별 clip(BH·pause·break) 먼저 → 정제 multirange 를 across-worker UNION (S-2).
+               저장값 ct = LEAST(FLOOR(union), active) — 불변식 CT ≤ M/H(active) (A-1).
+               단일작업자/릴레이 → ct=active / 병렬(세션 겹침) → ct<active.
 
     Returns:
-        {'manhour': int, 'active': int} (work_start_log 없으면 {0,0}).
+        {'manhour': int, 'active': int, 'ct': int} (work_start_log 없으면 {0,0,0}).
     """
     cur.execute(_TASK_WORK_SQL, {'tid': task_detail_id, 'close_at': close_at})
     row = cur.fetchone()
     if row is None:
-        return {'manhour': 0, 'active': 0}
+        return {'manhour': 0, 'active': 0, 'ct': 0}
     if isinstance(row, dict):
-        return {'manhour': int(row['manhour'] or 0), 'active': int(row['active'] or 0)}
-    return {'manhour': int(row[0] or 0), 'active': int(row[1] or 0)}
+        return {
+            'manhour': int(row['manhour'] or 0),
+            'active': int(row['active'] or 0),
+            'ct': int(row['ct'] or 0),
+        }
+    return {'manhour': int(row[0] or 0), 'active': int(row[1] or 0), 'ct': int(row[2] or 0)}
 
 
 def compute_task_manhour(cur, task_detail_id: int, close_at: datetime) -> int:
@@ -618,6 +642,7 @@ def complete_task_unified(
         work = compute_task_work(cur, task_detail_id, close_at)
         manhour = work['manhour']
         active = work['active']
+        ct = work['ct']  # S-2: 진짜 CT(across-worker union)
         guard_sql = " AND completed_at IS NULL AND force_closed = FALSE" if race_guard else ""
         cur.execute(
             f"""
@@ -625,6 +650,7 @@ def complete_task_unified(
             SET completed_at     = %(completed_at)s,
                 duration_minutes = %(manhour)s,
                 active_time_minutes = %(active)s,
+                ct_time_minutes  = %(ct)s,
                 elapsed_minutes  = GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (%(completed_at)s - started_at))/60))::int,
                 worker_count     = GREATEST(1, (
                     SELECT COUNT(DISTINCT worker_id) FROM work_start_log WHERE task_id = %(tid)s
@@ -638,7 +664,8 @@ def complete_task_unified(
             RETURNING duration_minutes, elapsed_minutes, worker_count
             """,
             {
-                'completed_at': completed_at, 'manhour': manhour, 'active': active, 'tid': task_detail_id,
+                'completed_at': completed_at, 'manhour': manhour, 'active': active, 'ct': ct,
+                'tid': task_detail_id,
                 'force_closed': force_closed, 'closed_by': closed_by,
                 'close_reason': close_reason, 'duration_source': duration_source,
             },
@@ -681,7 +708,13 @@ def complete_task_unified(
 
 def complete_task(task_detail_id: int, completed_at: datetime) -> bool:
     """
-    작업 완료 처리 (duration_minutes 자동 계산)
+    ⚠️ 레거시 — 사용 금지 (호출처 0). complete_task_unified() 사용할 것.
+
+    raw EXTRACT(EPOCH) duration 만 계산하며 man-hour(interval-union) / active_time /
+    ct_time 산식 미적용. S-2(ct) 동봉 4경로(complete_task_unified·auto_close_relay_task·
+    force_close_task·force_complete_task)에 미포함 — 본 함수로 완료 시 ct_time_minutes 미기록.
+
+    작업 완료 처리 (duration_minutes raw 계산)
 
     Args:
         task_detail_id: 작업 ID
@@ -1034,11 +1067,13 @@ def auto_close_relay_task(
         work = compute_task_work(cur, task_detail_id, last_completion_at)
         manhour = work['manhour']
         active = work['active']
+        ct = work['ct']  # S-2: 진짜 CT(across-worker union)
         cur.execute("""
             UPDATE app_task_details
             SET completed_at = %s,
                 duration_minutes = %s,
                 active_time_minutes = %s,
+                ct_time_minutes = %s,
                 elapsed_minutes = GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (%s - started_at))/60))::int,
                 worker_count = GREATEST(1, (
                     SELECT COUNT(DISTINCT worker_id) FROM work_start_log WHERE task_id = %s
@@ -1052,7 +1087,7 @@ def auto_close_relay_task(
               AND completed_at IS NULL
               AND force_closed = FALSE
             RETURNING id
-        """, (last_completion_at, manhour, active, last_completion_at, task_detail_id,
+        """, (last_completion_at, manhour, active, ct, last_completion_at, task_detail_id,
               force_closed, closed_by_worker_id, close_reason, duration_source,
               task_detail_id))
         result = cur.fetchone()

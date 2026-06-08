@@ -984,9 +984,11 @@ def force_complete_task(task_id: int) -> Tuple[Dict[str, Any], int]:
             _work = compute_task_work(cur, task_id, completed_at)
             duration_minutes = _work['manhour']
             active_minutes = _work['active']
+            ct_minutes = _work['ct']  # S-2: 진짜 CT(across-worker union)
         else:
             duration_minutes = 0
             active_minutes = 0
+            ct_minutes = 0
 
         # 작업 완료 처리
         cur.execute(
@@ -995,10 +997,11 @@ def force_complete_task(task_id: int) -> Tuple[Dict[str, Any], int]:
             SET completed_at = %s,
                 duration_minutes = %s,
                 active_time_minutes = %s,
+                ct_time_minutes = %s,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = %s
             """,
-            (completed_at, duration_minutes, active_minutes, task_id)
+            (completed_at, duration_minutes, active_minutes, ct_minutes, task_id)
         )
 
         conn.commit()
@@ -1246,16 +1249,18 @@ def force_close_task(task_id: int) -> Tuple[Dict[str, Any], int]:
             duration_minutes = 0
             elapsed_minutes = 0
             active_minutes = 0
+            ct_minutes = 0
         else:
             elapsed_minutes = int((completed_at - started_at).total_seconds() / 60)
             # FIX-DURATION-MANUAL-PAUSE-RAW-20260602 (v2.22.0): 휴게 차감(_calculate_working_minutes) 제거.
             #   man-hour = compute_task_manhour (완료로그 분기, 휴게 미차감 + manual pause 만 ∩ 차감).
             #   close_at = completed_at (관리자 지정 종료 시각).
-            # Sprint 86: man-hour + active-time 동시 산출.
+            # Sprint 86: man-hour + active-time 동시 산출. S-2: + ct(across-worker union).
             from app.models.task_detail import compute_task_work
             _work = compute_task_work(cur, task_id, completed_at)
             duration_minutes = _work['manhour']
             active_minutes = _work['active']
+            ct_minutes = _work['ct']  # S-2: 진짜 CT(across-worker union)
 
         # app_task_details 강제 종료 업데이트
         cur.execute(
@@ -1264,6 +1269,7 @@ def force_close_task(task_id: int) -> Tuple[Dict[str, Any], int]:
             SET completed_at    = %s,
                 duration_minutes = %s,
                 active_time_minutes = %s,
+                ct_time_minutes  = %s,
                 elapsed_minutes  = %s,
                 force_closed     = TRUE,
                 closed_by        = %s,
@@ -1271,7 +1277,7 @@ def force_close_task(task_id: int) -> Tuple[Dict[str, Any], int]:
                 updated_at       = CURRENT_TIMESTAMP
             WHERE id = %s
             """,
-            (completed_at, duration_minutes, active_minutes, elapsed_minutes,
+            (completed_at, duration_minutes, active_minutes, ct_minutes, elapsed_minutes,
              g.worker_id, close_reason, task_id)
         )
 

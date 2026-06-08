@@ -48,9 +48,11 @@ def data_quality():
 @jwt_required
 @gst_or_admin_required
 def task_stats():
-    """② task별 box plot(basis=duration|active) + 카테고리 요약 + meta.
+    """② task별 box plot(basis=duration|active|ct) + 카테고리 요약 + meta.
 
     S-1 (VIEW #82 ⓐ): period 제거 → basis/from/to(YYYY-MM, KST 윈도우).
+    S-2 (VIEW #82 ⓑ): basis=ct (진짜 CT=across-worker union) + effective_concurrency_median.
+    INVALID_BASIS 검증은 service(get_task_ct_stats) 에서 400 매핑.
     """
     basis = (request.args.get("basis") or "duration").strip().lower()
     from_month = request.args.get("from")

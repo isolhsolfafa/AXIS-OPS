@@ -223,8 +223,12 @@ def test_s1_08_meta_population_keys(db_conn, worker):
         _seed_n(db_conn, worker, _FAKE, 2, 200, "N", active_min=None)
         ss._cache.clear()
         m = ss.get_task_ct_stats(basis="active")["meta"]
-        assert m["n_total"] == 10                       # clean 전체 (act 필터 전)
-        assert m["n_used"] == 6                          # 산출 모집단 (act>0, Tukey 후)
+        assert m["n_total"] == 10                       # clean eligible 전체 (act 필터 전, Tukey 전)
+        # M-1: n_used = act>0 모집단(Tukey 전) = 10 − zero(2) − null(2) = 6
+        assert m["n_used"] == 6
+        # n_sample = Tukey 후 산출 표본 (이상치 없음 → 6). 하위호환 total_sample 동일.
+        assert m["n_sample"] == 6, m["n_sample"]
+        assert m["total_sample"] == m["n_sample"]
         assert m["excluded_zero_active"] == 2
         assert m["excluded_null_active"] == 2
         assert m["n_used"] <= m["n_total"]
