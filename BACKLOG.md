@@ -42,6 +42,14 @@
 >   - **시스템(UX) 개선**: 작업자가 태깅을 "제대로/쉽게" 하도록 OPS PWA 개선 (즉시 시작=완료 방지, 누락 task 알림, 태깅 편의). tank module 일괄 기능(미추적 원인) 안정화 후 삭제.
 > **CT 분석 재가동 조건**: 태깅 완성도(제품 완료율·실시간 추적율) 의미있게 상승(예: 70%+) 후. **태깅 완성도 KPI**(완료율·추적율·즉시완료율 월추세)를 그 사이 추적 지표로(보류된 무결성 KPI S-3 ⓒ-2와 직결).
 
+### FEAT-MISSED-CLOSE-DETAIL-MODAL Phase 2 (BE 연계) 🟡 LOW — 종료 누락 분석 [작업 상세] 진단 모달 (2026-06-08 등록)
+> **출처**: VIEW repo `AXIS-VIEW/BACKLOG.md` (FEAT-MISSED-CLOSE-DETAIL-MODAL) + `AutoCloseDetailModal.tsx`(L104 "준비중 Phase 1" 배지) + CHANGELOG v1.57.0. Phase 1(read-only 진단 모달) = VIEW prod 배포 완료(v1.57.0). **Phase 2 = OPS BE 대기**.
+> **Phase 2 BE 3항목**:
+>   - ✅ **① 협력사 누락 패턴(집계)** — `dashboard_service.py`(자동마감 분석 Sprint 71/81 인프라) 확장. **지금 가능**(자동마감 데이터는 CT보다 성숙).
+>   - ⚠️ **② CT IQR 표준시간 연계** — #82/#83 CT 표준(task-stats/partner-breakdown) 연계. **태깅 정착 후**(`🚨 CT 분석 결론` 게이트와 동일 — CT 표준 데이터 미성숙).
+>   - ✅ **③ 유사 케이스 조회** — 비슷한 종료누락 패턴 lookup. 가능.
+> **연계**: VIEW MissedCloseAnalysisPage / OPS `dashboard_service.py`(auto-close-summary/details, Sprint 71/81/82) / `🚨 CT 분석 결론`(②의 게이트). **재개**: ①③은 사용자 요청 시 / ②는 태깅율 70%+ 후 CT 분석과 함께.
+
 ### 후속 운영 KPI 권고 (사용자 catch)
 - **BAT 시간추적 교육**: 완료율 100%지만 act=0율 59%(시작=완료 즉시태깅, 실 timing 부재). FNI 7%. BAT 늦게 온보딩 → 적응 중. 월별 act=0율 추세로 개선 추적.
 - **tank module 일괄 시작/종료 편의 기능 삭제** 🟡 (⏳ **안정화 단계 통과 후** — 2026-06-08 결정): 현재 일괄 기능이 TMS garbage(가압완료∧tank미입력) + act=0 미추적의 원인. **단 아직 운영 안정화 단계라 즉시 삭제 불가** → 안정화 통과 후 삭제. 삭제 효과: ① TMS timing 신뢰 회복 → CT 모집단 복원 ② TMS 선후행 모순 자연 소멸 → S-3 ⓒ 재개 불필요화 가능. 삭제 시 OPS PWA tank module 작업 화면 + BE 일괄 start/complete 경로 제거.
