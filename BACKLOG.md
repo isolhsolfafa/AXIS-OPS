@@ -15,10 +15,11 @@
 > ~~**본질**: 현 active_time_minutes = M/H(across-worker SUM)이지 CT(cycle time) 아님. 진짜 CT = 작업자 세션 across-worker **UNION**(겹침 합산 안 함). 다중작업자 24~28%(act>0 24%/전체 28%, 추적개선 시 상승)에서 CT<M/H 갈라짐.~~
 > **범위**: 새 `ct_time_minutes` 컬럼 + 백필 migration(Sprint 86 active 패턴) — **읽기만 하는 S-1과 달리 새 컬럼 필요라 분리**. Codex M-Q1: union 전 작업자별 pause/BH/break clip 먼저 → 정제 multirange UNION. + 동시작업자 `COUNT(DISTINCT worker_id)`(worker_count 컬럼 신뢰 확인됨). elapsed_minutes 재활용 금지(밤샘·주말 갭 포함 raw span). `CT = M/H ÷ concurrency` 역산 금지(순환).
 
-### S-3 ⓒ 선후행 garbage 하드 제외 + 무결성 KPI 🟡 LOW
-> **검증 발견**: CT 최대 오염원 = 선후행 모순(소수)이 아니라 **act=0 미추적**(이미 S-1에서 제외). DAG는 부차. TMS 가압 모순 124건은 이미 TMS-dirty 제외 → 무결성 KPI 전용. MECH docking 모순 = 26/29가 "도킹 마커(one-action)만 누락"이라 false positive → 진짜 garbage 3건뿐.
-> **범위**: ⓒ-1 task-level DAG(TMS `TANK_MODULE→PRESSURE_TEST`, MECH `PRE(util1/gas1)→POST(util2/gas2)`, side(qr_doc_id) 매칭, **TANK_DOCKING one-action anchor 금지·스테이지 cross-category 금지**, 3소스 evidence). ⓒ-2 무결성 KPI(CT 분리 별 endpoint): **act=0율(시간추적 준수, 협력사별 월추세 — BAT 적응 추적)** + 선후행 모순율.
-> **PI 가압 ≠ TMS 가압**: PI_CHAMBER/PI_LNG_UTIL(완제품, GST 검사)는 tank-module 선행 룰 적용 금지(독립 유효). category+task_id 정확 매칭 필수.
+### S-3 ⓒ 선후행 garbage 하드 제외 + 무결성 KPI 🟢 INFO (보류 — 2026-06-08 결정)
+> **⏸️ 보류 결정 (2026-06-08)**: #82(act=0 제외)+#83(즉시완료율 KPI) 배포로 **S-3 고유 가치 대부분 흡수**. 풀스펙(DAG 모델링)은 CT 작업 중 최고 난이도/위험인데 잔여 가치 최소 → 비효율.
+> **잔여 고유 가치 = 선후행 모순율 KPI 1개**. 단 ① **act=0율은 #83 즉시완료율로 이미 추적**(중복) ② garbage CT 제외 = TMS 이미 제외 + MECH 진짜 garbage **3건뿐**(무시 가능) ③ **tank module 일괄 기능 삭제 시 TMS 선후행 모순 자연 소멸**(↓ 별 항목) → 모순율 KPI가 추적하려던 원인이 기능 삭제로 해결.
+> **재개 조건**: tank batch 삭제 후에도 선후행 모순율이 의미있게 남으면(또는 MECH garbage 증가 시) 최소 구현(MECH PRE→POST DAG + 모순율 KPI). 그때 아래 검증된 설계 재사용.
+> **검증된 설계 (재개 시 사용)**: ⓒ-1 task-level DAG(TMS `TANK_MODULE→PRESSURE_TEST`, MECH `PRE(util1/gas1)→POST(util2/gas2)`, side(qr_doc_id) 매칭, **TANK_DOCKING one-action anchor 금지·스테이지 cross-category 금지**, 3소스 evidence). ⓒ-2 무결성 KPI(CT 분리 별 endpoint): act=0율(#83 중복) + 선후행 모순율. **PI 가압 ≠ TMS 가압**: PI_CHAMBER/PI_LNG_UTIL(완제품, GST)은 tank-module 선행 룰 금지(독립 유효), category+task_id 정확 매칭.
 
 ### #83 협력사×모델×task×dual 분해 (partner-breakdown) ✅ 완료 (v2.31.0, 2026-06-08)
 > 신규 `GET /api/ct/partner-breakdown` read-only. rows(4축) + rollups(partner×task/partner×model) + meta. vs_task_standard_ratio((task,dual) 표준 — DUAL +18% 보정) + tracking_coverage(속도+추적 짝, BAT 61% 생존편향) + instant_completion(화이트리스트 제외). Codex 설계 R2 GO / 구현 M→A 2자합의 DEPLOY_SAFE. pytest 14+회귀 33 GREEN. **후속**: VIEW FE 연동(CtPartnerModelMatrix/협력사 평가 mock→실데이터).
@@ -28,7 +29,7 @@
 
 ### 후속 운영 KPI 권고 (사용자 catch)
 - **BAT 시간추적 교육**: 완료율 100%지만 act=0율 59%(시작=완료 즉시태깅, 실 timing 부재). FNI 7%. BAT 늦게 온보딩 → 적응 중. 월별 act=0율 추세로 개선 추적.
-- **tank module 일괄 시작/종료 편의 기능 삭제 예정**: 삭제 후 TMS timing 신뢰 회복 → CT 모집단 복원 검토.
+- **tank module 일괄 시작/종료 편의 기능 삭제** 🟡 (⏳ **안정화 단계 통과 후** — 2026-06-08 결정): 현재 일괄 기능이 TMS garbage(가압완료∧tank미입력) + act=0 미추적의 원인. **단 아직 운영 안정화 단계라 즉시 삭제 불가** → 안정화 통과 후 삭제. 삭제 효과: ① TMS timing 신뢰 회복 → CT 모집단 복원 ② TMS 선후행 모순 자연 소멸 → S-3 ⓒ 재개 불필요화 가능. 삭제 시 OPS PWA tank module 작업 화면 + BE 일괄 start/complete 경로 제거.
 
 ---
 
