@@ -19,6 +19,7 @@ from app.middleware.jwt_auth import (
     get_current_worker,
     jwt_required,
     manager_or_admin_required,
+    resolve_company_scope,
 )
 from app.services.dashboard_service import (
     InvariantViolationError,
@@ -68,6 +69,10 @@ def get_auto_close_summary():
     worker = get_current_worker()
     if not worker:
         return jsonify({"error": "UNAUTHORIZED", "message": "인증이 필요합니다."}), 401
+
+    # #86: 협력사 스코프 강제 — company 없는 매니저 → CompanyScopeError → 403.
+    #   반드시 try 밖에서 호출 (try 의 except Exception 이 삼키면 errorhandler 우회).
+    resolve_company_scope(worker)
 
     is_admin = bool(worker.is_admin)
     worker_company = worker.company
@@ -141,6 +146,10 @@ def get_auto_close_details():
     worker = get_current_worker()
     if not worker:
         return jsonify({"error": "UNAUTHORIZED", "message": "인증이 필요합니다."}), 401
+
+    # #86: 협력사 스코프 강제 — company 없는 매니저 → CompanyScopeError → 403.
+    #   반드시 try 밖에서 호출 (try 의 except Exception 이 삼키면 errorhandler 우회).
+    resolve_company_scope(worker)
 
     is_admin = bool(worker.is_admin)
     worker_company = worker.company

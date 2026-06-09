@@ -14,7 +14,7 @@ from datetime import date, datetime, timezone, timedelta
 from collections import defaultdict
 
 from app.config import Config
-from app.middleware.jwt_auth import jwt_required, admin_required, manager_or_admin_required, gst_or_admin_required, view_access_required
+from app.middleware.jwt_auth import jwt_required, admin_required, manager_or_admin_required, gst_or_admin_required, view_access_required, resolve_company_scope
 from app.models.worker import (
     get_db_connection, update_approval_status, get_worker_by_id,
     get_inactive_workers, get_deactivated_workers, deactivate_worker, reactivate_worker,
@@ -2003,13 +2003,18 @@ def _get_attendance_data(target_start_kst, target_end_kst, company_filter=None):
 
 
 def _get_manager_company_filter():
-    """Manager인 경우 자사 company 반환, Admin 또는 GST면 None (전체)"""
-    worker = get_worker_by_id(g.worker_id)
-    if worker and worker.is_manager and not worker.is_admin:
-        if worker.company == 'GST':
-            return None  # GST 직원은 전체 협력사 데이터 접근
-        return worker.company
-    return None
+    """협력사 데이터 company 필터 — admin/GST=None(전체), 협력사 매니저=자사, 그 외=403.
+
+    #86 (Sprint 88-BE): company 없는 매니저 전체 누수 차단을 위해
+    공통 RBAC resolver(resolve_company_scope)에 위임. admin/GST/협력사 매니저
+    동작은 100% 동일, company 없는 매니저만 CompanyScopeError(403)로 전환.
+
+    ⚠️ 반드시 라우트의 try/except 블록 **밖**에서 호출할 것.
+       (try 의 except Exception → 500 이 CompanyScopeError 를 삼키면
+        app errorhandler(403) 우회 → 보안 게이트 무력화)
+    """
+    scope = resolve_company_scope(get_worker_by_id(g.worker_id))
+    return None if scope.is_global else scope.company
 
 
 @admin_bp.route("/hr/attendance/today", methods=["GET"])
@@ -2025,9 +2030,10 @@ def get_attendance_today() -> Tuple[Dict[str, Any], int]:
     Returns:
         200: {"date": str, "records": [...], "summary": {...}}
     """
+    # #86: 협력사 스코프 강제 — try 밖 호출 (CompanyScopeError → errorhandler 403)
+    company_filter = _get_manager_company_filter()
     try:
         start, end = _kst_date_range()
-        company_filter = _get_manager_company_filter()
         records, summary = _get_attendance_data(start, end, company_filter=company_filter)
 
         return jsonify({
@@ -2073,9 +2079,10 @@ def get_attendance_by_date() -> Tuple[Dict[str, Any], int]:
     else:
         target_date = datetime.now(_KST).date()
 
+    # #86: 협력사 스코프 강제 — try 밖 호출 (CompanyScopeError → errorhandler 403)
+    company_filter = _get_manager_company_filter()
     try:
         start, end = _kst_date_range(target_date)
-        company_filter = _get_manager_company_filter()
         records, summary = _get_attendance_data(start, end, company_filter=company_filter)
 
         return jsonify({
@@ -2121,9 +2128,10 @@ def get_attendance_summary() -> Tuple[Dict[str, Any], int]:
     else:
         target_date = datetime.now(_KST).date()
 
+    # #86: 협력사 스코프 강제 — try 밖 호출 (CompanyScopeError → errorhandler 403)
+    company_filter = _get_manager_company_filter()
     try:
         start, end = _kst_date_range(target_date)
-        company_filter = _get_manager_company_filter()
         records, _ = _get_attendance_data(start, end, company_filter=company_filter)
 
         # company별 그룹핑

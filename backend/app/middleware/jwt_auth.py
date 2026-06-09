@@ -6,7 +6,8 @@ Sprint 32: 요청 시작 시각 기록 (access log용)
 
 import time
 import logging
-from typing import Callable, Any
+from dataclasses import dataclass
+from typing import Callable, Any, Optional
 from functools import wraps
 
 from flask import request, jsonify, g
@@ -172,6 +173,65 @@ def get_current_worker():
     worker = get_worker_by_id(g.worker_id)
     g.current_worker = worker
     return worker
+
+
+# ============================================================
+# 협력사 데이터 접근 범위 (근태·자동마감 공통 RBAC SSoT) — #86 Sprint 88-BE
+# ============================================================
+
+@dataclass(frozen=True)
+class CompanyScope:
+    """협력사 데이터(근태·자동마감) 접근 범위.
+
+    is_global=True  → 전체 협력사 조회 (admin 또는 GST 소속)
+    is_global=False → company 한정 (협력사 매니저, self-scope)
+    """
+    is_global: bool
+    company: Optional[str]  # is_global=True 면 None
+
+
+class CompanyScopeError(Exception):
+    """협력사 스코프 결정 불가 (company 없는 매니저 등) → 403.
+
+    Flask errorhandler 로 403 변환 (app factory 에 등록).
+    """
+    def __init__(self, message: str = "협력사 데이터 접근 권한이 없습니다."):
+        self.message = message
+        super().__init__(message)
+
+
+def resolve_company_scope(worker) -> CompanyScope:
+    """협력사 데이터 접근 범위 결정 — 근태/자동마감 공통 RBAC 단일 진실원.
+
+    선행: `@manager_or_admin_required` 통과 (= admin 또는 manager 보장).
+
+    규칙:
+      - admin                 → 전체 (is_global=True)
+      - company == 'GST'      → 전체 (GST = 발주·관리 주체, v2.20.14 결정 정합)
+      - 협력사 매니저(company 有) → 자기 회사 한정 (is_global=False, company exact)
+      - company 없는 매니저 / worker None → CompanyScopeError(403)  ← 전체 누수 차단
+
+    ⚠️ 반드시 라우트의 try/except 블록 **밖**에서 호출.
+       (라우트 except Exception → 500 이 CompanyScopeError 를 삼키면
+        app errorhandler(403) 우회 → 보안 게이트 무력화)
+    """
+    if worker is None:
+        raise CompanyScopeError()
+    if worker.is_admin:
+        return CompanyScope(is_global=True, company=None)
+    company = (worker.company or "").strip()
+    if company == "GST":
+        return CompanyScope(is_global=True, company=None)
+    if worker.is_manager and company:
+        return CompanyScope(is_global=False, company=company)
+    # company 없는 매니저 = 전체 협력사 데이터 노출 누수 → 차단
+    logger.warning(
+        "CompanyScope denied: worker_id=%s is_manager=%s company=%r",
+        getattr(worker, "id", None),
+        getattr(worker, "is_manager", None),
+        getattr(worker, "company", None),
+    )
+    raise CompanyScopeError()
 
 
 def admin_required(f: Callable) -> Callable:

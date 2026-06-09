@@ -326,6 +326,19 @@ def create_app(config_class: type = Config) -> Flask:
             "message": "서버 내부 오류가 발생했습니다."
         }), 500
 
+    # 협력사 스코프 거부 핸들러 (#86 Sprint 88-BE) — 403
+    # company 없는 매니저 등 협력사 데이터 접근 범위 결정 불가 시 raise.
+    from app.middleware.jwt_auth import CompanyScopeError
+
+    @app.errorhandler(CompanyScopeError)
+    def handle_company_scope_error(error):
+        """협력사 스코프 거부 → 403 FORBIDDEN"""
+        logger.warning(f"Company scope denied: {error}")
+        return jsonify({
+            "error": "FORBIDDEN",
+            "message": getattr(error, "message", "협력사 데이터 접근 권한이 없습니다."),
+        }), 403
+
     # 일반 예외 핸들러
     @app.errorhandler(Exception)
     def handle_exception(error):
