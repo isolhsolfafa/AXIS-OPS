@@ -2,11 +2,31 @@
 
 > 세션 간 누적되는 의사결정, 아키텍처 판단, 감사 결과를 기록합니다.
 > CLAUDE.md = 프로젝트 고정 정보 / memory.md = 누적 학습 / handoff.md = 세션 인계
-> 마지막 업데이트: 2026-06-10 (ADR-030 추가 — 리드·워커 하이브리드 모델 정책: 리드 기본 opus-4-8/복잡시 fable-5, 워커 기본 sonnet-4-6/복잡시 opus-4-8. VIEW ADR-V026 동기화)
+> 마지막 업데이트: 2026-06-10 (ADR-031~033 추가 — #86 협력사 데이터 RBAC SSoT(v2.32.0) / #87 협력사 규율 대시보드 공정성 계약(v2.33.0) / 근태 협력사 평가 제외 정책. + ADR-030 하이브리드 모델 정책)
 
 ---
 
 ## 1. 아키텍처 의사결정 기록 (ADR)
+
+### ADR-033: 근태(출근율·퇴근미체크) 협력사 평가 제외 정책 (2026-06-10, Twin파파 결정)
+- **맥락**: #87 협력사 규율 대시보드 설계 중, 출근율·퇴근미체크를 평가 지표에 포함하면 근태 기반 "줄세우기"가 됨 → 협력사 반발·게이밍 우려.
+- **결정**: **출근율·퇴근미체크(checkout-miss)·가동률(utilization)은 협력사 평가 지표에서 제외.** 출근 데이터는 Phase 2 `taggingRate`(GST 현장 출근자 분모)·`checkinNoTag`의 **분모로만** 사용. 퇴근미체크는 #86 checkout_status로 근태 페이지에만 표시(평가 X).
+- **남는 평가 지표**: 미종료(openTasks)·자동마감(autoClose)·0초탭(zeroTap)·태깅율(taggingRate)·출근O·미태깅(checkinNoTag)·체크리스트(checklist) — 전부 "태깅 정착/작업 규율" 축이지 근태 축 아님.
+- **영향**: VIEW PartnerDashboardPage 평가 카드에서 근태 컬럼 제외. #87 BACKLOG `checkout-miss-weekly` 별 항목 미진행. [[project_sprint89_partner_discipline]]
+
+### ADR-032: #87 협력사 규율 대시보드 — namespace + 공정성 계약 (2026-06-10, Sprint 89-BE, v2.33.0)
+- **맥락**: VIEW 협력사 공유 대시보드(PartnerDashboardPage) mockup → 실데이터. 협력사 데이터 환원으로 자가교정·태깅 정착 유도. 게이밍/줄세우기 방지가 핵심.
+- **결정 (namespace)**: `/api/admin/discipline/*` (admin 통일 — VIEW 최초안 `/api/partner/discipline/*` 폐기). #86 A′ 정합, `resolve_company_scope` 재사용. 사내서버 이관 시 partner 동 분리.
+- **결정 (공정성 계약)**: ① BE는 **raw + group_avg(peer-only)만** 산출, 등급·composite·줄세우기는 VIEW 책임. ② `group_avg` = 같은 group 내 **타사** 평균 + **peer_n≥3 충족 시만** 노출(소표본 역추론 차단) → 현 협력사 3사(MECH/ELEC 각 3)로는 협력사 매니저 peer=2<3 → **항상 suppress(정상·의도)**, admin/GST만 group_avg. ③ 협력사 매니저 = 자사 row만(타사 raw 미노출). ④ **MECH/ELEC only**(PI/QI/SI=GST 자체공정 제외). ⑤ 추적율<70% → `grade_eligible=false`(미태깅=데이터 누락 라벨). ⑥ 모든 지표 표준 envelope.
+- **Phase 분할**: Phase 1(v2.33.0) = openTasks/autoClose 실측 + group_avg + open-tasks 큐 / Phase 2 = taggingRate/checkinNoTag/zeroTap/checklist/trend.
+- **Codex**: 설계 R1 M=8→R2 조건부 GO(A-spec 5건) / 실코드 R3 M=1(`_PARTNER_SQL` 빈값 제외 누락)→fix(NULLIF+TRIM)→R4 DEPLOY_SAFE M=0. [[project_sprint89_partner_discipline]]
+
+### ADR-031: #86 협력사 데이터 접근 RBAC — `resolve_company_scope()` SSoT (2026-06-10, Sprint 88-BE, v2.32.0)
+- **맥락**: 근태·자동마감 라우트가 각자 company 필터(`_get_manager_company_filter`/`_build_partner_filter`)를 굴려 **company 없는 매니저가 전체 협력사 데이터에 접근**하는 누수 2곳 존재. #87 대시보드(협력사별 민감 데이터) 공유 전 차단 필수.
+- **결정**: `middleware/jwt_auth.resolve_company_scope(worker)` 단일 진실원(SSoT) — admin/GST→전체(is_global), 협력사 매니저(company 有)→자사 exact(TMS(M)/(E) 보존), **company 없는 매니저·None·비매니저→`CompanyScopeError`→403**(전체 누수 차단). `@app.errorhandler` 등록.
+- **핵심 규칙**: resolver는 **반드시 라우트 try/except 밖**에서 호출 — except Exception이 CompanyScopeError를 삼켜 500으로 바꾸면 errorhandler(403) 우회 = 게이트 무력화.
+- **부수**: 근태 mutation 로직 `services/hr_attendance_service.py` 추출(admin.py 2,626→2,456줄, God-route 완화) + `checkout_status`(not_started/working/missed/done, cutoff=LEAST(익일 첫 in, D+1 02:00 KST)) + by_work_site 미체크율 additive.
+- **Codex**: PR1 R3 DEPLOY_SAFE / 설계 R2 GO / step② GO 전부 M=0. **Fable 판정**으로 초기 B안(신규 endpoint) 차선 catch→A′(admin route 재사용+추출). [[project_sprint86_partner_attendance_rbac]]
 
 ### ADR-030: 리드·워커 하이브리드 모델 정책 — `claude-fable-5` 도입 + Opus 4.7 고착 정정 (2026-06-10, VIEW ADR-V026 동기화)
 - **맥락**: 2026-06-09 Anthropic Claude Fable 5(Mythos-class, model id `claude-fable-5`) 공개 출시 — Opus 4.8 상위 추론 모델. Twin파파 catch → 웹 검색 검증 후 CLAUDE.md 모델 버전 관리 규칙대로 갱신. VIEW 세션에서 먼저 반영(ADR-V026), 본 ADR은 OPS 동기화.
@@ -89,7 +109,7 @@
 ⑤ Pre-deploy Gate 통과 → push
 ```
 
-**잠재 ADR-031 후보 (현재 trail 영역, 미래 결정 — ADR-030 은 모델 정책으로 확정됨)**:
+**잠재 ADR 후보 (미발번 — 현재 trail 영역, 미래 결정. ADR-031~033 은 2026-06-10 발번됨)**:
 
 - cowork 측 사용 모델 영역 명시 (현재 정황 영역)
 - cowork ↔ Claude Code ↔ Codex 3자 역할 분리 정책 표준화
