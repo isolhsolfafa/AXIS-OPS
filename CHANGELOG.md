@@ -6,6 +6,17 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.32.1] - 2026-06-10 — 출고처리 실패 알림 메시지 명확화 (FIX-SHIP-COMPLETE-MSG)
+
+> **BE only patch — 메시지 문구만, 로직/에러코드 변경 0**. 박승록(GST PM)이 GBWS-6971/6997 출고처리 시 "SI 공정 task(SI_FINISHING/SI_SHIPMENT)를 찾을 수 없습니다" 기술 메시지가 헷갈린다는 catch.
+
+- **원인(코드 버그 아님)**: QR 이미지 배포 전환 ~1달 → pre-transition 제품(앱 공정 기록 0건, active 631건)이 출하 도달 시 SI task 없어 출고처리 실패. `actual_ship_date`도 ETL(생산관리 엑셀 수기) 미입력 → 정상 에러지만 메시지가 불친절.
+- **변경**: `shipment_service.py` 2개 메시지 한글·실무 친화 정정 — ① `SI_TASK_NOT_FOUND`: "이 제품은 앱에서 SI 공정(마무리공정/출하)이 생성되지 않았습니다. … 먼저 QR 스캔으로 공정을 시작한 뒤 출고처리해 주세요"(누락 공정 마무리/출하 명시) ② `SI_FINISHING_NOT_STARTED`: "… 작업자가 마무리공정을 시작(QR 스캔)한 뒤 출고처리해 주세요"(액션 안내 추가). 에러 코드 불변(FE 분기 영향 0).
+- **결정**: pre-transition 자동 출하(SI task 자동 생성) 기능은 **미구현** — "마무리공정 무조건 체크" 정상 워크플로우 전제하 현 시스템 정상. 재발 시 재검토(별 BACKLOG). 출하 SSoT = OPS Push(SI 완료) 우선 + ETL actual_ship_date 보조, best=교집합(factory KPI basis='best' 기존 정합).
+- 검증: pytest `test_ship_complete` 15/15 GREEN(에러 코드 보존). 회귀 0.
+
+---
+
 ## [2.32.0] - 2026-06-10 — #86 협력사 데이터 RBAC + 근태 checkout_status (Sprint 88-BE)
 
 > **BE minor — 협력사 대시보드 공유 1번 모듈**. PR1 보안(RBAC 누수 차단) + step① 리팩토링(god-route 추출) + step② 기능(퇴근 미체크). migration 0. VIEW URL 변경 0.

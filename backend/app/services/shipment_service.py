@@ -155,9 +155,18 @@ def ship_complete(
         (t for t in si_tasks if t.task_id == SI_SHIPMENT and t.is_applicable), None
     )
     if not finishing or not shipment:
+        missing = []
+        if not finishing:
+            missing.append('마무리공정')
+        if not shipment:
+            missing.append('출하')
         return {
             'error': 'SI_TASK_NOT_FOUND',
-            'message': 'SI 공정 task(SI_FINISHING/SI_SHIPMENT)를 찾을 수 없습니다.'
+            'message': (
+                f"이 제품은 앱에서 SI 공정({'/'.join(missing)})이 생성되지 않았습니다. "
+                f"작업자가 해당 제품을 한 번도 QR 스캔(공정 시작)하지 않은 제품입니다. "
+                f"먼저 QR 스캔으로 공정을 시작한 뒤 출고처리해 주세요."
+            )
         }, 404
 
     # 멱등성 — 둘 다 이미 완료된 경우 no-op 성공 (Codex A-Q6)
@@ -177,7 +186,11 @@ def ship_complete(
         if not finishing.started_at:
             return {
                 'error': 'SI_FINISHING_NOT_STARTED',
-                'message': 'SI 마무리공정이 아직 시작되지 않았습니다.'
+                'message': (
+                    'SI 마무리공정이 아직 시작되지 않았습니다. '
+                    '작업자가 마무리공정을 시작(QR 스캔)한 뒤 출고처리해 주세요. '
+                    '(출하완료는 마무리공정 시작 이후 가능)'
+                )
             }, 400
         # completed_at >= started_at 검증 (Codex M-Q5 — 닫히는 task 기준)
         if completed_at < finishing.started_at:
