@@ -48362,3 +48362,142 @@ active_time(task) = Σ over workers  FLOOR( GREATEST(0,  length(session_w ∩ BH
 - 라운드 1 NO-GO M=4: M-1(생존편향)→coverage / M-2(period충돌)→우선순위 / M-3(캐시키) / M-4(KST경계 SQL). A-1~4 반영.
 - 라운드 2 CONDITIONAL_GO: M-2/3/4 CLOSED, 5/1 단일 A급 승인. 잔여 M-5(coverage 슬라이스정렬)·M-6(period 미정의) → v3 반영(period 제거 + coverage 슬라이스 명시).
 - 진행: ③ 구현(statistics_service.py + ct_analysis.py) → ④ pytest TC-S1-01~14 + 회귀(test_sprint85_ct_stats) → ⑤ 배포 전 Codex 최종 → ⑥ v2.x 배포.
+
+---
+
+# Sprint 87-BE — 계획·납기 분석 API (FEAT-PLAN-DELIVERY-ANALYSIS, 2026-06-09)
+
+> **상태**: 📝 설계서 (⚠️ **구현 보류** — VIEW mockup 구조 미확정. mockup 확정 후 endpoint 1:1 재확정 → Codex → 구현)
+> **우선순위**: Phase A1(change_log 기반) 🟠 MEDIUM / Phase A2(태깅 의존) 🟡 LOW
+> **연계**: VIEW `OPS_API_REQUESTS.md` #85 + 블록5 / 단일 진실 source = OPS `CT_PLAN_VS_ACTUAL_LEAD_MOCKUP_SPEC.md` + `CT_LEAD_CAPACITY_ANALYSIS_2026-06-08.md` §1~18
+> **migration**: 0 (전부 read-time, 기존 테이블 + etl.change_log 읽기만)
+> **권한**: `@jwt_required + @gst_or_admin_required` (협력사 manager 차단 — VIEW PlanChangeAnalysisPage 권한과 정합)
+> **위치**: `backend/app/routes/ct_analysis.py` endpoint 추가 (도메인 분리됨 = admin god route 무관) + service 함수
+
+## 1. 배경·목적
+VIEW `PlanChangeAnalysisPage`(계획·납기 분석, admin OR GST manager) = 전부 mockup. mock `.ts`(ctLeadMock.ts / backlogMock.ts) = **API 계약 고정**. BE는 동일 shape를 실데이터로 반환 → VIEW mock→real 스왑(컴포넌트 변경 0). 납기·backlog·계획변경 = `etl.change_log` 기반 = 태깅 무관 = **지금 신뢰** (블록1·2). 공정/제품 lead·가동률 = app 태깅 의존 = provisional.
+
+## 2. 범위 — VIEW 카드 → endpoint 매핑
+
+| 섹션 | 카드 | endpoint | 소스 | 신뢰 | Phase |
+|---|---|---|---|---|---|
+| ① 납기 | DeliveryPerformanceCard | `GET /api/ct/delivery-performance` | change_log vs actual_ship | ✅ | A1 |
+| ① 납기 | PlanComplianceCard | ⚠️ mock 미확인 | change_log | ✅ | A1 |
+| ② Backlog | BacklogTrackingCard | `GET /api/ct/backlog-summary` | plan+change_log | ✅ | A1 |
+| ② Backlog | PlanChangeChurnCard | `GET /api/ct/plan-change-timeline?by=customer` | change_log | ✅ | A1 |
+| ③ lead | ProcessLeadCard | `GET /api/ct/process-lead?category=` | app vs plan | 🟡 | A2 |
+| ③ lead | ProductLeadBreakdownCard | `GET /api/ct/product-lead-breakdown?sn=` | plan+app+change_log | 🟡 | A2 |
+| ③ 협력사 | PartnerUtilizationCard | ⚠️ endpoint 미확정(§8/9/11 가동률) | attendance+work_log | 🟡 | A2 |
+| ④ 상관 | PlanImpactCard | ⚠️ mock 미확인(판단보류) | — | 보류 |
+
+> ⚠️ 미확정 3건(PlanCompliance/PartnerUtilization/PlanImpact): mockup 확정 시 mock 읽어 endpoint 수요 확정. 현 설계서 = 확정 5종 중심.
+
+## 3. endpoint 상세 (계약 = mock 인터페이스)
+- **A1-1 delivery-performance**: `DeliveryKpi`+`DeltaBin[]`+`DeliveryGroupStrat[]`+`DeliveryRow[]`. 최초계획=change_log `ship_plan_date` 최古 old_value vs actual_ship. 실측 중앙+4일(지연73/조기33/정시0, n106). 현재 ship_plan=self-fulfilling 금지. 좌측절단 meta.
+- **A1-2 backlog-summary**: `BacklogCat[]`(5분류 561=301+230+22+7+1 합산검증)+`BacklogCustomer[]`. ⚠️고객사별 wip/push/overdue 분해는 신규 계산(§17은 total만). 절대수 우선/12-31=추정보류.
+- **A1-3 plan-change-timeline?by=customer**: `WeekChurn[]`+`HeatRow[]`(고객사×주). push=new>old/pull=new<old. W11(3-11)=truncated. "상시churn" 단정금지.
+- **A2-1 process-lead?category=**: `ProcessLead[]`. MECH 7.9/10(n12 prov)·ELEC 10.3/26(n53 trusted+판넬주석). trk≥4 선택편향 "베타".
+- **A2-2 product-lead-breakdown?sn=**: `ProductLead`(segs 간트). 판넬=원격태깅 off-site +11일lag, "in-house only" 명칭금지.
+
+## 4. 공통 meta·규칙
+- meta: `as_of`/`window`/`tracking_coverage`/`confidence`/`panel_offsite_note`/`changelog_start='2026-03-11'`(좌측절단).
+- 계획축=change_log baseline. read-only(mutation 0). 기존 task-stats 등 불변(스키마 격리).
+
+## 5. Codex 이관
+- 자동 이관 6항목 직접 해당 없음(read-only, no auth/migration) → Opus 자가리뷰 가능하나, mockup spec 블록5 Codex M=6 정정 이력 → **구현 전 Codex 1라운드 권장**(특히 backlog per-customer 분해 신규계산).
+
+## 6. 진행 순서 (현 보류)
+1. ⏸ VIEW mockup 구조 확정(사용자 — PlanCompliance/PartnerUtilization/PlanImpact 포함 여부)
+2. mock 전수 읽어 endpoint 최종 목록 확정
+3. 설계서 endpoint 상세 확정 → Codex 라운드 1
+4. 구현(A1 우선: delivery/backlog/timeline=지금 신뢰) → pytest → 배포
+5. A2(process/product/partner-util) = 태깅 성숙도 보며 "베타"
+
+## 7. pytest
+- A1: change_log seed + delta 분류 + backlog 5분류 합산 + ISO week 집계. read-only(운영 데이터 보존). 회귀: 기존 ct_analysis 불변.
+
+> ⚠️ Sprint 번호 87 = CHANGELOG 최신(86) 기준 가정 — 착수 전 BACKLOG/PROGRESS max 재확인.
+
+---
+
+# Sprint 88-BE — 협력사 데이터 접근 RBAC resolver (#86, FEAT-PARTNER-ATTENDANCE-RBAC, 2026-06-10)
+
+> **상태**: 🟢 PR1 구현 GO (resolver + errorhandler + 6 라우트 가드). PR2(checkout_status/미체크률) = 별도 결정 대기.
+> **우선순위**: 🟠 MEDIUM (보안 누수 차단 + 협력사 대시보드 공유 기반)
+> **단일 진실 source**: `AXIS-VIEW/OPS_API_REQUESTS.md` #86 (사용자 결정 5개) + 본 설계서
+> **migration**: 0
+> **위치**: `backend/app/middleware/jwt_auth.py`(resolver) + `app/__init__.py`(errorhandler) + `routes/admin.py`(근태 4) + `routes/admin_dashboard.py`(자동마감 2)
+
+## 1. 배경 — 누수 2곳
+협력사 데이터(근태·자동마감)에 회사 격리(RBAC)가 있으나 **company 없는 매니저** 경로에서 전체 누수:
+- 근태 `admin.py _get_manager_company_filter()`: `company==None` 매니저 → `return None`(전체).
+- 자동마감 `dashboard_service.py _build_partner_filter()` L173: `worker_company=None & not admin → ("",[])`(전체).
+- 운영 검증: NULL/빈 company active 매니저 = **0명** → 실노출 0, 그러나 가드 부재 = 잠재 사고. 서버사이드 강제 필요(사용자 결정 3).
+
+## 2. 해법 — 공통 resolver (SSoT)
+`resolve_company_scope(worker) -> CompanyScope(is_global, company)`:
+- admin → `(True, None)`  /  company=='GST' → `(True, None)` (GST=발주·관리 주체, v2.20.14 정합)
+- 협력사 매니저(company 有) → `(False, company)` exact (TMS(M)/TMS(E) 분리 보존)
+- **company 없는 매니저 / worker None / 협력사 비-매니저 → `CompanyScopeError` → errorhandler 403**
+
+`@app.errorhandler(CompanyScopeError)` → `{"error":"FORBIDDEN"}`, 403.
+
+⚠️ **핵심 제약**: resolver 는 라우트의 `try/except Exception → 500` **밖**에서 호출.
+   (try 안에서 raise 시 except 가 삼켜 500 → errorhandler(403) 우회 = 게이트 무력화)
+   - 근태 4 라우트: `_get_manager_company_filter()`(resolver 위임) 호출을 try 위로 이동.
+   - 자동마감 2 라우트: `worker None` 체크 직후, `try:` 직전 `resolve_company_scope(worker)` 가드 1줄.
+   - 자동마감 서비스 시그니처(is_admin/worker_company) 불변 → test_sprint71/81/82 회귀 0.
+
+## 3. PR 분리 (CLAUDE.md 리팩토링 7원칙 — 기능변경/리팩토링 비혼합)
+- **PR1 [SECURITY]** (본 sprint): resolver + errorhandler + 6 라우트 가드. 동작은 admin/GST/협력사 100% 동일, **company 없는 매니저만 403**. Before/After pytest GREEN 증명.
+- **PR2 [FEAT additive]** (결정 대기): `checkout_status`(not_started/working/missed/done, 익일 첫 출근 or 익일 02:00 KST cutoff, LATERAL) + `missed_checkout_rate`(가중평균 Σmissed÷Σ출근, work_site 분리). 기존 `status` 불변(additive).
+- **별도 [REFACTOR]**(보류): admin.py(2546줄 god route) `_get_attendance_data` → 신규 `hr_attendance_service.py` 추출. PR1 과 비혼합(원칙 2) → 분리 PR.
+
+## 4. pytest (`tests/backend/test_sprint88_company_scope.py`)
+- resolver 단위(DB-free) 11: admin/admin+company/GST mgr/GST non-mgr/협력사/TMS(M)(E) exact/NULL→403/빈문자→403/공백→403/None→403/협력사 비-mgr→403.
+- 라우트 RBAC: 근태 NULL 매니저→403 / 협력사 매니저 자사 스코프 / admin 전체 / 자동마감 NULL→403 / 협력사 200.
+- 회귀: test_attendance·test_admin_attendance·test_sprint71·81·82 Before==After GREEN.
+
+## 5. Codex
+- 자동 이관 6항목 중 **인증·권한 로직 변경 해당** → 라운드 3(실코드) 위임 후 GO. 라운드 1(M=5)·2(M=1, None 누수 둘 다 → 공통 resolver) 해소 완료.
+
+> 배포 = 사용자 명시 승인(⑦.5) + git tag `pre-refactor-sprint88` 후.
+
+---
+
+## Sprint 88-BE PR2 — 협력사 근태 checkout_status + 미체크률 (B안 확정, 2026-06-10)
+
+> **상태**: 🟡 설계 확정 → Codex 라운드 2 대기. PR1(보안) 별 커밋 완료(ec1fe6d).
+> **배치(Codex 라운드1 N 확인)**: 신규 endpoint + 신규 파일 (admin god-route 불변, D1 추출 보류 유지).
+
+### 배치 (B안)
+- 신규 `GET /api/partner/hr/attendance/summary?date=YYYY-MM-DD`
+- 신규 파일: `backend/app/routes/partner_hr.py` + `backend/app/services/hr_attendance_service.py` (+ `__init__.py` blueprint 등록).
+- 권한 `@jwt_required + @manager_or_admin_required`, 라우트에서 `resolve_company_scope(get_current_worker())` **try 밖** 호출 → scope(PR1 재사용).
+- admin route(`/api/admin/hr/attendance*`) 불변 — VIEW 협력사 카드만 신규 URL로 전환.
+
+### checkout_status (M2=a day-row 확정 — 같은날 재출근 0.04%/3건 → 세션모델 과투자)
+대상 날짜 D(KST), 협력사 worker별 **1행**:
+- check_in = [D, D+1) 내 **MIN**(check_type='in') check_time. work_site = check_in 시점 work_site(M3/M4 기준).
+- **cutoff = LEAST(COALESCE(익일 이후 첫 'in', cutoff_cap), cutoff_cap)**, cutoff_cap = (D+1) 02:00 KST. **같은날 재in 무시**(M2: 익일 이후 'in'만 cutoff 후보).
+- check_out = check_in < t < cutoff 내 **MAX**('out'). **`check_time > check_in_time` 가드**(M3 orphan out 차단).
+- **상태**: check_in NULL→`not_started` / check_out NOT NULL→`done` / now()<cutoff→`working` / else→`missed`.
+- 기존 `status`(not_checked/working/left) 도 동봉(불변, VIEW 호환). checkout_status = additive.
+
+### RBAC (M5) — 단일 scoped CTE
+`scoped_workers` CTE 1개(`company<>'GST' AND approved AND is_active AND (is_global OR company=%s)`)를 records 기반으로 사용. **summary 는 records(Python) 에서 집계** → 2차 쿼리 누수 경로 원천 차단.
+
+### 미체크률 (M4) + work_site 분리
+- by_work_site(GST/HQ): checked_in = check_in 있는 수, missed = checkout_status='missed' 수.
+- **miss_rate = CASE WHEN checked_in>0 THEN missed/checked_in ELSE null END** (분모0 → null, "0%" 오해 차단).
+- total = 양 work_site 합산. (주간 가중평균 = #87 checkout-miss-weekly 별 endpoint.)
+
+### KST (M6)
+- day_start/day_end/cutoff_cap = `(%(date)s::date)::timestamp AT TIME ZONE 'Asia/Seoul'` 류로 **timestamptz** 생성. now() 그대로 timestamptz 비교(타입 일치).
+
+### 입력검증·등록 (Codex A)
+- date 미전달 → 오늘(KST). invalid → 400 INVALID_DATE.
+- `__init__.py` blueprint 등록 필수(체크리스트).
+
+### pytest (Codex 라운드1 A 10 TC 반영)
+not_started/working(cutoff 전)/missed(cutoff 후)/done / 야간조 D+1 01:30 퇴근→done / 같은날 재출근 3건 day-row / orphan out(퇴근<출근)→done 아님 / 분모0→null / work_site GST·HQ 분리 / RBAC(협력사 자사만·admin 전체·company없는 매니저 403).

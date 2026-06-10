@@ -6,6 +6,28 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.32.0] - 2026-06-10 — #86 협력사 데이터 RBAC + 근태 checkout_status (Sprint 88-BE)
+
+> **BE minor — 협력사 대시보드 공유 1번 모듈**. PR1 보안(RBAC 누수 차단) + step① 리팩토링(god-route 추출) + step② 기능(퇴근 미체크). migration 0. VIEW URL 변경 0.
+
+### PR1 [SECURITY] — 협력사 데이터 접근 RBAC resolver
+- `jwt_auth.py` `resolve_company_scope(worker)` 신규(SSoT): admin/GST→전체 / 협력사 매니저→자사 exact(TMS(M)/(E) 분리) / **company 없는 매니저·None·비매니저→CompanyScopeError→403**. `@app.errorhandler(CompanyScopeError)` 등록.
+- 근태 admin 4라우트 + 자동마감 2라우트: resolver를 try **밖** 호출(except가 삼키면 500→errorhandler 우회 차단). 기존 admin/GST/협력사 동작 100% 동일, **company 없는 매니저 전체누수만 차단**(근태 `_get_manager_company_filter` + 자동마감 `_build_partner_filter` 두 누수 통일). Codex 라운드3 DEPLOY_SAFE M=0, pytest 94 GREEN.
+
+### step① [REFACTOR] — 근태 로직 service 추출
+- `_get_attendance_data`/`_kst_date_range`/`_get_attendance_trend_data` → 신규 `services/hr_attendance_service.py`(verbatim). admin.py 2,626→2,456줄. 동작 동일 — Before/After pytest 37==37.
+
+### step② [FEAT] — checkout_status + 미체크률 (additive)
+- `get_checkout_status_map()`: worker_id→checkout_status(not_started/working/missed/done). day-row(같은날 재출근 0.04%→세션모델 미채택), check_in=MIN(in), **cutoff=LEAST(익일이후 첫in, D+1 02:00 KST)**(야간조 오탐0), check_out=check_in<t<cutoff MAX(out)+orphan 가드.
+- `get_attendance_data_with_checkout()`: 기존 status(불변) 병합 + summary by_work_site(GST/HQ) 미체크률(missed/checked_in, 분모0→null). admin `/today`·`/hr/attendance?date=` 노출.
+- 실데이터 정합(6-08 미체크 14.53%). 단일 scoped_workers→records, summary=Python(누수 차단). Codex 설계2+구현 GO M=0. pytest 신규 9 + 회귀 37 GREEN.
+
+### 결정 trail
+- **Fable 판정**으로 초기 B안(신규 endpoint) 차선 catch → A′(admin route 재사용 + 추출). PR1이 이미 보안 필요 제거 + 계약(OPS_API_REQUESTS #86 L8717) 정합.
+- VIEW 후속(별 repo): PartnerAttendanceCard `enabled:isAdminOrGst` 가드 제거 + checkout_status/miss_rate 렌더. #87(checkout-miss-weekly) 별 sprint.
+
+---
+
 ## [2.31.0] - 2026-06-08 — #83 CT 협력사×모델×task×dual 분해 집계 (partner-breakdown)
 
 > **BE only minor — 신규 `GET /api/ct/partner-breakdown`(read-only) + statistics_service.py 신규 함수, DB/migration 0**. CT 분석의 본질=협력사 평가. 현 task-stats는 task-pooled(partner 차원 전무) → VIEW CtPartnerModelMatrix·협력사 평가 페이지 mock. partner 분해 축 추가.
