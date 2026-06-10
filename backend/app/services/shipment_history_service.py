@@ -722,6 +722,9 @@ def get_shipment_details(
         total = int(row['total'] or 0) if row else 0
 
         # items
+        # #88: 출하 처리자(shipment_worker) — SI_SHIPMENT 완료자.
+        #   COALESCE(closed_by 대행 출하완료 매니저, worker_id 현장 태깅 작업자) → workers.name.
+        #   엑셀 backfill(앱 SI task 없음) → NULL (VIEW "엑셀"/"—" 표시). DUAL = 최근 완료 1명 대표.
         sql_items = cte + f"""
             SELECT serial_number, sales_order, model, customer,
                    partner_mech, partner_elec, plan_date, actual_date, source,
@@ -734,8 +737,19 @@ def get_shipment_details(
                        WHEN actual_date IS NOT NULL AND plan_date IS NOT NULL
                            THEN (actual_date - plan_date)
                        ELSE NULL
-                   END AS delay_days
+                   END AS delay_days,
+                   sw.shipment_worker
             FROM best_ship
+            LEFT JOIN LATERAL (
+                SELECT w.name AS shipment_worker
+                FROM app_task_details t
+                LEFT JOIN workers w ON w.id = COALESCE(t.closed_by, t.worker_id)
+                WHERE t.serial_number = best_ship.serial_number
+                  AND t.task_id = 'SI_SHIPMENT'
+                  AND t.completed_at IS NOT NULL
+                ORDER BY t.completed_at DESC
+                LIMIT 1
+            ) sw ON TRUE
             WHERE {where_sql}
             ORDER BY COALESCE(actual_date, plan_date) DESC NULLS LAST, serial_number ASC
             LIMIT %s OFFSET %s;
@@ -755,6 +769,7 @@ def get_shipment_details(
                 'status': r['status'],
                 'source': r['source'],
                 'delay_days': int(r['delay_days']) if r['delay_days'] is not None else None,
+                'shipment_worker': r['shipment_worker'],  # #88: SI_SHIPMENT 완료자 (excel=null)
             })
         cur.close()
 

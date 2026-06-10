@@ -6,6 +6,15 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.32.2] - 2026-06-10 — #88 출하상세에 출하 처리자(shipment_worker) 1필드 추가
+
+> **BE only patch — additive 1필드, read-only, migration/route 0**. VIEW OPS_API_REQUESTS #88. VIEW 선반영 완료(types+ShipmentList 컬럼) → BE 배포 시 자동 표시.
+
+- `shipment_history_service.get_shipment_details()` items[] 에 `shipment_worker`(string|null) 추가. SI_SHIPMENT 완료자 = `COALESCE(closed_by 대행 출하완료 매니저, worker_id 현장 태깅 작업자)` → workers.name. LEFT JOIN LATERAL(완료 task 최근 1명 대표, DUAL 포함). 엑셀 backfill(앱 SI task 없음) → null.
+- 검증: 실데이터 스모크('한성현' 현장 / 'ADMIN' 대행 / excel=null) + pytest test_shipment_history 32/32 GREEN(additive 회귀 0). 기존 items 필드 불변.
+
+---
+
 ## [2.32.1] - 2026-06-10 — 출고처리 실패 알림 메시지 명확화 (FIX-SHIP-COMPLETE-MSG)
 
 > **BE only patch — 메시지 문구만, 로직/에러코드 변경 0**. 박승록(GST PM)이 GBWS-6971/6997 출고처리 시 "SI 공정 task(SI_FINISHING/SI_SHIPMENT)를 찾을 수 없습니다" 기술 메시지가 헷갈린다는 catch.
