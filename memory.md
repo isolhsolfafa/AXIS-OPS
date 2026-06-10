@@ -2,11 +2,19 @@
 
 > 세션 간 누적되는 의사결정, 아키텍처 판단, 감사 결과를 기록합니다.
 > CLAUDE.md = 프로젝트 고정 정보 / memory.md = 누적 학습 / handoff.md = 세션 인계
-> 마지막 업데이트: 2026-06-10 (ADR-031~033 추가 — #86 협력사 데이터 RBAC SSoT(v2.32.0) / #87 협력사 규율 대시보드 공정성 계약(v2.33.0) / 근태 협력사 평가 제외 정책. + ADR-030 하이브리드 모델 정책)
+> 마지막 업데이트: 2026-06-10 (ADR-034 추가 — 미종료 기준 통일 + 규율 지표 정의 보정(v2.35.0). 선행 ADR-031~033 #86 RBAC / #87 공정성 / 근태 평가 제외)
 
 ---
 
 ## 1. 아키텍처 의사결정 기록 (ADR)
+
+### ADR-034: 미종료 기준 단일화 + 규율 지표 정의 보정 (#87, v2.35.0, 2026-06-10 사용자 catch)
+- **맥락**: v2.34.0 규율 대시보드 운영 catch — ① summary openTasks 가 month 무시한 실시간(월 summary인데 불일치) ② discipline 미종료 기준이 정식 "미종료 작업 현황"(`/tasks/pending/grouped`)보다 느슨(비해당·TEST 포함) ③ checkinNoTag 가 taggingRate 와 중복.
+- **결정 (미종료 기준 단일화)**: discipline 의 미종료 정의 = **정식 미종료 작업 현황과 동일** — `started_at IS NOT NULL AND completed_at IS NULL AND is_applicable=TRUE AND COALESCE(force_closed,FALSE)=FALSE AND customer<>'TEST CUSTOMER'`. 한 시스템 안에서 "미종료" 정의가 갈리지 않게 canonical 기준 따름.
+- **결정 (집계 anchor)**: summary 지표는 **월단위** — openTasks 는 `started_at`∈월(autoClose/zeroTap 의 completed_at, taggingRate 의 출근월과 anchor 일관). 단 `/open-tasks` 큐는 **realtime**(현재 backlog 드릴다운) → 카드(월)≠큐(현재)는 의도된 차이, meta `*_basis` 명시.
+- **결정 (중복 지표 제거)**: `checkinNoTag`(출근−태깅 인원) = taggingRate(태깅÷출근)의 카운트 버전 = 중복 → 폐기. 그 슬롯 = `checkoutMiss`(퇴근미체크율, #86 근태 동일 기준 월 가중) **참고 지표(reference_only, 평가 제외)** — ADR-033 정합(근태 평가 X, 참고 표시 O).
+- **결정 (비협력사 제외)**: `_EXCLUDED_PARTNERS`=('GST','SH') — 자체수행 GST + 비협력사 구데이터 SH. task/worker 파생 양쪽 NULL 처리. 향후 비협력사 발견 시 이 set 에 추가.
+- **영향**: Codex 설계 R1 GO/실코드 R2 DEPLOY_SAFE M=0. pytest 32/32. [[project_sprint89_partner_discipline]]
 
 ### ADR-033: 근태(출근율·퇴근미체크) 협력사 평가 제외 정책 (2026-06-10, Twin파파 결정)
 - **맥락**: #87 협력사 규율 대시보드 설계 중, 출근율·퇴근미체크를 평가 지표에 포함하면 근태 기반 "줄세우기"가 됨 → 협력사 반발·게이밍 우려.
