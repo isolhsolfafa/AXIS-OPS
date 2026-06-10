@@ -700,6 +700,17 @@ _DUAL_SQL = "CASE WHEN p.model ILIKE '%%DUAL%%' THEN 'DUAL' ELSE 'SINGLE' END"
 # one-click 화이트리스트 — 즉시완료가 정상인 task (즉시완료율 평가 제외).
 #   TANK_DOCKING(트리거 마커) / SI_SHIPMENT(출하 단일액션) / SELF_INSPECTION / INSPECTION(자주검사).
 _INSTANT_WHITELIST = frozenset({"TANK_DOCKING", "SI_SHIPMENT", "SELF_INSPECTION", "INSPECTION"})
+
+
+def is_instant_whitelisted(task_id: Optional[str]) -> bool:
+    """one-click 화이트리스트 판정 — 정상 즉시완료(평가 제외) task 여부.
+
+    Sprint 89 zeroTap(Phase 2) 등 외부 모듈이 #83 정의를 재사용하기 위한 공개 helper (A3).
+    ⚠️ `_INSTANT_WHITELIST` private 직접 import 금지 → 본 함수로만 접근 (단일 정의 보장).
+    """
+    return task_id in _INSTANT_WHITELIST
+
+
 # side(L/R) 분리가 유의미한 task — TMS/TANK_MODULE 한정 (그 외 false, A5).
 _SIDE_APPLICABLE_TASKS = frozenset({"TANK_MODULE"})
 _INSTANT_THRESHOLD_MIN = 1  # active_time_minutes <= 1 → 즉시완료

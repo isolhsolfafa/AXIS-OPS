@@ -6,6 +6,22 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.33.0] - 2026-06-10 — #87 협력사 규율 종합 대시보드 Phase 1 (Sprint 89-BE)
+
+> **BE only minor — 신규 service + route + blueprint, read-only, migration 0**. VIEW PartnerDashboardPage 실데이터 공급 1차(재사용 지표 중심). 공정성(게이밍 방지) = BE는 raw + group_avg(peer-only)만, 등급·줄세우기는 VIEW.
+
+- **신규 파일**: `services/partner_discipline_service.py`(집계 — envelope/group_avg/build_discipline_summary/build_open_tasks) + `routes/admin_discipline.py`(2 endpoint) + `__init__.py` blueprint 등록 1줄. `statistics_service.is_instant_whitelisted()` 공개 helper 추가(A3, #83 `_INSTANT_WHITELIST` 단일 정의 재사용 — Phase 2 zeroTap용 선반영).
+- **endpoint 2개** (`@jwt_required + @manager_or_admin_required` + `resolve_company_scope` try-밖, #86 누수 차단):
+  - `GET /api/admin/discipline/summary?month=YYYY-MM` — partner×group row + 지표 envelope. Phase 1 실측 = `openTasks`(미종료 실시간) + `autoClose`(월 자동마감). Phase 2(`taggingRate`/`checkinNoTag`/`zeroTap`/`checklist`) = placeholder(`available=false, raw=null, phase='phase2'`).
+  - `GET /api/admin/discipline/open-tasks` — 미종료 즉시조치 큐(실시간) + `repeat` 플래그(동일 worker OR 동일 S/N+task 최근 30일 2회+).
+- **공정성 핵심**: `group_avg` = peer-only(자사 제외) + `peer_n≥3` 충족 시만(소표본 역추론 차단). 현 협력사 수(MECH 3 / ELEC 3) → 협력사 매니저 peer=2<3 → 항상 suppress(`insufficient_peers`, 정상·의도) / admin·GST(global)만 peer_n=3 노출. 협력사 매니저 응답 = 자사 row만(타사 raw·by_partner 미노출). 모집단 = MECH/ELEC only + `_PARTNER_SQL` = `NULLIF(TRIM(CASE…END),'')`(NULL/빈값/공백 partner 일괄 제외).
+- **근태 평가 제외(2026-06-10 결정)**: 출근율·퇴근미체크는 협력사 평가 지표에서 제외(줄세우기 방지). 출근 데이터는 Phase 2 taggingRate/checkinNoTag 분모로만. #86 checkout_status는 근태 페이지 전용 유지.
+- **Codex 검증**: 설계 라운드1(M=8 NO-GO)→v2 전건 반영→라운드2 조건부 GO(A-spec 5건 고정) / 실코드 라운드3(M=1 NO-GO — `_PARTNER_SQL` 빈값 제외 누락, A-spec 4 위반)→fix(NULLIF+TRIM 단일점)→**라운드4 DEPLOY_SAFE/GO(M=0)**. M 추적 6→4→1→0.
+- 검증: pytest `test_sprint89_partner_discipline` 22/22 GREEN(순수 `_group_avg`/`_envelope`/`_month_range` + monkeypatch builder scope/suppress/placeholder + `_PARTNER_SQL` 정규화 가드 + HTTP 401 wiring). 회귀 0(신규 파일, 기존 touch = `statistics_service` 공개 helper 추가 + `__init__` 등록 2줄). DB·migration 0.
+- **Phase 2(별 sprint)**: taggingRate(GST onsite 분모)/checkinNoTag/zeroTap(instant 제외)/checklist(applicable resolver 추출)/trend. **선행 의무**: #87 완료 → 계획·납기(Sprint 87-BE) 진행. VIEW FE(별 repo): PartnerDashboardPage mock→API 연동.
+
+---
+
 ## [2.32.2] - 2026-06-10 — #88 출하상세에 출하 처리자(shipment_worker) 1필드 추가
 
 > **BE only patch — additive 1필드, read-only, migration/route 0**. VIEW OPS_API_REQUESTS #88. VIEW 선반영 완료(types+ShipmentList 컬럼) → BE 배포 시 자동 표시.
