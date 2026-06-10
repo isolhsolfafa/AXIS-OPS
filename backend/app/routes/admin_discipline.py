@@ -25,6 +25,7 @@ from app.services.partner_discipline_service import (
     KST,
     build_discipline_summary,
     build_open_tasks,
+    build_trend,
 )
 
 logger = logging.getLogger(__name__)
@@ -97,6 +98,43 @@ def get_discipline_open_tasks():
         return jsonify({
             "error": "INTERNAL_ERROR",
             "message": "미종료 작업 큐 조회 실패",
+        }), 500
+
+    return jsonify(response), 200
+
+
+@admin_discipline_bp.route("/trend", methods=["GET"])
+@jwt_required
+@manager_or_admin_required
+def get_discipline_trend():
+    """월별 규율 추이 (Phase 2a) — autoClose/taggingRate/zeroTap. openTasks 제외."""
+    raw = request.args.get("months", "6").strip()
+    try:
+        months = int(raw)
+    except ValueError:
+        return jsonify({
+            "error": "INVALID_MONTHS",
+            "message": "months 는 1~12 정수여야 합니다.",
+        }), 400
+    if months < 1 or months > 12:
+        return jsonify({
+            "error": "INVALID_MONTHS",
+            "message": "months 는 1~12 범위여야 합니다.",
+        }), 400
+
+    worker = get_current_worker()
+    if not worker:
+        return jsonify({"error": "UNAUTHORIZED", "message": "인증이 필요합니다."}), 401
+
+    scope = resolve_company_scope(worker)  # try 밖
+
+    try:
+        response = build_trend(months, scope)
+    except Exception as exc:
+        logger.exception("[Sprint89] discipline trend failed: %s", exc)
+        return jsonify({
+            "error": "INTERNAL_ERROR",
+            "message": "규율 추이 조회 실패",
         }), 500
 
     return jsonify(response), 200

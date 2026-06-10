@@ -6,6 +6,22 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.34.0] - 2026-06-10 — #87 협력사 규율 대시보드 Phase 2a (Sprint 89-BE)
+
+> **BE only minor — read-only, migration 0**. Phase 1(v2.33.0)의 placeholder 4지표 중 3개(taggingRate/checkinNoTag/zeroTap) 실측 전환 + trend endpoint 신규. checklist=Phase 2b(별 Codex). **Phase 1 버그 2건 동반 정정**.
+
+- **taggingRate / checkinNoTag** (`_query_tagging`): partner=`workers.company` × group=`workers.role`. 분모 `gst_onsite`=월 `work_site='GST'` 출근 DISTINCT worker(HQ-only·무출근 제외, 의미론 B), 분자 `tagged`=그 중 `work_start_log`(task_category=role) 1건+ DISTINCT worker(월 단위, 의미론 A). taggingRate=tagged/onsite, checkinNoTag=onsite−tagged. onsite=0 → raw=null.
+- **zeroTap** (`_query_zerotap`): partner=task파생 × group. 완료 MECH/ELEC `active_time_minutes IS NOT NULL` 모집단 중 `active<=1`(미추적, 의미론 C=#83 정합) ÷ substantive. one-click은 `statistics_service.is_instant_whitelisted()` 공개 helper로 Python 제외(SQL whitelist 재정의 0). 실데이터 BAT/MECH 0.66·FNI 0.17(MECH 미추적 심함, CT 발견 일치)·ELEC ~0.
+- **trend** `GET /api/admin/discipline/trend?months=N(1~12, 기본 6)`: 월별 autoClose/taggingRate/zeroTap series. openTasks는 실시간이라 제외. 협력사 매니저=자사 series만.
+- **union universe + provenance** (Codex D): summary row = task파생 ∪ worker파생 partner(누락 방지) + meta `partner_provenance`(task/worker 출처 진단).
+- **공정성 유지**: `group_avg` peer-only k≥3(rate=분모0 peer 제외 / count=0 포함, 불변식 raw=None⟺missing=None), 협력사 매니저 자사 row만, 추적율<70% grade_eligible=false, `resolve_company_scope` try-밖.
+- **Phase 1 동반 정정 2건**: ① `_PARTNER_SQL`에 `NULLIF(…,'GST')` 추가 — 일부 제품 mech/elec_partner='GST'(GST 자체수행)가 협력사 row로 유입되던 noise 제외(openTasks/autoClose 포함). ② `build_open_tasks` 타사 작업자 실명 누수 차단 — task partner=자사이나 실제 작업자 company≠자사(또는 NULL)면 `worker_name`/`worker_id` 마스킹 + `worker_masked` 플래그(M-Q8/M-Q8-NULL).
+- **Codex 검증**: 설계 라운드1 GO(의미론 A/B/C/D 판정) / 실코드 라운드2 M=2(M-Q5 checkinNoTag missing·M-Q8 실명 누수)→라운드3 M=1(M-Q5→A 강등 합의, M-Q8-NULL 신규)→**라운드4 DEPLOY_SAFE/GO M=0**.
+- 검증: pytest `test_sprint89_partner_discipline` 31/31 GREEN(순수+monkeypatch builder+trend+마스킹 4케이스+_PARTNER_SQL 가드) + 실데이터 스모크(rows=7 GST제외, taggingRate/zeroTap 정합, active 분포 검증). 회귀 0. DB·migration 0.
+- **Phase 2b(별 sprint)**: checklist(applicable resolver 추출). VIEW FE(별 repo): PartnerDashboardPage placeholder→실측 렌더 + trend 차트.
+
+---
+
 ## [2.33.0] - 2026-06-10 — #87 협력사 규율 종합 대시보드 Phase 1 (Sprint 89-BE)
 
 > **BE only minor — 신규 service + route + blueprint, read-only, migration 0**. VIEW PartnerDashboardPage 실데이터 공급 1차(재사용 지표 중심). 공정성(게이밍 방지) = BE는 raw + group_avg(peer-only)만, 등급·줄세우기는 VIEW.
