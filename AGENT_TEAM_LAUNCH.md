@@ -48501,3 +48501,138 @@ VIEW `PlanChangeAnalysisPage`(계획·납기 분석, admin OR GST manager) = 전
 
 ### pytest (Codex 라운드1 A 10 TC 반영)
 not_started/working(cutoff 전)/missed(cutoff 후)/done / 야간조 D+1 01:30 퇴근→done / 같은날 재출근 3건 day-row / orphan out(퇴근<출근)→done 아님 / 분모0→null / work_site GST·HQ 분리 / RBAC(협력사 자사만·admin 전체·company없는 매니저 403).
+
+---
+
+# Sprint 89-BE — 협력사 규율 종합 대시보드 (#87, FEAT-PARTNER-DISCIPLINE-DASHBOARD, 2026-06-10)
+
+> **상태**: 🟢 **Phase 1 배포 완료 (OPS v2.33.0, 2026-06-10)** — summary(openTasks/autoClose 실측 + group_avg) + open-tasks. Phase 2(taggingRate/checkinNoTag/zeroTap/checklist/trend) 대기.
+> **Codex trail**: 설계 라운드1(M=8 NO-GO)→v2 전건→라운드2 조건부 GO(A-spec 5건) / 실코드 라운드3(M=1, `_PARTNER_SQL` 빈값 제외 누락 = A-spec 4 위반)→fix(NULLIF+TRIM 단일점)→**라운드4 DEPLOY_SAFE/GO(M=0)**. M 추적 6→4→1→0. pytest test_sprint89 22/22 GREEN.
+> **우선순위**: 🟠 MEDIUM (협력사 대시보드 공유 = 태깅 정착 레버) · **Phase 2 완료돼야 계획·납기(Sprint 87-BE) 진행**
+> **단일 진실 source**: VIEW `partnerMgmtMock.ts`(API 계약) + `PartnerDashboardPage.tsx`
+> **네임스페이스**: `/api/admin/discipline/*` (admin 통일 — #86 A′ 정합, resolve_company_scope 재사용. 사내서버 이관 시 partner 동 분리)
+> **권한**: `@jwt_required + @manager_or_admin_required` + `resolve_company_scope(worker)` (협력사 매니저 자사 scope, #86 재사용)
+> **migration**: 0 (read-only 집계)
+
+## 1. 배경·원칙
+VIEW PartnerDashboardPage = 협력사 규율 공유 대시보드(mockup). 협력사 데이터 환원 → 자가교정 → 태깅 정착.
+**공정성(게이밍 방지, #83 Codex 경고 정합)**:
+- **MECH/ELEC 협력사만** (PI/QI/SI = GST 자체공정 제외).
+- **평가 = 그룹평균 대비 상대값** (절대 임계 X). BE는 raw + group_avg 제공, 등급 산출은 VIEW.
+- **미태깅 = 데이터 누락**(작업 부재 아님) / **출근O·미체크 = 앱 태깅 미정착 신호**(근태 불량 아님) — 라벨 BE meta로 명시.
+- 추적율<70% 공정/협력사 = 등급 미부여 (Codex 공정성).
+
+## 2. 엔드포인트 (3개)
+| endpoint | 블록 | 성격 |
+|---|---|---|
+| `GET /api/admin/discipline/summary?month=YYYY-MM` | PartnerDiscipline(6지표) + CheckoutMiss + Checklist + group_avg | 월 집계 |
+| `GET /api/admin/discipline/open-tasks` | OpenTaskQueue(미종료 즉시조치) | 실시간 |
+| `GET /api/admin/discipline/trend?months=N` | DiscTrend(auto/zeroTap/taggingRate) + CheckoutMissTrend(MECH/ELEC + by_partner) | 월별 시계열 |
+
+## 3. 지표 SQL 매핑 (실데이터 검증 완료)
+| 지표 | 소스 | 재사용/신규 |
+|---|---|---|
+| openTasks 미종료 | app_task_details started·미완 + partner | ✅ (work.py pending) |
+| autoClose 자동마감 | dashboard_service auto-close partner matrix | ✅ (#81) |
+| zeroTap 0초탭% | work_completion_log duration=0 ÷ total, **one-click 제외**(TANK_DOCKING/SI_SHIPMENT 등 #83 화이트리스트) | 🆕 |
+| taggingRate 태깅율% | DISTINCT work_start_log worker ÷ DISTINCT attendance(출근) worker, by company | 🆕 |
+| checkinNoTag 출근O·미체크 | attendance 출근 − work_start_log 태깅 worker 수 | 🆕 |
+| attendance 출근율% | hr.partner_attendance (#86) | ✅ |
+| checkoutMiss | #86 checkout_status='missed' by partner (v2.32.0 재사용) | ✅ |
+| checklist completionPct/topMissing | checklist.checklist_record ÷ checklist_master by partner | 🆕 |
+| trend(월별) | 위 지표 월별 GROUP BY | 🆕 |
+
+- **partner 정규화** = `_COMPANY_SQL`(TMS(M)/(E) 분리, v2.20.11) 재사용. group(MECH/ELEC) = task_category 매핑.
+- **신규 service**: `backend/app/services/partner_discipline_service.py` (admin.py god-route 회피, CLAUDE.md L545) + `routes/admin_discipline.py`.
+
+## 4. Phase 분할 (점진)
+- **Phase 1 (재사용 중심)**: summary 핵심(openTasks/autoClose/attendance/checkoutMiss + group_avg) + open-tasks endpoint. 기존 4 소스 조합 → 빠른 1차.
+- **Phase 2 (신규 집계)**: taggingRate/checkinNoTag/zeroTap/checklist + trend endpoint. attendance×work_start_log 조인 + 월별 시계열 + one-click 화이트리스트 + checklist 집계.
+
+## 5. pytest
+- Phase 1: summary partner×group 행 + group_avg + checkoutMiss(#86 재사용) + RBAC(협력사 자사 scope·None→403) + open-tasks.
+- Phase 2: taggingRate 분모(출근)·분자(태깅) + checkinNoTag + zeroTap one-click 제외 + checklist 완료율 + trend 월별. 운영 데이터 보존(read-only).
+
+## 6. Codex 이관
+- read-only·migration 0 → 자동 이관 6항목 직접 해당 X. 단 **복잡 집계(태깅율 조인·zeroTap 화이트리스트·공정성 라벨)** + #83 게이밍 방지 정합 → **설계 라운드1 권장**, 구현 라운드 Phase별.
+
+> ⚠️ Sprint 번호 89 = Sprint 88(#86) 다음. 착수 전 BACKLOG/PROGRESS max 재확인.
+
+## v2 갱신 (Codex 라운드1 M=8/A=1 전건 반영, 2026-06-10)
+
+### A1 (M1+M9) 공정성 = BE 응답 계약으로 강제
+모든 지표 row 응답 표준 envelope:
+```
+{ metric, raw, group_avg(|null), tracking_coverage(0~1),
+  grade_eligible(bool), ineligibility_reason(null|'tracking_below_70'|'insufficient_sample'),
+  available(bool), phase('phase1'|'phase2'), label, label_note }
+```
+- BE는 **composite/등급/줄세우기 미산출** (raw + group_avg 만). 등급 = VIEW.
+- 추적율<70% → `grade_eligible=false` + `ineligibility_reason='tracking_below_70'`.
+- Phase 1 미구현 지표 → `available=false, raw=null, phase='phase2'` (VIEW 오해 차단, M9).
+- `label_note` = 미태깅="데이터 누락(작업 부재 아님)" / 출근O·미체크="앱 태깅 미정착(근태 불량 아님)".
+
+### A2 (M2) taggingRate 분모 = GST 현장 출근자 (HQ 제외)
+- **분모 = `work_site='GST'` 출근자** (HQ 본사=판넬 off-site 작업 → 현장 태깅 대상 아님 → 제외).
+- 분자 = 그 중 work_start_log 태깅 worker (DISTINCT, 같은날 재출근 무관).
+- meta 분리 제공: `attendance_total`(전체 출근) / `gst_onsite`(분모) / `hq_excluded` / `tagged` / `checkinNoTag`(=gst_onsite−tagged). VIEW 해석.
+- checkinNoTag = GST 현장 출근했으나 work_start_log 0건 worker.
+
+### A3 (M3) zeroTap = #83 instant 정의 재사용 (미추적 ≠ 정상 즉시완료)
+- #83 `statistics_service` 의 instant/one-click 화이트리스트(`_INSTANT_WHITELIST`: TANK_DOCKING/SI_SHIPMENT/SELF_INSPECTION/INSPECTION 등 SINGLE_ACTION+정상 즉시완료) **그대로 import 재사용**.
+- zeroTap("미추적") = `duration_minutes=0 AND task NOT IN _INSTANT_WHITELIST` (또는 #83 active_time 기준). **정상 즉시완료(instant)는 제외**.
+- ⚠️ duration=0 단독 금지 — #83 instant_completion 정의와 동일 소스 함수 재사용(중복 정의 금지).
+
+### A4 (M4) checkoutMiss 월집계 = 가중 (일별 합산)
+- 월/trend = 일별 `checked_in`/`missed` 합산 → `miss_rate = SUM(missed)/SUM(checked_in)` (가중평균). by_partner 동일.
+- get_checkout_status_map(일별, #86) 을 월 루프 합산 (#86 checkout-miss-weekly 정의 정합).
+
+### A5 (M5) checklist 분모 = applicable resolver 재사용 (Phase 2, 신중)
+- 단순 record÷master **금지**. 기존 `check_mech_completion_all`/`check_elec_completion`/TM DUAL applicable 로직을 **공용 resolver 함수로 추출** → denominator.
+- DUAL L/R qr_doc_id, `phase1_applicable`, `checker_role`(JIG/QI 분기), `scope_rule`(tank_in_mech) 전부 정합.
+- 응답 meta: `applicable_total` / `checked_total` / `excluded_by_role` / `excluded_by_scope` / `excluded_by_phase`. completionPct = checked÷applicable.
+- ⚠️ 복잡도 高 → Phase 2 후반, 별도 Codex 라운드.
+
+### A6 (M6) 모집단 = MECH/ELEC only 명시
+- **모든 지표 SQL**: `task_category IN ('MECH','ELEC')` + `partner_display <> '(미지정)'` (PI/QI/SI=GST 자동 제외).
+- TMS(M)/(E) 정규화 = `_COMPANY_SQL` 단일 helper 일관 적용 (전 지표 동일).
+
+### A7 (M7) group_avg 누수 방지 (핵심)
+- 협력사 매니저 응답 = **자사 raw만**.
+- `group_avg` = 같은 group(MECH/ELEC) 협력사 **k≥3 충족 시만** 익명 평균 제공, 미달 → `null + suppressed_reason='insufficient_peers'` (소표본 경쟁사 역추론 차단).
+- **`by_partner`(타사 raw) = admin/GST 전용**. 협력사 매니저 요청 시 자사만 반환(타사 raw 미노출).
+- trend by_partner 동일 (매니저=자사 trend만).
+
+### A8 (M8/A) 응답 shape 권한 분기
+- **manager**: `{ self_rows(자사), group_avg(k≥3시), suppressed_meta }`.
+- **admin/GST**: `{ all_rows, by_partner, group_avg }`.
+- summary 단일 endpoint 유지하되 scope.is_global 분기로 shape 결정. metric block별 builder 내부 분리.
+
+### A9 (M9) Phase 경계 = 응답에 명시
+- Phase 1 응답: 미구현 지표(taggingRate/checkinNoTag/zeroTap/checklist) = `available=false, raw=null, phase='phase2'`.
+- pytest 필수 커버: RBAC(자사 scope·None→403) / group_avg suppression(k<3→null) / by_partner admin전용 / MECH·ELEC only / TMS(M)(E) / tagging 분모(GST onsite, HQ 제외) / zeroTap instant 제외 / checkout 월가중 / Phase1 available=false 플래그.
+
+### 진행 순서 (v2)
+Codex 라운드2 (v2 재검증) → 잔여 M=0 = Phase 1 구현(envelope + RBAC + group_avg suppression + 재사용 4지표 + open-tasks) → pytest → Phase 2(신규 집계 4종 + trend, checklist는 별 Codex).
+
+## 라운드2 반영 — 조건부 GO (A 5건 구현 명세 고정, 2026-06-10)
+
+**Phase1 차단 M=0 → 구현 GO.** 단 아래 5건 명세 고정 필수:
+
+1. **group_avg = peer-only (자사 제외) + peer_n≥3**: manager group_avg = 같은 group 내 **타사** 평균(자사 제외). `peer_n≥3` 충족 시만 노출, 미달 → `group_avg=null, suppressed_reason='insufficient_peers'`.
+   - ⚠️ **현 협력사 수(MECH 3=BAT/FNI/TMS(M), ELEC 3=C&A/P&S/TMS(E))로는 peer=2<3 → 협력사 매니저 group_avg 항상 suppress** (정상·의도). admin/GST만 group_avg 실수치.
+2. **by_partner + 타사 raw row = admin/GST 전용**. 협력사 매니저 응답엔 타사 row 자체 미포함(자사만).
+3. **open-tasks manager = 자사 worker만 실명, 타사 row 미반환**. `repeat` = 동일 worker OR 동일 S/N+task 최근 `repeat_window_days=30` 내 `repeat_min_count=2`회+ 미종료.
+4. **모든 Phase1 SQL = `task_category IN ('MECH','ELEC')` + `partner_display <> '(미지정)'`**.
+5. **Phase2 지표(tagging/checkinNoTag/zeroTap/checklist) = envelope placeholder** `available=false, raw=null, phase='phase2'`.
+
+**envelope 추가 필드**: `suppressed_reason`, `sample_n`, `peer_n`(group_avg 근거), `window`(month/range), `scope`(self|global) — meta.
+**A3 보강**: #83 `_INSTANT_WHITELIST` private import 금지 → `statistics_service.py` 에 **공개 helper `is_instant_whitelisted(task_id)`** 추가해 재사용.
+**A2 보강(Phase2)**: taggingRate 분모 = "해당일 GST in 1회+ 있으면 onsite 분모 포함, HQ-only 제외". `no_assignment`(출근했으나 작업배정 0)는 등급 분모서 제외 or grade_eligible=false.
+**Phase1 TC 추가**: peer-only 평균 suppress / peer_n=3 노출 경계(admin) / 기존 pending 실명 누수 방지 / available=false raw null 렌더 계약.
+
+### Phase 1 구현 범위 (확정)
+- `services/partner_discipline_service.py`: envelope builder + group_avg(peer-only, k≥3) + 재사용 4지표(openTasks/autoClose/attendance/checkoutMiss) + Phase2 placeholder.
+- `routes/admin_discipline.py`: summary + open-tasks (trend=Phase2). `resolve_company_scope` try-밖. scope.is_global 분기(manager=자사+suppress / admin=all+by_partner).
+- `statistics_service.py`: `is_instant_whitelisted()` 공개 helper 추가(A3, Phase2 zeroTap용 — Phase1선 미사용이나 helper만 선반영 가능).
+- pytest: RBAC 4케이스 + group_avg suppress + by_partner admin전용 + open-tasks 자사실명 + MECH/ELEC only + TMS(M)(E) + Phase2 placeholder.
