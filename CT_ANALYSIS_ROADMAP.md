@@ -1,10 +1,31 @@
 # CT 분석 페이지 — 아이디어 인큐베이션 (Ideas / Long-incubating)
 
+> 📌 **이 문서 = CT 작업 단일 진입점(허브)**. CT 관련 문서가 흩어져 있어 아래 인덱스로 통합 관리 (2026-06-10).
+
+## 📁 CT 문서 인덱스
+
+| 문서 | 성격 | 상태 | 비고 |
+|---|---|---|---|
+| **`CT_ANALYSIS_ROADMAP.md`** (이 문서) | 🟢 살아있는 허브/로드맵 | 인큐베이션 | CT 아이디어·결정 마스터. 새 CT 작업은 여기서 시작 |
+| `CT_S1_BASIS_ACTIVE_DESIGN.md` | 🔒 frozen 설계 | 배포됨 (v2.29.0) | S-1 ⓐ CT basis=active + 미추적 제외 + 신뢰컷오프 |
+| `CT_S2_TRUE_CT_UNION_DESIGN.md` | 🔒 frozen 설계 | 배포됨 (v2.30.0) | S-2 ⓑ 진짜 CT across-worker UNION + 동시작업자 |
+| `CT_PARTNER_BREAKDOWN_DESIGN.md` | 🔒 frozen 설계 | 배포됨 (v2.31.0) | #83 협력사×모델×task×dual 분해 (partner-breakdown) |
+| `CT_LEAD_CAPACITY_ANALYSIS_2026-06-08.md` | 📊 종합 분석 스냅샷 | 2026-06-08 | lead vs CT 분해 / 협력사 가동률 / 지연원인 지도 / Codex 자문 |
+| `CT_PLAN_VS_ACTUAL_LEAD_MOCKUP_SPEC.md` | 📐 VIEW mockup spec | 인큐베이션 | 계획 vs 실적 Lead 분석 FE mockup |
+| `CT_DATA_EXPLORATION_RESULTS.md` | 📊 쿼리 결과 스냅샷 | 2026-06-05 | CT 데이터 탐험 raw 결과값 |
+
+> **다음 단계 = 미구현(별 sprint)**: S-3 ⓒ DAG 선후행 garbage 제외 + 무결성 KPI (act=0율·선후행 모순율, side매칭, TANK_DOCKING anchor 금지, PI가압≠TMS가압) — BACKLOG `📊 CT 분석 후속` 참조.
+> ⚠️ **현 단계 결론(handoff 정합)**: CT product-level 해석은 **태깅율 70%+ 까지 보류**. 우선순위 = 태깅 정착(운영/교육/UX). #87 협력사 규율 대시보드가 그 측정·환원 수단.
+
+---
+
 > **목적**: 컨텍스트 영구 보존용. 결정은 시급하지 않음. 오랜 시간 아이디어 도모 후 결정.
 >
 > **트리거**: 2026-05-22 사용자 catch — "종료누락분석페이지는 목표가 명확하지 작업자 개선이지, 여기에 IQR 데이터가 Minitap 으로 들어가는거고 minitap detail view 가 CT 분석"
 >
 > **상태**: 📝 IDEAS (인큐베이션 중) — 결정 sprint 없음. Sprint 71 (종료 누락 분석) 완료 후 별도 시점 재논의.
+
+> **📄 2026-06-08 종합 분석 → `CT_LEAD_CAPACITY_ANALYSIS_2026-06-08.md`** (lead vs CT 분해 / change_log 진짜납기 +4일 / 협력사 가동률 work_site=GST 분모 / 태깅 참여율↔가동률 / "대기=병렬생산" 간트 증명 / 지연원인 지도 / Codex 다차원 자문 GO). VIEW mockup = `CT_PLAN_VS_ACTUAL_LEAD_MOCKUP_SPEC.md`.
 
 ---
 
