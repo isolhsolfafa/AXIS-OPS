@@ -2,11 +2,22 @@
 
 > 세션 간 누적되는 의사결정, 아키텍처 판단, 감사 결과를 기록합니다.
 > CLAUDE.md = 프로젝트 고정 정보 / memory.md = 누적 학습 / handoff.md = 세션 인계
-> 마지막 업데이트: 2026-05-11 (ADR-029 추가 — Cowork ↔ Claude Code 작업 분리 정책 정식 채택, 5-07 분리 검토 영역 도달 후 5-11 9건 누적 catch 임계 초과)
+> 마지막 업데이트: 2026-06-10 (ADR-030 추가 — 리드·워커 하이브리드 모델 정책: 리드 기본 opus-4-8/복잡시 fable-5, 워커 기본 sonnet-4-6/복잡시 opus-4-8. VIEW ADR-V026 동기화)
 
 ---
 
 ## 1. 아키텍처 의사결정 기록 (ADR)
+
+### ADR-030: 리드·워커 하이브리드 모델 정책 — `claude-fable-5` 도입 + Opus 4.7 고착 정정 (2026-06-10, VIEW ADR-V026 동기화)
+- **맥락**: 2026-06-09 Anthropic Claude Fable 5(Mythos-class, model id `claude-fable-5`) 공개 출시 — Opus 4.8 상위 추론 모델. Twin파파 catch → 웹 검색 검증 후 CLAUDE.md 모델 버전 관리 규칙대로 갱신. VIEW 세션에서 먼저 반영(ADR-V026), 본 ADR은 OPS 동기화.
+- **결정 (양 티어 하이브리드)**: Fable 2배 단가 → 상시 사용 X, 복잡 판단에만 한시 투입.
+  - **리드**: 기본 `claude-opus-4-8`(Opus 최상위) / Fable 5 승격 트리거 6종(① 아키텍처·3페이지+ cross-cutting ② God Component 분할 등 복잡 리팩토링 설계 ③ BE 계약·데이터 모델 모호 ④ 회귀 큰 root-cause(Opus로 막힐 때) ⑤ 다중 제약 trade-off ⑥ Codex 합의 실패 최종 판정).
+  - **워커**: 기본 `claude-sonnet-4-6`(Sonnet 최상위) / 복잡 리팩토링·회귀 큰 Sprint만 `claude-opus-4-8`.
+  - 근거: Fable = SWE-Bench Pro 80.3%(vs Opus 4.8 69.2%) 우수하나 단가 $10/$50 = Opus 2배 → 일반 Sprint엔 과투자. 어려운 설계 판단에만 ROI 확보.
+- **부수 catch**: 갱신 과정에서 리드가 그동안 `claude-opus-4-7`에 고착 → Opus 4.8 출시 후에도 한 단계 낮은 모델로 운영된 사실 발견. "세션 시작 체크"가 실제로 안 돌고 있었음 = 교훈. 워커 Opus 승격 시에도 4.7 아닌 **4.8** 명시(고착 재발 방지).
+- **주의**: Fable 5는 고위험 토픽(사이버보안·생물/화학·model distillation) 쿼리를 자동으로 Opus 4.8로 fallback(세션 ~5% 미만). GST 공장 대시보드 업무 특성상 영향 거의 없음.
+- **영향**: AXIS-OPS/CLAUDE.md 리드/워커 모델 라인 + 모델 버전 관리 규칙 §"Claude 모델" 갱신 완료. VIEW ADR-V026 와 1:1 정합.
+- **trail**: 출처 = anthropic.com/news/claude-fable-5-mythos-5, TechCrunch/IT Pro(2026-06-09). ⚠️ 본 모델명은 Claude Code 환경 기본 모델 목록(Claude 4.X)엔 미등재 — Twin파파 웹검증 기반 운영 정책 기록.
 
 ### ADR-029: Cowork ↔ Claude Code 작업 분리 정책 (2026-05-11)
 
@@ -78,7 +89,7 @@
 ⑤ Pre-deploy Gate 통과 → push
 ```
 
-**잠재 ADR-030 후보 (현재 trail 영역, 미래 결정)**:
+**잠재 ADR-031 후보 (현재 trail 영역, 미래 결정 — ADR-030 은 모델 정책으로 확정됨)**:
 
 - cowork 측 사용 모델 영역 명시 (현재 정황 영역)
 - cowork ↔ Claude Code ↔ Codex 3자 역할 분리 정책 표준화
