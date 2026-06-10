@@ -11,12 +11,13 @@ VIEW PartnerDashboardPage(협력사 규율 공유) 실데이터. read-only, migr
 - 추적율<70% → grade_eligible=false. 미태깅=데이터누락(작업부재 아님) 라벨.
 
 Phase 1: openTasks / autoClose (재사용) + envelope + RBAC + group_avg + open-tasks 큐.
-Phase 2a: taggingRate / checkinNoTag / zeroTap 실측 + trend endpoint (Codex 라운드1 GO).
+Phase 2a: taggingRate / zeroTap 실측(평가) + checkoutMiss(퇴근미체크율, 참고) + trend endpoint.
 Phase 2b(placeholder): checklist (applicable resolver 추출, 별도 Codex 라운드).
 
-⚠️ 근태 평가 제외 (2026-06-10 Twin파파 결정): 출근율(attendance)·퇴근미체크(checkoutMiss)는
-   협력사 평가 지표로 사용하지 않음 (줄세우기 방지). 출근 데이터는 taggingRate/checkinNoTag
-   의 분모로만 사용. #86 checkout_status 는 근태 페이지 전용으로 유지.
+⚠️ 근태 평가 제외 (2026-06-10 Twin파파 결정): 출근율·퇴근미체크는 협력사 **평가** 지표로
+   사용하지 않음 (줄세우기 방지). 단 checkoutMiss(퇴근미체크율)는 근태 페이지 동일 기준으로
+   **참고(reference_only)** 표시 — 평가/등급/group 줄세우기 미반영. 출근 데이터는 taggingRate 분모로도 사용.
+   ⚠️ checkinNoTag(출근O·미태깅)는 taggingRate 와 중복(=onsite−tagged)이라 폐기 → checkoutMiss 로 교체.
 
 Phase 2a 의미론 (Codex 라운드1 판정):
 - (A) taggingRate "tagged" = 월 DISTINCT worker (월 1회+ 태깅=tagged). 일 단위 정착률은 보류.
@@ -44,31 +45,30 @@ _PHASE2B_PENDING = ('checklist',)  # Phase 2b 미구현 (placeholder 유지)
 # partner_display 정규화 (v2.20.11 _COMPANY_SQL 정합) — MECH/ELEC 만. group = category.
 #   MECH: mech_partner ('TMS'→TMS(M)) / ELEC: elec_partner ('TMS'→TMS(E))
 #   ⚠️ NULLIF(TRIM(...), '') 래핑 (Codex 라운드3 M-6): NULL/빈문자열/공백 partner 를
-#      단일 IS NOT NULL 조건으로 일괄 제외 → SELECT·WHERE·GROUP BY·company_filter 전부 정합
-#      (A-spec 4 = partner_display 미지정 제외, raw·peer_n 모집단 일치 보장).
-#   ⚠️ NULLIF(..., 'GST') 추가 (Phase 2a 스모크 catch): 일부 제품 mech/elec_partner='GST'
-#      (GST 자체수행) → 협력사 아님 → 제외. worker 파생(company<>'GST')과 정합. Phase 1 정정 동반.
+#      단일 IS NOT NULL 조건으로 일괄 제외 → SELECT·WHERE·GROUP BY·company_filter 전부 정합.
+#   ⚠️ 비협력사 제외 (_EXCLUDED_PARTNERS): 'GST'(자체수행) + 'SH'(비협력사/구데이터, 2026-06-10
+#      Twin파파 제외 지시) → NULL → IS NOT NULL 로 일괄 제외. worker 파생도 동일 set 제외.
+_EXCLUDED_PARTNERS = ('GST', 'SH')  # 협력사 아님 — task/worker 파생 양쪽 제외
 _PARTNER_SQL = (
-    "NULLIF(NULLIF(TRIM(CASE "
+    "NULLIF(NULLIF(NULLIF(TRIM(CASE "
     "WHEN t.task_category = 'MECH' THEN CASE WHEN pi.mech_partner = 'TMS' THEN 'TMS(M)' ELSE pi.mech_partner END "
     "WHEN t.task_category = 'ELEC' THEN CASE WHEN pi.elec_partner = 'TMS' THEN 'TMS(E)' ELSE pi.elec_partner END "
-    "ELSE NULL END), ''), 'GST')"
+    "ELSE NULL END), ''), 'GST'), 'SH')"
 )
 
 _METRIC_LABEL = {
     'openTasks': '미종료', 'autoClose': '자동마감', 'zeroTap': '0초탭%',
-    'taggingRate': '태깅율%', 'checkinNoTag': '출근O·미체크', 'attendance': '출근율%',
-    'checkoutMiss': '퇴근미체크%', 'checklist': '체크리스트완료%',
+    'taggingRate': '태깅율%', 'checkoutMiss': '퇴근미체크율%', 'checklist': '체크리스트완료%',
 }
 _METRIC_NOTE = {
     'taggingRate': '미태깅 = 데이터 누락(작업 부재 아님)',
-    'checkinNoTag': '출근O·미체크 = 앱 태깅 미정착 신호(근태 불량 아님)',
     'zeroTap': '0초탭 = 미추적(정상 즉시완료 제외)',
+    'checkoutMiss': '퇴근미체크율 = 참고 지표(평가 제외, 근태 페이지 동일 기준). 출근 후 퇴근 미체크 비율',
 }
-# 낮을수록 좋음(true) / 높을수록 좋음(false=taggingRate, attendance)
+# 낮을수록 좋음(true) / 높을수록 좋음(false=taggingRate)
 _LOWER_BETTER = {
     'openTasks': True, 'autoClose': True, 'zeroTap': True, 'taggingRate': False,
-    'checkinNoTag': True, 'attendance': False, 'checkoutMiss': True, 'checklist': False,
+    'checkoutMiss': True, 'checklist': False,
 }
 
 
@@ -86,12 +86,18 @@ def _envelope(
     metric: str, raw: Optional[float], *, available: bool, phase: str,
     group_avg: Optional[float] = None, peer_n: Optional[int] = None,
     tracking_coverage: Optional[float] = None, suppressed_reason: Optional[str] = None,
-    sample_n: Optional[int] = None,
+    sample_n: Optional[int] = None, reference_only: bool = False,
 ) -> Dict[str, Any]:
-    """지표 1개 표준 envelope (공정성 계약 강제, A1)."""
-    grade_eligible = available and raw is not None
+    """지표 1개 표준 envelope (공정성 계약 강제, A1).
+
+    reference_only=True: 참고 지표(평가/등급/줄세우기 제외). 근태 평가 제외 결정 정합 —
+      checkoutMiss(퇴근미체크율)는 근태 페이지 동일값을 참고로만 표시(평가 X). grade_eligible=False.
+    """
+    grade_eligible = available and raw is not None and not reference_only
     ineligibility_reason: Optional[str] = None
-    if available and tracking_coverage is not None and tracking_coverage < _TRACKING_THRESHOLD:
+    if reference_only:
+        ineligibility_reason = 'reference_only'
+    elif available and tracking_coverage is not None and tracking_coverage < _TRACKING_THRESHOLD:
         grade_eligible = False
         ineligibility_reason = 'tracking_below_70'
     return {
@@ -105,6 +111,7 @@ def _envelope(
         'suppressed_reason': suppressed_reason,
         'sample_n': sample_n,
         'available': available,
+        'reference_only': reference_only,
         'phase': phase,
         'label': _METRIC_LABEL.get(metric, metric),
         'label_note': _METRIC_NOTE.get(metric),
@@ -116,17 +123,26 @@ def _envelope(
 # Phase 1 raw 집계 (partner_display × group) — MECH/ELEC only, 미지정 제외
 # ---------------------------------------------------------------------------
 
-def _query_open_tasks_count(cur, company_filter: Optional[str]) -> Dict[Tuple[str, str], int]:
-    """미종료(started·미완) task 수 — partner×group. 실시간(현재 열린 것)."""
+def _query_open_tasks_count(cur, start, end, company_filter: Optional[str]) -> Dict[Tuple[str, str], int]:
+    """미종료 task 수 — partner×group, **월단위**(A: started_at ∈ [start,end) AND 미완).
+
+    미종료 기준 = 정식 `/tasks/pending/grouped` 정합 (B): is_applicable=TRUE +
+    force_closed=FALSE + TEST CUSTOMER 제외. (autoClose 가 completed_at 으로 월 자르듯
+    openTasks 는 started_at 기준 — "그 달 시작됐는데 아직 미종료").
+    """
     sql = f"""
         SELECT {_PARTNER_SQL} AS partner, t.task_category AS grp, COUNT(*) AS n
         FROM app_task_details t
         JOIN plan.product_info pi ON pi.serial_number = t.serial_number
         WHERE t.task_category IN ('MECH','ELEC')
-          AND t.started_at IS NOT NULL AND t.completed_at IS NULL
+          AND t.started_at >= %s AND t.started_at < %s
+          AND t.completed_at IS NULL
+          AND COALESCE(t.force_closed, FALSE) = FALSE
+          AND t.is_applicable = TRUE
+          AND COALESCE(pi.customer, '') <> 'TEST CUSTOMER'
           AND {_PARTNER_SQL} IS NOT NULL
     """
-    params: List[Any] = []
+    params: List[Any] = [start, end]
     if company_filter:
         sql += f" AND {_PARTNER_SQL} = %s"
         params.append(company_filter)
@@ -144,6 +160,8 @@ def _query_auto_close_count(cur, start, end, company_filter: Optional[str]) -> D
         WHERE t.task_category IN ('MECH','ELEC')
           AND t.close_reason LIKE 'AUTO_CLOSED%%'
           AND t.completed_at >= %s AND t.completed_at < %s
+          AND t.is_applicable = TRUE
+          AND COALESCE(pi.customer, '') <> 'TEST CUSTOMER'
           AND {_PARTNER_SQL} IS NOT NULL
     """
     params: List[Any] = [start, end]
@@ -161,7 +179,10 @@ def _query_partner_groups(cur) -> List[Tuple[str, str]]:
         SELECT DISTINCT {_PARTNER_SQL} AS partner, t.task_category AS grp
         FROM app_task_details t
         JOIN plan.product_info pi ON pi.serial_number = t.serial_number
-        WHERE t.task_category IN ('MECH','ELEC') AND {_PARTNER_SQL} IS NOT NULL
+        WHERE t.task_category IN ('MECH','ELEC')
+          AND t.is_applicable = TRUE
+          AND COALESCE(pi.customer, '') <> 'TEST CUSTOMER'
+          AND {_PARTNER_SQL} IS NOT NULL
         ORDER BY 2, 1
     """
     cur.execute(sql)
@@ -177,7 +198,7 @@ def _query_worker_partner_groups(cur, company_filter: Optional[str]) -> List[Tup
     sql = """
         SELECT DISTINCT w.company AS partner, w.role::text AS grp
         FROM workers w
-        WHERE w.company IS NOT NULL AND w.company <> 'GST'
+        WHERE w.company IS NOT NULL AND w.company NOT IN ('GST', 'SH')
           AND w.role::text IN ('MECH','ELEC')
           AND COALESCE(w.is_active, TRUE) = TRUE
     """
@@ -201,7 +222,7 @@ def _query_tagging(cur, start, end, company_filter: Optional[str]) -> Dict[Tuple
             SELECT DISTINCT w.id, w.company AS partner, w.role::text AS grp
             FROM workers w
             JOIN hr.partner_attendance pa ON pa.worker_id = w.id
-            WHERE w.company IS NOT NULL AND w.company <> 'GST'
+            WHERE w.company IS NOT NULL AND w.company NOT IN ('GST', 'SH')
               AND w.role::text IN ('MECH','ELEC')
               AND COALESCE(w.is_active, TRUE) = TRUE
               AND pa.check_type = 'in' AND pa.work_site = 'GST'
@@ -248,6 +269,8 @@ def _query_zerotap(cur, start, end, company_filter: Optional[str]) -> Dict[Tuple
         WHERE t.task_category IN ('MECH','ELEC')
           AND t.completed_at >= %s AND t.completed_at < %s
           AND t.active_time_minutes IS NOT NULL
+          AND t.is_applicable = TRUE
+          AND COALESCE(pi.customer, '') <> 'TEST CUSTOMER'
           AND {_PARTNER_SQL} IS NOT NULL
     """
     params: List[Any] = [start, end]
@@ -267,6 +290,57 @@ def _query_zerotap(cur, start, end, company_filter: Optional[str]) -> Dict[Tuple
     return {k: (v[0], v[1]) for k, v in acc.items()}
 
 
+def _query_checkout_miss(cur, start, end, company_filter: Optional[str]) -> Dict[Tuple[str, str], Tuple[int, int]]:
+    """퇴근 미체크율 (참고 지표) — (company, role) → (checked_in_days, missed_days).
+
+    #86 checkout_status 정의(일별 cutoff = (D+1) 02:00 KST)를 월×협력사로 가중 집계.
+    miss_rate = SUM(미체크 worker-day) / SUM(출근 worker-day) (A4 일별 합산).
+    ⚠️ 단순화: #86 의 next_day_in LEAST 보정(back-to-back 0.04%)은 생략 — 참고 지표라 무시 가능.
+    근태 평가 제외 정합 → 평가 X 참고(reference_only).
+    """
+    company_clause = "AND w.company = %(company)s" if company_filter else ""
+    sql = f"""
+        WITH checkins AS (
+            SELECT pa.worker_id, w.company AS partner, w.role::text AS grp,
+                   (pa.check_time AT TIME ZONE 'Asia/Seoul')::date AS d,
+                   MIN(pa.check_time) AS cin
+            FROM hr.partner_attendance pa
+            JOIN workers w ON w.id = pa.worker_id
+            WHERE pa.check_type = 'in'
+              AND pa.check_time >= %(start)s AND pa.check_time < %(end)s
+              AND w.company IS NOT NULL AND w.company NOT IN ('GST', 'SH')
+              AND w.role::text IN ('MECH','ELEC')
+              AND w.approval_status = 'approved' AND COALESCE(w.is_active, TRUE) = TRUE
+              {company_clause}
+            GROUP BY pa.worker_id, w.company, w.role, d
+        ),
+        co AS (
+            SELECT c.worker_id, c.partner, c.grp, c.d, c.cin,
+                   ((c.d + 1)::timestamp AT TIME ZONE 'Asia/Seoul') + INTERVAL '2 hours' AS cutoff
+            FROM checkins c
+        ),
+        done AS (
+            SELECT co.worker_id, co.d, MAX(pa.check_time) AS cout
+            FROM co
+            JOIN hr.partner_attendance pa
+              ON pa.worker_id = co.worker_id AND pa.check_type = 'out'
+             AND pa.check_time > co.cin AND pa.check_time < co.cutoff
+            GROUP BY co.worker_id, co.d
+        )
+        SELECT co.partner, co.grp,
+               COUNT(*) AS checked_in_days,
+               COUNT(*) FILTER (WHERE d2.cout IS NULL) AS missed_days
+        FROM co
+        LEFT JOIN done d2 ON d2.worker_id = co.worker_id AND d2.d = co.d
+        GROUP BY co.partner, co.grp
+    """
+    params: Dict[str, Any] = {'start': start, 'end': end}
+    if company_filter:
+        params['company'] = company_filter
+    cur.execute(sql, params)
+    return {(r['partner'], r['grp']): (r['checked_in_days'], r['missed_days']) for r in cur.fetchall()}
+
+
 # ---------------------------------------------------------------------------
 # group_avg (peer-only, k>=3) — A7 / 라운드2 #1
 # ---------------------------------------------------------------------------
@@ -283,9 +357,8 @@ def _group_avg(
 
     `missing` (불변식: raw 가 None 가능한 지표 ⟺ missing=None, 그래야 raw=None ⟺ peer 제외 일관):
     - 0.0 (openTasks/autoClose): raw 가 항상 count(≥0), 절대 None 아님 → 누락 협력사 = 정상 0건 → 분모 포함.
-    - None (taggingRate/zeroTap/checkinNoTag): 분모(출근 onsite / substantive) 없으면 raw=None →
-      측정 불가 협력사는 peer 에서 제외. checkinNoTag 는 count 지만 taggingRate 와 동일 출근 모집단
-      (onsite=0 → raw=None)이라 None 정합 (M-Q5: count 분류보다 모집단 일관성 우선).
+    - None (taggingRate/zeroTap/checkoutMiss 등 rate): 분모(출근 onsite / substantive / 출근일)
+      없으면 raw=None → 측정 불가 협력사는 peer 에서 제외 (raw=None ⟺ peer 제외 일관).
     """
     partners = [p for (p, g) in all_groups if g == grp]
     if scope.is_global:
@@ -319,10 +392,11 @@ def build_discipline_summary(month: str, scope) -> Dict[str, Any]:
         with conn.cursor() as cur:
             task_groups = _query_partner_groups(cur)               # task 파생 partner×group
             worker_groups = _query_worker_partner_groups(cur, None)  # worker 파생 (taggingRate)
-            open_counts = _query_open_tasks_count(cur, None)        # 전체 (자사 노출은 row 필터로)
+            open_counts = _query_open_tasks_count(cur, start, end, None)  # 월단위 (started_at ∈ month)
             auto_counts = _query_auto_close_count(cur, start, end, None)
             tagging = _query_tagging(cur, start, end, None)         # {(p,g):(onsite,tagged)}
             zerotap = _query_zerotap(cur, start, end, None)         # {(p,g):(sub,zero)}
+            checkout_miss = _query_checkout_miss(cur, start, end, None)  # {(p,g):(in_days,miss_days)} 참고
     finally:
         put_conn(conn)
 
@@ -332,13 +406,14 @@ def build_discipline_summary(month: str, scope) -> Dict[str, Any]:
     all_groups = sorted(task_set | worker_set, key=lambda x: (x[1], x[0]))
 
     # rate 지표 group_avg 용 by-partner dict (분모0/누락 = None → peer 제외)
-    tagrate_by: Dict[Tuple[str, str], Optional[float]] = {}
-    checkinNoTag_by: Dict[Tuple[str, str], Optional[float]] = {}
-    for k, (onsite, tagged) in tagging.items():
-        tagrate_by[k] = round(tagged / onsite, 4) if onsite > 0 else None
-        checkinNoTag_by[k] = float(onsite - tagged) if onsite > 0 else None
+    tagrate_by: Dict[Tuple[str, str], Optional[float]] = {
+        k: (round(tagged / onsite, 4) if onsite > 0 else None) for k, (onsite, tagged) in tagging.items()
+    }
     zerorate_by: Dict[Tuple[str, str], Optional[float]] = {
         k: (round(zero / sub, 4) if sub > 0 else None) for k, (sub, zero) in zerotap.items()
+    }
+    checkoutmiss_by: Dict[Tuple[str, str], Optional[float]] = {
+        k: (round(miss / ind, 4) if ind > 0 else None) for k, (ind, miss) in checkout_miss.items()
     }
 
     # 노출 대상 row: admin=전체 / manager=자사만
@@ -361,7 +436,7 @@ def build_discipline_summary(month: str, scope) -> Dict[str, Any]:
             'autoClose', raw_auto, available=True, phase='phase1',
             group_avg=ga2, peer_n=pn2, suppressed_reason=sr2, sample_n=int(raw_auto))
 
-        # ── Phase 2a: taggingRate / checkinNoTag (분모 gst_onsite) ──
+        # ── Phase 2a: taggingRate (분모 gst_onsite, 평가) ──
         onsite, tagged = tagging.get((partner, grp), (0, 0))
         tag_raw = round(tagged / onsite, 4) if onsite > 0 else None
         ga_t, pn_t, sr_t = _group_avg(tagrate_by, grp, all_groups, scope, missing=None)
@@ -369,11 +444,13 @@ def build_discipline_summary(month: str, scope) -> Dict[str, Any]:
             'taggingRate', tag_raw, available=True, phase='phase2',
             group_avg=ga_t, peer_n=pn_t, suppressed_reason=sr_t, sample_n=onsite)
 
-        cnt_raw = float(onsite - tagged) if onsite > 0 else None
-        ga_c, pn_c, sr_c = _group_avg(checkinNoTag_by, grp, all_groups, scope, missing=None)
-        metrics['checkinNoTag'] = _envelope(
-            'checkinNoTag', cnt_raw, available=True, phase='phase2',
-            group_avg=ga_c, peer_n=pn_c, suppressed_reason=sr_c, sample_n=onsite)
+        # ── Phase 2a: checkoutMiss (퇴근미체크율, 참고 지표 — 평가 제외) ──
+        in_days, miss_days = checkout_miss.get((partner, grp), (0, 0))
+        cm_raw = round(miss_days / in_days, 4) if in_days > 0 else None
+        ga_c, pn_c, sr_c = _group_avg(checkoutmiss_by, grp, all_groups, scope, missing=None)
+        metrics['checkoutMiss'] = _envelope(
+            'checkoutMiss', cm_raw, available=True, phase='phase2', reference_only=True,
+            group_avg=ga_c, peer_n=pn_c, suppressed_reason=sr_c, sample_n=in_days)
 
         # ── Phase 2a: zeroTap (substantive 모집단, one-click 제외) ──
         sub, zero = zerotap.get((partner, grp), (0, 0))
@@ -406,8 +483,13 @@ def build_discipline_summary(month: str, scope) -> Dict[str, Any]:
         'rows': rows,
         'meta': {
             'phase1_metrics': ['openTasks', 'autoClose'],
-            'phase2a_metrics': ['taggingRate', 'checkinNoTag', 'zeroTap'],
+            'phase2a_metrics': ['taggingRate', 'zeroTap', 'checkoutMiss'],
+            'reference_metrics': ['checkoutMiss'],  # 평가 제외 참고 (근태 동일값)
             'phase2b_pending': list(_PHASE2B_PENDING),
+            # 집계 anchor 명시 (Advisory): openTasks=월(started 기준)·autoClose/zeroTap=월(completed)·
+            #   taggingRate/checkoutMiss=월(출근). /open-tasks 큐는 realtime_all_open (값 다름, 의도).
+            'openTasks_basis': 'monthly_started_open',
+            'missed_task_standard': 'is_applicable=TRUE, force_closed=FALSE, TEST 제외 (정식 미종료 현황 정합)',
             'min_peers': _MIN_PEERS,
             'groups_present': sorted({g for _, g in target}),
             'partner_provenance': provenance,
@@ -448,6 +530,9 @@ def build_open_tasks(scope) -> Dict[str, Any]:
                 LEFT JOIN workers w ON w.id = t.worker_id
                 WHERE t.task_category IN ('MECH','ELEC')
                   AND t.started_at IS NOT NULL AND t.completed_at IS NULL
+                  AND COALESCE(t.force_closed, FALSE) = FALSE
+                  AND t.is_applicable = TRUE
+                  AND COALESCE(pi.customer, '') <> 'TEST CUSTOMER'
                   AND {_PARTNER_SQL} IS NOT NULL
             """
             q_params: List[Any] = []
@@ -465,6 +550,9 @@ def build_open_tasks(scope) -> Dict[str, Any]:
                 WHERE t.task_category IN ('MECH','ELEC')
                   AND t.started_at IS NOT NULL AND t.completed_at IS NULL
                   AND t.started_at >= %s
+                  AND COALESCE(t.force_closed, FALSE) = FALSE
+                  AND t.is_applicable = TRUE
+                  AND COALESCE(pi.customer, '') <> 'TEST CUSTOMER'
                   AND {_PARTNER_SQL} IS NOT NULL
             """
             r_params: List[Any] = [window_start]
@@ -537,6 +625,8 @@ def build_open_tasks(scope) -> Dict[str, Any]:
             'repeat_count': repeat_count,
             'repeat_window_days': _REPEAT_WINDOW_DAYS,
             'repeat_min_count': _REPEAT_MIN_COUNT,
+            'basis': 'realtime_all_open',  # 현재 backlog 전체 (summary openTasks=월단위와 다름, 의도)
+            'missed_task_standard': 'is_applicable=TRUE, force_closed=FALSE, TEST 제외',
             'generated_at': now.isoformat(),
         },
     }

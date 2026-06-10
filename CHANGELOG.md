@@ -6,6 +6,22 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.35.0] - 2026-06-10 — #87 협력사 규율 대시보드 보정 (미종료 기준통일·월단위 + 중복지표 교체)
+
+> **BE only minor — read-only, migration 0**. v2.34.0 운영 catch 보정 묶음. 사용자 catch 기반 지표 정의·기준 통일.
+
+- **중복 지표 교체** (사용자 catch): `checkinNoTag`(출근O·미태깅 **인원**)는 `taggingRate`(태깅÷출근)와 같은 신호의 카운트 버전(중복) → **폐기**. 그 자리에 **`checkoutMiss`(퇴근미체크율)** — #86 `checkout_status` 정의(일별 cutoff D+1 02:00 KST)를 월×협력사 가중집계(`_query_checkout_miss`). `reference_only:true` **참고 지표(평가/등급/줄세우기 제외)** — 근태 평가 제외 결정 정합, 근태 페이지 동일 기준. `_envelope` 에 `reference_only` 필드 추가.
+- **openTasks 월단위화(A)**: summary `openTasks` 가 `month` 무시한 실시간이던 것 → **`started_at` ∈ 해당 월 AND completed_at IS NULL** ("그 달 시작됐는데 아직 미종료"). autoClose(completed_at)·zeroTap(completed_at)·taggingRate(출근)와 월 anchor 일관. `_query_open_tasks_count` 시그니처 `(cur, start, end, company_filter)`. meta `openTasks_basis='monthly_started_open'`.
+- **미종료 기준 통일(B)**: openTasks + `/open-tasks` 큐 양쪽을 정식 "미종료 작업 현황"(`/tasks/pending/grouped` = `shipment_flow_service`) 기준과 일치 — `is_applicable=TRUE` + `COALESCE(force_closed,FALSE)=FALSE` + `TEST CUSTOMER 제외`. (이전엔 비해당 task·TEST 포함돼 부풀어 있었음.)
+- **공통 하이진(C)**: task 기반 지표(`autoClose`/`zeroTap`/partner universe)에 `is_applicable=TRUE` + `TEST CUSTOMER 제외` 추가. trend(autoClose/zeroTap 재사용)에도 자동 전파.
+- **`/open-tasks` 큐 = 실시간 유지(D)**: 큐는 month 필터 안 함(현재 backlog 드릴다운) + canonical 3조건만. meta `basis='realtime_all_open'`. → summary openTasks(월단위) ≠ 큐(실시간), **의도된 차이**(카드=월 KPI / 큐=현재 backlog), meta 라벨 명시.
+- **비협력사 제외**: `_PARTNER_SQL` + worker 쿼리에서 `GST`(자체수행) + **`SH`(비협력사/구데이터, 사용자 제외 지시)** 일괄 NULL 처리(`_EXCLUDED_PARTNERS`). → partner set = 6개 정식 협력사(BAT/FNI/TMS(M)/C&A/P&S/TMS(E)).
+- **Codex 검증**: 중복지표 교체(checkoutMiss) → 미종료 설계 라운드1 GO(M=0, 의미론 A/D/universe 권고) → 실코드 라운드2 **DEPLOY_SAFE/GO(M=0)**. SH 제외 = GST 패턴 확장(검증 불요).
+- 검증: pytest `test_sprint89_partner_discipline` 32/32 GREEN + 실데이터 스모크(openTasks 월단위 BAT 82·큐 493·checkoutMiss C&A 0.30·zeroTap BAT 0.66·SH/GST 제외). 회귀 0. DB·migration 0.
+- **VIEW FE 영향**: `checkinNoTag`→`checkoutMiss`(참고 라벨) 키 변경 + openTasks 월단위 의미 + `reference_only`/`*_basis` meta. (별 repo 렌더 작업.)
+
+---
+
 ## [2.34.0] - 2026-06-10 — #87 협력사 규율 대시보드 Phase 2a (Sprint 89-BE)
 
 > **BE only minor — read-only, migration 0**. Phase 1(v2.33.0)의 placeholder 4지표 중 3개(taggingRate/checkinNoTag/zeroTap) 실측 전환 + trend endpoint 신규. checklist=Phase 2b(별 Codex). **Phase 1 버그 2건 동반 정정**.

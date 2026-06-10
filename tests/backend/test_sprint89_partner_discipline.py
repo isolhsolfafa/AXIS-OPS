@@ -51,6 +51,9 @@ _TAGGING = {("BAT", "MECH"): (10, 7), ("FNI", "MECH"): (8, 2), ("TMS(M)", "MECH"
 # Phase 2a — (substantive_n, zerotap_n): zeroTap BAT 0.25 / FNI 0.8 / TMS(M) 0.0
 _ZEROTAP = {("BAT", "MECH"): (20, 5), ("FNI", "MECH"): (10, 8), ("TMS(M)", "MECH"): (12, 0),
             ("C&A", "ELEC"): (8, 2), ("P&S", "ELEC"): (6, 1), ("TMS(E)", "ELEC"): (15, 3)}
+# Phase 2a 참고 — (checked_in_days, missed_days): checkoutMiss BAT 0.2 / FNI 0.0 / TMS(M) 1.0
+_CHECKOUT = {("BAT", "MECH"): (20, 4), ("FNI", "MECH"): (18, 0), ("TMS(M)", "MECH"): (10, 10),
+             ("C&A", "ELEC"): (15, 3), ("P&S", "ELEC"): (12, 12), ("TMS(E)", "ELEC"): (20, 1)}
 
 
 # ============================================================
@@ -141,10 +144,12 @@ class TestPartnerSqlNormalization:
     def test_partner_sql_wraps_nullif_trim(self):
         # NULLIF(NULLIF(TRIM(...), ''), 'GST') → NULL/빈문자열/공백/GST 단일 IS NOT NULL 제외
         sql = svc._PARTNER_SQL
-        assert sql.startswith("NULLIF(NULLIF(TRIM(")
-        assert sql.rstrip().endswith(", 'GST')")  # GST(자체수행) 제외
-        assert ", ''" in sql                       # 빈문자열 제외 유지
+        assert sql.startswith("NULLIF(NULLIF(NULLIF(TRIM(")
+        assert sql.rstrip().endswith(", 'SH')")     # 비협력사 SH 제외 (최외곽)
+        assert ", 'GST')" in sql                    # GST(자체수행) 제외
+        assert ", ''" in sql                        # 빈문자열 제외 유지
         assert "TMS(M)" in sql and "TMS(E)" in sql  # 정규화 보존
+        assert svc._EXCLUDED_PARTNERS == ('GST', 'SH')
 
 
 # ============================================================
@@ -169,10 +174,11 @@ def patch_summary(monkeypatch):
     monkeypatch.setattr(svc, "put_conn", lambda c: None)
     monkeypatch.setattr(svc, "_query_partner_groups", lambda cur: list(_GROUPS))
     monkeypatch.setattr(svc, "_query_worker_partner_groups", lambda cur, cf: list(_GROUPS))
-    monkeypatch.setattr(svc, "_query_open_tasks_count", lambda cur, cf: dict(_OPEN))
+    monkeypatch.setattr(svc, "_query_open_tasks_count", lambda cur, s, e, cf: dict(_OPEN))
     monkeypatch.setattr(svc, "_query_auto_close_count", lambda cur, s, e, cf: dict(_AUTO))
     monkeypatch.setattr(svc, "_query_tagging", lambda cur, s, e, cf: dict(_TAGGING))
     monkeypatch.setattr(svc, "_query_zerotap", lambda cur, s, e, cf: dict(_ZEROTAP))
+    monkeypatch.setattr(svc, "_query_checkout_miss", lambda cur, s, e, cf: dict(_CHECKOUT))
 
 
 class TestDisciplineSummary:
@@ -208,18 +214,24 @@ class TestDisciplineSummary:
         resp = build_discipline_summary("2026-06", ADMIN_SCOPE)
         m = next(r for r in resp["rows"] if r["partner"] == "BAT")["metrics"]
         # Phase 2a 실측 (available=True)
-        for key in ("taggingRate", "checkinNoTag", "zeroTap"):
+        for key in ("taggingRate", "zeroTap", "checkoutMiss"):
             assert m[key]["available"] is True
             assert m[key]["phase"] == "phase2"
         assert m["taggingRate"]["raw"] == 0.7    # 7/10
-        assert m["checkinNoTag"]["raw"] == 3.0   # 10-7
         assert m["zeroTap"]["raw"] == 0.25       # 5/20
+        # checkoutMiss = 퇴근미체크율, 참고 지표(평가 제외)
+        assert m["checkoutMiss"]["raw"] == 0.2   # 4/20
+        assert m["checkoutMiss"]["reference_only"] is True
+        assert m["checkoutMiss"]["grade_eligible"] is False  # 참고 → 평가 제외
+        assert m["checkoutMiss"]["ineligibility_reason"] == "reference_only"
+        # checkinNoTag 폐기 확인 (taggingRate 중복)
+        assert "checkinNoTag" not in m
         # Phase 2b 만 placeholder
         assert m["checklist"]["available"] is False
         assert m["checklist"]["raw"] is None
-        assert m["checklist"]["phase"] == "phase2"
-        # Phase 1 유지
+        # Phase 1 유지 (평가 지표)
         assert m["openTasks"]["available"] is True
+        assert m["openTasks"]["grade_eligible"] is True
         assert m["autoClose"]["available"] is True
 
     def test_taggingrate_group_avg_peer_only(self, patch_summary):
@@ -237,6 +249,17 @@ class TestDisciplineSummary:
         assert z["group_avg"] == 0.35  # (0.25+0.8+0.0)/3
         assert z["lower_better"] is True
 
+    def test_checkoutmiss_reference_with_group_avg(self, patch_summary):
+        resp = build_discipline_summary("2026-06", ADMIN_SCOPE)
+        cm = next(r for r in resp["rows"] if r["partner"] == "BAT")["metrics"]["checkoutMiss"]
+        assert cm["raw"] == 0.2                 # 4/20
+        assert cm["reference_only"] is True     # 참고 (평가 제외)
+        assert cm["grade_eligible"] is False
+        assert cm["sample_n"] == 20             # checked_in_days
+        # MECH 평균 (0.2+0.0+1.0)/3 = 0.4 (참고지표도 group_avg 는 제공)
+        assert cm["group_avg"] == 0.4
+        assert cm["lower_better"] is True
+
     def test_manager_phase2a_rate_suppressed(self, patch_summary):
         resp = build_discipline_summary("2026-06", BAT_SCOPE)
         tr = resp["rows"][0]["metrics"]["taggingRate"]
@@ -252,10 +275,11 @@ class TestDisciplineSummary:
         monkeypatch.setattr(svc, "put_conn", lambda c: None)
         monkeypatch.setattr(svc, "_query_partner_groups", lambda cur: list(_GROUPS))
         monkeypatch.setattr(svc, "_query_worker_partner_groups", lambda cur, cf: list(_GROUPS))
-        monkeypatch.setattr(svc, "_query_open_tasks_count", lambda cur, cf: dict(_OPEN))
+        monkeypatch.setattr(svc, "_query_open_tasks_count", lambda cur, s, e, cf: dict(_OPEN))
         monkeypatch.setattr(svc, "_query_auto_close_count", lambda cur, s, e, cf: dict(_AUTO))
         monkeypatch.setattr(svc, "_query_tagging", lambda cur, s, e, cf: tagging)
         monkeypatch.setattr(svc, "_query_zerotap", lambda cur, s, e, cf: dict(_ZEROTAP))
+        monkeypatch.setattr(svc, "_query_checkout_miss", lambda cur, s, e, cf: dict(_CHECKOUT))
         resp = build_discipline_summary("2026-06", ADMIN_SCOPE)
         tr = next(r for r in resp["rows"] if r["partner"] == "BAT")["metrics"]["taggingRate"]
         # MECH rate 보유 = BAT/TMS(M) 2개 (FNI None 제외) → peer_n=2<3 suppress
@@ -271,7 +295,8 @@ class TestDisciplineSummary:
         resp = build_discipline_summary("2026-06", ADMIN_SCOPE)
         meta = resp["meta"]
         assert meta["phase1_metrics"] == ["openTasks", "autoClose"]
-        assert meta["phase2a_metrics"] == ["taggingRate", "checkinNoTag", "zeroTap"]
+        assert meta["phase2a_metrics"] == ["taggingRate", "zeroTap", "checkoutMiss"]
+        assert meta["reference_metrics"] == ["checkoutMiss"]  # 평가 제외 참고
         assert meta["phase2b_pending"] == ["checklist"]
         assert meta["min_peers"] == 3
         assert "근태" in meta["fairness_note"]
