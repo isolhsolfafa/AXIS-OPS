@@ -48636,3 +48636,209 @@ Codex 라운드2 (v2 재검증) → 잔여 M=0 = Phase 1 구현(envelope + RBAC 
 - `routes/admin_discipline.py`: summary + open-tasks (trend=Phase2). `resolve_company_scope` try-밖. scope.is_global 분기(manager=자사+suppress / admin=all+by_partner).
 - `statistics_service.py`: `is_instant_whitelisted()` 공개 helper 추가(A3, Phase2 zeroTap용 — Phase1선 미사용이나 helper만 선반영 가능).
 - pytest: RBAC 4케이스 + group_avg suppress + by_partner admin전용 + open-tasks 자사실명 + MECH/ELEC only + TMS(M)(E) + Phase2 placeholder.
+
+
+---
+
+# § Sprint 90-BE — 태깅 커버리지 / 0초탭 드릴다운 (FEAT-TAGGING-COVERAGE-ZEROTAP-DRILLDOWN-20260610)
+
+> AXIS-VIEW `종료 누락 분석` 페이지(MissedCloseAnalysisPage)의 `TaggingCoverageCard` mockup(준비중·BE 집계 대기)을 실데이터로 채우는 OPS BE route 1개.
+> read-only / migration 0 / 신규 service 파일. Codex Q1~Q4 (네임스페이스 판정) GO 후 설계.
+
+## 결정 사항 (확정)
+
+| 항목 | 결정 | 근거 |
+|---|---|---|
+| **네임스페이스** | `GET /api/ct/tagging-coverage` | Codex 판정 A — primitive(`is_instant_whitelisted`/`active_time`/`_resolve_window`/Tukey)가 전부 statistics_service. dashboard(B)는 import 결합, discipline(C)은 MECH/ELEC 평가전용 스코프 충돌 |
+| **service 파일** | 신규 `services/tagging_coverage_service.py` | statistics_service(1,122줄)·dashboard_service(1,154줄) 둘 다 800줄+ "새 로직 추가 금지". route는 `ct_analysis.py`에 얇게 |
+| **권한** | `@jwt_required + @gst_or_admin_required` | VIEW 페이지 청중 = admin + GST manager(협력사 manager 페이지 내부 차단). `gst_or_admin_required`(company=='GST' OR is_admin)와 정확 일치 |
+| **스코프** | 5공정 전부 (MECH/ELEC/PI/QI/SI) | 사용자 결정. PI/QI/SI 0초탭 78~95% = CT 미추적 핵심 신호 |
+| **PI/QI/SI partner** | 'GST' 단일 (share 100%) | 평가 아닌 진단. VIEW가 scope:GST 라벨 렌더, partner-share 막대는 MECH/ELEC만 |
+
+## 분모 정의 (핵심 — `_COVERAGE_WHERE`)
+
+완료된 applicable task 전수 — force_closed/TEST/TMS모듈만 제외 (자동마감·admin대행완료는 **미추적으로 카운트**):
+
+```
+td.completed_at IS NOT NULL
+AND td.active_time_minutes IS NOT NULL
+AND COALESCE(td.force_closed, FALSE) = FALSE                                   ← 강제종료만 제외 (Codex R1 Q1 M)
+AND td.is_applicable = TRUE
+AND td.task_id NOT IN ('TANK_MODULE','PRESSURE_TEST')                          ← TMS 모듈 제외(mock 5공정에 TMS 없음)
+AND COALESCE(p.customer, '') <> 'TEST CUSTOMER'
+AND td.serial_number NOT LIKE 'TEST%'
++ _WINDOW_WHERE (completed_at KST 월범위 [from, to+1) 반열림)
+```
+
+**분모 정의 = 포함(미추적 카운트) — 사용자 결정 2026-06-10 (Codex R2 M-2 해소 방향)**:
+자동마감(`close_reason='AUTO_CLOSED_*'`, v2.15.16 이후 `force_closed=FALSE`) + admin대행완료(`SHIP_COMPLETE`/`ADMIN_COMPLETE`, PI/QI/SI) = active~0 → **0초탭(미추적)으로 자연 집계**. 이게 카드의 핵심 의도 = mock 주석 *"추적율 낮은 공정(PI/QI/SI)은 미시작·0초탭 마감이 과소 집계"* + *"0초탭·미시작 자동마감 = 같은 태깅 미흡 신호"*. 대행/자동완료를 분모에서 빼면 PI/QI/SI "고 미추적" 신호 자체가 소실 → **포함**. CT `_CLEAN_WHERE`(duration_source NORMAL)와는 의도적으로 다름(CT=시간정확도 모집단 / 본 카드=태깅 유무 모집단). `duration_source` 필터 미적용.
+
+> ⚠️ **Codex R1 Q1 M (유지)**: `force_close_task()`(admin.py L1274~)는 `force_closed=TRUE`만 set, `duration_source` 미갱신 → `duration_source` 기반 가드는 force-close를 못 거름. `COALESCE(td.force_closed,FALSE)=FALSE`가 force-close(매니저 수동 override = 작업자 완료 아님) 제외 단일 가드. 자동마감/admin대행은 force_closed=FALSE라 **분모 포함**(의도대로).
+
+## 지표 정의 (공정별, `_COVERAGE_WHERE` 모집단)
+
+공정별 N = COUNT(*). `_INSTANT_THRESHOLD_MIN=1` 재사용. **3분류 우선순위 = oneClick > zero_tap > tracked** (Codex R3 M-3 반영):
+
+| 분류 | 조건 (위에서부터 우선) | 비고 |
+|---|---|---|
+| oneClick | `task_id IN whitelist` | act=0 정상(탱크도킹/출하완료/자주검사). close_reason·active 무관 우선 — SI_SHIPMENT ship-complete도 정상 |
+| zero_tap | `NOT oneClick AND (active_time_minutes <= 1 OR close_reason IS NOT NULL)` | 미추적 — 즉시탭(active≤1) **또는** 비-작업자완료(자동마감·admin대행 = close_reason 존재) |
+| tracked | `NOT oneClick AND active_time_minutes > 1 AND close_reason IS NULL` | 작업자 실완료 + 실세션 시간 |
+
+> ⚠️ **Codex R3 M-3 (핵심)**: `active_time_minutes`는 자동마감/admin대행도 work_start_log 세션을 close_at까지 계산 → **실시작 후 자동마감 task는 active>1** 가능. `active>1`만으로 tracked 분류 시 자동/admin완료가 tracked로 부풀려짐(사용자 "포함=미추적" 의도 위반). → **`close_reason IS NULL` 가드를 tracked 조건에 추가** = 비-작업자완료(close_reason 존재)는 active 무관 zero_tap. 정상완료만 close_reason=None(task_service.py L819 확인) → `close_reason IS NOT NULL` ⟺ 자동마감/admin대행/ship-complete.
+
+- `tracking_pct = round(100*tracked/N)`, `zero_tap_pct = round(100*zero_tap/N)` (세 분류 합 = 100%)
+- `confidence = 'trusted' if N >= 30 else 'provisional'` (`_TUKEY_MIN_N` 재사용)
+- whitelist = `is_instant_whitelisted()` → SQL `task_id IN ('TANK_DOCKING','SI_SHIPMENT','SELF_INSPECTION','INSPECTION')` 인라인 (단일 정의는 Python frozenset, SQL은 그 값 미러 + 주석으로 동기화 명시)
+
+## 응답 스키마 (3블록 = coverageMock.ts 1:1)
+
+```jsonc
+{
+  "coverage": [                          // ① COVERAGE[] — 공정별 (MECH/ELEC/PI/QI/SI 순서 고정)
+    { "process": "MECH", "tracking_pct": 52, "zero_tap_pct": 44, "confidence": "provisional", "n": 410 }
+  ],
+  "well_tracked_pct": 41,                 // ② 추적율≥80% 제품(S/N) 비율
+  "zero_tap_tasks": {                     // ③ 공정별 → task 드릴다운
+    "MECH": [
+      { "task_id": "WASTE_GAS_LINE_1", "ko": "Waste Gas LINE 1",
+        "zero_pct": 38, "n": 120, "oneClick": false,
+        "partners": [ { "partner": "BAT", "share": 58 }, { "partner": "FNI", "share": 30 }, { "partner": "TMS(M)", "share": 12 } ] }
+    ],
+    "PI": [ { "task_id": "PI_CHAMBER", "ko": "챔버 가압검사", "zero_pct": 80, "n": 55, "oneClick": false,
+             "partners": [ { "partner": "GST", "share": 100 } ] } ]
+  },
+  "meta": { "from": "2026-05", "to": "2026-06", "trust_start": "2026-05",
+            "total_tasks": 1320, "total_serials": 210,
+            "confidence_threshold_n": 30, "denominator_basis": "completed_applicable_non_force",
+            "note": "0초탭=active≤1분(시작=완료 동시각). one-click(탱크도킹/출하완료/자주검사)은 정상. 강제종료(force_closed)만 분모 제외 — 자동마감·admin대행완료는 미추적으로 포함." }
+}
+```
+
+### 블록별 산출 로직
+- **① coverage**: `GROUP BY task_category`. tracked/zero_tap/oneClick 카운트 → pct. 공정 5개 고정 순서(없는 공정은 N=0, tracking_pct=0, confidence='provisional'로 포함 — VIEW 행 깨짐 방지).
+- **② well_tracked_pct**: per-serial 집계 — `serial별 tracked_count / total_count >= 0.8` 인 serial 비율. 5공정 통합 분모. tracked = 위 3분류의 tracked(oneClick 아님 AND active>1 AND close_reason IS NULL). CTE로 `serial별 tracked행/전체행` 산출 → `COUNT(*) FILTER (WHERE ratio>=0.8) / COUNT(*)` (serial 단위). **분모 0 serial 처리**: `_COVERAGE_WHERE` 통과 행이 0인 serial은 애초 집계에서 빠짐(division-by-zero 불가). serial 0건이면 well_tracked_pct=0.
+  - **DUAL L/R 정책 (Codex R1 Q3 M)**: DUAL 모델은 같은 (serial, task_category, task_id)에 `-L`/`-R` qr_doc_id로 **2행** 존재(migration 024 / task_seed.py L467~, UNIQUE=(serial,qr_doc_id,category,task_id)). well_tracked_pct는 **per-row 단위** — serial ratio = `tracked행 / 전체행`(L/R 각각 독립 카운트). L tracked·R 미추적 = ratio 0.5 (정상 의도). 별도 평균/병합 없음. coverage[]·zero_tap_tasks n 도 동일하게 per-row(각 L/R 인스턴스 = 1 task).
+- **③ zero_tap_tasks**: `GROUP BY task_category, task_id`. task별 n + zero_pct(= 위 zero_tap 분류 비율 = `(active<=1 OR close_reason IS NOT NULL)` 비율, oneClick task는 0) + oneClick(`is_instant_whitelisted`). **partners** = 그 task의 **zero_tap 인스턴스**(active<=1 OR close_reason 존재)를 `_COV_PARTNER_SQL`로 GROUP BY → share% (내림차순). task 정렬 = zero_pct 내림차순. n>=1 인 task만 포함. ko = `_TASK_NAME`. zero-tap 0건 task는 `partners=[]`.
+  - **share 반올림 합 100 보정 (Codex R1 Q4 M + R2 M-1 + R3)**: **largest-remainder method, 정수 기반** — `base = (cnt*100)//total`, `rem = (cnt*100) % total` (float frac 미사용 = 오차 원천 차단, Codex R3 권고). `floor` 합산 후 잔여(100−Σbase)를 `rem` 큰 순으로 +1 분배. **동률 tie-break (R2 M-1)**: `sorted(key=lambda x: (-rem, idx))` — rem 같으면 **원래 정렬(cnt 내림차순 → 동률 시 partner명 사전순) index** 우선 = 결정적(비-flaky). partner 카운트 fetch 후 Python 후처리.
+
+### `_COV_PARTNER_SQL` (PI/QI/SI→GST, MECH/ELEC TMS(M)/(E) 표시)
+```
+CASE td.task_category
+  WHEN 'MECH' THEN CASE WHEN p.mech_partner='TMS' THEN 'TMS(M)' ELSE COALESCE(NULLIF(TRIM(p.mech_partner),''),'(미지정)') END
+  WHEN 'ELEC' THEN CASE WHEN p.elec_partner='TMS' THEN 'TMS(E)' ELSE COALESCE(NULLIF(TRIM(p.elec_partner),''),'(미지정)') END
+  ELSE 'GST'   -- PI/QI/SI
+END
+```
+
+## 파라미터 / 재사용
+- `?from=&to=` (YYYY-MM, KST). 미지정 = `_resolve_window` 기본 `[CT_TRUST_START_MONTH('2026-05'), 현재월]`. INVALID_MONTH/INVALID_RANGE → `CtParamError` 400.
+- 재사용(import from statistics_service): `_resolve_window`, `CtParamError`, `is_instant_whitelisted`, `_TASK_NAME`, `_INSTANT_THRESHOLD_MIN`, `_TUKEY_MIN_N`, `CT_TRUST_START_MONTH`, TTL 캐시 패턴(`_cache_get/_put`, key=`tagcov:{from}:{to}`).
+- 신규 service 자체 상수: `_COVERAGE_WHERE`, `_COV_PARTNER_SQL`, `_PROCESS_ORDER=['MECH','ELEC','PI','QI','SI']`.
+
+## route (ct_analysis.py 얇게 추가)
+```python
+@ct_analysis_bp.route("/tagging-coverage", methods=["GET"])
+@jwt_required
+@gst_or_admin_required
+def tagging_coverage():
+    from_month = request.args.get("from"); to_month = request.args.get("to")
+    try:
+        return jsonify(get_tagging_coverage(from_month=from_month, to_month=to_month)), 200
+    except CtParamError as e:
+        return jsonify({"error": e.code, "message": e.message}), 400
+    except Exception:
+        logger.exception("[ct] tagging-coverage 산출 실패")
+        return jsonify({"error": "INTERNAL_ERROR", "message": "태깅 커버리지 산출 실패"}), 500
+```
+
+## pytest (tests/backend/test_sprint90_tagging_coverage.py — 신규)
+- TC-TC-01 tracked/zero_tap/oneClick 3분류 합=100% (공정별)
+- TC-TC-02 oneClick task(TANK_DOCKING)는 zero_tap에서 제외 + oneClick=true
+- TC-TC-03 active>1 = tracked, active<=1 비whitelist = zero_tap
+- TC-TC-04 well_tracked_pct = 추적율≥80% serial 비율 (경계값 80% 포함)
+- TC-TC-05 partners share 합 100 + 내림차순 + PI/QI/SI = GST 100%
+- TC-TC-06 **force_closed=TRUE task만 분모 제외**. 자동마감(close_reason='AUTO_CLOSED_*', force_closed=FALSE)·admin대행(SHIP_COMPLETE/ADMIN_COMPLETE)은 **분모 포함 = 미추적 카운트** (사용자 결정, R2 M-2)
+- TC-TC-16 **close_reason override (R3 M-3)** — **active_time_minutes > 1 이지만 close_reason 존재**(실시작 후 자동마감 or admin대행) task → `tracked` 아닌 **`zero_tap`** 분류 확인 (active>1만으로 tracked 부풀림 차단). 반대로 active>1 AND close_reason IS NULL = tracked
+- TC-TC-07 TEST CUSTOMER / TEST% serial 제외
+- TC-TC-08 confidence: N>=30 trusted / N<30 provisional
+- TC-TC-09 공정 5개 고정 순서 + 빈 공정 N=0 포함
+- TC-TC-10 INVALID_MONTH / INVALID_RANGE 400
+- TC-TC-11 빈 윈도우 → coverage 5행(전부 0) + zero_tap_tasks {} + well_tracked_pct 0
+- TC-TC-12 **force_closed=TRUE AND duration_source IS NULL** task 분모 제외 (Codex R1 Q1 경계 — NORMAL 필터만으론 못 거름)
+- TC-TC-13 **DUAL L/R per-row** — 같은 serial -L tracked·-R 미추적 → 그 serial well_tracked ratio=0.5 + coverage n에 L/R 둘 다 카운트
+- TC-TC-14 **HEATING_JACKET is_applicable=FALSE** task 분모 제외 (옵션 off task)
+- TC-TC-15 share largest-remainder — 3-partner 비정수 분할(예: 1/3씩) 시 Σshare=100 정확
+
+## Codex 검증 질의 (설계 라운드 1)
+1. **분모 정의** — `_COVERAGE_WHERE`가 duration_source NORMAL만 포함(auto/force 제외)하는 것이 맞나? auto/force-closed를 빼면 "태깅 미흡" 전체상이 과소집계되는지, 아니면 페이지의 미시작 자동마감 matrix와 역할분리가 정합인지. active_time fallback(force_complete=man-hour) 부풀림 회피 효과 포함 판단.
+2. **tracked 경계** — `active>1`(분)이 적절한가, `>0`이어야 하나? (active=0과 active=1 구간 처리. `_INSTANT_THRESHOLD_MIN=1` = "<=1 즉시완료" 정의와 정합)
+3. **well_tracked_pct 분모** — serial별 5공정 통합 tracked/total >= 0.8. applicable task 0인 serial(분모 0) 처리 + DUAL L/R 중복 집계 위험.
+4. **partners share** — active<=1 인스턴스 기준 점유율. 그 task의 zero-tap이 0건이면 partners=[] 처리. share 반올림 합 100 보장(반올림 오차) 방식.
+5. **PI/QI/SI=GST 단일** — partner-share가 GST 100% 단조 — 응답에 포함하되 VIEW 렌더 분리가 맞나, BE에서 PI/QI/SI partners 생략이 나은가.
+6. **TC 누락** — 위 11개가 충분한지, 추가 엣지(DUAL 모델 partner 매핑 / heating_jacket 옵션 task / 미시작이지만 completed_at 있는 강제완료).
+
+
+---
+
+# § Sprint 90-BE-B — 마감 유형 월별 추이 zerotap 확장 (FEAT-CLOSE-TYPE-TREND-ZEROTAP-20260610)
+
+> AXIS-VIEW `종료 누락 분석` 페이지 `CloseTrendChart` mockup(준비중·BE 월별 집계 대기)을 실데이터로.
+> Sprint 90-BE(태깅 커버리지)의 sibling — 같은 페이지·같은 0초탭 정의. read-only / migration 0.
+
+## 핵심 발견 — 새 route 불필요 (DRY)
+
+`CloseTrendChart`가 요구하는 데이터(`closeTrendMock.ts`):
+```ts
+interface CloseTrendPoint { month: string; auto: number; zerotap: number; force: number }
+```
+
+**`GET /api/ct/data-quality`의 `auto_close_trend[]`가 이미 `{month, total, normal, auto, force, auto_rate}` 반환** (statistics_service.py L625~, 고정 6개월 KST 윈도우). → **빠진 건 `zerotap` 1필드뿐**. 신규 endpoint/route 신설 = 월버킷·auto/force 집계 SQL 중복(DRY 위반). → **기존 `auto_close_trend`에 `zerotap` FILTER 1개 추가**.
+
+→ 사용자 질문("사용했던 route 사용 가능?") 답 = **이 추이는 YES** (data-quality route 재사용). (단 태깅 커버리지 snapshot은 형태가 달라 별 route /tagging-coverage = Sprint 90-BE.)
+
+## 변경 (statistics_service.py `get_data_quality` 내 `trend_sql` + dict — additive)
+
+### zerotap 정의 (Sprint 90-BE와 동일 = 일관)
+```sql
+COUNT(*) FILTER (
+    WHERE td.task_id NOT IN ('INSPECTION','SELF_INSPECTION','SI_SHIPMENT','TANK_DOCKING')  -- whitelist 미러
+      AND COALESCE(td.force_closed, FALSE) = FALSE
+      AND (td.active_time_minutes <= 1 OR td.close_reason IS NOT NULL)
+) AS zerotap
+```
+- **base WHERE = 기존 trend_sql 그대로** (completed_at NOT NULL + TMS모듈 제외 + non-TEST + 6개월). auto/force/zerotap **3 series 동일 base** → 한 차트 비교 정합.
+- **auto ⊆ zerotap (일반)**: 자동마감(close_reason LIKE AUTO)은 close_reason 존재 → zerotap 포함. mock 검증 = zerotap ≥ auto 매월 성립(95≥62/82≥55/70≥48/63≥47). 예외 = whitelist task 자동마감 시 auto엔 있고 zerotap엔 없음(미세, NOT IN whitelist 가드) → 두 FILTER 독립, 엄밀 subset 아님 명시.
+- Python: `auto_close_trend[]` dict에 `"zerotap": int(r["zerotap"])` + `"zerotap_rate": _r(zerotap/total*100)` 1줄 추가.
+
+### 응답 (additive)
+```jsonc
+"auto_close_trend": [
+  { "month": "2026-06", "total": 320, "normal": 250, "auto": 47, "force": 4,
+    "auto_rate": 14.7, "zerotap": 63, "zerotap_rate": 19.7 }   // ← zerotap/zerotap_rate 신규
+]
+```
+
+## ⚠️ 코드 크기 정책 검토 (X vs Y)
+
+statistics_service.py = 1,122줄 🔴(800+ "새 로직 추가 금지"). 두 안:
+- **(X) data-quality trend 확장 (권장)**: 기존 `auto_close_trend`(auto/force 이미 계산)에 FILTER+dict 2줄 additive. = **새 로직/함수 아님, 기존 집계 완성**. DRY 정합(월버킷 단일 소스). 정책 "새 로직" 취지(신기능 bloat)에 비해 미미.
+- **(Y) tagging_coverage_service.py에 신규 `get_close_type_trend()` + /close-type-trend route**: 🔴 파일 미터치하나 월버킷·auto/force SQL **중복**(DRY 위반) + route 1개 추가.
+
+→ **X 권장** (DRY > 2줄 additive). Codex 판정 요청 항목.
+
+## pytest (test_sprint85_ct_stats.py 확장 — data-quality 영역)
+- TC: `auto_close_trend[]` 각 항목에 `zerotap`/`zerotap_rate` 키 존재
+- TC: zerotap = (active≤1 OR close_reason) 비-whitelist 비-force 카운트 (seed 검증)
+- TC: 자동마감(close_reason AUTO) → auto + zerotap 양쪽 카운트(일반 subset)
+- TC: force_closed task → force만, zerotap 제외
+
+## VIEW FE 후속 (별 repo)
+- `useDataQuality` 훅(이미 있으면 재사용) → `auto_close_trend[].zerotap` 소비.
+- `CloseTrendChart` mock→실데이터 + `ZeroTapKpiCard`(현재월 zerotap = trend 마지막점). month 'YYYY-MM'→'6월' FE 포맷.
+- "준비중" 배지 제거.
+
+## Codex 검증 질의 (설계 라운드 1)
+1. **X vs Y** — 🔴 파일(statistics_service 1,122줄)에 2줄 additive(X) vs 신규 endpoint 중복(Y). 코드크기 정책 "새 로직 금지" 해석 — 기존 집계 필드 추가가 "새 로직"인지.
+2. zerotap base = trend_sql 기존 base(is_applicable/category 필터 없음, auto/force와 동일) — Sprint 90-BE tagging-coverage zerotap(is_applicable+category IN 5 필터)과 숫자 다른데, 다른 카드/목적이므로 허용인지. 한 차트 내 3 series 동일 base가 우선인지.
+3. whitelist task 자동마감 시 auto∈/zerotap∉ 엣지 — 차트 혼란(auto>zerotap 역전) 실제 발생 가능성/영향.

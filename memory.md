@@ -2,11 +2,19 @@
 
 > 세션 간 누적되는 의사결정, 아키텍처 판단, 감사 결과를 기록합니다.
 > CLAUDE.md = 프로젝트 고정 정보 / memory.md = 누적 학습 / handoff.md = 세션 인계
-> 마지막 업데이트: 2026-06-10 (ADR-034 추가 — 미종료 기준 통일 + 규율 지표 정의 보정(v2.35.0). 선행 ADR-031~033 #86 RBAC / #87 공정성 / 근태 평가 제외)
+> 마지막 업데이트: 2026-06-11 (ADR-035 추가 — 태깅 커버리지 분모 정의: 자동/admin완료=미추적 포함, CT와 다른 모집단(v2.36.0). 선행 ADR-034 미종료 기준 통일)
 
 ---
 
 ## 1. 아키텍처 의사결정 기록 (ADR)
+
+### ADR-035: 태깅 커버리지 분모 정의 — 자동/admin완료=미추적 포함 (Sprint 90-BE, v2.36.0, 2026-06-11)
+- **맥락**: `종료 누락 분석` TaggingCoverageCard(공정별 추적율/0초탭) 실데이터. 분모를 CT `_CLEAN_WHERE`(duration_source NORMAL only)로 할지, 자동마감·admin대행완료를 포함할지 갈림 — PI/QI/SI 숫자 정반대.
+- **결정 (분모 = 포함)**: `_COVERAGE_WHERE` = 완료+active NOT NULL+applicable+`force_closed=FALSE`, TEST/TMS모듈 제외. **duration_source 필터 미적용** → 자동마감(close_reason AUTO)·admin대행(SHIP/ADMIN_COMPLETE)을 **미추적으로 분모 포함**. **이유**: 카드 목적 = "어느 공정이 태깅 안 되나"(데이터 품질 진단). PI/QI/SI는 작업자 실시간 태깅 거의 없이 admin 대행 → 대행을 빼면 "고 미추적" 신호 자체 소실. **CT task-stats `_CLEAN_WHERE`(시간정확도 모집단)와 의도적으로 다른 모집단**(태깅 유무 모집단). → 같은 "zero_tap"이라도 discipline(MECH/ELEC 평가, 자동/admin 제외)과 숫자 다름 = 정상.
+- **결정 (3분류 close_reason override)**: `active_time_minutes`는 자동/admin완료도 세션 기반이라 active>1 가능 → active>1만으론 tracked 오분류. **tracked = NOT oneClick AND active>1 AND `close_reason IS NULL`**(정상완료=close_reason NULL, force_closed=FALSE 모집단에서 close_reason 존재 ⟺ 자동/admin/ship 대행, Codex R4 전수검증). zero_tap = NOT oneClick AND (active≤1 OR close_reason 존재). 우선순위 oneClick > zero_tap > tracked.
+- **결정 (route 배치)**: `/api/ct/tagging-coverage`(CT primitive 응집 — is_instant_whitelisted/active_time/_resolve_window/Tukey). discipline(`/admin/discipline`)은 MECH/ELEC 평가전용 스코프 충돌로 제외. `gst_or_admin_required`(페이지 청중=admin+GST매니저, 협력사 차단과 일치). 신규 service 파일(statistics/dashboard 둘 다 800줄+ 새 로직 금지).
+- **연계**: Sprint 90-BE-B = 마감 추이 zerotap 은 기존 `data-quality.auto_close_trend` 재사용(DRY, 신규 route X). [[sprint89-partner-discipline]] discipline zeroTap 과는 모집단·목적 다름.
+- **영향**: VIEW FE = TaggingCoverageCard/CloseTrendChart/ZeroTapKpiCard 연동(별 repo). advisory A-1(auto>zerotap 역전 라벨)/A-2(private whitelist import) BACKLOG.
 
 ### ADR-034: 미종료 기준 단일화 + 규율 지표 정의 보정 (#87, v2.35.0, 2026-06-10 사용자 catch)
 - **맥락**: v2.34.0 규율 대시보드 운영 catch — ① summary openTasks 가 month 무시한 실시간(월 summary인데 불일치) ② discipline 미종료 기준이 정식 "미종료 작업 현황"(`/tasks/pending/grouped`)보다 느슨(비해당·TEST 포함) ③ checkinNoTag 가 taggingRate 와 중복.

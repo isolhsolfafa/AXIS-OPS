@@ -50,6 +50,10 @@
 >   - ✅ **③ 유사 케이스 조회** — 비슷한 종료누락 패턴 lookup. 가능.
 > **연계**: VIEW MissedCloseAnalysisPage / OPS `dashboard_service.py`(auto-close-summary/details, Sprint 71/81/82) / `🚨 CT 분석 결론`(②의 게이트). **재개**: ①③은 사용자 요청 시 / ②는 태깅율 70%+ 후 CT 분석과 함께.
 
+### Sprint 90-BE advisory (Codex, v2.36.0 배포 후 등록)
+- **A-1 차트 라벨 — auto>zerotap 역전** 🟢 INFO (VIEW): `data-quality.auto_close_trend` 의 `zerotap`(NOT IN whitelist)과 `auto`(close_reason LIKE AUTO)는 독립 FILTER → `SELF_INSPECTION` 자동마감(whitelist task, `AUTO_CLOSED_BY_SECOND_FINAL_TRIGGER:SELF_INSPECTION`) 발생 월은 `auto > zerotap` 역전 가능(엄밀 subset 아님). **조치**: VIEW CloseTrendChart tooltip/주석에 "zerotap은 auto의 strict superset 아님" 명시. BE 변경 0.
+- **A-2 `_INSTANT_WHITELIST` 공개 helper 화** 🟢 INFO: `tagging_coverage_service.py`(L52) + `statistics_service.trend_sql` 가 private `_INSTANT_WHITELIST` 직접 참조(전자는 import, 후자는 리터럴 미러). drift 없음(단일 정의 기준 생성/주석)이나 공개 helper 원칙(`is_instant_whitelisted` 외 set 접근 비공개)과 어긋남. **조치(여유 시)**: `statistics_service` 에 `instant_whitelist_sql()` 또는 공개 frozenset alias 추가 → 양측 재사용.
+
 ### 후속 운영 KPI 권고 (사용자 catch)
 - **BAT 시간추적 교육**: 완료율 100%지만 act=0율 59%(시작=완료 즉시태깅, 실 timing 부재). FNI 7%. BAT 늦게 온보딩 → 적응 중. 월별 act=0율 추세로 개선 추적.
 - **tank module 일괄 시작/종료 편의 기능 삭제** 🟡 (⏳ **안정화 단계 통과 후** — 2026-06-08 결정): 현재 일괄 기능이 TMS garbage(가압완료∧tank미입력) + act=0 미추적의 원인. **단 아직 운영 안정화 단계라 즉시 삭제 불가** → 안정화 통과 후 삭제. 삭제 효과: ① TMS timing 신뢰 회복 → CT 모집단 복원 ② TMS 선후행 모순 자연 소멸 → S-3 ⓒ 재개 불필요화 가능. 삭제 시 OPS PWA tank module 작업 화면 + BE 일괄 start/complete 경로 제거.

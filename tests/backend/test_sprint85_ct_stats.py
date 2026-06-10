@@ -289,6 +289,46 @@ def test_ct09_auto_close_trend_invariant(db_conn, worker):
             assert len(x["month"]) == 7 and x["month"][4] == "-"   # YYYY-MM (KST)
             assert x["normal"] + x["auto"] + x["force"] == x["total"]
             assert x["auto_rate"] == (round(x["auto"] / x["total"] * 100, 1) if x["total"] else 0.0)
+            # Sprint 90-BE-B: zerotap 키 additive (invariant 불변 — zerotap 은 별 분류축)
+            assert "zerotap" in x and "zerotap_rate" in x
+            assert x["zerotap_rate"] == (round(x["zerotap"] / x["total"] * 100, 1) if x["total"] else 0.0)
+    finally:
+        _cleanup(db_conn)
+
+
+def test_ct12_zerotap_trend_classification(db_conn, worker):
+    """Sprint 90-BE-B — auto_close_trend.zerotap 분류 (active≤1 OR close_reason, 비-whitelist 비-force)."""
+    try:
+        cur = db_conn.cursor()
+
+        def _seed_active(tag, task_id, active, *, close_reason=None, force_closed=False):
+            sn = f"{_PREFIX}-{tag}"
+            _seed_product(db_conn, sn)
+            cur.execute(
+                """INSERT INTO app_task_details
+                   (worker_id, serial_number, qr_doc_id, task_category, task_id, task_name,
+                    started_at, completed_at, duration_minutes, active_time_minutes,
+                    close_reason, force_closed, is_applicable)
+                   VALUES (%s,%s,%s,'MECH',%s,%s, now()-interval '3 hours', now(), 120, %s, %s, %s, TRUE)""",
+                (worker, sn, f"DOC_{sn}", task_id, task_id, active, close_reason, force_closed),
+            )
+            db_conn.commit()
+
+        _seed_active("z_norm", "WASTE_GAS_LINE_1", 120)                                  # tracked
+        _seed_active("z_inst", "UTIL_LINE_1", 0)                                         # zerotap(active≤1)
+        _seed_active("z_auto", "WASTE_GAS_LINE_2", 120,
+                     close_reason="AUTO_CLOSED_BY_FIRST_FINAL_TRIGGER:X")                # zerotap(close_reason)+auto
+        _seed_active("z_wl", "SELF_INSPECTION", 0)                                       # whitelist → zerotap 제외
+        _seed_active("z_fc", "UTIL_LINE_2", 120, force_closed=True,
+                     close_reason="MANUAL_FORCE_CLOSE")                                  # force → zerotap 제외
+        ss._cache.clear()
+        trend = ss.get_data_quality()["auto_close_trend"]
+        cur_month = [x for x in trend if x["zerotap"] > 0 or x["auto"] > 0]
+        assert cur_month, "현재월 추이 row 존재"
+        row = cur_month[-1]
+        assert row["zerotap"] == 2   # z_inst(active≤1) + z_auto(close_reason). whitelist/force/normal 제외
+        assert row["auto"] == 1      # z_auto
+        assert row["force"] == 1     # z_fc
     finally:
         _cleanup(db_conn)
 

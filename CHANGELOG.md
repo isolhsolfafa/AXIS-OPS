@@ -6,6 +6,22 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.36.0] - 2026-06-11 — 태깅 커버리지/0초탭 드릴다운 + 마감 유형 월별 추이 zerotap (Sprint 90-BE / 90-BE-B)
+
+> **BE only minor — read-only, migration 0**. AXIS-VIEW `종료 누락 분석` 페이지 mockup 2종(TaggingCoverageCard / CloseTrendChart) 실데이터.
+
+- **Sprint 90-BE — `GET /api/ct/tagging-coverage?from=&to=`** (신규 `services/tagging_coverage_service.py` + `ct_analysis.py` route, `@jwt_required + @gst_or_admin_required`): 공정별(MECH/ELEC/PI/QI/SI) 추적율/0초탭 + `well_tracked_pct`(추적율≥80% serial 비율) + `zero_tap_tasks{공정:[{task_id, ko, zero_pct, n, oneClick, partners}]}` 드릴다운.
+  - **분모 `_COVERAGE_WHERE`** = 완료 + active_time NOT NULL + applicable + `force_closed=FALSE`, TEST/TMS모듈 제외. **duration_source 필터 미적용** → 자동마감·admin대행완료 = **미추적으로 분모 포함**(사용자 결정 2026-06-10 — mock "PI/QI/SI 고 미추적" 신호 재현, CT `_CLEAN_WHERE`와 다른 모집단).
+  - **3분류 우선순위 oneClick > zero_tap > tracked**: `oneClick`=task_id IN whitelist / `zero_tap`=NOT oneClick AND (active≤1 **OR close_reason 존재**) / `tracked`=NOT oneClick AND active>1 AND close_reason IS NULL. → close_reason 가드로 "실시작 후 자동/admin완료(active>1)"도 미추적 분류(Codex R3 M-3, 정상완료=close_reason NULL 전수 검증 R4).
+  - PI/QI/SI partner='GST' 단일. DUAL L/R per-row. partners share = largest-remainder(정수 기반, 결정적 tie-break) Σ=100.
+  - **Codex 4라운드** (M=3→2→1→0): R1(force_closed 분모오염/DUAL/share반올림) → R2(tie-break/자동마감 분모포함 사용자결정) → R3(active>1만으론 자동완료 미추적 보장X → close_reason override) → **R4 DEPLOY_SAFE M=0**. pytest 16/16(TC-TC-01~16) + CT회귀 16/16 GREEN.
+- **Sprint 90-BE-B — `data-quality.auto_close_trend[]`에 `zerotap`/`zerotap_rate` additive** (`statistics_service.py` trend_sql FILTER + dict 2줄): CloseTrendChart(마감 유형 월별 추이 — 자동마감·0초탭·강제종료)용. zerotap 정의 = 90-BE와 동일(active≤1 OR close_reason, 비-whitelist 비-force). auto/force/zerotap 3 series 동일 base. **신규 route 불필요**(기존 data-quality 재사용 = DRY). **Codex 1라운드 DEPLOY_SAFE M=0**. pytest 17/17(신규 test_ct12 + test_ct09 invariant 불변) GREEN.
+- **잔여 advisory(BACKLOG)**: A-1 `SELF_INSPECTION` 자동마감 시 특정 월 auto>zerotap 역전 가능(VIEW tooltip 명시) / A-2 `tagging_coverage_service` private `_INSTANT_WHITELIST` import(공개 helper 권고).
+- **VIEW FE 후속(별 repo)**: TaggingCoverageCard→/tagging-coverage / CloseTrendChart·ZeroTapKpiCard→data-quality.zerotap / "준비중" 배지 제거.
+- 설계서: `AGENT_TEAM_LAUNCH.md` § Sprint 90-BE / § Sprint 90-BE-B.
+
+---
+
 ## [2.35.0] - 2026-06-10 — #87 협력사 규율 대시보드 보정 (미종료 기준통일·월단위 + 중복지표 교체)
 
 > **BE only minor — read-only, migration 0**. v2.34.0 운영 catch 보정 묶음. 사용자 catch 기반 지표 정의·기준 통일.

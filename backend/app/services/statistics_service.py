@@ -556,13 +556,21 @@ def get_data_quality(from_month: Optional[str] = None, to_month: Optional[str] =
     """
     # [2] 월별 마감유형 추이 — KST 월 경계 (Codex M-Q8). 추이는 lookback 무관 고정 6개월 윈도우(의도).
     #     close_reason LIKE 'AUTO_CLOSED_BY_%%' = dashboard_service._AUTO_LIKE 와 동치 (분류 규칙 변경 시 동기화).
+    #     Sprint 90-BE-B: zerotap 추가 (CloseTrendChart) — NOT IN whitelist = _INSTANT_WHITELIST 미러,
+    #       zerotap = active≤1 OR close_reason 존재 (Sprint 90-BE tagging-coverage 정의 동일).
+    #       auto/force/zerotap 3 series 동일 base. auto⊆zerotap 일반(단 whitelist task 자동마감 시 역전 가능).
     trend_sql = """
         SELECT to_char(date_trunc('month', td.completed_at AT TIME ZONE 'Asia/Seoul'), 'YYYY-MM') AS month,
                COUNT(*) AS total,
                COUNT(*) FILTER (
                    WHERE td.close_reason LIKE 'AUTO_CLOSED_BY_%%' AND td.force_closed = FALSE
                ) AS auto,
-               COUNT(*) FILTER (WHERE td.force_closed = TRUE) AS force
+               COUNT(*) FILTER (WHERE td.force_closed = TRUE) AS force,
+               COUNT(*) FILTER (
+                   WHERE td.task_id NOT IN ('INSPECTION','SELF_INSPECTION','SI_SHIPMENT','TANK_DOCKING')
+                     AND COALESCE(td.force_closed, FALSE) = FALSE
+                     AND (td.active_time_minutes <= 1 OR td.close_reason IS NOT NULL)
+               ) AS zerotap
         FROM app_task_details td
         JOIN plan.product_info p ON p.serial_number = td.serial_number
         WHERE td.completed_at IS NOT NULL
@@ -627,6 +635,7 @@ def get_data_quality(from_month: Optional[str] = None, to_month: Optional[str] =
         total = int(r["total"])
         auto = int(r["auto"])
         force = int(r["force"])
+        zerotap = int(r["zerotap"])  # Sprint 90-BE-B (CloseTrendChart)
         auto_close_trend.append({
             "month": r["month"],
             "total": total,
@@ -634,6 +643,8 @@ def get_data_quality(from_month: Optional[str] = None, to_month: Optional[str] =
             "auto": auto,
             "force": force,
             "auto_rate": _r(auto / total * 100) if total else 0.0,
+            "zerotap": zerotap,
+            "zerotap_rate": _r(zerotap / total * 100) if total else 0.0,
         })
 
     training_impact = []

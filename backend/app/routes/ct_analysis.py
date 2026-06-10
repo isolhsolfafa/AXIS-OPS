@@ -20,6 +20,7 @@ from app.services.statistics_service import (
     get_partner_breakdown,
     get_task_ct_stats,
 )
+from app.services.tagging_coverage_service import get_tagging_coverage
 
 logger = logging.getLogger(__name__)
 
@@ -108,3 +109,27 @@ def partner_breakdown():
     except Exception:
         logger.exception("[ct] partner-breakdown 산출 실패")
         return jsonify({"error": "INTERNAL_ERROR", "message": "협력사 분해 집계 실패"}), 500
+
+
+@ct_analysis_bp.route("/tagging-coverage", methods=["GET"])
+@jwt_required
+@gst_or_admin_required
+def tagging_coverage():
+    """Sprint 90-BE — 공정별 태깅 추적율 + 0초탭 드릴다운 (read-only).
+
+    응답 = {coverage[], well_tracked_pct, zero_tap_tasks{공정:[...]}, meta}.
+      - 분모 = 완료+active NOT NULL+applicable+force_closed=FALSE (자동/admin완료=미추적 포함).
+      - 3분류 oneClick>zero_tap>tracked (zero_tap = active≤1 OR close_reason 존재).
+      - PI/QI/SI partner='GST' 단일. DUAL L/R per-row. share = largest-remainder.
+    from/to(YYYY-MM, KST 윈도우, 미지정=2026-05~현재월).
+    설계서: AGENT_TEAM_LAUNCH.md § Sprint 90-BE (Codex 4라운드 GO).
+    """
+    from_month = request.args.get("from")
+    to_month = request.args.get("to")
+    try:
+        return jsonify(get_tagging_coverage(from_month=from_month, to_month=to_month)), 200
+    except CtParamError as e:
+        return jsonify({"error": e.code, "message": e.message}), 400
+    except Exception:
+        logger.exception("[ct] tagging-coverage 산출 실패")
+        return jsonify({"error": "INTERNAL_ERROR", "message": "태깅 커버리지 산출 실패"}), 500
