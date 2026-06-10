@@ -127,6 +127,140 @@ def get_attendance_data(
             put_conn(conn)
 
 
+def get_checkout_status_map(
+    target_date: date,
+    company_filter: Optional[str] = None,
+) -> Dict[int, str]:
+    """worker_id → checkout_status (working/missed/done) 맵 — Sprint 88-BE step② (#86).
+
+    기존 status(not_checked/working/left)와 **독립** 계산 (status 불변 보장).
+    day-row 모델(같은날 재출근 0.04% → 세션모델 미채택, Codex 라운드2 GO):
+      - check_in = [D, D+1) KST 내 MIN(check_type='in')
+      - cutoff = LEAST(익일 이후(>= D+1 00:00) 첫 'in', D+1 02:00 KST)  ← 같은날 재in 무시
+      - check_out = check_in < t < cutoff 내 MAX('out'), `t > check_in` orphan 가드
+      - done(check_out 존재) / working(now < cutoff) / missed(now >= cutoff, out 없음)
+    출근 없는 worker는 맵에 미포함 → 호출부에서 'not_started' 기본.
+    모든 비교 timestamptz (KST aware).
+    """
+    day_start = datetime(target_date.year, target_date.month, target_date.day, tzinfo=KST)
+    day_end = day_start + timedelta(days=1)
+    cutoff_cap = day_end + timedelta(hours=2)  # D+1 02:00 KST
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        company_clause = " AND w.company = %(company)s" if company_filter else ""
+        query = f"""
+            WITH scoped AS (
+                SELECT w.id
+                FROM workers w
+                WHERE w.company <> 'GST'
+                  AND w.approval_status = 'approved'
+                  AND w.is_active = TRUE
+                  {company_clause}
+            ),
+            checkin AS (
+                SELECT pa.worker_id, MIN(pa.check_time) AS check_in_time
+                FROM hr.partner_attendance pa
+                JOIN scoped s ON s.id = pa.worker_id
+                WHERE pa.check_type = 'in'
+                  AND pa.check_time >= %(day_start)s AND pa.check_time < %(day_end)s
+                GROUP BY pa.worker_id
+            ),
+            next_day_in AS (
+                SELECT ci.worker_id, MIN(pa.check_time) AS next_in
+                FROM checkin ci
+                JOIN hr.partner_attendance pa
+                  ON pa.worker_id = ci.worker_id AND pa.check_type = 'in'
+                 AND pa.check_time >= %(day_end)s AND pa.check_time < %(cutoff_cap)s
+                GROUP BY ci.worker_id
+            ),
+            cutoff AS (
+                SELECT ci.worker_id, ci.check_in_time,
+                       LEAST(COALESCE(ndi.next_in, %(cutoff_cap)s), %(cutoff_cap)s) AS cutoff_ts
+                FROM checkin ci
+                LEFT JOIN next_day_in ndi ON ndi.worker_id = ci.worker_id
+            ),
+            checkout AS (
+                SELECT co.worker_id, MAX(pa.check_time) AS check_out_time
+                FROM cutoff co
+                JOIN hr.partner_attendance pa
+                  ON pa.worker_id = co.worker_id AND pa.check_type = 'out'
+                 AND pa.check_time > co.check_in_time AND pa.check_time < co.cutoff_ts
+                GROUP BY co.worker_id
+            )
+            SELECT co.worker_id,
+                   CASE
+                       WHEN cko.check_out_time IS NOT NULL THEN 'done'
+                       WHEN now() < co.cutoff_ts THEN 'working'
+                       ELSE 'missed'
+                   END AS checkout_status
+            FROM cutoff co
+            LEFT JOIN checkout cko ON cko.worker_id = co.worker_id
+        """
+        params: Dict[str, Any] = {
+            'day_start': day_start,
+            'day_end': day_end,
+            'cutoff_cap': cutoff_cap,
+        }
+        if company_filter:
+            params['company'] = company_filter
+
+        cur.execute(query, params)
+        return {row['worker_id']: row['checkout_status'] for row in cur.fetchall()}
+    finally:
+        if conn:
+            put_conn(conn)
+
+
+def get_attendance_data_with_checkout(
+    target_start_kst: datetime,
+    target_end_kst: datetime,
+    target_date: date,
+    company_filter: Optional[str] = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """근태 records(기존 status 불변) + checkout_status(신규) + 미체크률 — step② (#86).
+
+    get_attendance_data(불변)에 checkout_status 병합 + summary 에 by_work_site 미체크률 추가.
+    additive: 기존 records 필드 / summary 카운트 키 전부 보존.
+    """
+    records, summary = get_attendance_data(target_start_kst, target_end_kst, company_filter)
+    checkout_map = get_checkout_status_map(target_date, company_filter)
+
+    # work_site(GST/HQ)별 출근/미체크 집계 — 출근(check_in 있음)만, not_started 제외
+    site_agg: Dict[str, Dict[str, int]] = {}
+    for r in records:
+        cs = checkout_map.get(r['worker_id'], 'not_started')
+        r['checkout_status'] = cs
+        if r['check_in_time'] is None:
+            continue  # 미출근 → 분모 제외 (work_site NULL)
+        ws = r['work_site'] or 'unknown'
+        agg = site_agg.setdefault(ws, {'checked_in': 0, 'missed': 0})
+        agg['checked_in'] += 1
+        if cs == 'missed':
+            agg['missed'] += 1
+
+    def _rate(missed: int, checked_in: int):
+        # 분모 0 → None ("0%" 오해 차단, Codex M4)
+        return round(missed / checked_in, 4) if checked_in > 0 else None
+
+    by_work_site = {
+        ws: {'checked_in': a['checked_in'], 'missed': a['missed'],
+             'miss_rate': _rate(a['missed'], a['checked_in'])}
+        for ws, a in sorted(site_agg.items())
+    }
+    total_in = sum(a['checked_in'] for a in site_agg.values())
+    total_missed = sum(a['missed'] for a in site_agg.values())
+
+    summary['by_work_site'] = by_work_site
+    summary['missed'] = total_missed
+    summary['miss_rate'] = _rate(total_missed, total_in)
+
+    return records, summary
+
+
 def get_attendance_trend_data(
     date_from: date,
     date_to: date,

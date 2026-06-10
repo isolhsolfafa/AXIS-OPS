@@ -18,6 +18,7 @@ from app.middleware.jwt_auth import jwt_required, admin_required, manager_or_adm
 from app.services.hr_attendance_service import (
     kst_date_range,
     get_attendance_data,
+    get_attendance_data_with_checkout,
     get_attendance_trend_data,
 )
 from app.models.worker import (
@@ -1933,11 +1934,15 @@ def get_attendance_today() -> Tuple[Dict[str, Any], int]:
     # #86: 협력사 스코프 강제 — try 밖 호출 (CompanyScopeError → errorhandler 403)
     company_filter = _get_manager_company_filter()
     try:
-        start, end = kst_date_range()
-        records, summary = get_attendance_data(start, end, company_filter=company_filter)
+        today = datetime.now(_KST).date()
+        start, end = kst_date_range(today)
+        # #86 step②: checkout_status + 미체크률 동봉 (기존 status/필드 불변, additive)
+        records, summary = get_attendance_data_with_checkout(
+            start, end, today, company_filter=company_filter
+        )
 
         return jsonify({
-            'date': datetime.now(_KST).strftime('%Y-%m-%d'),
+            'date': today.strftime('%Y-%m-%d'),
             'records': records,
             'summary': summary,
         }), 200
@@ -1983,7 +1988,10 @@ def get_attendance_by_date() -> Tuple[Dict[str, Any], int]:
     company_filter = _get_manager_company_filter()
     try:
         start, end = kst_date_range(target_date)
-        records, summary = get_attendance_data(start, end, company_filter=company_filter)
+        # #86 step②: checkout_status + 미체크률 동봉 (기존 status/필드 불변, additive)
+        records, summary = get_attendance_data_with_checkout(
+            start, end, target_date, company_filter=company_filter
+        )
 
         return jsonify({
             'date': target_date.strftime('%Y-%m-%d'),
