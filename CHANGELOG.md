@@ -6,6 +6,16 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.38.2] - 2026-06-13 — 퇴근 다이얼로그 [모두 내작업완료] + Sprint 번호 부여 (Sprint 91-FE 연장)
+
+> **FE only patch (home_screen) — BE 0**. 실기기 QA(일시정지 정상) 후 사용자 요청.
+
+- 퇴근 미완료 다이얼로그에 **[모두 내작업완료]**(completeTask finalize=false — 내 작업만 종료·릴레이 유지, 실패=일시정지중/이미완료 안내) 추가. 액션 3개: 나중에/모두 내작업완료/모두 일시정지.
+- Sprint 번호 부여: 90-BE-D(#91)/91(PENDING-REFINE)/91-FE(FE 가드) — 설계서 헤더 갱신.
+- 공지 게시(id 117, is_pinned, OPS 2.% only unpin). Netlify prod 배포.
+
+---
+
 ## [2.38.1] - 2026-06-13 — OPS app 미종료 가드 FE (FEAT-OPS-FE-PENDING-GUARD)
 
 > **FE only patch (OPS app 3화면) — BE 변경 0**. v2.38.0 방치 기준의 FE part, BAT 일괄 강제종료 재발 방지 2차(view단).

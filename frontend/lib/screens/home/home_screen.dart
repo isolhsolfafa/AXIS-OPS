@@ -264,6 +264,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('나중에')),
+          OutlinedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _completeAllOpenTasks(openTasks);
+            },
+            child: const Text('모두 내작업완료'),
+          ),
           ElevatedButton(
             onPressed: () {
               Navigator.pop(ctx);
@@ -300,6 +307,36 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         content: Text(fail == 0
             ? '미완료 작업 $ok건 일시정지 완료'
             : '$ok건 일시정지 · $fail건 실패 (작업 화면에서 확인해주세요)'),
+        backgroundColor: fail == 0 ? GxColors.success : GxColors.warning,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  /// Sprint 91-FE 연장: 퇴근 시 [모두 내작업완료] — finalize=false(내 작업만 종료, 릴레이 유지)
+  Future<void> _completeAllOpenTasks(List<Map<String, dynamic>> openTasks) async {
+    final taskService = ref.read(taskServiceProvider);
+    final workerId = ref.read(authProvider).currentWorker?.id;
+    if (workerId == null) return;
+    int ok = 0, fail = 0;
+    for (final t in openTasks) {
+      final id = t['task_detail_id'];
+      if (id is! int) { fail++; continue; }
+      try {
+        await taskService.completeTask(taskId: id, workerId: workerId, finalize: false);
+        ok++;
+      } catch (e) {
+        // 이미 완료/일시정지 중 등은 실패로 집계 (완료는 idempotent 아님 — 상태 확인 유도)
+        fail++;
+      }
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(fail == 0
+            ? '내 작업 $ok건 완료 처리되었습니다'
+            : '$ok건 완료 · $fail건 실패 (일시정지 중이거나 이미 완료 — 작업 화면에서 확인해주세요)'),
         backgroundColor: fail == 0 ? GxColors.success : GxColors.warning,
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 3),
