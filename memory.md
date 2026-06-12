@@ -2,11 +2,21 @@
 
 > 세션 간 누적되는 의사결정, 아키텍처 판단, 감사 결과를 기록합니다.
 > CLAUDE.md = 프로젝트 고정 정보 / memory.md = 누적 학습 / handoff.md = 세션 인계
-> 마지막 업데이트: 2026-06-11 (ADR-035 추가 — 태깅 커버리지 분모 정의: 자동/admin완료=미추적 포함, CT와 다른 모집단(v2.36.0). 선행 ADR-034 미종료 기준 통일)
+> 마지막 업데이트: 2026-06-12 (ADR-036 추가 — CT 표준 강제종료 제외: 클린 코어 원칙 복원(v2.36.1). 선행 ADR-035 태깅 커버리지 분모)
 
 ---
 
 ## 1. 아키텍처 의사결정 기록 (ADR)
+
+### ADR-036: CT 표준 강제종료 제외 — 클린 코어 원칙 복원 (FIX-CT-FORCE-CLOSE-POLLUTION, v2.36.1, 2026-06-12)
+- **맥락**: 클린 코어 원칙(2026-04-20, BACKLOG L230) = "강제종료 task는 실행 측정값 생성 금지, NULL이 정직. APS-Lite CT/lead/OEE 오염 방지". 그러나 v2.22.0(FIX-DURATION)+v2.28.0(Sprint86)+S-2(ct)가 `force_close_task`에 `compute_task_work`를 추가 → ct/duration/active를 **계산·저장**하게 됨(원칙 drift). `duration_source`는 미설정(NULL)이라 CT clean 필터(`_CLEAN_CORE`, duration_source 기반)를 통과 → CT 표본 오염.
+- **실측(운영 DB, 2026-05~, basis=ct 1,244건)**: 강제종료 128건(10.3%) 오염. WASTE_GAS_LINE_1 median 1.40h→2.98h(+112%). 강제종료 = 작업자 시작만·미종료를 관리자가 수일 뒤 마감 → 대기시간 포함 부풀림(최대 16h). 오늘 1일 98건 일괄 강제종료(관리자 1명 아침 batch) 확인.
+- **결정 (read-side 제외, 조치 ①)**: `_CLEAN_CORE`에 `AND COALESCE(td.force_closed, FALSE) = FALSE` 1줄. `_CLEAN_WHERE` 공유로 task-stats(#82)+partner-breakdown(#83)+training_impact 전파. 저장값 무변경(write-side 불변) → man-hour 리포트·대시보드 영향 0.
+- **결정 (자동마감 유지 — 제외 X)**: AUTO_CLOSED_BY_*(force_closed=FALSE) 65건은 **work_completion_log 전건 보유 = 작업자가 complete 탭함**(릴레이가 그 시각으로 task record 닫음) = 정상 NORMAL_COMPLETION. Codex R1 Q3(완료로그 없는 NORMAL 누출) 우려를 **실데이터 67/67 완료로그 보유로 0건 확인** → 제외하면 정상 표본 손실이라 불채택. → **CT 표본 = "작업자가 complete 탭한 것만"**(NULL + NORMAL, 둘 다 완료로그 존재) = 설계자(Twin파파) 원래 의도 복원.
+- **6 duration_source 분류 최종**: 적재(2) = NULL(작업자 직접종료) + NORMAL_COMPLETION(완료로그 있고 릴레이가 닫음). 버림(4) = ATTENDANCE_OUT/FALLBACK_17/PREV_DAY_CAP(추정, 이미 제외됨) + **force-close(NULL이라 새던 것 → 이번에 제외)**. 마감 메커니즘: 작업자탭/릴레이트리거/관리자강제 (스케줄러 자동마감 없음 — 알림만). ATTENDANCE/17:00은 릴레이 마감 시 close_at 시각 선택 로직(독립 트리거 아님). force-close는 calculate_close_at 미경유(관리자 시각 직접) → PREV_DAY_CAP 보호 없어 부풀림.
+- **미채택 (조치 ②, write-side)**: force_close가 ct/duration NULL 저장(클린 코어 문자 그대로) = v2.22.0 man-hour 정합 일부 되돌림이라 별 정책 결정. read-side로 CT 오염 완전 차단되어 보류.
+- **Codex**: R1 NO-GO(M-Q3) → 실데이터 해소 → R2 DEPLOY_SAFE M=0. pytest 신규 test_ct17 + CT회귀 18/18 GREEN.
+- **영향/연관**: VIEW CT/종료누락 페이지 MECH 배관 표준값 하락(의도된 정정, 자동 반영). VIEW `CT_VISUALIZATION_GUIDE.md` §8-7 #1 정정(force-close 자연제외 ❌→오염 ✅). [[sprint89-partner-discipline]] tagging-coverage(ADR-035)는 이미 force_closed=FALSE 명시라 무관. 잔여 INFO 2건(admin대행 2건 / checklist orphan duration_source) BACKLOG.
 
 ### ADR-035: 태깅 커버리지 분모 정의 — 자동/admin완료=미추적 포함 (Sprint 90-BE, v2.36.0, 2026-06-11)
 - **맥락**: `종료 누락 분석` TaggingCoverageCard(공정별 추적율/0초탭) 실데이터. 분모를 CT `_CLEAN_WHERE`(duration_source NORMAL only)로 할지, 자동마감·admin대행완료를 포함할지 갈림 — PI/QI/SI 숫자 정반대.

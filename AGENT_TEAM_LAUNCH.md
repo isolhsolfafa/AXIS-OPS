@@ -48842,3 +48842,89 @@ statistics_service.py = 1,122줄 🔴(800+ "새 로직 추가 금지"). 두 안:
 1. **X vs Y** — 🔴 파일(statistics_service 1,122줄)에 2줄 additive(X) vs 신규 endpoint 중복(Y). 코드크기 정책 "새 로직 금지" 해석 — 기존 집계 필드 추가가 "새 로직"인지.
 2. zerotap base = trend_sql 기존 base(is_applicable/category 필터 없음, auto/force와 동일) — Sprint 90-BE tagging-coverage zerotap(is_applicable+category IN 5 필터)과 숫자 다른데, 다른 카드/목적이므로 허용인지. 한 차트 내 3 series 동일 base가 우선인지.
 3. whitelist task 자동마감 시 auto∈/zerotap∉ 엣지 — 차트 혼란(auto>zerotap 역전) 실제 발생 가능성/영향.
+
+
+---
+
+# § FIX-CT-FORCE-CLOSE-POLLUTION (20260612) — 강제종료 CT 표본 제외 (클린 코어 원칙 복원)
+
+> 강제종료 task가 CT 표본(basis=ct/duration/active)에 섞여 CT 표준 오염. 2026-04-20 클린 코어 원칙 복원.
+> read-only, migration 0. CT 모집단 변경 = Codex 교차검증 필수.
+
+## 배경 — 원칙 + drift (운영 DB 실측)
+- **클린 코어 원칙(2026-04-20, BACKLOG L230)**: "강제종료 task는 실행 측정값(wsl/wcl/duration_sec)을 절대 생성하지 않는다. NULL이 정직한 답. APS-Lite CT/lead/OEE 영구 오염 방지."
+- **drift**: v2.22.0(FIX-DURATION 6-03)+v2.28.0(Sprint86 6-07)+S-2(ct)가 `force_close_task`(admin.py L1266·1278)에 `compute_task_work` 추가 → man-hour/active/ct 계산·저장. duration_source는 미설정(NULL) → CT clean 필터(duration_source 기반)가 못 거름.
+- **실측 (2026-05~, basis=ct)**: CT 표본 1,235건 중 **강제종료 128건(10.36%)** 오염. MECH 배관 median 왜곡 — WASTE_GAS_LINE_1 2.98h→(강제제외)1.40h **+112.9%** / UTIL_LINE_2 +56.4% / WASTE_GAS_LINE_2 +29.3%. 강제종료 ct 평균 6.8h(정상 배관 ~1.4h의 5배, 수일 열림 대기 포함).
+- **오늘(6-12) 1일 98건** 강제종료(관리자 1명 아침 일괄), ct>0 69건이 CT 표본 진입, duration_source 98/98 NULL.
+
+## Fix (옵션 A — read-side, 1줄)
+`statistics_service.py` `_CLEAN_CORE`에 **`AND COALESCE(td.force_closed, FALSE) = FALSE`** 추가.
+
+```python
+_CLEAN_CORE = (
+    "td.completed_at IS NOT NULL "
+    "AND td.duration_minutes IS NOT NULL "
+    "AND (td.duration_source IS NULL OR td.duration_source = 'NORMAL_COMPLETION') "
+    "AND COALESCE(td.force_closed, FALSE) = FALSE "   # ← 신규 (클린 코어 원칙 복원)
+    "AND td.task_id NOT IN ('TANK_MODULE','PRESSURE_TEST') "
+    "AND COALESCE(p.customer, '') <> 'TEST CUSTOMER' "
+    "AND td.serial_number NOT LIKE 'TEST%%'"
+)
+```
+
+### 전파 범위 (의도)
+`_CLEAN_CORE`/`_CLEAN_WHERE` 공유 → **전부 강제종료 제외**:
+- `get_task_ct_stats`(#82, basis=duration/active/ct box plot + categories + tracking_coverage) — L224/258/294/310/342/359
+- `get_partner_breakdown`(#83, 협력사×모델×task×dual) — L835/847/864/880
+- `get_data_quality` `training_impact`(교육 전후 man-hour) — L600 `_CLEAN_CORE`
+
+### 미영향 (자체 WHERE, 의도적)
+- `get_data_quality` `duration_source_dist`(src_sql) — 전 source 분포 표시 목적이라 _CLEAN_CORE 미사용 → 그대로
+- `get_data_quality` `auto_close_trend`(trend_sql, 90-BE-B) — 자체 WHERE(force는 별 선) → 그대로
+- `tagging_coverage_service`(90-BE) — 이미 `force_closed=FALSE` 명시 → 무관
+
+## 영향 / 회귀
+- CT 표준값 **하락**(MECH 배관 특히, 진짜 작업시간 반영). VIEW CT 페이지 표시값 변동 — 의도된 정정.
+- 표본 n 감소: WASTE_GAS_LINE_1 105→53(여전히 ≥30 trusted). 일부 task n이 confidence/standard_status 경계(_TUKEY_MIN_N=30, _STD 5/30) 아래로 떨어질 수 있음 → 신뢰도 강등은 정상(원래 오염 표본이었음).
+- read-only, 저장값/write-path 무변경 → man-hour 리포트·대시보드 무영향. migration 0.
+
+## pytest (test_sprint85_ct_stats.py 확장)
+- TC: force_closed=TRUE + duration_source NULL + ct>0 task → CT 표본(task-stats/partner-breakdown/training)에서 **제외** 확인
+- TC: force_closed=FALSE 정상완료 + auto-close(NORMAL_COMPLETION) → 포함 유지(회귀 0)
+- TC: 기존 CT-01~15 회귀 GREEN
+
+## (별도) 옵션 B — write-side 근본안 (BACKLOG 분리)
+`force_close_task`가 ct/duration 계산 자체를 안 하고 NULL 저장(원칙 문자 그대로). man-hour를 force-close에 둘지 = 정책 결정 → 별 설계+Codex. 본 fix(A)와 독립.
+
+## Codex 검증 질의
+1. `_CLEAN_CORE`에 force_closed=FALSE 추가가 모든 CT 소비처(#82/#83/training)에 올바르게 전파되는지, **강제종료를 포함해야 할 CT 소비처가 하나라도 있는지**.
+2. duration_source_dist/auto_close_trend가 _CLEAN_CORE 미사용 맞는지(전파 안 됨 확인) — 의도 정합인지.
+3. **인접 오염 점검**: auto-close(force_closed=FALSE, close_reason='AUTO_CLOSED_BY_%', duration_source 보통 ATTENDANCE_OUT/PREV_DAY_CAP/FALLBACK→이미 _CLEAN 제외 / 단 NORMAL_COMPLETION auto-close는 통과)도 CT 오염원인지, 아니면 완료로그 있는 정상보정이라 포함이 맞는지. 본 fix 범위에 포함할지.
+4. 표본 급감(force 50% task)으로 confidence/standard_status 경계 붕괴가 통계 신뢰성에 문제인지, 아니면 원래 오염이라 정상인지.
+5. read-side 제외(A)로 충분한지, write-side(B)까지 필요한지(클린 코어 원칙 문자적 준수 vs 실용).
+
+## 라운드 1 NO-GO(M-Q3) 반영 — 실데이터 검증으로 해소 (2026-06-12)
+
+Codex 라운드 1 M-Q3 = "checklist 자동마감이 완료로그 없이 NORMAL_COMPLETION 저장 → CT 누출 가능. Fix A 반쪽". → **실데이터 측정으로 발생 여부 확인:**
+
+### CT 표본(basis=ct, 2026-05~, 1,244건) 마감유형 분해
+| 마감유형 | 건수 | work_completion_log | 판정 |
+|---|---|---|---|
+| 강제종료(force_closed=TRUE) | 128 (10.3%) | — | 🔴 오염 = Fix 대상 |
+| 자동마감(AUTO_CLOSED_BY_*, force=FALSE) | 65 (5.2%) | **65/65 전건 존재** | ✅ 작업자 완료(릴레이가 그 시각으로 닫음) = 정상 |
+| admin대행(ADMIN_COMPLETE) | 2 (0.2%) | 2/2 존재 | ✅ (negligible) |
+| 순수 작업자완료(close_reason NULL) | 1,049 (84.3%) | 전건 | ✅ |
+
+→ **Q3 누출 = 실데이터 0건.** force-close 제외 후 잔여 67건(자동/admin)은 **전부 완료로그 보유 = "작업자가 complete 누름"(설계상 NORMAL_COMPLETION keep 정의 충족)**. 자동마감 median 차이는 자연 변동(긴 작업)이지 추정값 오염 아님. → **Fix A1(force_closed=FALSE)만으로 CT 표본 = 작업자 완료 전건 정합** (설계자 의도 = NULL+NORMAL keep 그대로 복원).
+
+### 확정 Fix A1 (1줄)
+`statistics_service.py` `_CLEAN_CORE`에 `AND COALESCE(td.force_closed, FALSE) = FALSE` 추가. (옵션 A+/close_reason IS NULL = 자동마감까지 제외 = **불채택**: 자동마감은 작업자 완료라 제외하면 오히려 정상 표본 손실.)
+
+### 잔여 메모 (별 BACKLOG, INFO)
+- admin대행 2건(0.2%): 완료로그가 admin backfill일 수 있음(작업자 탭 아닐 가능성). negligible → `INFO-CT-ADMIN-COMPLETE-2ROWS` 메모만, 후속.
+- checklist 자동마감 NORMAL_COMPLETION 코드경로(Codex 지적) = 현재 운영 0건이나 미래 orphan(완료로그 없는 릴레이) 발생 시 재현 가능 → `REFACTOR-CHECKLIST-ORPHAN-DURATION-SOURCE` BACKLOG(LOW) 등록, write-side에서 완료로그 없으면 calculate_close_at source 명시 권고. CT read-side는 Fix A1 무관(현재 0건).
+
+### Codex 라운드 2 질의
+1. 실데이터(자동마감 65/65 완료로그 보유)로 M-Q3가 해소되는지 — Fix A1(force_closed=FALSE)이 "작업자 완료만 적재" 설계 의도에 충분한지.
+2. Fix A1 1줄이 `_CLEAN_WHERE` 공유로 task-stats(#82)+partner-breakdown(#83)+training_impact 전파 정합(이미 라운드1 N 확인).
+3. 잔여 M=0이면 GO.

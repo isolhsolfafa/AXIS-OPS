@@ -6,6 +6,22 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.36.1] - 2026-06-12 — CT 표준 강제종료 오염 정정 (FIX-CT-FORCE-CLOSE-POLLUTION)
+
+> **BE only patch — read-only, migration 0**. CT 표준(basis=ct/duration/active)에 강제종료가 섞여 표준값을 부풀리던 버그 정정. 클린 코어 원칙(2026-04-20) 복원.
+
+- **버그**: 강제종료(`force_close_task`)가 v2.22.0/v2.28.0(FIX-DURATION + Sprint86)에서 `compute_task_work`로 ct/duration/active를 **계산·저장**하게 됐으나 `duration_source`는 미설정(NULL) → CT clean 필터(`_CLEAN_CORE`, duration_source 기반)를 통과 → **CT 표본 오염**. 클린 코어 원칙("강제종료 = 실행 측정값 생성 금지, 버리는 데이터")과 모순되는 drift였음.
+- **실측 (운영 DB, 2026-05~, basis=ct 1,244건)**: 강제종료 **128건(10.3%)** 오염. MECH 배관 median 왜곡 — WASTE_GAS_LINE_1 1.40h→2.98h **(+112%)** / UTIL_LINE_2 +56% / WASTE_GAS_LINE_2 +29%. 강제종료는 작업자가 시작만 하고 안 닫은 걸 관리자가 수일 뒤 닫아 대기시간이 duration에 포함(최대 16h).
+- **Fix**: `statistics_service.py` `_CLEAN_CORE`에 `AND COALESCE(td.force_closed, FALSE) = FALSE` 1줄 추가 → `_CLEAN_WHERE` 공유로 task-stats(#82)+partner-breakdown(#83)+training_impact 전파.
+- **자동마감은 유지(제외 X)**: 자동마감(AUTO_CLOSED_BY_*, force_closed=FALSE) 65건은 **work_completion_log 전건 보유 = 작업자가 complete 탭함**(릴레이가 그 시각으로 닫음) = 정상 NORMAL_COMPLETION. 실데이터로 Codex 라운드1 Q3(완료로그 없는 NORMAL 누출) **0건 확인** → 제외 시 오히려 정상 표본 손실이라 불채택.
+- **Codex**: 라운드1 NO-GO(Q3) → 실데이터 측정(자동마감 67/67 완료로그 보유) 해소 → **라운드2 DEPLOY_SAFE/GO (M=0)**.
+- **pytest**: 신규 `test_ct17_force_close_excluded`(강제종료 제외 + 자동마감/정상 유지) + CT 회귀 17건 = 격리 18/18 GREEN. (8분 full-run의 transient 연결 끊김 제외)
+- **안전성**: read-only, 저장값/write-path 무변경 → man-hour 리포트·대시보드 영향 0. factory/dashboard(마감 분석 의도적 포함)·duration_source_dist·auto_close_trend 무영향(자체 WHERE).
+- **잔여 INFO(BACKLOG)**: admin대행 2건(0.2%, 완료로그 admin backfill 가능성) / checklist orphan duration_source 코드경로(현재 0건). VIEW `CT_VISUALIZATION_GUIDE.md` §8-7 #1 정정(force-close 자연제외 ❌ → 오염 ✅).
+- 설계서: `AGENT_TEAM_LAUNCH.md` § FIX-CT-FORCE-CLOSE-POLLUTION.
+
+---
+
 ## [2.36.0] - 2026-06-11 — 태깅 커버리지/0초탭 드릴다운 + 마감 유형 월별 추이 zerotap (Sprint 90-BE / 90-BE-B)
 
 > **BE only minor — read-only, migration 0**. AXIS-VIEW `종료 누락 분석` 페이지 mockup 2종(TaggingCoverageCard / CloseTrendChart) 실데이터.

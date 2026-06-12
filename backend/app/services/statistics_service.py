@@ -122,10 +122,15 @@ def _r(v: Optional[float], nd: int = 1) -> float:
 
 # clean 모집단 WHERE (alias td=app_task_details, p=plan.product_info)
 # %% = psycopg2 리터럴 % (LIKE). _CLEAN_CORE = lookback 없는 공통 조건(교육 전후는 전기간 필요).
+# FIX-CT-FORCE-CLOSE-POLLUTION(2026-06-12): 강제종료(force_closed=TRUE)는 클린 코어 원칙(2026-04-20)상
+#   "버리는 데이터"인데 force_close_task가 duration_source 미설정(NULL) → 위 NORMAL 필터 통과 → CT 표본 오염
+#   (운영 실측 128건/10.3%, WASTE_GAS_LINE_1 median 1.40h→2.98h +112%). force_closed=FALSE 명시 제외.
+#   (자동마감 AUTO_CLOSED_BY_* 65건은 완료로그 전건 보유 = 작업자 완료라 NORMAL 유지가 정상 — 제외 X.)
 _CLEAN_CORE = (
     "td.completed_at IS NOT NULL "
     "AND td.duration_minutes IS NOT NULL "
     "AND (td.duration_source IS NULL OR td.duration_source = 'NORMAL_COMPLETION') "
+    "AND COALESCE(td.force_closed, FALSE) = FALSE "
     "AND td.task_id NOT IN ('TANK_MODULE','PRESSURE_TEST') "
     "AND COALESCE(p.customer, '') <> 'TEST CUSTOMER' "
     "AND td.serial_number NOT LIKE 'TEST%%'"

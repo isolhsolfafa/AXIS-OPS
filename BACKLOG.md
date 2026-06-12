@@ -33,6 +33,15 @@
 ### REF-CT-PARTNER-BREAKDOWN-ROLLUP-GROUPING-SETS 🟢 INFO (2026-06-08, Codex M→A advisory)
 > #83 rollup median을 raw pull + Python 버킷화로 산출(시맨틱 정확, ~1500행 성능 무관). 설계서는 SQL GROUP BY/GROUPING SETS 권장 → 모집단 대폭 증가 시 SQL 전환 검토. 현재 불필요(2자 합의 A 강등).
 
+### FIX-CT-FORCE-CLOSE-POLLUTION-20260612 ✅ COMPLETED (v2.36.1, 2026-06-12)
+> **해결**: `statistics_service.py _CLEAN_CORE`에 `AND COALESCE(td.force_closed, FALSE) = FALSE` 1줄(조치 ① read-side 채택). `_CLEAN_WHERE` 공유로 task-stats #82 + partner-breakdown #83 + training_impact 전파. **실측 영향**: 강제종료 128건(10.3%) CT 표본 제외, WASTE_GAS_LINE_1 median 2.98h→1.40h. **자동마감 유지(제외 X)**: AUTO_CLOSED_BY_* 65건 work_completion_log 전건 보유=작업자완료(NORMAL_COMPLETION)라 정상 — Codex Q3(완료로그 없는 NORMAL 누출) 실데이터 0건 확인. Codex R1 NO-GO(Q3)→실데이터 해소→R2 DEPLOY_SAFE M=0. pytest 신규 test_ct17 + CT회귀 18/18 GREEN.
+> **발견 경위**: 강제종료(`force_close_task` admin.py L1266·L1278)가 v2.22.0/v2.28.0에서 `compute_task_work`로 ct/duration 기록하나 `duration_source` 미설정(NULL) → `_CLEAN_CORE` 통과. 클린 코어 원칙(2026-04-20 L230) drift. VIEW §8-7 #1 "자연 제외"는 오독(task_detail.py:715 = 폐기 레거시 주석) → 정정 완료.
+> **잔여 INFO (후속, 비긴급)**:
+>   - `INFO-CT-ADMIN-COMPLETE-2ROWS-20260612` 🟢: admin대행(ADMIN_COMPLETE) 2건(0.2%) CT 표본 잔존 — 완료로그가 admin backfill일 수 있음(작업자 탭 아닐 가능성). negligible, 후속 정책 결정 시 close_reason 기반 제외 검토.
+>   - `REFACTOR-CHECKLIST-ORPHAN-DURATION-SOURCE-20260612` 🟢 LOW: checklist 자동마감(checklist_service.py L1622~1689)이 완료로그 없는 orphan을 NORMAL_COMPLETION으로 저장하는 코드경로 존재(Codex R1 지적). **현재 운영 0건**(전건 완료로그 보유)이나 미래 재현 가능 → write-side에서 완료로그 없으면 `calculate_close_at` source 명시 권고. CT read-side는 Fix 무관.
+> **미채택**: 조치 ②(write-side, force_close가 ct/duration NULL 저장 = 클린 코어 문자 그대로) — v2.22.0 man-hour 정합 일부 되돌림이라 별 정책 결정. read-side(①)로 CT 오염은 완전 차단됨.
+> **연관**: ADR-035(tagging-coverage 분모) / VIEW §8-7 #1 정정 / 클린 코어 원칙(BACKLOG L230).
+
 ### 🚨 CT 분석 결론 — 인프라 완료·데이터 성숙 대기 (2026-06-08 결정적 진단)
 > **핵심**: CT 분석 인프라(S-1 basis=active / S-2 진짜 CT / #83 협력사 분해)는 **다 만들어졌으나, app 도입 초기라 태깅 데이터가 미성숙 → product-level CT/lead/효율/납기 인사이트가 비현실적.**
 > **증거 (출하완료 118제품)**: 제품당 applicable task **14.5개 중 완료 태깅 3.2개(22%)** / MECH applicable 5.8개 중 **실시간 잡힘 0.5개(9%)** / MECH 제품당 실작업 CT **7.3h** (현장 기대 ~30h의 24%). → 실작업의 70~80%가 미태깅(즉시완료 act=0 / 미입력)이라 총 CT 과소, lead 대비 효율이 3%로 비현실적 산출.

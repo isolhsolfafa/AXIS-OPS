@@ -245,6 +245,25 @@ def test_ct13_attendance_out_excluded(db_conn, worker):
         _cleanup(db_conn)
 
 
+def test_ct17_force_close_excluded(db_conn, worker):
+    """FIX-CT-FORCE-CLOSE-POLLUTION(2026-06-12) — 강제종료(force_closed=TRUE) CT 표본 제외.
+    강제종료는 duration_source NULL이라 NORMAL 필터를 통과하나 force_closed=FALSE 가드로 제외.
+    자동마감(close_reason AUTO + NORMAL_COMPLETION = 완료로그 보유 작업자완료)은 포함 유지(회귀 0)."""
+    try:
+        _seed_n(db_conn, worker, _FAKE, 6, 120, "NM")                         # 정상완료 (force=False, source=None)
+        _seed_n(db_conn, worker, _FAKE, 4, 600, "FC", force_closed=True)       # 강제종료 (source=None, 부풀린 600분)
+        _seed_n(db_conn, worker, _FAKE, 3, 130, "AU",
+                close_reason="AUTO_CLOSED_BY_SECOND_FINAL_TRIGGER:X",
+                source="NORMAL_COMPLETION")                                    # 자동마감(작업자완료=keep)
+        ss._cache.clear()
+        t = _find(ss.get_task_ct_stats()["tasks"], _FAKE)
+        assert t is not None
+        # 강제종료 4건 제외 / 정상 6 + 자동마감 3 = 9건만 표본
+        assert t["sample_size"] == 9
+    finally:
+        _cleanup(db_conn)
+
+
 def test_ct15_excluded_source_meta(db_conn, worker):
     """추정 source(PREV_DAY_CAP) → 통계 제외 + meta excluded_by_source 노출."""
     try:
