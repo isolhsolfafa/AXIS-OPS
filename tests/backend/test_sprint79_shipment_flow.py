@@ -203,13 +203,21 @@ class TestPendingTasksGrouped:
         _seed_product(db_conn, _sn('PG_FNI'), ship_plan_date=_TOMORROW, mech='FNI', elec='P&S')
         # MECH task started + 미종료
         cur = db_conn.cursor()
+        # FEAT-PENDING-DISCIPLINE-REFINE: 방치 기준(무활동 24h+ & wsl 활성세션) 충족 seed
         cur.execute("""
             INSERT INTO app_task_details
                 (worker_id, serial_number, qr_doc_id, task_category, task_id, task_name,
                  started_at, is_applicable)
             VALUES (%s, %s, %s, 'MECH', 'TEST_TASK', 'Test',
-                    NOW() - INTERVAL '1 hour', TRUE)
+                    NOW() - INTERVAL '25 hours', TRUE)
+            RETURNING id
         """, (wid, _sn('PG_FNI'), f'DOC_{_sn("PG_FNI")}'))
+        _tid = cur.fetchone()[0]
+        cur.execute("""
+            INSERT INTO work_start_log (task_id, worker_id, serial_number, qr_doc_id,
+                 task_category, task_id_ref, task_name, started_at)
+            VALUES (%s, %s, %s, %s, 'MECH', 'TEST_TASK', 'Test', NOW() - INTERVAL '25 hours')
+        """, (_tid, wid, _sn('PG_FNI'), f'DOC_{_sn("PG_FNI")}'))
         db_conn.commit()
         cur.close()
 

@@ -63,6 +63,11 @@
 - **A-1 차트 라벨 — auto>zerotap 역전** 🟢 INFO (VIEW): `data-quality.auto_close_trend` 의 `zerotap`(NOT IN whitelist)과 `auto`(close_reason LIKE AUTO)는 독립 FILTER → `SELF_INSPECTION` 자동마감(whitelist task, `AUTO_CLOSED_BY_SECOND_FINAL_TRIGGER:SELF_INSPECTION`) 발생 월은 `auto > zerotap` 역전 가능(엄밀 subset 아님). **조치**: VIEW CloseTrendChart tooltip/주석에 "zerotap은 auto의 strict superset 아님" 명시. BE 변경 0.
 - **A-2 `_INSTANT_WHITELIST` 공개 helper 화** 🟢 INFO: `tagging_coverage_service.py`(L52) + `statistics_service.trend_sql` 가 private `_INSTANT_WHITELIST` 직접 참조(전자는 import, 후자는 리터럴 미러). drift 없음(단일 정의 기준 생성/주석)이나 공개 helper 원칙(`is_instant_whitelisted` 외 set 접근 비공개)과 어긋남. **조치(여유 시)**: `statistics_service` 에 `instant_whitelist_sql()` 또는 공개 frozenset alias 추가 → 양측 재사용.
 
+### FEAT-PENDING-DISCIPLINE-REFINE 후속 (v2.38.0 배포 후 등록, 2026-06-13)
+- **PERF-WORK-LOG-INDEX** 🟡 LOW (Codex R2 A): `work_start_log(task_id)` + `work_completion_log(task_id, worker_id)` 인덱스 없음 — 방치 기준 EXISTS 서브쿼리 스캔 경로. 성능 이슈 관찰 시 migration 추가.
+- **FEAT-OPS-FE-PENDING-GUARD** 🟠 MEDIUM (OPS app FE 별 세션): ① 퇴근 checkout 토스트(open_tasks[] 소비 — "일시정지/내 작업 완료" 유도) ② 미종료 화면 2·3겹(방치/진행중 섹션 분리 + inactive_hours·has_paused_worker 뱃지 + 종료 다이얼로그 경고 + 일괄 건수 확인). BE 필드 v2.38.0 제공 완료.
+- **FEAT-VIEW-CARD-EXACT-ACTIVITY (B5)** 🟡 LOW: VIEW MissedTaskQueueCard "최근활동 후" = S/N 근사 → task 단위 정확값(+pause) 전환. tasks by-serial 응답 additive 필요하나 work.py 🔴(새 로직 금지) → 분할 후 또는 별 경로. VIEW FE 교체 동반(별 repo).
+
 ### #90/#91 advisory (Codex, v2.37.0 배포 후 등록)
 - **A-90-ZEROTAP-SQL-REUSE** 🟢 INFO: `close_type_trend_service` zerotap SQL = 90-BE-B(statistics_service trend) 정의 복제. whitelist는 `_INSTANT_WHITELIST` 미러로 drift 차단했으나 active≤1/close_reason 조건은 수기 복제 → 분류 규칙 변경 시 동기화 필요. 공통 상수/헬퍼 추출 검토(영향 0).
 - **A-90-WINDOW-LABEL** 🟢 INFO (VIEW): CloseTrendChart [전체]=data-quality(6mo) / [비교]=close-type-trend(trust 5월~) 윈도우 차이 → VIEW 라벨/툴팁 구분 권고.

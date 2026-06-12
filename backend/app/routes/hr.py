@@ -218,11 +218,60 @@ def attendance_check() -> Tuple[Dict[str, Any], int]:
             'message': '출퇴근 기록 중 오류가 발생했습니다.'
         }), 500
 
+    # FEAT-PENDING-DISCIPLINE-REFINE (C): 퇴근 시 본인 미완료(활성·미pause) task 동봉
+    #   → OPS app FE 토스트 "일시정지/내 작업 완료" 유도 (미종료·강제종료 사태 예방). additive.
+    open_tasks = []
+    if check_type == 'out':
+        try:
+            conn2 = get_db_connection()
+            try:
+                with conn2.cursor() as cur2:
+                    cur2.execute(
+                        """
+                        SELECT t.id AS task_detail_id, t.serial_number, t.task_name,
+                               t.task_category, t.started_at
+                        FROM app_task_details t
+                        WHERE t.completed_at IS NULL
+                          AND COALESCE(t.force_closed, FALSE) = FALSE
+                          AND t.is_applicable = TRUE
+                          AND EXISTS (
+                              SELECT 1 FROM work_start_log wsl
+                              WHERE wsl.task_id = t.id AND wsl.worker_id = %s
+                              HAVING MAX(wsl.started_at) > COALESCE(
+                                  (SELECT MAX(wcl.completed_at) FROM work_completion_log wcl
+                                   WHERE wcl.task_id = t.id AND wcl.worker_id = %s),
+                                  '-infinity'::timestamptz)
+                          )
+                          AND NOT EXISTS (
+                              SELECT 1 FROM work_pause_log wpl
+                              WHERE wpl.task_detail_id = t.id AND wpl.worker_id = %s
+                                AND wpl.resumed_at IS NULL
+                          )
+                        ORDER BY t.started_at ASC
+                        """,
+                        (worker_id, worker_id, worker_id),
+                    )
+                    open_tasks = [
+                        {
+                            'task_detail_id': r['task_detail_id'],
+                            'serial_number': r['serial_number'],
+                            'task_name': r['task_name'],
+                            'task_category': r['task_category'],
+                            'started_at': r['started_at'].isoformat() if r['started_at'] else None,
+                        }
+                        for r in cur2.fetchall()
+                    ]
+            finally:
+                put_conn(conn2)
+        except Exception as e:
+            logger.warning(f"checkout open_tasks 조회 실패(non-blocking): {e}")
+
     label = '출근' if check_type == 'in' else '퇴근'
     logger.info(f"Attendance {check_type}: worker_id={worker_id}")
 
     return jsonify({
         'message': f'{label} 기록이 저장되었습니다.',
+        'open_tasks': open_tasks,
         'record': {
             'id': record['id'],
             'worker_id': record['worker_id'],

@@ -22,6 +22,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.db_pool import get_conn, put_conn
 from app.services.shipment_history_service import _get_actual_date_subquery
 
+from app.services.pending_task_standard import ABANDONED_WHERE_SQL
+
 logger = logging.getLogger(__name__)
 
 KST = timezone(timedelta(hours=9))
@@ -237,7 +239,8 @@ def get_pending_tasks_grouped() -> Dict[str, Any]:
         cur = conn.cursor()
 
         # 단일 query — pending_tasks CTE + UNION ALL GROUP BY
-        cur.execute(
+        # FEAT-PENDING-DISCIPLINE-REFINE: __ABANDONED__ → 방치 단일 기준 치환
+        _grouped_sql = (
             """
             WITH pending_tasks AS (
                 SELECT t.id, t.serial_number, t.task_category,
@@ -249,6 +252,7 @@ def get_pending_tasks_grouped() -> Dict[str, Any]:
                   AND COALESCE(t.force_closed, FALSE) = FALSE
                   AND COALESCE(p.customer, '') <> 'TEST CUSTOMER'
                   AND t.is_applicable = TRUE
+                  AND __ABANDONED__
             ),
             partner_groups AS (
                 SELECT 'partner' AS group_type,
@@ -289,7 +293,8 @@ def get_pending_tasks_grouped() -> Dict[str, Any]:
             SELECT * FROM gst_groups
             ORDER BY group_type, category, name
             """
-        )
+        ).replace("__ABANDONED__", ABANDONED_WHERE_SQL)
+        cur.execute(_grouped_sql)
         rows = cur.fetchall()
 
         partners = []

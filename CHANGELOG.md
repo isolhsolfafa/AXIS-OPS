@@ -6,6 +6,22 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.38.0] - 2026-06-13 — 미종료 = "방치" 단일 기준 + 0초탭 force 제외 + 퇴근 open_tasks (FEAT-PENDING-DISCIPLINE-REFINE)
+
+> **BE only minor — read-only + additive, migration 0**. BAT 매니저 일괄 강제종료 사태(98건) 재발 방지 1차(BE).
+
+- **방치 단일 기준** (신규 `services/pending_task_standard.py`): 미종료 = canonical + **활성(미pause) 세션≥1** + **마지막 활동(시작/재개) 24h+** (`GREATEST(MAX(wsl.started_at), MAX(wpl.resumed_at))` — resume은 wpl.resumed_at만 update, Codex R1 M-1/M-2). 일시정지·갓 시작·재개 직후 task 는 미종료 아님(방치만).
+- **적용 4표면 통일**: 데이터 종합 openTasks(월 anchor 유지) / discipline `/open-tasks` 큐(+repeat) / 대시보드 `tasks/pending/grouped` / OPS 메뉴 `tasks/pending`(+additive `last_activity_at`/`inactive_hours`/`has_paused_worker`).
+- **0초탭 force-close 제외**: discipline `_query_zerotap` `force_closed=FALSE` — CT(v2.36.1)·tagging-coverage 정합 (강제종료 대량 발생 시 rate 희석 차단).
+- **audit 자동 태그**: 활성(24h내 활동·미pause) task 강제종료 시 close_reason prefix `[활동중 종료]` — 차단 X(매니저 실행 유지, 사용자 정책), 추적 O. force write 전용(분류 규칙 무충돌, Codex R2 Q4 전수 대조).
+- **퇴근 예방(C)**: `attendance_check` 'out' 응답에 본인 미완료(활성·미pause) `open_tasks[]` additive → OPS app 토스트("일시정지/내 작업 완료") FE 별 작업.
+- **Codex 2라운드**: R1 CONDITIONAL_GO(M-1/M-2 resume 소스 공식 확정 + M-3 API가드→사용자 기각·audit 태그 대체) → R2 **DEPLOY_SAFE M=0** + A 2건(work_log 인덱스/prefix 주석) BACKLOG.
+- **pytest**: 신규 test_pending_abandoned_standard 6/6 + 회귀 sprint79 25 + sprint89 32 = 63/63 GREEN.
+- **후속(별 작업)**: OPS app FE 토스트+미종료 화면 뱃지·섹션 / VIEW 카드 근사→정확값(B5, work.py 분할 후) / work_log 인덱스 migration.
+- 설계: `AGENT_TEAM_LAUNCH.md` § FEAT-PENDING-DISCIPLINE-REFINE (v2 + as-built).
+
+---
+
 ## [2.37.0] - 2026-06-12 — #90 협력사 마감유형 추이 + #91 협력사 매니저 group_avg 노출
 
 > **BE only minor — read-only, migration 0**. AXIS-VIEW OPS_API_REQUESTS #90/#91 BE part.

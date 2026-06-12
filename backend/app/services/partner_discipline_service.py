@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.models.worker import get_db_connection, put_conn
 from app.services.statistics_service import is_instant_whitelisted
+from app.services.pending_task_standard import ABANDONED_WHERE_SQL
 
 KST = timezone(timedelta(hours=9))
 
@@ -141,6 +142,7 @@ def _query_open_tasks_count(cur, start, end, company_filter: Optional[str]) -> D
           AND t.is_applicable = TRUE
           AND COALESCE(pi.customer, '') <> 'TEST CUSTOMER'
           AND {_PARTNER_SQL} IS NOT NULL
+          AND {ABANDONED_WHERE_SQL}
     """
     params: List[Any] = [start, end]
     if company_filter:
@@ -268,6 +270,7 @@ def _query_zerotap(cur, start, end, company_filter: Optional[str]) -> Dict[Tuple
         JOIN plan.product_info pi ON pi.serial_number = t.serial_number
         WHERE t.task_category IN ('MECH','ELEC')
           AND t.completed_at >= %s AND t.completed_at < %s
+          AND COALESCE(t.force_closed, FALSE) = FALSE
           AND t.active_time_minutes IS NOT NULL
           AND t.is_applicable = TRUE
           AND COALESCE(pi.customer, '') <> 'TEST CUSTOMER'
@@ -533,6 +536,7 @@ def build_open_tasks(scope) -> Dict[str, Any]:
                   AND t.is_applicable = TRUE
                   AND COALESCE(pi.customer, '') <> 'TEST CUSTOMER'
                   AND {_PARTNER_SQL} IS NOT NULL
+                  AND {ABANDONED_WHERE_SQL}
             """
             q_params: List[Any] = []
             if company_filter:
@@ -553,6 +557,7 @@ def build_open_tasks(scope) -> Dict[str, Any]:
                   AND t.is_applicable = TRUE
                   AND COALESCE(pi.customer, '') <> 'TEST CUSTOMER'
                   AND {_PARTNER_SQL} IS NOT NULL
+                  AND {ABANDONED_WHERE_SQL}
             """
             r_params: List[Any] = [window_start]
             if company_filter:

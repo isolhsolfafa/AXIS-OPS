@@ -25,6 +25,9 @@ from app.models.worker import (
     get_db_connection, update_approval_status, get_worker_by_id,
     get_inactive_workers, get_deactivated_workers, deactivate_worker, reactivate_worker,
 )
+from app.services.pending_task_standard import (
+    ABANDONED_WHERE_SQL, LAST_ACTIVITY_SQL, is_task_active_recent,
+)
 from app.models.admin_settings import get_all_settings, update_setting
 from app.services.alert_service import create_and_broadcast_alert
 
@@ -1268,6 +1271,12 @@ def force_close_task(task_id: int) -> Tuple[Dict[str, Any], int]:
             active_minutes = _work['active']
             ct_minutes = _work['ct']  # S-2: 진짜 CT(across-worker union)
 
+        # FEAT-PENDING-DISCIPLINE-REFINE: 활성(미pause·24h내 활동) task 강제종료 audit 태그
+        #   차단 X(매니저 실행 유지, 사용자 결정) — close_reason prefix 로 추적만.
+        #   ⚠️ force_closed=TRUE write 전용 (비-force 행 prefix 금지, Codex R2 Q4).
+        if is_task_active_recent(cur, task_id) and not close_reason.startswith('[활동중 종료]'):
+            close_reason = f'[활동중 종료] {close_reason}'
+
         # app_task_details 강제 종료 업데이트
         cur.execute(
             """
@@ -1778,7 +1787,11 @@ def get_pending_tasks() -> Tuple[Dict[str, Any], int]:
                 pi.sales_order,
                 pi.model,
                 pi.customer,
-                'in_progress' AS status
+                'in_progress' AS status,
+                __LAST_ACTIVITY__ AS last_activity_at,
+                EXTRACT(EPOCH FROM (NOW() - __LAST_ACTIVITY__)) / 3600 AS inactive_hours,
+                EXISTS (SELECT 1 FROM work_pause_log wp WHERE wp.task_detail_id = t.id
+                        AND wp.resumed_at IS NULL) AS has_paused_worker
             FROM app_task_details t
             LEFT JOIN LATERAL (
                 SELECT wsl2.worker_id
@@ -1794,8 +1807,10 @@ def get_pending_tasks() -> Tuple[Dict[str, Any], int]:
               AND t.is_applicable = TRUE
               AND t.force_closed = FALSE
               AND (w.company = %s OR %s IS NULL)
+              AND __ABANDONED__
             ORDER BY t.started_at ASC
-            """,
+            """.replace("__ABANDONED__", ABANDONED_WHERE_SQL)
+               .replace("__LAST_ACTIVITY__", LAST_ACTIVITY_SQL),
             (company, company)
         )
         in_progress_rows = cur.fetchall()
@@ -1868,6 +1883,11 @@ def get_pending_tasks() -> Tuple[Dict[str, Any], int]:
                 'task_name': row['task_name'],
                 'started_at': row['started_at'].isoformat() if row['started_at'] else None,
                 'elapsed_minutes': int(row['elapsed_minutes']) if row['elapsed_minutes'] else 0,
+                'last_activity_at': (row.get('last_activity_at').isoformat()
+                                     if row.get('last_activity_at') else None),
+                'inactive_hours': (round(float(row['inactive_hours']), 1)
+                                   if row.get('inactive_hours') is not None else None),
+                'has_paused_worker': bool(row.get('has_paused_worker', False)),
                 'sales_order': row['sales_order'],
                 'model': row.get('model'),
                 'customer': row.get('customer'),
