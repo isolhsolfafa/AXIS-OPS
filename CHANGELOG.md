@@ -6,6 +6,18 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.38.1] - 2026-06-13 — OPS app 미종료 가드 FE (FEAT-OPS-FE-PENDING-GUARD)
+
+> **FE only patch (OPS app 3화면) — BE 변경 0**. v2.38.0 방치 기준의 FE part, BAT 일괄 강제종료 재발 방지 2차(view단).
+
+- **A 퇴근 안내**: 퇴근 응답 `open_tasks[]` 있으면 SnackBar 대신 다이얼로그(목록) — **[모두 일시정지]**(순차 pause, `TASK_ALREADY_PAUSED`=idempotent 성공, 실패 요약 토스트)/[나중에]. null 방어. (`home_screen.dart`)
+- **B 방치 뱃지**: 미종료 카드 시작시간 아래 metadata Row — "무활동 N시간"(48h+ danger/24~48h warning) + ⏸ 일시정지 작업자. (`manager_pending_tasks_screen` + `admin_options_screen`)
+- **C 종료 다이얼로그**: "⚠️ 무활동 N시간 경과" 문구(단건, inactiveHours 전달). 일괄 항목 = Codex M-3대로 미구현(버튼 미존재).
+- Codex R1 정정(M-2/M-3/A-1/Q4) 전부 반영. flutter build web GREEN + Netlify prod 배포. 실기기 QA 위탁.
+- 설계: `AGENT_TEAM_LAUNCH.md` § FEAT-OPS-FE-PENDING-GUARD.
+
+---
+
 ## [2.38.0] - 2026-06-13 — 미종료 = "방치" 단일 기준 + 0초탭 force 제외 + 퇴근 open_tasks (FEAT-PENDING-DISCIPLINE-REFINE)
 
 > **BE only minor — read-only + additive, migration 0**. BAT 매니저 일괄 강제종료 사태(98건) 재발 방지 1차(BE).

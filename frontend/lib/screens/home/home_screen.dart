@@ -13,6 +13,7 @@ import '../../widgets/break_time_end_popup.dart';
 import '../../widgets/update_dialog.dart';
 import '../../services/update_service.dart';
 import '../../services/notice_service.dart';
+import '../../providers/task_provider.dart';
 import '../../services/auth_service.dart';  // v2.18.27: 매뉴얼 버튼 token 발급용
 // v2.18.35: apiServiceProvider 영역 Provider singleton 사용 (이미 L7 영역 auth_provider.dart import 됨)
 
@@ -238,6 +239,74 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   /// 출근/퇴근 처리
+  /// FEAT-OPS-FE-PENDING-GUARD(A): 퇴근 후 미완료 task 안내 — [모두 일시정지]/[나중에]
+  Future<void> _showOpenTasksDialog(List<Map<String, dynamic>> openTasks) async {
+    final preview = openTasks.take(5).toList();
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('미완료 작업 ${openTasks.length}건'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('퇴근 처리되었습니다.\n종료하지 않은 작업이 있습니다. 일시정지하면 미종료(방치) 알림 대상에서 제외됩니다.',
+                style: TextStyle(fontSize: 13)),
+            const SizedBox(height: 8),
+            ...preview.map((t) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Text('• ${t['serial_number'] ?? ''} · ${t['task_name'] ?? ''}',
+                      style: const TextStyle(fontSize: 12)),
+                )),
+            if (openTasks.length > preview.length)
+              Text('외 ${openTasks.length - preview.length}건', style: const TextStyle(fontSize: 12)),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('나중에')),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _pauseAllOpenTasks(openTasks);
+            },
+            child: const Text('모두 일시정지'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 순차 pause — TASK_ALREADY_PAUSED(400)는 idempotent 성공 취급 (Codex M-2)
+  Future<void> _pauseAllOpenTasks(List<Map<String, dynamic>> openTasks) async {
+    final taskService = ref.read(taskServiceProvider);
+    int ok = 0, fail = 0;
+    for (final t in openTasks) {
+      final id = t['task_detail_id'];
+      if (id is! int) { fail++; continue; }
+      try {
+        await taskService.pauseTask(taskDetailId: id);
+        ok++;
+      } catch (e) {
+        if (e.toString().contains('TASK_ALREADY_PAUSED')) {
+          ok++; // 이미 일시정지 = 목적 달성
+        } else {
+          fail++;
+        }
+      }
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(fail == 0
+            ? '미완료 작업 $ok건 일시정지 완료'
+            : '$ok건 일시정지 · $fail건 실패 (작업 화면에서 확인해주세요)'),
+        backgroundColor: fail == 0 ? GxColors.success : GxColors.warning,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
   Future<void> _handleAttendance() async {
     if (!_attendanceStatusLoaded) {
       setState(() => _attendanceLoading = true);
@@ -297,8 +366,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           }
         }
       }
-      await apiService.post('/hr/attendance/check', data: body);
+      final attendanceResp = await apiService.post('/hr/attendance/check', data: body);
       await _fetchAttendanceStatus();
+      // FEAT-OPS-FE-PENDING-GUARD(A): 퇴근 시 미완료 task 있으면 SnackBar 대신 안내 다이얼로그
+      final openTasks = (checkType == 'out' && attendanceResp is Map)
+          ? List<Map<String, dynamic>>.from(
+              (attendanceResp['open_tasks'] as List? ?? [])
+                  .map((e) => Map<String, dynamic>.from(e as Map)))
+          : <Map<String, dynamic>>[];
+      if (mounted && openTasks.isNotEmpty) {
+        await _showOpenTasksDialog(openTasks);
+        return;
+      }
       // 출근/퇴근 처리 성공 토스트 (협력사 one-action 확인 피드백)
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

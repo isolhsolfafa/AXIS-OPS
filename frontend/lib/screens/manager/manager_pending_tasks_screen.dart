@@ -50,7 +50,7 @@ class _ManagerPendingTasksScreenState
     }
   }
 
-  Future<void> _forceCloseTask(int taskId) async {
+  Future<void> _forceCloseTask(int taskId, {num? inactiveHours}) async {
     final reasonController = TextEditingController();
     DateTime selectedDateTime = DateTime.now();
 
@@ -86,6 +86,15 @@ class _ManagerPendingTasksScreenState
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // FEAT-OPS-FE-PENDING-GUARD(C): 무활동 경과 문구 (3겹)
+              if (inactiveHours != null) ...[
+                Text('⚠️ 무활동 ${inactiveHours.round()}시간 경과한 작업입니다.',
+                    style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: GxColors.danger)),
+                const SizedBox(height: 8),
+              ],
               const Text('완료 시각',
                   style: TextStyle(
                       fontSize: 11,
@@ -467,6 +476,41 @@ class _ManagerPendingTasksScreenState
                 ],
               ),
             ],
+            // FEAT-OPS-FE-PENDING-GUARD(B): 방치 메타 — 무활동 N시간 + ⏸ (null 방어, A-1 별도 Row)
+            if (task['inactive_hours'] != null ||
+                task['has_paused_worker'] == true) ...[
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  if (task['inactive_hours'] != null) ...[
+                    Icon(Icons.hourglass_empty,
+                        size: 14,
+                        color: ((task['inactive_hours'] as num) >= 48)
+                            ? GxColors.danger
+                            : GxColors.warning),
+                    const SizedBox(width: 4),
+                    Text(
+                      '무활동 ${(task['inactive_hours'] as num).round()}시간',
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: ((task['inactive_hours'] as num) >= 48)
+                              ? GxColors.danger
+                              : GxColors.warning),
+                    ),
+                  ],
+                  if (task['has_paused_worker'] == true) ...[
+                    const SizedBox(width: 12),
+                    const Icon(Icons.pause_circle_outline,
+                        size: 14, color: GxColors.steel),
+                    const SizedBox(width: 4),
+                    const Text('일시정지 작업자 있음',
+                        style:
+                            TextStyle(fontSize: 12, color: GxColors.slate)),
+                  ],
+                ],
+              ),
+            ],
             const SizedBox(height: 12),
             Container(
               width: double.infinity,
@@ -481,7 +525,8 @@ class _ManagerPendingTasksScreenState
               child: Material(
                 color: Colors.transparent,
                 child: InkWell(
-                  onTap: () => _forceCloseTask(taskId),
+                  onTap: () => _forceCloseTask(taskId,
+                      inactiveHours: task['inactive_hours'] as num?),
                   borderRadius: BorderRadius.circular(GxRadius.sm),
                   child: Center(
                     child: Row(
