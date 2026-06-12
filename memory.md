@@ -2,7 +2,14 @@
 
 > 세션 간 누적되는 의사결정, 아키텍처 판단, 감사 결과를 기록합니다.
 > CLAUDE.md = 프로젝트 고정 정보 / memory.md = 누적 학습 / handoff.md = 세션 인계
-> 마지막 업데이트: 2026-06-12 (ADR-036 추가 — CT 표준 강제종료 제외: 클린 코어 원칙 복원(v2.36.1). 선행 ADR-035 태깅 커버리지 분모)
+> 마지막 업데이트: 2026-06-13 (ADR-037 추가 — 미종료="방치" 단일 기준)
+
+### ADR-037: 미종료 = "방치" 단일 기준 (FEAT-PENDING-DISCIPLINE-REFINE, v2.38.0, 2026-06-13)
+- **맥락**: BAT 매니저가 미종료 메뉴에서 갓 시작 task까지 일괄 강제종료(98건). 미종료 정의가 일시정지/진행중/방치 미구분.
+- **결정**: 방치 = canonical + **활성(미pause) 세션≥1** + **마지막 활동(시작/재개) 24h+** — `GREATEST(MAX(wsl.started_at), MAX(wpl.resumed_at))` (resume은 wpl.resumed_at만 update). 신규 `services/pending_task_standard.py` 단일 정의 → 4표면 통일(데이터종합 openTasks 월anchor / discipline 큐 / 대시보드 grouped / OPS 메뉴+additive 필드).
+- **결정(M-3 기각)**: force-close API 가드 대신 **매니저 실행 유지 + view단 실수 방지**(Twin파파) — `[활동중 종료]` audit 태그(차단X) + checkout open_tasks 토스트(예방). zerotap force_closed=FALSE(CT 정합). Codex 2R DEPLOY_SAFE. pytest 63/63. 실효: openTasks BAT 12→1, 큐 493→117.
+- **후속**: FEAT-OPS-FE-PENDING-GUARD(FE, 설계+Codex R1 M=0 완료 — AGENT_TEAM_LAUNCH.md §) / B5 / work_log 인덱스.
+
 
 ---
 
