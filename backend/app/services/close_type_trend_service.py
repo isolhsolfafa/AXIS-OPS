@@ -62,22 +62,47 @@ def _month_range(from_month: str, to_month: str) -> List[str]:
     return out
 
 
+def _week_range(fm: str, tm: str) -> List[str]:
+    """윈도우 [fm월 1일, tm월말] 와 겹치는 ISO 주 라벨(IYYY-WIW) 리스트 — zero-fill grid."""
+    from datetime import date, timedelta
+    start = date(int(fm[:4]), int(fm[5:7]), 1)
+    ty, tmn = int(tm[:4]), int(tm[5:7])
+    end = (date(ty + 1, 1, 1) if tmn == 12 else date(ty, tmn + 1, 1)) - timedelta(days=1)
+    monday = start - timedelta(days=start.weekday())
+    out: List[str] = []
+    while monday <= end:
+        iy, iw, _ = monday.isocalendar()
+        out.append(f"{iy:04d}-W{iw:02d}")
+        monday += timedelta(days=7)
+    return out
+
+
 def get_close_type_trend(
     from_month: Optional[str] = None, to_month: Optional[str] = None,
     partner: Optional[str] = None, group: Optional[str] = None,
+    bucket: str = "month",
 ) -> Dict[str, Any]:
     """협력사×그룹×월 마감유형 추이 (auto/zerotap/force, 단위=건).
 
     flat series + zero-fill. ?partner/?group 미지정=전체. from/to 기본 [CT_TRUST_START_MONTH, 현재월].
     """
+    if bucket not in ("month", "week"):
+        from app.services.statistics_service import CtParamError
+        raise CtParamError("INVALID_BUCKET", "bucket 은 'month' | 'week' 중 하나여야 합니다.")
     fm, tm = _resolve_window(from_month, to_month)
     params = {"from_month": fm, "to_month": tm}
+    # #90b: 주별 버킷 — ISO week 라벨(IYYY-"W"IW), python isocalendar 와 동치
+    bucket_expr = (
+        "to_char(date_trunc('week', td.completed_at AT TIME ZONE 'Asia/Seoul'), 'IYYY-\"W\"IW')"
+        if bucket == "week" else
+        "to_char(date_trunc('month', td.completed_at AT TIME ZONE 'Asia/Seoul'), 'YYYY-MM')"
+    )
 
     sql = f"""
         WITH base AS (
             SELECT {_PARTNER_SQL} AS partner,
                    td.task_category AS grp,
-                   to_char(date_trunc('month', td.completed_at AT TIME ZONE 'Asia/Seoul'), 'YYYY-MM') AS month,
+                   {bucket_expr} AS month,
                    td.close_reason, td.force_closed, td.task_id, td.active_time_minutes
             FROM app_task_details td
             JOIN plan.product_info p ON p.serial_number = td.serial_number
@@ -111,7 +136,7 @@ def get_close_type_trend(
         put_conn(conn)
 
     # 관측된 (partner, group) + 월 grid → zero-fill
-    months = _month_range(fm, tm)
+    months = _week_range(fm, tm) if bucket == 'week' else _month_range(fm, tm)
     observed: Dict[tuple, Dict[str, Dict[str, int]]] = {}
     pg_set = set()
     for r in rows:
@@ -138,6 +163,7 @@ def get_close_type_trend(
         "series": series,
         "scope": {"partner": partner or None, "group": group or None},
         "meta": {
+            "bucket": bucket,
             "from": fm, "to": tm,
             "generated_at": datetime.now(_KST).isoformat(),
             "window": "trust",

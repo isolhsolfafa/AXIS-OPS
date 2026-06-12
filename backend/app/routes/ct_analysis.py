@@ -150,9 +150,11 @@ def close_type_trend():
     to_month = request.args.get("to")
     partner = (request.args.get("partner") or "").strip() or None
     group = (request.args.get("group") or "").strip() or None
+    bucket = (request.args.get("bucket") or "month").strip().lower()  # #90b: week|month
     try:
         return jsonify(get_close_type_trend(
             from_month=from_month, to_month=to_month, partner=partner, group=group,
+            bucket=bucket,
         )), 200
     except CtParamError as e:
         return jsonify({"error": e.code, "message": e.message}), 400

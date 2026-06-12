@@ -140,3 +140,29 @@ def test_ctt07_invalid_month(db_conn, worker):
     with pytest.raises(CtParamError) as e:
         cts.get_close_type_trend(from_month="2026-13")
     assert e.value.code == "INVALID_MONTH"
+
+
+# ── #90b TC-CTT-08 bucket=week — ISO 라벨 + 주 zero-fill + meta ──
+def test_ctt08_week_bucket(db_conn, worker):
+    _seed(db_conn, worker, "wk", "MECH", "WASTE_GAS_LINE_1", active=0, month="2026-06")
+    res = cts.get_close_type_trend(from_month="2026-06", to_month="2026-06", bucket="week")
+    assert res["meta"]["bucket"] == "week"
+    import re
+    labels = {s["month"] for s in res["series"]}
+    assert all(re.match(r"^\d{4}-W\d{2}$", m) for m in labels)
+    # 6-15 완료 → 2026-W25 셀에 zerotap 1
+    c = next((s for s in res["series"] if s["month"] == "2026-W25" and s["partner"] == "BAT"), None)
+    assert c is not None and c["zerotap"] == 1
+    # 6월 윈도우 = W23~W27 5개 주 zero-fill
+    assert len(labels) >= 4
+
+
+# ── #90b TC-CTT-09 기본 month 회귀 + INVALID_BUCKET ──
+def test_ctt09_month_default_and_invalid(db_conn, worker):
+    _seed(db_conn, worker, "mo", "MECH", "UTIL_LINE_1", active=0, month="2026-06")
+    res = cts.get_close_type_trend(from_month="2026-06", to_month="2026-06")
+    assert res["meta"]["bucket"] == "month"
+    assert any(s["month"] == "2026-06" for s in res["series"])
+    with pytest.raises(CtParamError) as e:
+        cts.get_close_type_trend(bucket="day")
+    assert e.value.code == "INVALID_BUCKET"

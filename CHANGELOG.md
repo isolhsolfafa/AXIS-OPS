@@ -6,6 +6,17 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.39.0] - 2026-06-13 — #90b close-type-trend 주별(ISO week) 버킷 (Sprint 90-BE-C-b)
+
+> **BE only minor — additive, read-only, migration 0**. VIEW [비교] 차트 [주|월] 토글(주 기본)의 BE part.
+
+- `GET /api/ct/close-type-trend?bucket=week|month`(기본 month=back-compat 완전). week = `series[].month` 에 ISO 라벨(`IYYY-"W"IW`, 예 2026-W25) + `meta.bucket`. zero-fill = 윈도우 내 ISO 주 전건(`_week_range`, isocalendar ↔ PG IYYY-IW 동치 — Codex 연말 W53/W01 독립 계산 확인). INVALID_BUCKET 400.
+- A-1(허용): 월초 경계 주는 윈도우 내 완료분만 부분 집계(라벨은 표시) — 의미 정합.
+- Codex 실코드 R1 **DEPLOY_SAFE/GO (M=0)**. pytest test_sprint90c 9/9(신규 TC-CTT-08/09 + 회귀 7).
+- VIEW: `meta.bucket==='week'` 수신 시 주별 mockup→실데이터 자동 전환(선반영 완료, degrade-safe).
+
+---
+
 ## [2.38.2] - 2026-06-13 — 퇴근 다이얼로그 [모두 내작업완료] + Sprint 번호 부여 (Sprint 91-FE 연장)
 
 > **FE only patch (home_screen) — BE 0**. 실기기 QA(일시정지 정상) 후 사용자 요청.
