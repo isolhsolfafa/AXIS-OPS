@@ -349,22 +349,21 @@ def _group_avg(
     value_by_partner: Dict[Tuple[str, str], Any], grp: str,
     all_groups: List[Tuple[str, str]], scope, *, missing: Optional[float] = 0.0,
 ) -> Tuple[Optional[float], int, Optional[str]]:
-    """같은 group 내 peer 평균 (자사 제외, peer_n>=3 충족 시만).
+    """같은 group 의 **그룹평균** (자사 포함, 기여 협력사≥_MIN_PEERS 충족 시만).
 
-    - admin/global: peer = group 내 전체 협력사 (자사 개념 없음). peer_n = 협력사 수.
-    - 협력사 매니저: peer = 자사 제외 타사. peer_n = 타사 수.
-    미달(peer_n<_MIN_PEERS) → (None, peer_n, 'insufficient_peers') 로 suppress.
+    #91(2026-06-12): 협력사 매니저도 group_avg 노출 — `cand=partners`(admin·협력사 동일, 자사 포함).
+      - 이전: 협력사는 자사 제외 peer 평균 → group 3곳서 자사 제외 2<3 → 영구 suppress 였음.
+      - 변경: admin·협력사 모두 group 전체(자사 포함) 평균 = **동일 값**.
+      - 역추론 가드: len(vals)>=3(자사 포함 기여≥3 → 자사 외 미지수≥2) → "avg+자기값"으로 타사
+        개별값 역산 불가. 기여<3(예: 3곳 중 1곳 데이터 누락 → vals=2 → 자사+1타사면 그 1곳 역산 가능)
+        시 suppress 로 정확히 차단. (3곳 노출 시 타사 2곳 '합계'는 도출 가능 — 개별값 아님, 허용 수준.)
 
-    `missing` (불변식: raw 가 None 가능한 지표 ⟺ missing=None, 그래야 raw=None ⟺ peer 제외 일관):
-    - 0.0 (openTasks/autoClose): raw 가 항상 count(≥0), 절대 None 아님 → 누락 협력사 = 정상 0건 → 분모 포함.
-    - None (taggingRate/zeroTap/checkoutMiss 등 rate): 분모(출근 onsite / substantive / 출근일)
-      없으면 raw=None → 측정 불가 협력사는 peer 에서 제외 (raw=None ⟺ peer 제외 일관).
+    `missing` (불변식: raw 가 None 가능한 지표 ⟺ missing=None):
+    - 0.0 (openTasks/autoClose): raw 항상 count(≥0) → 누락 협력사 = 정상 0건 → 분모 포함.
+    - None (taggingRate/zeroTap/checkoutMiss 등 rate): 분모 없으면 raw=None → 측정 불가 협력사 제외.
     """
     partners = [p for (p, g) in all_groups if g == grp]
-    if scope.is_global:
-        cand = partners
-    else:
-        cand = [p for p in partners if p != scope.company]
+    cand = partners   # #91: 협력사도 자사 포함 group-wide avg (admin 과 동일 값)
     vals: List[float] = []
     for p in cand:
         v = value_by_partner.get((p, grp), missing)

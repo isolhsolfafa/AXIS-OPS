@@ -21,6 +21,7 @@ from app.services.statistics_service import (
     get_task_ct_stats,
 )
 from app.services.tagging_coverage_service import get_tagging_coverage
+from app.services.close_type_trend_service import get_close_type_trend
 
 logger = logging.getLogger(__name__)
 
@@ -133,3 +134,28 @@ def tagging_coverage():
     except Exception:
         logger.exception("[ct] tagging-coverage 산출 실패")
         return jsonify({"error": "INTERNAL_ERROR", "message": "태깅 커버리지 산출 실패"}), 500
+
+
+@ct_analysis_bp.route("/close-type-trend", methods=["GET"])
+@jwt_required
+@gst_or_admin_required
+def close_type_trend():
+    """#90 — 협력사×그룹 마감유형 월별 추이 (auto/zerotap/force, 단위=건, read-only).
+
+    VIEW CloseTrendChart [비교] 오버레이용 flat series → VIEW 가 metric/by 피벗.
+    partner=MECH/ELEC(TMS(M)/(E)), GST+SH 제외. from/to(YYYY-MM) 기본 [2026-05, 현재월], 빈 달 zero-fill.
+    ?partner/?group = 표시 필터. 설계서: AGENT_TEAM_LAUNCH.md § Sprint 90-BE-C.
+    """
+    from_month = request.args.get("from")
+    to_month = request.args.get("to")
+    partner = (request.args.get("partner") or "").strip() or None
+    group = (request.args.get("group") or "").strip() or None
+    try:
+        return jsonify(get_close_type_trend(
+            from_month=from_month, to_month=to_month, partner=partner, group=group,
+        )), 200
+    except CtParamError as e:
+        return jsonify({"error": e.code, "message": e.message}), 400
+    except Exception:
+        logger.exception("[ct] close-type-trend 산출 실패")
+        return jsonify({"error": "INTERNAL_ERROR", "message": "마감유형 추이 산출 실패"}), 500

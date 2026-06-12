@@ -48928,3 +48928,81 @@ Codex 라운드 1 M-Q3 = "checklist 자동마감이 완료로그 없이 NORMAL_C
 1. 실데이터(자동마감 65/65 완료로그 보유)로 M-Q3가 해소되는지 — Fix A1(force_closed=FALSE)이 "작업자 완료만 적재" 설계 의도에 충분한지.
 2. Fix A1 1줄이 `_CLEAN_WHERE` 공유로 task-stats(#82)+partner-breakdown(#83)+training_impact 전파 정합(이미 라운드1 N 확인).
 3. 잔여 M=0이면 GO.
+
+
+---
+
+# § Sprint 90-BE-C / #90 — 협력사 차원 마감유형 월별 추이 (close-type-trend) (20260612)
+
+> VIEW `CloseTrendChart` [비교] 오버레이 mockup 실데이터. read-only / migration 0. 신규 endpoint.
+
+## 결정
+| 항목 | 값 | 근거 |
+|---|---|---|
+| endpoint | `GET /api/ct/close-type-trend?from=&to=&partner=&group=` | 옵션 B(신규) — discipline /trend(평가지표) 확장 금지 + data-quality(전사) cache bleed 회피 |
+| 권한 | `@jwt_required + @gst_or_admin_required` | 소비 페이지(종료누락)=admin+GST manager, 협력사 차단 → company-scope 불필요(요청 문구 제거) |
+| service | 신규 `services/close_type_trend_service.py` | statistics/dashboard 둘 다 🔴(새 로직 금지). zerotap=90-BE-B 정의 재사용(is_instant_whitelisted import) |
+| 스코프 | MECH/ELEC only | 협력사 작업(PI/QI/SI=GST 제외). group=task_category |
+
+## 지표 정의 (partner×group×month, 단위=건)
+base WHERE: `completed_at NOT NULL + task_id NOT IN (TANK_MODULE,PRESSURE_TEST) + non-TEST + completed_at∈window`.
+- `auto` = `close_reason LIKE 'AUTO_CLOSED_BY_%' AND force_closed=FALSE`
+- `force` = `force_closed=TRUE`
+- `zerotap` = `task_id NOT IN whitelist AND force_closed=FALSE AND (active_time_minutes<=1 OR close_reason IS NOT NULL)` (= 90-BE-B 동일)
+- partner = `CASE task_category WHEN MECH→mech_partner(TMS→TMS(M)) WHEN ELEC→elec_partner(TMS→TMS(E)) END`, **GST+SH+NULL 제외**(#87 `_EXCLUDED_PARTNERS` 정합). group = task_category(MECH/ELEC).
+
+## 응답 (flat — VIEW가 피벗)
+```jsonc
+{
+  "series": [ {"partner":"BAT","group":"MECH","month":"2026-05","auto":18,"zerotap":30,"force":2}, ... ],
+  "scope": {"partner": null, "group": null},   // ?partner=/?group= 필터 echo (null=전체)
+  "meta": {"from":"2026-05","to":"2026-06","generated_at":"...","window":"trust"}
+}
+```
+- 윈도우: from/to(YYYY-MM) 미지정=`_resolve_window` 기본 [CT_TRUST_START_MONTH(2026-05), 현재월]. **빈 달 zero-fill**(partner×group×month grid 전건, 0 채움 — 라인 끊김 방지).
+- ?partner=/?group= = 표시 필터(서버 필터). 미지정=전 partner×group. 유효하지 않으면 빈 series + scope echo(에러 X).
+- VIEW `compareCloseSeries(by, metric, partnerList)`가 선택 metric+by로 `{month, BAT:30, FNI:18,...}` 피벗.
+
+## ⚠️ 전체/비교 윈도우 차이 (Codex 질의)
+[전체] view = data-quality.auto_close_trend(rolling 6mo) / [비교] = 본 endpoint(trust 5월~). 윈도우 불일치 → VIEW 정합 or 본 endpoint도 6mo? 요청 §8848 = trust window 명시 → trust 채택, VIEW 라벨로 구분 권고.
+
+## pytest (test_sprint90c — 신규)
+- partner×group 분리 + GST/SH 제외 + zero-fill + auto/zerotap/force 정의 + ?partner/?group 필터 + 빈 윈도우.
+
+## Codex 질의
+1. service 신규 파일 + zerotap 정의 90-BE-B 재사용(중복 SQL vs import) 정합.
+2. partner SQL GST+SH 제외 + group=MECH/ELEC 스코프 적정.
+3. flat series 응답 + zero-fill grid가 VIEW compareCloseSeries 피벗에 충분한지.
+4. 전체(6mo)/비교(trust) 윈도우 차이 처리.
+
+---
+
+# § #91 — 협력사 매니저 group_avg 노출 (group-wide avg, 역추론 가드) (20260612)
+
+> 협력사 대시보드 "데이터 종합 — 그룹평균 대비"가 협력사 계정엔 영구 "—". #87 discipline 공정성 변경. read-only.
+
+## 원인 (실측)
+`partner_discipline_service._group_avg` L364-367: admin=`cand=partners`(전체) / 협력사=`cand=[자사 제외]`. `_MIN_PEERS=3` + group 3곳씩 → 협력사 자사 제외 2<3 → **영구 suppress**.
+
+## Fix (옵션 A — group 전체 평균, 자사 포함)
+`_group_avg`에서 `is_global` 분기 제거 → **`cand = partners`(admin·협력사 동일, 자사 포함)**. guard `len(vals) < _MIN_PEERS(3)` 유지.
+```python
+# before: cand = partners if scope.is_global else [p for p in partners if p != scope.company]
+cand = partners   # 협력사도 자사 포함 group-wide avg (admin과 동일 값)
+```
+- **역추론 가드 유지**: `len(vals)>=3` = 기여 협력사 ≥3(자사 + 타사 ≥2) → "avg + 자기값"으로 타사 2개 개별 역산 불가(미지수 2). 현재 3곳 group 전건 데이터 시 vals=3 → 노출. 1곳 데이터 누락 시 vals=2<3 → suppress(자사+1타사면 그 1곳 역산 가능하므로 정확히 차단). **missing/None 로직 그대로** = 안전.
+- **의미 전환**: "peer 평균(자사 제외)" → "group 평균(자사 포함)". VIEW 라벨 이미 "그룹평균" → 변경 0. admin·협력사 **동일 값**.
+- suppressed_reason: `'insufficient_peers'` → `'insufficient_group'`(또는 유지). peer_n = 기여 협력사 수(자사 포함).
+
+## 미채택 (옵션 B)
+`_MIN_PEERS` 3→2(자사 제외 2곳 평균) = admin과 값 다름(self-excluded) + 2곳이면 역추론 위험(자사 제외 2곳 중 1곳 = avg×2−타1). → A 채택.
+
+## 영향 / pytest
+- VIEW 변경 0 (BE non-null → `groupAvgOf` 자동 렌더).
+- admin 동작 불변(cand=partners 그대로). 협력사만 self-excluded→self-included.
+- pytest(test_sprint89 확장): 협력사 scope group_avg = admin과 동일 값 + group 3곳 노출 + 1곳 누락 시 suppress + admin 회귀 0.
+
+## Codex 질의
+1. cand=partners 통일이 admin 회귀 0 + 협력사 노출 정합인지.
+2. 역추론 가드 = `len(vals)>=3`(group 전체 기여)이 A7(소표본 역추론 차단) 유지하는지 — group 2곳 축소 시나리오 안전성.
+3. 의미 전환(peer→group avg, 자사 포함)이 "그룹평균 대비" 카드 해석에 문제없는지(자기값이 평균에 1/3 포함 = deviation 완화).

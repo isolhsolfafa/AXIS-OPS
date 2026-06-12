@@ -6,6 +6,24 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.37.0] - 2026-06-12 — #90 협력사 마감유형 추이 + #91 협력사 매니저 group_avg 노출
+
+> **BE only minor — read-only, migration 0**. AXIS-VIEW OPS_API_REQUESTS #90/#91 BE part.
+
+- **#90 — `GET /api/ct/close-type-trend?from=&to=&partner=&group=`** (신규 `services/close_type_trend_service.py` + `ct_analysis.py` route, `@jwt_required + @gst_or_admin_required`): VIEW `CloseTrendChart` [비교] 오버레이 실데이터. **협력사×그룹×월 × {auto, zerotap, force}**(단위=건) flat series → VIEW가 metric/by 피벗.
+  - 정의: auto=`AUTO_CLOSED_BY_*` (force=FALSE) / force=`force_closed=TRUE` / zerotap=`NOT one-click AND force=FALSE AND (active≤1 OR close_reason 존재)`(=90-BE-B 동일). partner=MECH→mech_partner(TMS→TMS(M))/ELEC→elec_partner(TMS→TMS(E)), **GST+SH+NULL 제외**(#87 정합). group=task_category(MECH/ELEC only).
+  - 윈도우 from/to(YYYY-MM) 기본 `[CT_TRUST_START_MONTH(2026-05), 현재월]`, **빈 달 zero-fill**(라인 끊김 방지). ?partner/?group = 서버 표시 필터. company-scope 불필요(소비 페이지=admin/GST, 협력사 차단).
+  - pytest 신규 `test_sprint90c_close_type_trend` 7 TC(TC-CTT-01~07) GREEN.
+- **#91 — 협력사 매니저 group_avg 노출** (`partner_discipline_service._group_avg` 1줄): 협력사 대시보드 "데이터 종합 — 그룹평균 대비"가 협력사 계정엔 영구 "—"이던 것 정정. `is_global` 분기 제거 → **`cand = partners`(admin·협력사 동일, 자사 포함 group-wide avg)**.
+  - 원인: `_MIN_PEERS=3` + group 3곳씩 → 협력사 자사 제외 2<3 → 영구 suppress.
+  - **역추론 가드 유지**: `len(vals)≥3`(자사 포함 기여≥3 → 자사 외 미지수≥2) → "avg+자기값"으로 타사 개별값 역산 불가. 3곳 중 1곳 데이터 누락(rate, missing=None) → vals=2 → suppress(자사+1타사 역산 정확 차단). admin·협력사 **동일 값**. (3곳 노출 시 타사 2곳 '합계'는 도출 가능 — 개별값 아님, 허용.)
+  - VIEW 변경 0(BE non-null → `groupAvgOf` 자동 렌더). pytest test_sprint89 32/32(갱신 3 + 신규 역추론 가드 TC).
+- **Codex**: #90·#91 각각 라운드1 **DEPLOY_SAFE/GO (M=0)** + advisory 4건 BACKLOG.
+- **VIEW FE 후속(별 repo)**: #90 mockup→실데이터(compareCloseSeries) + 윈도우 라벨 / #91 "그룹평균(자사 포함)" 툴팁.
+- 설계서: `AGENT_TEAM_LAUNCH.md` § Sprint 90-BE-C / § #91.
+
+---
+
 ## [2.36.1] - 2026-06-12 — CT 표준 강제종료 오염 정정 (FIX-CT-FORCE-CLOSE-POLLUTION)
 
 > **BE only patch — read-only, migration 0**. CT 표준(basis=ct/duration/active)에 강제종료가 섞여 표준값을 부풀리던 버그 정정. 클린 코어 원칙(2026-04-20) 복원.

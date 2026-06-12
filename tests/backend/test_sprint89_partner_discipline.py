@@ -112,23 +112,19 @@ class TestGroupAvg:
         assert pn == 3
         assert sr is None
 
-    def test_manager_peer_below_3_suppressed(self):
-        # 협력사 매니저 BAT: peer = FNI/TMS(M) = 2 < 3 → suppress
+    def test_manager_now_shows_group_avg_same_as_admin(self):
+        # #91(2026-06-12): 협력사 매니저 BAT 도 group 전체(자사 포함) 평균 = admin 동일 값
         ga, pn, sr = _group_avg(_OPEN, "MECH", _GROUPS, BAT_SCOPE)
-        assert ga is None
-        assert pn == 2
-        assert sr == "insufficient_peers"
+        ga_admin, _, _ = _group_avg(_OPEN, "MECH", _GROUPS, ADMIN_SCOPE)
+        assert ga == ga_admin == 2.0   # (5+1+0)/3 — 자사 포함
+        assert pn == 3 and sr is None
 
-    def test_manager_peer_at_3_boundary_shown(self):
-        # 가상: MECH 4사 → BAT peer=3 → 노출 (k>=3 경계)
-        groups4 = _GROUPS + [("EXTRA", "MECH")]
-        open4 = dict(_OPEN)
-        open4[("EXTRA", "MECH")] = 6
-        # peer(BAT 제외) = FNI(1)+TMS(M)(0)+EXTRA(6) = 7/3 ≈ 2.33
-        ga, pn, sr = _group_avg(open4, "MECH", groups4, BAT_SCOPE)
-        assert pn == 3
-        assert sr is None
-        assert ga == pytest.approx(2.33, abs=0.01)
+    def test_manager_group_below_3_suppressed_reverse_inference_guard(self):
+        # #91 역추론 가드: 기여 협력사 < 3 (rate 지표 1곳 측정불가) → suppress
+        #   (자사 + 1타사만 데이터면 avg×2−자사 로 그 1타사 역산 가능하므로 정확히 차단)
+        open_missing = {("BAT", "MECH"): 0.5, ("FNI", "MECH"): 0.3, ("TMS(M)", "MECH"): None}
+        ga, pn, sr = _group_avg(open_missing, "MECH", _GROUPS, BAT_SCOPE, missing=None)
+        assert ga is None and pn == 2 and sr == "insufficient_peers"
 
     def test_global_below_3_suppressed(self):
         groups2 = [("X", "MECH"), ("Y", "MECH")]
@@ -202,13 +198,14 @@ class TestDisciplineSummary:
         assert resp["rows"][0]["partner"] == "BAT"
         assert resp["rows"][0]["group"] == "MECH"
 
-    def test_manager_group_avg_suppressed(self, patch_summary):
+    def test_manager_group_avg_now_shown(self, patch_summary):
+        # #91(2026-06-12): 협력사 매니저도 group_avg 노출 (openTasks=count missing=0.0 → 3사 vals=3 → admin 동일)
         resp = build_discipline_summary("2026-06", BAT_SCOPE)
         ot = resp["rows"][0]["metrics"]["openTasks"]
-        assert ot["raw"] == 5.0  # 자사 raw 는 노출
-        assert ot["group_avg"] is None  # peer=2<3 → suppress
-        assert ot["suppressed_reason"] == "insufficient_peers"
-        assert ot["peer_n"] == 2
+        assert ot["raw"] == 5.0          # 자사 raw 노출
+        assert ot["group_avg"] == 2.0    # group 전체(자사 포함) 평균 = admin 동일 값
+        assert ot["suppressed_reason"] is None
+        assert ot["peer_n"] == 3
 
     def test_phase2a_implemented_phase2b_placeholder(self, patch_summary):
         resp = build_discipline_summary("2026-06", ADMIN_SCOPE)
@@ -260,12 +257,15 @@ class TestDisciplineSummary:
         assert cm["group_avg"] == 0.4
         assert cm["lower_better"] is True
 
-    def test_manager_phase2a_rate_suppressed(self, patch_summary):
-        resp = build_discipline_summary("2026-06", BAT_SCOPE)
-        tr = resp["rows"][0]["metrics"]["taggingRate"]
-        assert tr["raw"] == 0.7              # 자사 raw 노출
-        assert tr["group_avg"] is None       # peer=2<3 suppress
-        assert tr["suppressed_reason"] == "insufficient_peers"
+    def test_manager_phase2a_rate_now_shown(self, patch_summary):
+        # #91(2026-06-12): 협력사 매니저도 rate group_avg 노출 (MECH 3사 전건 데이터 → vals=3, admin 동일)
+        resp_m = build_discipline_summary("2026-06", BAT_SCOPE)
+        resp_a = build_discipline_summary("2026-06", ADMIN_SCOPE)
+        tr_m = resp_m["rows"][0]["metrics"]["taggingRate"]
+        tr_a = next(r for r in resp_a["rows"] if r["partner"] == "BAT")["metrics"]["taggingRate"]
+        assert tr_m["raw"] == 0.7
+        assert tr_m["group_avg"] == tr_a["group_avg"] == 0.65   # (0.7+0.25+1.0)/3 자사 포함
+        assert tr_m["suppressed_reason"] is None
 
     def test_rate_group_avg_skips_zero_denominator(self, monkeypatch):
         # FNI onsite=0 → taggingRate None → MECH peer 2<3 → group_avg suppress (None-skip 검증)

@@ -63,6 +63,12 @@
 - **A-1 차트 라벨 — auto>zerotap 역전** 🟢 INFO (VIEW): `data-quality.auto_close_trend` 의 `zerotap`(NOT IN whitelist)과 `auto`(close_reason LIKE AUTO)는 독립 FILTER → `SELF_INSPECTION` 자동마감(whitelist task, `AUTO_CLOSED_BY_SECOND_FINAL_TRIGGER:SELF_INSPECTION`) 발생 월은 `auto > zerotap` 역전 가능(엄밀 subset 아님). **조치**: VIEW CloseTrendChart tooltip/주석에 "zerotap은 auto의 strict superset 아님" 명시. BE 변경 0.
 - **A-2 `_INSTANT_WHITELIST` 공개 helper 화** 🟢 INFO: `tagging_coverage_service.py`(L52) + `statistics_service.trend_sql` 가 private `_INSTANT_WHITELIST` 직접 참조(전자는 import, 후자는 리터럴 미러). drift 없음(단일 정의 기준 생성/주석)이나 공개 helper 원칙(`is_instant_whitelisted` 외 set 접근 비공개)과 어긋남. **조치(여유 시)**: `statistics_service` 에 `instant_whitelist_sql()` 또는 공개 frozenset alias 추가 → 양측 재사용.
 
+### #90/#91 advisory (Codex, v2.37.0 배포 후 등록)
+- **A-90-ZEROTAP-SQL-REUSE** 🟢 INFO: `close_type_trend_service` zerotap SQL = 90-BE-B(statistics_service trend) 정의 복제. whitelist는 `_INSTANT_WHITELIST` 미러로 drift 차단했으나 active≤1/close_reason 조건은 수기 복제 → 분류 규칙 변경 시 동기화 필요. 공통 상수/헬퍼 추출 검토(영향 0).
+- **A-90-WINDOW-LABEL** 🟢 INFO (VIEW): CloseTrendChart [전체]=data-quality(6mo) / [비교]=close-type-trend(trust 5월~) 윈도우 차이 → VIEW 라벨/툴팁 구분 권고.
+- **A-91-PRIVACY-SUM-LEAK** 🟢 INFO: 3사 group_avg 노출 시 자사가 "타사 2곳 합계=avg×3−자사" 도출 가능(개별값 X). 사용자 의도("개별값 보호")는 충족 — 합계 누출 허용 수준 문서화.
+- **A-91-LABEL-UPDATE** 🟢 INFO (VIEW): group_avg 의미가 "peer평균(자사제외)"→"그룹평균(자사포함)" 전환 → VIEW 툴팁/라벨 "그룹평균(자사 포함)" 갱신 권고.
+
 ### 후속 운영 KPI 권고 (사용자 catch)
 - **BAT 시간추적 교육**: 완료율 100%지만 act=0율 59%(시작=완료 즉시태깅, 실 timing 부재). FNI 7%. BAT 늦게 온보딩 → 적응 중. 월별 act=0율 추세로 개선 추적.
 - **tank module 일괄 시작/종료 편의 기능 삭제** 🟡 (⏳ **안정화 단계 통과 후** — 2026-06-08 결정): 현재 일괄 기능이 TMS garbage(가압완료∧tank미입력) + act=0 미추적의 원인. **단 아직 운영 안정화 단계라 즉시 삭제 불가** → 안정화 통과 후 삭제. 삭제 효과: ① TMS timing 신뢰 회복 → CT 모집단 복원 ② TMS 선후행 모순 자연 소멸 → S-3 ⓒ 재개 불필요화 가능. 삭제 시 OPS PWA tank module 작업 화면 + BE 일괄 start/complete 경로 제거.
