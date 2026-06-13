@@ -1136,3 +1136,223 @@ def get_partner_breakdown(
     }
     _cache_put(cache_key, result)
     return result
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# FEAT-CT-RELIABILITY-SUMMARY (B/v4) — 데이터 신뢰도 게이트 (모델 기준 + 생산량 가중)
+#   가중평균(부풀림) 폐기 → count 게이트: 표준가능 = (n>=30 AND 모델공정추적>=70%) 셀 비율.
+#   생산량(12mo rolling) 가중 Σ(w_model·r_model). 표시=모델별, 협력사는 drill(매트릭스).
+#   설계: AGENT_TEAM_LAUNCH.md § FEAT-CT-RELIABILITY-SUMMARY v1~v4. Codex CONDITIONAL_GO(Q2/Q4/Q5 반영).
+# ══════════════════════════════════════════════════════════════════════════
+_RELIABILITY_TRACKING_GATE = 0.70   # 모델공정추적율 게이트 (사용자 결정, ADR 정합)
+_RELIABILITY_MIN_N = 30             # 표본 게이트 (= _STD_STANDARD_N)
+_PRODUCTION_WINDOW_MONTHS = 12      # 생산비중 rolling window (동적)
+
+
+def _norm_model_prefix(model: Optional[str], prefixes: List[str]) -> str:
+    """model 원문 → model_config prefix 정규화 (Codex Q5).
+
+    known prefix(GAIA/DRAGON/...) startswith 우선, 미매칭=첫토큰 fallback.
+    생산비중·셀·추적율 집계에 동일 적용 (단일 정규화 규칙).
+    """
+    if not model:
+        return "(미지정)"
+    mu = model.upper().strip()
+    for p in prefixes:
+        if p and mu.startswith(p.upper()):
+            return p
+    toks = mu.split()
+    return toks[0] if toks else mu
+
+
+def _dual_label(model: Optional[str]) -> str:
+    """_DUAL_SQL(ILIKE '%DUAL%') 과 동일 규칙 — DUAL/SINGLE."""
+    return "DUAL" if model and "DUAL" in model.upper() else "SINGLE"
+
+
+def get_reliability_summary(
+    from_month: Optional[str] = None, to_month: Optional[str] = None
+) -> Dict[str, Any]:
+    """데이터 신뢰도 게이트 — 모델×task×dual count 게이트 + 생산량 가중 (B/v4).
+
+    - 표준가능 셀 = n>=30 AND 모델공정추적율>=70% (양 AND 질). 협력사 합산.
+    - standard_ready_pct = Σ(모델 12mo 생산비중 · 모델 표준가능비율). 표본수 가중 폐기.
+    - 무자료 모델(생산>0, 셀=0) = r=0 기여(분모 유지, Codex Q4 — 과대평가 재발 방지).
+    """
+    from_month, to_month = _resolve_window(from_month, to_month)
+    cache_key = f"reliability_summary:{from_month}:{to_month}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    # 함수 내부 import — tagging_coverage_service ↔ statistics_service 순환 회피
+    from app.services.tagging_coverage_service import _COVERAGE_WHERE, _TRACKED_SQL
+
+    # ── 1. 협력사×모델×task×dual 셀 (partner_breakdown rows 재사용, category=partner_scope) ──
+    pb = get_partner_breakdown(from_month=from_month, to_month=to_month)
+    rows = pb.get("rows", [])
+
+    # ── 2. 마감출처 정합 (get_data_quality 재사용, A=v2.40.0 FORCE_CLOSED 분리됨) ──
+    dq = get_data_quality(from_month=from_month, to_month=to_month)
+    dist = dq.get("duration_source_dist", [])
+    clean_pct = _r(sum(d["pct"] for d in dist if d["clean"]))
+    force_closed_pct = _r(sum(d["pct"] for d in dist if d["source"] == "FORCE_CLOSED"))
+    estimated_pct = _r(
+        sum(d["pct"] for d in dist if not d["clean"] and d["source"] != "FORCE_CLOSED")
+    )
+
+    # ── 3. model_config prefix + 모델×공정 추적율 + 12mo 생산비중 ──
+    track_sql = f"""
+        SELECT p.model AS model, td.task_category AS category,
+               COUNT(*) AS n,
+               COUNT(*) FILTER (WHERE {_TRACKED_SQL}) AS tracked
+        FROM app_task_details td
+        JOIN plan.product_info p ON p.serial_number = td.serial_number
+        WHERE {_COVERAGE_WHERE}{_WINDOW_WHERE}
+        GROUP BY 1, 2
+    """
+    prod_sql = f"""
+        SELECT p.model AS model, COUNT(*) AS n
+        FROM plan.product_info p
+        WHERE p.mech_start >= ((now() AT TIME ZONE 'Asia/Seoul')::date
+                               - interval '{_PRODUCTION_WINDOW_MONTHS} months')
+          AND COALESCE(p.customer, '') <> 'TEST CUSTOMER'
+          AND p.serial_number NOT LIKE 'TEST%%'
+          AND p.model IS NOT NULL
+        GROUP BY 1
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # 긴 prefix 우선 (겹침 prefix 대비, get_model_config 정합 — Codex A)
+            cur.execute("SELECT model_prefix FROM model_config ORDER BY LENGTH(model_prefix) DESC")
+            prefixes = [r["model_prefix"] for r in cur.fetchall()]
+            cur.execute(track_sql, {"from_month": from_month, "to_month": to_month})
+            track_rows = cur.fetchall()
+            cur.execute(prod_sql)
+            prod_rows = cur.fetchall()
+    finally:
+        put_conn(conn)
+
+    # ── 모델×공정 추적율 (norm_prefix, category) + 헤드라인 전체 추적율 ──
+    track_agg: Dict[tuple, List[int]] = {}
+    tot_tracked = 0
+    tot_n = 0
+    for r in track_rows:
+        pfx = _norm_model_prefix(r["model"], prefixes)
+        a = track_agg.setdefault((pfx, r["category"]), [0, 0])
+        a[0] += int(r["tracked"])
+        a[1] += int(r["n"])
+        tot_tracked += int(r["tracked"])
+        tot_n += int(r["n"])
+    model_cat_track = {k: (v[0] / v[1] if v[1] else 0.0) for k, v in track_agg.items()}
+    headline_tracking = round(100 * tot_tracked / tot_n) if tot_n else 0
+
+    # ── 12mo 생산비중 (norm_prefix, dual) ──
+    prod_agg: Dict[tuple, int] = {}
+    prod_total = 0
+    for r in prod_rows:
+        key = (_norm_model_prefix(r["model"], prefixes), _dual_label(r["model"]))
+        prod_agg[key] = prod_agg.get(key, 0) + int(r["n"])
+        prod_total += int(r["n"])
+    prod_share = {k: v / prod_total for k, v in prod_agg.items()} if prod_total else {}
+
+    # ── 셀 (prefix, category, task_id, dual) 재집계 (협력사 합산 n) — category=partner_scope (Codex Q2) ──
+    cell_n: Dict[tuple, int] = {}
+    for r in rows:
+        pfx = _norm_model_prefix(r.get("model"), prefixes)
+        key = (pfx, r.get("partner_scope"), r.get("task_id"), r.get("dual"))
+        cell_n[key] = cell_n.get(key, 0) + int(r.get("n_raw", 0))
+
+    # ── (prefix, dual) 단위 게이트 집계 ──
+    bm: Dict[tuple, Dict[str, int]] = {}
+    for (pfx, cat, _tid, dual), n in cell_n.items():
+        b = bm.setdefault((pfx, dual), {"total": 0, "n_met": 0, "trk_met": 0, "both": 0})
+        b["total"] += 1
+        n_ok = n >= _RELIABILITY_MIN_N
+        t_ok = model_cat_track.get((pfx, cat), 0.0) >= _RELIABILITY_TRACKING_GATE
+        if n_ok:
+            b["n_met"] += 1
+        if t_ok:
+            b["trk_met"] += 1
+        if n_ok and t_ok:
+            b["both"] += 1
+
+    # ── 생산량 가중 합산 (무자료 모델 r=0 기여, 분모 유지 — Codex Q4) ──
+    all_keys = set(bm.keys()) | set(prod_share.keys())
+    by_model: List[Dict[str, Any]] = []
+    sr = nm = tm = 0.0
+    for key in sorted(all_keys, key=lambda k: -prod_share.get(k, 0.0)):
+        pfx, dual = key
+        b = bm.get(key, {"total": 0, "n_met": 0, "trk_met": 0, "both": 0})
+        w = prod_share.get(key, 0.0)
+        total = b["total"]
+        r_std = b["both"] / total if total else 0.0
+        r_nm = b["n_met"] / total if total else 0.0
+        r_tm = b["trk_met"] / total if total else 0.0
+        sr += w * r_std
+        nm += w * r_nm
+        tm += w * r_tm
+        by_model.append({
+            "model": pfx,
+            "dual": dual == "DUAL",
+            "production_share": _r(w * 100),
+            "standard_ready_pct": _r(r_std * 100),
+            "n_met_pct": _r(r_nm * 100),
+            "tracking_met_pct": _r(r_tm * 100),
+            "cells": total,
+            "standardizable": b["both"],
+            "status": "no_ct_cells" if total == 0 else "ok",
+        })
+
+    settled = headline_tracking >= int(_RELIABILITY_TRACKING_GATE * 100)
+    result = {
+        "headline": {
+            "tracking_pct": headline_tracking,
+            "stage": "standard_ready" if settled else "tagging_settlement",
+            "interpret": "ok" if settled else "hold",
+            "label": "표준 산출 단계" if settled else "태깅 정착 단계",
+            "note": (
+                f"실시간 추적 {headline_tracking}% — "
+                + ("표준 산출 가능 단계." if settled else
+                   "표준 산출 아닌 태깅 정착 단계. 추적율이 오르면 표준가능이 자동 상승합니다.")
+            ),
+        },
+        "gate": {
+            "standard_ready_pct": _r(sr * 100),
+            "n_met_pct": _r(nm * 100),
+            "tracking_met_pct": _r(tm * 100),
+            "input_integrity_pct": clean_pct,
+            "force_closed_pct": force_closed_pct,
+            "unit": "model_task_dual",
+            "weight": "production_volume_12mo",
+            "criteria": f"n>={_RELIABILITY_MIN_N} AND 모델공정추적>={int(_RELIABILITY_TRACKING_GATE * 100)}%",
+            "threshold_n": _RELIABILITY_MIN_N,
+            "tracking_threshold": _RELIABILITY_TRACKING_GATE,
+        },
+        "by_model": by_model,
+        "input_source_integrity": {
+            "clean_pct": clean_pct,
+            "force_closed_pct": force_closed_pct,
+            "estimated_pct": estimated_pct,
+            "dist": dist,
+        },
+        "labels": {"ct_reliability": "표준 가능 비율", "input_integrity": "마감 출처 정합"},
+        "meta": {
+            "from": from_month,
+            "to": to_month,
+            "trust_start": CT_TRUST_START_MONTH,
+            "unit": "model_task_dual",
+            "weight_basis": "production_volume_12mo_rolling",
+            "production_window_months": _PRODUCTION_WINDOW_MONTHS,
+            "production_date_basis": "mech_start",
+            "tracking_threshold": _RELIABILITY_TRACKING_GATE,
+            "generated_at": datetime.now(_KST).isoformat(),
+            "note": (
+                "표본수 가중 폐기, 생산량 가중. 게이트=모델×task×dual "
+                "(n>=30 AND 모델공정추적>=70%). 협력사 원인은 매트릭스 drill."
+            ),
+        },
+    }
+    _cache_put(cache_key, result)
+    return result

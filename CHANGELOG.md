@@ -6,6 +6,23 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.41.0] - 2026-06-14 — CT 데이터 신뢰도 게이트 재설계 (FEAT-CT-RELIABILITY-SUMMARY, B)
+
+> **BE only minor — read-only, 신규 endpoint, migration 0**. CT 분석 "데이터 신뢰도" summary 가 FE 파생 **가중평균**(`Σweight(n)·n/Σn`, 풀링 부풀림 80.6%)이라 과대평가되던 문제를 **count 게이트 + 생산량 가중**으로 재설계. 3모델(Claude+Codex+Fable) 합의 + 사용자 catch 누적.
+
+- **신규 `GET /api/ct/reliability-summary?from=&to=`** (`statistics_service.get_reliability_summary`, jwt_required+gst_or_admin_required). 기존 `get_partner_breakdown`(rows)+`get_data_quality`(dist) 재사용 + 모델×공정 추적율·12mo 생산비중 자체 집계. 캐시 1h.
+- **가중평균 폐기 → count 게이트**: 표준가능 = 셀(모델×task×dual) 중 (n≥30 **AND** 모델공정추적≥70%) 비율. 표본수 가중(부풀림) 제거.
+- **생산량 가중**: `standard_ready_pct = Σ(모델 12mo rolling 생산비중 · 모델 표준가능비율)`. 주력 GAIA 88%(DUAL 54%+SINGLE 34%) 품질이 전체 좌우(정직). 표본수 가중과 별개(전자=데이터양 부풀림 폐기 / 후자=비즈니스 임팩트 정당).
+- **2조건 분리**: n_met_pct / tracking_met_pct / standard_ready_pct(둘다) → 게이트 0%여도 진행 gradient 가시화.
+- **모델 기준** 평가(CT 표준=모델별 적용): 게이트=모델×task×dual(협력사 합산), 협력사 원인은 매트릭스 drill. Fable Q2(협력사 분리)는 "협력사별 표준" 전제였으나 모델별 표준 사용자 판정으로 무효.
+- **라벨 정정**: "CT 신뢰도"→"표준 가능 비율", "입력 정합"→"마감 출처 정합". 헤드라인=추적율(행동지표). force_closed 분리(A=v2.40.0 정합).
+- **Codex 3라운드**: R1 NO-GO(M-Q1 tracked) → R2 CONDITIONAL_GO(Q2 category/Q4 무자료0기여/Q5 prefix정규화) → R3 **DEPLOY_SAFE M=0**. Q2=rows.partner_scope 직접 사용 / Q4=union+r0 분모유지(no_ct_cells) / Q5=`_norm_model_prefix` 단일(ORDER BY LENGTH DESC). Fable 2차(PR2 brief) 반박 반영.
+- **실데이터**: 헤드라인 추적 53%(hold) / standard_ready 17.6%(생산량 가중) / n_met 51.7% vs tracking_met 22.5%(병목=추적) / input_integrity 71.5%·force_closed 9.2%. (가중평균 80.6%→17.6% 정직화)
+- pytest test_reliability_summary 9 passed+1 skip(운영 데이터 보존 정책) + CT 회귀 44 passed+1 skip. 기존 endpoint touch 0 → 회귀 0.
+- **VIEW 후속**(별 repo, VIEW_FE_Request.md 인계): CtAnalysisPage FE 파생 가중평균 제거 → reliability-summary 소비, DataQualityGate 연결, 가중평균 카드 제거, 드릴 계층(모델→task→협력사). 설계: `AGENT_TEAM_LAUNCH.md` § FEAT-CT-RELIABILITY-SUMMARY v1~v4.
+
+---
+
 ## [2.40.0] - 2026-06-13 — 강제종료 duration_source='FORCE_CLOSED' 근본 정합 (FIX-FORCE-CLOSE-DURATION-SOURCE, A)
 
 > **BE only minor — migration 062 동반**. 강제종료(force_closed=TRUE)가 duration_source 미설정(NULL)이라 입력정합(get_data_quality)에서 NULL=clean 으로 과대 집계되던 결함 근본 수정. 클린 코어 데이터 원칙(2026-04-20)상 강제종료 = "버리는 데이터" → 비-clean 표시 필요.

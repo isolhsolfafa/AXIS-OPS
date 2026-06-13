@@ -18,6 +18,7 @@ from app.services.statistics_service import (
     CtParamError,
     get_data_quality,
     get_partner_breakdown,
+    get_reliability_summary,
     get_task_ct_stats,
 )
 from app.services.tagging_coverage_service import get_tagging_coverage
@@ -26,6 +27,26 @@ from app.services.close_type_trend_service import get_close_type_trend
 logger = logging.getLogger(__name__)
 
 ct_analysis_bp = Blueprint("ct_analysis", __name__, url_prefix="/api/ct")
+
+
+@ct_analysis_bp.route("/reliability-summary", methods=["GET"])
+@jwt_required
+@gst_or_admin_required
+def reliability_summary():
+    """데이터 신뢰도 게이트 (B/v4) — 모델×task×dual count 게이트 + 생산량 가중.
+
+    가중평균(부풀림) 폐기 → 표준가능=(n>=30 AND 모델공정추적>=70%) 셀 비율, 생산량(12mo) 가중.
+    from/to(YYYY-MM, KST 윈도우). 미지정=2026-05~현재월.
+    """
+    from_month = request.args.get("from")
+    to_month = request.args.get("to")
+    try:
+        return jsonify(get_reliability_summary(from_month=from_month, to_month=to_month)), 200
+    except CtParamError as e:
+        return jsonify({"error": e.code, "message": e.message}), 400
+    except Exception:
+        logger.exception("[ct] reliability-summary 산출 실패")
+        return jsonify({"error": "INTERNAL_ERROR", "message": "데이터 신뢰도 게이트 산출 실패"}), 500
 
 
 @ct_analysis_bp.route("/data-quality", methods=["GET"])
