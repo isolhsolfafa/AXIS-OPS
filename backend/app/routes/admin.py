@@ -1287,6 +1287,7 @@ def force_close_task(task_id: int) -> Tuple[Dict[str, Any], int]:
                 ct_time_minutes  = %s,
                 elapsed_minutes  = %s,
                 force_closed     = TRUE,
+                duration_source  = 'FORCE_CLOSED',  -- FIX-FORCE-CLOSE-DURATION-SOURCE: 입력정합·CT 자동 정합
                 closed_by        = %s,
                 close_reason     = %s,
                 updated_at       = CURRENT_TIMESTAMP

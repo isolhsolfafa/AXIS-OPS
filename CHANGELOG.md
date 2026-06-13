@@ -6,6 +6,19 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.40.0] - 2026-06-13 — 강제종료 duration_source='FORCE_CLOSED' 근본 정합 (FIX-FORCE-CLOSE-DURATION-SOURCE, A)
+
+> **BE only minor — migration 062 동반**. 강제종료(force_closed=TRUE)가 duration_source 미설정(NULL)이라 입력정합(get_data_quality)에서 NULL=clean 으로 과대 집계되던 결함 근본 수정. 클린 코어 데이터 원칙(2026-04-20)상 강제종료 = "버리는 데이터" → 비-clean 표시 필요.
+
+- **migration 062**: duration_source CHECK enum 에 `'FORCE_CLOSED'` 추가(057 패턴 BEGIN/COMMIT + table_constraints DROP + pg_get_constraintdef 검증 DO block, Codex R1 M-Q1 반영) + **backfill** `force_closed=TRUE AND source∈(NULL,NORMAL) → 'FORCE_CLOSED'`(멱등, clean 으로 잘못 집계된 것만 정정). FALLBACK/PREV_DAY_CAP force-close(이미 비-clean)는 cap source 보존 미변경(약불변식, Codex Q5 A 합의).
+- **admin.py `force_close_task`** UPDATE SET 절에 `duration_source='FORCE_CLOSED'` 1줄 추가 → 신규 강제종료부터 자동 기록. 측정값 컬럼(active_time/ct_time/duration/elapsed)은 audit·표시용 유지, source 로만 비-clean 표시.
+- **statistics_service.py `_ESTIMATED_SOURCES`** 에 `'FORCE_CLOSED'` 추가(메타 excluded 추적). `_CLEAN_SOURCES` 불변. `_CLEAN_CORE`(v2.36.1 force_closed=FALSE 가드) 이중 안전(가드 redundant 되나 방어적 유지).
+- **효과**: 입력정합 81.8% → **72.7%**(force-close 199건을 clean 에서 제외, 정직값). CT 표본 = v2.36.1 가드 + FORCE_CLOSED source 제외 이중 정합. force_complete_task(force_closed 미설정)·정상완료·자동마감(NORMAL+force_closed=FALSE) 무영향 → 회귀 0.
+- **Codex** 라운드 1 NO-GO(M-Q1 migration 트랜잭션/검증) → 라운드 2 **DEPLOY_SAFE/GO M=0**. pytest test_fix_force_close_duration_source 5/5 GREEN.
+- 설계: `AGENT_TEAM_LAUNCH.md` § FIX-FORCE-CLOSE-DURATION-SOURCE.
+
+---
+
 ## [2.39.1] - 2026-06-13 — 미종료 큐 방치 기준 통일 BE (Sprint 91-FE-b)
 
 > **BE only patch — additive, read-only, migration 0**. VIEW 미종료 작업 현황 카드를 방치 단일 기준으로 통일하기 위한 BE 계약.
