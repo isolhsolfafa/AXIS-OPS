@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.models.worker import get_db_connection, put_conn
 from app.services.statistics_service import is_instant_whitelisted
-from app.services.pending_task_standard import ABANDONED_WHERE_SQL
+from app.services.pending_task_standard import ABANDONED_WHERE_SQL, LAST_ACTIVITY_SQL
 
 KST = timezone(timedelta(hours=9))
 
@@ -526,7 +526,8 @@ def build_open_tasks(scope) -> Dict[str, Any]:
                 SELECT t.id, t.serial_number, t.task_id, t.task_name,
                        t.task_category AS grp, t.worker_id, t.started_at,
                        {_PARTNER_SQL} AS partner, w.name AS worker_name,
-                       w.company AS worker_company
+                       w.company AS worker_company,
+                       {LAST_ACTIVITY_SQL} AS last_activity_at
                 FROM app_task_details t
                 JOIN plan.product_info pi ON pi.serial_number = t.serial_number
                 LEFT JOIN workers w ON w.id = t.worker_id
@@ -589,6 +590,9 @@ def build_open_tasks(scope) -> Dict[str, Any]:
             repeat_count += 1
         started = r['started_at']
         hours_open = round((now - started).total_seconds() / 3600.0, 1) if started else None
+        # 91-FE-b: 무활동 시간 = now - 마지막 활동(시작/재개). 방치=24h+ 보장(음수 방어 GREATEST(0))
+        la = r.get('last_activity_at')
+        inactive_hours = max(0.0, round((now - la).total_seconds() / 3600.0, 1)) if la else None
         reasons = []
         if by_worker:
             reasons.append('worker')
@@ -616,10 +620,23 @@ def build_open_tasks(scope) -> Dict[str, Any]:
             'worker_masked': worker_masked,
             'started_at': started.isoformat() if started else None,
             'hours_open': hours_open,
+            'inactive_hours': inactive_hours,
             'repeat': repeat,
             'repeat_reason': reasons or None,
         })
 
+    # 91-FE-b: 칩(by_partner) + 버킷(24-48/48+) — filter 후 tasks 기반(scope 자사 = 자사 1개, Codex Q2)
+    by_partner: Dict[str, int] = {}
+    h24_48 = 0
+    h48plus = 0
+    for t in tasks:
+        by_partner[t['partner']] = by_partner.get(t['partner'], 0) + 1
+        ih = t['inactive_hours']
+        if ih is not None:
+            if ih >= 48:
+                h48plus += 1
+            else:
+                h24_48 += 1  # 방치=24h+ 보장이라 24h미만 버킷 없음
     return {
         'scope': 'global' if scope.is_global else 'self',
         'company': None if scope.is_global else scope.company,
@@ -629,8 +646,11 @@ def build_open_tasks(scope) -> Dict[str, Any]:
             'repeat_count': repeat_count,
             'repeat_window_days': _REPEAT_WINDOW_DAYS,
             'repeat_min_count': _REPEAT_MIN_COUNT,
-            'basis': 'realtime_all_open',  # 현재 backlog 전체 (summary openTasks=월단위와 다름, 의도)
-            'missed_task_standard': 'is_applicable=TRUE, force_closed=FALSE, TEST 제외',
+            'basis': 'realtime_abandoned',  # 현재 방치(무활동 24h+·미pause) backlog. 데이터종합=월 방치(ADR-034 의도 차이)
+            'missed_task_standard': '방치 = started+미완 + is_applicable=TRUE + force_closed=FALSE + TEST 제외 '
+                                    '+ 활성(미pause) 세션≥1 + 마지막 활동(시작/재개) 24h+ (pending_task_standard)',
+            'by_partner': by_partner,
+            'buckets': {'h24_48': h24_48, 'h48plus': h48plus},
             'generated_at': now.isoformat(),
         },
     }

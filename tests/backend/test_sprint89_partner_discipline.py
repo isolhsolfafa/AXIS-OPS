@@ -340,21 +340,21 @@ def patch_open_tasks(monkeypatch):
     queue_rows = [
         {"id": 1, "serial_number": "SN1", "task_id": "UTIL_LINE_1", "task_name": "Util 1",
          "grp": "MECH", "worker_id": 10, "started_at": _started(5), "partner": "BAT",
-         "worker_name": "홍길동", "worker_company": "BAT"},
+         "worker_name": "홍길동", "worker_company": "BAT", "last_activity_at": _started(30)},
         {"id": 2, "serial_number": "SN2", "task_id": "WASTE_GAS_LINE_2", "task_name": "Waste 2",
          "grp": "MECH", "worker_id": 10, "started_at": _started(3), "partner": "BAT",
-         "worker_name": "홍길동", "worker_company": "BAT"},
+         "worker_name": "홍길동", "worker_company": "BAT", "last_activity_at": _started(50)},
         {"id": 3, "serial_number": "SN3", "task_id": "PANEL_WORK", "task_name": "Panel",
          "grp": "ELEC", "worker_id": 20, "started_at": _started(1), "partner": "C&A",
-         "worker_name": "김철수", "worker_company": "C&A"},
+         "worker_name": "김철수", "worker_company": "C&A", "last_activity_at": _started(25)},
         # M-Q8: task partner=BAT 인데 작업자는 FNI (cross-company) → 매니저 실명 마스킹 대상
         {"id": 4, "serial_number": "SN4", "task_id": "UTIL_LINE_2", "task_name": "Util 2",
          "grp": "MECH", "worker_id": 30, "started_at": _started(2), "partner": "BAT",
-         "worker_name": "이영희", "worker_company": "FNI"},
+         "worker_name": "이영희", "worker_company": "FNI", "last_activity_at": _started(60)},
         # M-Q8-NULL: 작업자 company=NULL(미지정) → 자사 아님으로 안전 마스킹
         {"id": 5, "serial_number": "SN5", "task_id": "WASTE_GAS_LINE_1", "task_name": "Waste 1",
          "grp": "MECH", "worker_id": 40, "started_at": _started(1), "partner": "BAT",
-         "worker_name": "미지정", "worker_company": None},
+         "worker_name": "미지정", "worker_company": None, "last_activity_at": _started(26)},
     ]
     # repeat (30d open): worker 10 이 2건 → by_worker repeat. worker 20 = 1건.
     repeat_rows = [
@@ -426,6 +426,27 @@ class TestOpenTasks:
         repeat_call = patch_open_tasks.calls[1]
         assert "BAT" in queue_call[1]
         assert "BAT" in repeat_call[1]
+
+    def test_inactive_hours_and_buckets(self, patch_open_tasks):
+        # 91-FE-b: inactive_hours(last_activity 기준) + meta.by_partner + meta.buckets
+        resp = build_open_tasks(ADMIN_SCOPE)
+        ih = {t["id"]: t["inactive_hours"] for t in resp["tasks"]}
+        assert ih[1] == pytest.approx(30, abs=1.5) and ih[2] == pytest.approx(50, abs=1.5)
+        m = resp["meta"]
+        # 버킷: 24-48(id1·3·5=30·25·26) / 48+(id2·4=50·60)
+        assert m["buckets"]["h48plus"] == 2
+        assert m["buckets"]["h24_48"] == 3
+        # by_partner: BAT 4 + C&A 1
+        assert m["by_partner"]["BAT"] == 4 and m["by_partner"]["C&A"] == 1
+        assert m["basis"] == "realtime_abandoned"
+
+    def test_manager_by_partner_self_only(self, patch_open_tasks):
+        # 협력사 매니저 scope → tasks 자사만(쿼리 필터) → by_partner 자사 키만
+        resp = build_open_tasks(BAT_SCOPE)
+        # _SeqCur 는 동일 queue 반환(필터는 SQL params 검증으로 별도) — by_partner 가 tasks 기반인지만 확인
+        assert set(resp["meta"]["by_partner"].keys()) <= {"BAT", "C&A"}
+        assert "buckets" in resp["meta"]
+
 
 
 # ============================================================

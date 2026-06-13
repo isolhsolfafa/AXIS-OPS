@@ -6,6 +6,18 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.39.1] - 2026-06-13 — 미종료 큐 방치 기준 통일 BE (Sprint 91-FE-b)
+
+> **BE only patch — additive, read-only, migration 0**. VIEW 미종료 작업 현황 카드를 방치 단일 기준으로 통일하기 위한 BE 계약.
+
+- `discipline /open-tasks`(`build_open_tasks`, 이미 v2.38.0 방치 필터) 에 additive: ① per-task `inactive_hours`(=now-마지막활동, LAST_ACTIVITY_SQL, 음수방어) ② `meta.by_partner`(방치 협력사별 카운트=칩) ③ `meta.buckets{h24_48,h48plus}`(방치=24h+) ④ meta basis='realtime_abandoned'+missed_task_standard 갱신.
+- 목적: VIEW MissedTaskQueueCard 가 옛 progress 근사(제품×공정·제품 last_activity·방치무관, 협력사합 254) → 방치 task-level(127)로 통일. 후보/버킷/칩/리스트 = 동일 방치 숫자.
+- tasks[] 기존 필드 불변. Codex R2 **DEPLOY_SAFE M=0**. pytest test_sprint89 34/34(신규 2).
+- **VIEW 후속(별 repo)**: 카드 progress→/open-tasks 교체, getSNTasks 검증·[전체]토글·24h미만박스 제거. 잔존 의도차이: 데이터종합=월 방치 / 미종료현황=realtime 방치(ADR-034).
+- 설계: `AGENT_TEAM_LAUNCH.md` § Sprint 91-FE-b.
+
+---
+
 ## [2.39.0] - 2026-06-13 — #90b close-type-trend 주별(ISO week) 버킷 (Sprint 90-BE-C-b)
 
 > **BE only minor — additive, read-only, migration 0**. VIEW [비교] 차트 [주|월] 토글(주 기본)의 BE part.
