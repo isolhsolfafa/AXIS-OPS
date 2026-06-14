@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
@@ -53,7 +53,9 @@ _WHITELIST_SQL = "(" + ",".join("'%s'" % t for t in sorted(_INSTANT_WHITELIST)) 
 
 # 분모 — 완료된 applicable task 전수, force_closed/TEST/TMS모듈만 제외.
 #   %% = psycopg2 리터럴 % (LIKE). alias td=app_task_details, p=plan.product_info.
-_COVERAGE_WHERE = (
+# #92: 윈도우 분리 — _COVERAGE_BASE(윈도우 없음) + 윈도우 조각. _COVERAGE_WHERE 값 불변(아래 합성)
+#   → reliability-summary(v2.41.0)가 import 하는 _COVERAGE_WHERE 문자열 동일 = 회귀 0.
+_COVERAGE_BASE = (
     "td.completed_at IS NOT NULL "
     "AND td.active_time_minutes IS NOT NULL "
     "AND COALESCE(td.force_closed, FALSE) = FALSE "
@@ -61,11 +63,20 @@ _COVERAGE_WHERE = (
     "AND td.task_id NOT IN ('TANK_MODULE','PRESSURE_TEST') "
     "AND COALESCE(p.customer, '') <> 'TEST CUSTOMER' "
     "AND td.serial_number NOT LIKE 'TEST%%' "
-    "AND td.task_category IN ('MECH','ELEC','PI','QI','SI') "
-    "AND (td.completed_at AT TIME ZONE 'Asia/Seoul') >= (%(from_month)s || '-01')::date "
+    "AND td.task_category IN ('MECH','ELEC','PI','QI','SI')"
+)
+_COVERAGE_WINDOW_MONTH = (
+    " AND (td.completed_at AT TIME ZONE 'Asia/Seoul') >= (%(from_month)s || '-01')::date "
     "AND (td.completed_at AT TIME ZONE 'Asia/Seoul') <  "
     "((%(to_month)s || '-01')::date + interval '1 month')"
 )
+# 신규 day 윈도우 (period 기반) — start/end = KST naive datetime (_resolve_period_range)
+_COVERAGE_WINDOW_DAY = (
+    " AND (td.completed_at AT TIME ZONE 'Asia/Seoul') >= %(start)s "
+    "AND (td.completed_at AT TIME ZONE 'Asia/Seoul') < %(end)s"
+)
+# ★ 기존 문자열과 byte 동일 (base + month) → reliability-summary 호환
+_COVERAGE_WHERE = _COVERAGE_BASE + _COVERAGE_WINDOW_MONTH
 
 # 협력사 정규화 — MECH→mech_partner, ELEC→elec_partner (TMS→TMS(M)/(E)), PI/QI/SI→'GST'.
 _COV_PARTNER_SQL = (
@@ -76,6 +87,9 @@ _COV_PARTNER_SQL = (
     "ELSE COALESCE(NULLIF(TRIM(p.elec_partner), ''), '(미지정)') END "
     "ELSE 'GST' END"
 )
+
+# #92 partner 표시 필터 — 지정 시 그 협력사 task 만 (4 SQL 분모 포함). PI/QI/SI=GST 고정.
+_COVERAGE_PARTNER_FILTER = f" AND {_COV_PARTNER_SQL} = %(partner)s"
 
 # 분류 SQL 조각 (oneClick > zero_tap > tracked).
 _TRACKED_SQL = (
@@ -119,20 +133,44 @@ def _shares(partner_counts: List[Tuple[str, int]]) -> List[Dict[str, Any]]:
 
 
 def get_tagging_coverage(
-    from_month: Optional[str] = None, to_month: Optional[str] = None
+    from_month: Optional[str] = None, to_month: Optional[str] = None,
+    period: Optional[str] = None, reference_date: Optional[date] = None,
+    partner: Optional[str] = None,
 ) -> Dict[str, Any]:
     """태깅 커버리지 + 0초탭 드릴다운 (3블록 = coverageMock.ts 1:1).
 
     coverage[] (공정별 추적율/0초탭/신뢰도) + well_tracked_pct + zero_tap_tasks{공정:[...]} + meta.
-    from/to = YYYY-MM (KST). 미지정 = [CT_TRUST_START_MONTH, 현재월] (_resolve_window).
+    #92: period(today|week|month|quarter)+reference_date → day 윈도우 / partner(company) → 협력사 필터(분모 포함).
+         미지정 = from/to(YYYY-MM, KST) 월 누적 [CT_TRUST_START_MONTH, 현재월] (back-compat).
     """
-    fm, tm = _resolve_window(from_month, to_month)
-    cache_key = f"tagcov:{fm}:{tm}"
+    # 윈도우: period 지정 → day(_resolve_period_range) / else → month(현행)
+    if period:
+        from app.services.dashboard_service import _resolve_period_range
+        start, end, _ps, _pe, _label = _resolve_period_range(period, reference_date)
+        win_sql = _COVERAGE_WINDOW_DAY
+        params = {"start": start, "end": end}
+        win_from, win_to = start.date().isoformat(), end.date().isoformat()
+    else:
+        fm, tm = _resolve_window(from_month, to_month)
+        win_sql = _COVERAGE_WINDOW_MONTH
+        params = {"from_month": fm, "to_month": tm}
+        win_from, win_to = fm, tm
+
+    # partner 표시 필터 (분모 포함)
+    part_sql = ""
+    if partner:
+        part_sql = _COVERAGE_PARTNER_FILTER
+        params["partner"] = partner
+
+    _where = _COVERAGE_BASE + win_sql + part_sql
+
+    cache_key = (
+        f"tagcov:{period or ''}:{reference_date.isoformat() if reference_date else ''}:"
+        f"{partner or ''}:{win_from}:{win_to}"
+    )
     hit = _cache.get(cache_key)
     if hit and (time.time() - hit[0]) < _CACHE_TTL_SEC:
         return hit[1]
-
-    params = {"from_month": fm, "to_month": tm}
 
     # ① 공정별 — tracked/zero_tap 카운트
     coverage_sql = f"""
@@ -142,7 +180,7 @@ def get_tagging_coverage(
                COUNT(*) FILTER (WHERE {_ZEROTAP_SQL}) AS zero_tap
         FROM app_task_details td
         JOIN plan.product_info p ON p.serial_number = td.serial_number
-        WHERE {_COVERAGE_WHERE}
+        WHERE {_where}
         GROUP BY td.task_category
     """
 
@@ -154,7 +192,7 @@ def get_tagging_coverage(
                    COUNT(*) FILTER (WHERE {_TRACKED_SQL}) AS tracked
             FROM app_task_details td
             JOIN plan.product_info p ON p.serial_number = td.serial_number
-            WHERE {_COVERAGE_WHERE}
+            WHERE {_where}
             GROUP BY td.serial_number
         )
         SELECT COUNT(*) AS serials,
@@ -171,7 +209,7 @@ def get_tagging_coverage(
                COUNT(*) FILTER (WHERE {_ZERO_RAW_SQL}) AS zero_n
         FROM app_task_details td
         JOIN plan.product_info p ON p.serial_number = td.serial_number
-        WHERE {_COVERAGE_WHERE}
+        WHERE {_where}
         GROUP BY td.task_category, td.task_id
     """
 
@@ -182,7 +220,7 @@ def get_tagging_coverage(
                COUNT(*) AS cnt
         FROM app_task_details td
         JOIN plan.product_info p ON p.serial_number = td.serial_number
-        WHERE {_COVERAGE_WHERE} AND {_ZERO_RAW_SQL}
+        WHERE {_where} AND {_ZERO_RAW_SQL}
         GROUP BY td.task_category, td.task_id, partner
     """
 
@@ -256,8 +294,12 @@ def get_tagging_coverage(
         "well_tracked_pct": well_tracked_pct,
         "zero_tap_tasks": zero_tap_tasks,
         "meta": {
-            "from": fm,
-            "to": tm,
+            "from": win_from,
+            "to": win_to,
+            "period": period,
+            "reference_date": reference_date.isoformat() if reference_date else None,
+            "partner": partner,
+            "window": {"from": win_from, "to": win_to},
             "trust_start": CT_TRUST_START_MONTH,
             "total_tasks": total_tasks,
             "total_serials": serials,

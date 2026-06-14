@@ -49491,3 +49491,85 @@ GET /api/ct/reliability-summary?from=&to=
 4. by_model drill + 협력사 매트릭스(기존)가 "모델 미달 원인=협력사 미태깅" 보충 설명 계층으로 정합한지.
 5. Fable Q2 기각(협력사별 표준 전제 무효, 사용자 모델 기준 최종판정)이 타당한지 — 독립 재판단.
 6. 회귀 0 + single-source 합성 적정.
+
+---
+
+# § FEAT-TAGGING-COVERAGE-FILTERS (#92, 20260615) — tagging-coverage period/reference_date/partner 필터
+
+> AXIS-VIEW OPS_API_REQUESTS.md #92. 종료 누락 분석 페이지 상단 필터(오늘/주간/월간/분기 + 협력사)가 다른 카드(auto-close-summary)는 다 받는데 0초탭 카드(tagging-coverage)만 월 단위 from/to라 불일치. 사용자 catch.
+
+## 요청
+`GET /api/ct/tagging-coverage?period=&reference_date=&partner=` (전부 optional, 미지정=현행 [CT_TRUST_START_MONTH, 현재월] 누적, back-compat).
+- period = today|week|month|quarter (auto-close-summary 동일 윈도우). reference_date(YYYY-MM-DD) = 기준일 → day 단위 윈도우.
+- partner(company, 예 FNI) = coverage/zero_tap_tasks 를 그 협력사로 필터, **분모도 협력사 기준**. PI/QI/SI=GST 고정.
+- 응답 스키마 동일 + meta echo (period/reference_date/partner/window).
+
+## ⚠️ 핵심 — _COVERAGE_WHERE 공유 상수 (v2.41.0 회귀 방지)
+`reliability-summary`(v2.41.0)가 `tagging_coverage_service._COVERAGE_WHERE` 를 import 해 추적율 분모로 재사용. 현 `_COVERAGE_WHERE` = [base 조건] + [월 윈도우 하드코딩]. day 윈도우로 바꾸면 reliability-summary 깨짐.
+→ **해법: `_COVERAGE_WHERE` 문자열 값 불변 유지** (`_COVERAGE_BASE` + 월 윈도우 = 기존과 동일) → reliability-summary import 무영향(회귀 0). 신규 day/partner 는 **별도 조각**으로 추가.
+
+## 변경 (tagging_coverage_service.py + ct_analysis.py)
+### 상수 분리 (값 호환)
+```python
+_COVERAGE_BASE = (   # 윈도우 없는 조건 (완료·active·force·applicable·TEST·TMS·category IN)
+    "td.completed_at IS NOT NULL AND td.active_time_minutes IS NOT NULL "
+    "AND COALESCE(td.force_closed, FALSE) = FALSE AND td.is_applicable = TRUE "
+    "AND td.task_id NOT IN ('TANK_MODULE','PRESSURE_TEST') "
+    "AND COALESCE(p.customer, '') <> 'TEST CUSTOMER' AND td.serial_number NOT LIKE 'TEST%%' "
+    "AND td.task_category IN ('MECH','ELEC','PI','QI','SI')"
+)
+_COVERAGE_WINDOW_MONTH = (   # 월 윈도우 조각 (현행)
+    " AND (td.completed_at AT TIME ZONE 'Asia/Seoul') >= (%(from_month)s || '-01')::date "
+    "AND (td.completed_at AT TIME ZONE 'Asia/Seoul') < ((%(to_month)s || '-01')::date + interval '1 month')"
+)
+_COVERAGE_WHERE = _COVERAGE_BASE + _COVERAGE_WINDOW_MONTH   # ★ 기존 문자열과 동일 → reliability-summary 호환
+_COVERAGE_WINDOW_DAY = (   # 신규 day 윈도우 (period 기반)
+    " AND (td.completed_at AT TIME ZONE 'Asia/Seoul') >= %(start)s "
+    "AND (td.completed_at AT TIME ZONE 'Asia/Seoul') < %(end)s"
+)
+_COVERAGE_PARTNER_FILTER = f" AND {_COV_PARTNER_SQL} = %(partner)s"   # 신규 partner 조각
+```
+### get_tagging_coverage 확장
+```python
+def get_tagging_coverage(from_month=None, to_month=None,
+                         period=None, reference_date=None, partner=None):
+    # 윈도우: period 지정 → _resolve_period_range(day) / else → month(현행)
+    if period:
+        from app.services.dashboard_service import _resolve_period_range
+        start, end, _ps, _pe, _label = _resolve_period_range(period, reference_date)
+        win_sql = _COVERAGE_WINDOW_DAY
+        params = {"start": start, "end": end}
+        win_echo = {"from": start.date().isoformat(), "to": end.date().isoformat()}
+    else:
+        fm, tm = _resolve_window(from_month, to_month)
+        win_sql = _COVERAGE_WINDOW_MONTH
+        params = {"from_month": fm, "to_month": tm}
+        win_echo = {"from": fm, "to": tm}
+    # partner 필터
+    part_sql = ""
+    if partner:
+        part_sql = _COVERAGE_PARTNER_FILTER
+        params["partner"] = partner
+    where = _COVERAGE_BASE + win_sql + part_sql   # 4 SQL 모두 이 where 사용
+    cache_key = f"tagcov:{period or ''}:{reference_date or ''}:{partner or ''}:{win_echo['from']}:{win_echo['to']}"
+    # ... coverage/well/task/partner SQL 의 WHERE {_COVERAGE_WHERE} → WHERE {where}
+    # meta echo: period/reference_date/partner/window
+```
+### route ct_analysis.py tagging-coverage
+- request.args: period/reference_date/partner. period 화이트리스트 {today,week,month,quarter} (위반 400 INVALID_PERIOD). reference_date YYYY-MM-DD parse (위반 400 INVALID_DATE). partner = string echo.
+- RBAC 그대로 (jwt+gst_or_admin). partner=표시 필터(RBAC 아님).
+
+## 회귀/영향
+- `reliability-summary`(v2.41.0): `_COVERAGE_WHERE` 값 불변 → 무영향(회귀 0). track_sql 그대로.
+- tagging-coverage 미지정 호출(현 VIEW): 월 윈도우 현행 → 동작 동일(back-compat).
+- partner 필터: PI/QI/SI=GST 고정 → partner='FNI'면 MECH/ELEC만(GST task 제외). well_tracked_pct(VIEW 제거됨)는 계산 유지.
+- 표본 급감(today/week): confidence(provisional n<30) echo 유지.
+- read-only, DB/migration 0.
+
+## Codex 질의
+1. `_COVERAGE_WHERE = _COVERAGE_BASE + _COVERAGE_WINDOW_MONTH` 분리가 문자열 값 불변 보장 → reliability-summary(v2.41.0) 회귀 0 확인.
+2. `_resolve_period_range`(dashboard_service) day 윈도우 datetime(KST naive) 을 `(completed_at AT TIME ZONE 'Asia/Seoul') >= %(start)s` 바인딩 정합 — auto-close-summary 와 동일 패턴인지.
+3. partner 필터 분모 정합 — `_COV_PARTNER_SQL = %(partner)s` 가 4 SQL(coverage/well/task/partner) 전부 적용 시 분모도 협력사 기준 보장. PI/QI/SI=GST 처리.
+4. cache_key 에 period/reference_date/partner 포함(캐시 오염 방지).
+5. dashboard_service ↔ tagging_coverage_service 순환 import 없는지(함수 내부 import).
+6. back-compat (미지정=현행) + additive 회귀 0.

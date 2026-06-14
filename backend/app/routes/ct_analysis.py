@@ -144,12 +144,37 @@ def tagging_coverage():
       - 3분류 oneClick>zero_tap>tracked (zero_tap = active≤1 OR close_reason 존재).
       - PI/QI/SI partner='GST' 단일. DUAL L/R per-row. share = largest-remainder.
     from/to(YYYY-MM, KST 윈도우, 미지정=2026-05~현재월).
-    설계서: AGENT_TEAM_LAUNCH.md § Sprint 90-BE (Codex 4라운드 GO).
+    #92: period(today|week|month|quarter)+reference_date(YYYY-MM-DD) → day 윈도우 / partner(company) → 협력사 필터.
+    설계서: AGENT_TEAM_LAUNCH.md § Sprint 90-BE / § FEAT-TAGGING-COVERAGE-FILTERS.
     """
+    from datetime import date as _date
+
     from_month = request.args.get("from")
     to_month = request.args.get("to")
+    period = request.args.get("period")
+    reference_date_str = request.args.get("reference_date")
+    partner = request.args.get("partner")
+
+    # #92 검증 — period 화이트리스트 + reference_date 파싱
+    if period is not None:
+        period = period.strip().lower()
+        if period not in ("today", "week", "month", "quarter"):
+            return jsonify({"error": "INVALID_PERIOD",
+                            "message": "period 는 today|week|month|quarter 중 하나여야 합니다."}), 400
+    ref_date = None
+    if reference_date_str:
+        try:
+            ref_date = _date.fromisoformat(reference_date_str.strip())
+        except ValueError:
+            return jsonify({"error": "INVALID_DATE",
+                            "message": "reference_date 는 YYYY-MM-DD 형식이어야 합니다."}), 400
+    partner = partner.strip() if partner else None
+
     try:
-        return jsonify(get_tagging_coverage(from_month=from_month, to_month=to_month)), 200
+        return jsonify(get_tagging_coverage(
+            from_month=from_month, to_month=to_month,
+            period=period, reference_date=ref_date, partner=partner,
+        )), 200
     except CtParamError as e:
         return jsonify({"error": e.code, "message": e.message}), 400
     except Exception:

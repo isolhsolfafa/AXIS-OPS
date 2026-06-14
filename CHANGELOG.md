@@ -6,6 +6,19 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.42.0] - 2026-06-15 — tagging-coverage period/reference_date/partner 필터 (FEAT-TAGGING-COVERAGE-FILTERS, #92)
+
+> **BE only minor — read-only, additive, migration 0**. AXIS-VIEW #92 — 종료 누락 분석 페이지 상단 필터(오늘/주간/월간/분기 + 협력사)가 auto-close-summary 카드는 다 받는데 0초탭 카드(`tagging-coverage`)만 월 단위 from/to라 불일치. 사용자 catch.
+
+- **`GET /api/ct/tagging-coverage?period=&reference_date=&partner=`** (전부 optional, 미지정=현행 [CT_TRUST_START_MONTH, 현재월] 월 누적, **back-compat**). period=today|week|month|quarter(`_resolve_period_range` 재사용, auto-close 동일) + reference_date(YYYY-MM-DD) → **day 윈도우**. partner(company) → coverage/zero_tap_tasks 협력사 필터, **분모도 협력사 기준**(PI/QI/SI=GST 고정 → partner='FNI'면 MECH/ELEC만).
+- **⚠️ 공유 상수 회귀 방지**: `reliability-summary`(v2.41.0)가 `_COVERAGE_WHERE` 를 import → **`_COVERAGE_WHERE = _COVERAGE_BASE + _COVERAGE_WINDOW_MONTH` (byte 동일 유지)** + 신규 `_COVERAGE_WINDOW_DAY`/`_COVERAGE_PARTNER_FILTER` 별도 조각. reliability-summary 무변경(회귀 0, byte 동일 pytest 검증).
+- 응답 스키마 동일 + `meta` echo (period/reference_date/partner/window). cache_key 에 period/ref/partner 포함. route 검증: period 화이트리스트 400 INVALID_PERIOD / reference_date YYYY-MM-DD 400 INVALID_DATE. RBAC 그대로(jwt+gst_or_admin, partner=표시 필터).
+- **Codex 라운드 1 GO M=0** (A: byte 동일 테스트·period datetime 바인딩·partner 화이트리스트 정책 → 반영/수용). `_resolve_period_range` KST naive datetime + `(completed_at AT TIME ZONE 'Asia/Seoul') >= %(start)s` 명시 변환(DB tz 무관 안전).
+- **실데이터 검증**: back-compat(월 누적 2026-05~06) / partner=FNI(MECH만, PI/QI/SI=0) / period=quarter(2026-04~07) / **reliability-summary tracking 53·standard_ready 17.6 = v2.41.0 동일(회귀 0)**. pytest test_tagging_coverage_filters 7 passed + 회귀(sprint90 tagging + reliability) 32 passed 1 skip.
+- **VIEW 후속**(별 repo): `useTaggingCoverage({period,reference_date,partner})` → auto-close 동일 값 전달 → 0초탭 동일 필터 반응. 설계: `AGENT_TEAM_LAUNCH.md` § FEAT-TAGGING-COVERAGE-FILTERS.
+
+---
+
 ## [2.41.0] - 2026-06-14 — CT 데이터 신뢰도 게이트 재설계 (FEAT-CT-RELIABILITY-SUMMARY, B)
 
 > **BE only minor — read-only, 신규 endpoint, migration 0**. CT 분석 "데이터 신뢰도" summary 가 FE 파생 **가중평균**(`Σweight(n)·n/Σn`, 풀링 부풀림 80.6%)이라 과대평가되던 문제를 **count 게이트 + 생산량 가중**으로 재설계. 3모델(Claude+Codex+Fable) 합의 + 사용자 catch 누적.
