@@ -6,6 +6,19 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.42.1] - 2026-06-15 — one-click whitelist 자주검사 2개 제거 (FIX-INSTANT-WHITELIST-SELF-INSPECTION-REMOVE)
+
+> **BE only patch — read-only, 상수 정정, migration 0**. 사용자 catch: "one-click은 2개야 — tank docking, si_shipment". 실측 검증 결과 `_INSTANT_WHITELIST` 4개 중 자주검사(SELF_INSPECTION/INSPECTION)가 **실작업인데 one-click 오분류** → 추적률 부당 과소.
+
+- **실측**: TANK_DOCKING 104건·SI_SHIPMENT 40건 전부 active NULL(진짜 즉시완료, 추적률 분모에서 이미 자동 제외) / SELF_INSPECTION(MECH 자주검사) 평균 **57분** 즉시완료 0% · INSPECTION(ELEC 자주검사) 평균 **98분** 즉시완료 15% = **실작업**.
+- **변경**: `_INSTANT_WHITELIST = frozenset({"TANK_DOCKING", "SI_SHIPMENT"})` (자주검사 2개 제거). 6개 지표가 `is_instant_whitelisted`/`_WHITELIST_SQL`/`_wl_sql` 미러로 연결 → 자동 전파 (tagging-coverage·reliability-summary·partner-breakdown #83·data-quality·close-type-trend #90·partner_discipline Sprint 89).
+- **⚠️ Codex Q5 핵심 결함 동반 수정**: data-quality `trend_sql` zerotap이 whitelist 4개를 **하드코딩**(`NOT IN ('INSPECTION',...)`)이라 상수 변경 자동 전파 안 됨 → `_wl_sql` 동적 미러(f-string)로 교체. 단일 미러 원칙 복원, 하드코딩 잔존 0.
+- **효과(정직화)**: 자주검사가 NOT oneClick → active>1 이면 tracked 정상 카운트. tagging-coverage MECH 34→**49%**·ELEC 47→**58%**, reliability-summary 헤드라인 53→**63%**(표준가능 17.6% 유지). TANK_DOCKING/SI_SHIPMENT는 active NULL이라 추적률 영향 0(whitelist 잔류=안전망).
+- **Codex 2R**: R1 NO-GO(Q5 하드코딩/Q3 test assert/Q6 stale 주석) → R2 **DEPLOY_SAFE M=0**. 주석 2곳·test fixture(SELF_INSPECTION→TANK_DOCKING) 갱신. pytest 6지표 회귀 **93 passed 1 skip**.
+- **연관**: #93(협력사 데이터 입력 신뢰도, 협력사×모델×공정 추적률) 의 **추적률 base 정정 선행** — #93은 정정된 추적률 위에 설계. 설계: `AGENT_TEAM_LAUNCH.md` § FIX-INSTANT-WHITELIST-SELF-INSPECTION-REMOVE.
+
+---
+
 ## [2.42.0] - 2026-06-15 — tagging-coverage period/reference_date/partner 필터 (FEAT-TAGGING-COVERAGE-FILTERS, #92)
 
 > **BE only minor — read-only, additive, migration 0**. AXIS-VIEW #92 — 종료 누락 분석 페이지 상단 필터(오늘/주간/월간/분기 + 협력사)가 auto-close-summary 카드는 다 받는데 0초탭 카드(`tagging-coverage`)만 월 단위 from/to라 불일치. 사용자 catch.

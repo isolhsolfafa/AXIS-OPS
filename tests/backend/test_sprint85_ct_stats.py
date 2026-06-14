@@ -337,7 +337,7 @@ def test_ct12_zerotap_trend_classification(db_conn, worker):
         _seed_active("z_inst", "UTIL_LINE_1", 0)                                         # zerotap(active≤1)
         _seed_active("z_auto", "WASTE_GAS_LINE_2", 120,
                      close_reason="AUTO_CLOSED_BY_FIRST_FINAL_TRIGGER:X")                # zerotap(close_reason)+auto
-        _seed_active("z_wl", "SELF_INSPECTION", 0)                                       # whitelist → zerotap 제외
+        _seed_active("z_wl", "TANK_DOCKING", 0)                                          # whitelist(2개) → zerotap 제외 (SELF_INSPECTION 은 실작업이라 whitelist 제거 — 20260615)
         _seed_active("z_fc", "UTIL_LINE_2", 120, force_closed=True,
                      close_reason="MANUAL_FORCE_CLOSE")                                  # force → zerotap 제외
         ss._cache.clear()
@@ -345,7 +345,7 @@ def test_ct12_zerotap_trend_classification(db_conn, worker):
         cur_month = [x for x in trend if x["zerotap"] > 0 or x["auto"] > 0]
         assert cur_month, "현재월 추이 row 존재"
         row = cur_month[-1]
-        assert row["zerotap"] == 2   # z_inst(active≤1) + z_auto(close_reason). whitelist/force/normal 제외
+        assert row["zerotap"] == 2   # z_inst(active≤1) + z_auto(close_reason). whitelist(TANK_DOCKING)/force/normal 제외
         assert row["auto"] == 1      # z_auto
         assert row["force"] == 1     # z_fc
     finally:

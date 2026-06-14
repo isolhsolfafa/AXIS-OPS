@@ -49573,3 +49573,49 @@ def get_tagging_coverage(from_month=None, to_month=None,
 4. cache_key 에 period/reference_date/partner 포함(캐시 오염 방지).
 5. dashboard_service ↔ tagging_coverage_service 순환 import 없는지(함수 내부 import).
 6. back-compat (미지정=현행) + additive 회귀 0.
+
+---
+
+# § FIX-INSTANT-WHITELIST-SELF-INSPECTION-REMOVE (20260615) — one-click whitelist 자주검사 2개 제거
+
+> 사용자 catch (#93 검토 중): "one-click action은 2개야 — tank docking, si_shipment". 실측 검증 결과 현 `_INSTANT_WHITELIST` 4개 중 자주검사(SELF_INSPECTION/INSPECTION)가 실작업인데 one-click 오분류.
+
+## 문제 (실측)
+현 `_INSTANT_WHITELIST = {TANK_DOCKING, SI_SHIPMENT, SELF_INSPECTION, INSPECTION}` (4개). 실측(2026-05~):
+- **TANK_DOCKING** 104건 전부 active NULL / **SI_SHIPMENT** 40건 전부 active NULL → 진짜 즉시완료(시간 측정 안 함). active NULL 이라 추적률 분모(_COVERAGE_WHERE: active NOT NULL)에서 이미 자동 제외 → whitelist 효과 = 안전망(분모에 0건).
+- **SELF_INSPECTION**(MECH 자주검사) 64건 평균 **57분** 즉시완료 0% / **INSPECTION**(ELEC 자주검사) 128건 평균 **98분** 즉시완료 15% → **실제 작업**인데 one-click 오분류. active 값 있어 분모에 포함되는데 oneClick 분류라 tracked/zerotap 양쪽에서 제외 → 추적률 부당하게 과소.
+
+## 변경 (상수 1줄 — 단일 정의 미러)
+```python
+_INSTANT_WHITELIST = frozenset({"TANK_DOCKING", "SI_SHIPMENT"})   # 자주검사 2개 제거
+```
+`statistics_service.py` L718. 6개 지표가 `is_instant_whitelisted`/`_WHITELIST_SQL` 미러로 연결 → 1줄 변경 자동 전파.
+
+## 효과
+- 자주검사(SELF_INSPECTION active 57분·INSPECTION active 98분)가 NOT oneClick → active>1 이면 **tracked 정상 카운트** → MECH/ELEC 추적률 정직하게 상승.
+- INSPECTION 즉시완료 15% 는 zerotap 으로(정상 — 실제 미태깅).
+- TANK_DOCKING/SI_SHIPMENT 는 active NULL 이라 분모에 원래 없음 → 추적률 영향 0 (whitelist 잔류 = 안전망).
+
+## 영향 지표 (전부 자동 반영)
+| 지표 | endpoint | 영향 |
+|---|---|---|
+| tagging-coverage 추적률/0초탭 | `/api/ct/tagging-coverage` | 자주검사 tracked 포함 → 추적률↑ |
+| reliability-summary 헤드라인/표준가능 | `/api/ct/reliability-summary`(v2.41.0) | 추적률↑ → standard_ready↑ |
+| partner-breakdown instant_completion | `/api/ct/partner-breakdown`(#83) | 자주검사 instant 대상 됨 |
+| data-quality zerotap | `/api/ct/data-quality` | zerotap 분모 변동 |
+| close-type-trend zerotap | `/api/ct/close-type-trend`(#90) | zerotap 변동 |
+| partner_discipline zerotap | `/api/admin/discipline/*`(Sprint 89) | zerotap 변동 |
+
+## 종료 누락 분석 검증 (사용자 요청)
+변경 후 tagging-coverage 실데이터로 ① TANK_DOCKING/SI_SHIPMENT 제외(active NULL → 분모 미포함) ② 자주검사 tracked 포함 ③ 추적률 변동 확인.
+
+## 회귀/Codex
+- 광범위 영향(6 지표) → Codex 검증 + 영향 지표 pytest 전수(tagging/reliability/partner-breakdown/data-quality/close-type-trend/discipline) 회귀.
+- read-only, DB/migration 0 (상수 변경).
+- ⚠️ 일부 기존 테스트가 whitelist 4개 가정(SELF_INSPECTION oneClick) 이면 assert 갱신 필요.
+
+## Codex 질의
+1. _INSTANT_WHITELIST 2개 축소가 6 지표 의미론 정합 — 자주검사를 추적 대상으로 보는 게 옳은지(실작업 57~98분 입증).
+2. TANK_DOCKING/SI_SHIPMENT active NULL → 분모 미포함이라 whitelist 잔류가 영향 0 + 안전망(active 값 있는 예외 케이스 대비) 맞는지.
+3. 기존 테스트 whitelist 4개 가정 회귀 — 갱신 필요 항목.
+4. instant_completion(#83) 의미 변화 — 자주검사가 instant 대상 되면 협력사 즉시완료율 해석 영향.

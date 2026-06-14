@@ -307,7 +307,7 @@ def get_tagging_coverage(
             "denominator_basis": "completed_applicable_non_force",
             "generated_at": datetime.now(_KST).isoformat(),
             "note": (
-                "0초탭=active≤1분(시작=완료 동시각). one-click(탱크도킹/출하완료/자주검사)은 정상. "
+                "0초탭=active≤1분(시작=완료 동시각). one-click(탱크도킹/출하완료)은 정상. "
                 "강제종료(force_closed)만 분모 제외 — 자동마감·admin대행완료는 미추적으로 포함."
             ),
         },

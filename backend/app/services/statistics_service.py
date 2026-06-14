@@ -564,7 +564,9 @@ def get_data_quality(from_month: Optional[str] = None, to_month: Optional[str] =
     #     Sprint 90-BE-B: zerotap 추가 (CloseTrendChart) — NOT IN whitelist = _INSTANT_WHITELIST 미러,
     #       zerotap = active≤1 OR close_reason 존재 (Sprint 90-BE tagging-coverage 정의 동일).
     #       auto/force/zerotap 3 series 동일 base. auto⊆zerotap 일반(단 whitelist task 자동마감 시 역전 가능).
-    trend_sql = """
+    # zerotap whitelist = _INSTANT_WHITELIST 동적 미러 (하드코딩 금지 — Codex Q5, 상수 변경 자동 전파)
+    _wl_sql = "(" + ",".join("'%s'" % t for t in sorted(_INSTANT_WHITELIST)) + ")"
+    trend_sql = f"""
         SELECT to_char(date_trunc('month', td.completed_at AT TIME ZONE 'Asia/Seoul'), 'YYYY-MM') AS month,
                COUNT(*) AS total,
                COUNT(*) FILTER (
@@ -572,7 +574,7 @@ def get_data_quality(from_month: Optional[str] = None, to_month: Optional[str] =
                ) AS auto,
                COUNT(*) FILTER (WHERE td.force_closed = TRUE) AS force,
                COUNT(*) FILTER (
-                   WHERE td.task_id NOT IN ('INSPECTION','SELF_INSPECTION','SI_SHIPMENT','TANK_DOCKING')
+                   WHERE td.task_id NOT IN {_wl_sql}
                      AND COALESCE(td.force_closed, FALSE) = FALSE
                      AND (td.active_time_minutes <= 1 OR td.close_reason IS NOT NULL)
                ) AS zerotap
@@ -713,9 +715,11 @@ _PARTNER_DISPLAY_SQL = (
 )
 _DUAL_SQL = "CASE WHEN p.model ILIKE '%%DUAL%%' THEN 'DUAL' ELSE 'SINGLE' END"
 
-# one-click 화이트리스트 — 즉시완료가 정상인 task (즉시완료율 평가 제외).
-#   TANK_DOCKING(트리거 마커) / SI_SHIPMENT(출하 단일액션) / SELF_INSPECTION / INSPECTION(자주검사).
-_INSTANT_WHITELIST = frozenset({"TANK_DOCKING", "SI_SHIPMENT", "SELF_INSPECTION", "INSPECTION"})
+# one-click 화이트리스트 — active=0(완료만 찍음)이 정상인 task (추적/즉시완료율 평가 제외).
+#   TANK_DOCKING(트리거 마커, active NULL) / SI_SHIPMENT(출하 단일액션, active NULL) 2개만.
+#   ⚠️ 자주검사(SELF_INSPECTION/INSPECTION)는 실작업(평균 57~98분)이라 one-click 아님 — 추적 대상
+#      (2026-06-15 사용자 catch + 실측: SELF_INSPECTION 즉시완료 0%/INSPECTION 15%).
+_INSTANT_WHITELIST = frozenset({"TANK_DOCKING", "SI_SHIPMENT"})
 
 
 def is_instant_whitelisted(task_id: Optional[str]) -> bool:
