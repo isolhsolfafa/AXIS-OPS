@@ -162,16 +162,47 @@ def send_approval_notification_async(name: str, email: str, role: str, company: 
 
 # ─── Sprint 79: 출하 미처리 알림 메일 ──────────────────────────────────
 
-def _render_shipment_overdue_html(overdue_items: list, target_date) -> str:
+def _render_completed_section(completed_items: list) -> str:
+    """Sprint 95: 어제 출하 완료 섹션 (참고) — 항상 표시(health check, 0건도 표시)."""
+    completed = completed_items or []
+    ccount = len(completed)
+    crows = ""
+    for item in completed:
+        cs_sn = html.escape(str(item.get('serial_number', '-')), quote=True)
+        cs_so = html.escape(str(item.get('sales_order', '-') or '-'), quote=True)
+        cs_model = html.escape(str(item.get('model', '-') or '-'), quote=True)
+        crows += (
+            f'<tr><td style="padding:6px;border-bottom:1px solid #d1fae5;font-weight:600;">{cs_sn}</td>'
+            f'<td style="padding:6px;border-bottom:1px solid #d1fae5;color:#555;">{cs_so}</td>'
+            f'<td style="padding:6px;border-bottom:1px solid #d1fae5;color:#555;">{cs_model}</td></tr>'
+        )
+    inner = (
+        '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead>'
+        '<tr style="background:#d1fae5;">'
+        '<th style="padding:6px;text-align:left;font-size:11px;color:#065f46;">S/N</th>'
+        '<th style="padding:6px;text-align:left;font-size:11px;color:#065f46;">O/N</th>'
+        '<th style="padding:6px;text-align:left;font-size:11px;color:#065f46;">모델</th>'
+        f'</tr></thead><tbody>{crows}</tbody></table>'
+    ) if ccount else '<p style="margin:0;color:#888;">어제 출하 완료된 건이 없습니다.</p>'
+    return f"""
+    <div style="background:#ecfdf5;border-radius:8px;padding:14px 16px;margin:16px 0;font-size:13px;">
+      <p style="margin:0 0 8px 0;font-weight:600;color:#059669;">✅ 어제 출하 완료 — {ccount}건</p>
+      {inner}
+    </div>"""
+
+
+def _render_shipment_overdue_html(overdue_items: list, target_date, completed_items: list = None) -> str:
     """출하 미처리 알림 HTML 템플릿 (Sprint 79, v2.19.10).
 
     v2.19.10: 회원가입 승인 메일 컨셉 정합 (사용자 catch 5-28).
     v2.20.5: overdue_items=[] 분기 추가 — "전일 출하 모두 완료" 메일 (daily health check).
+    Sprint 95: completed_items(어제 출하 완료) 섹션 추가 — 출하 현황 종합.
     """
     target_str = target_date.strftime('%Y-%m-%d') if hasattr(target_date, 'strftime') else str(target_date)
     now_kst = datetime.now(_KST).strftime('%Y-%m-%d %H:%M')
     safe_date = html.escape(target_str, quote=True)
     count = len(overdue_items)
+    completed_section = _render_completed_section(completed_items)
 
     # v2.20.5: 0건 분기 — "전일 출하 모두 완료" 메일 (daily health check)
     if count == 0:
@@ -189,7 +220,7 @@ def _render_shipment_overdue_html(overdue_items: list, target_date) -> str:
       <p style="margin:4px 0;"><strong>미처리 건수:</strong> <strong style="color:#059669;">0건 ✅</strong></p>
       <p style="margin:4px 0;color:#888;"><strong>발송 시각:</strong> {now_kst} KST</p>
     </div>
-
+{completed_section}
     <p style="margin-top:18px;">이 메일은 출하 알림 시스템이 매일 정상 작동 중임을 확인하는 메일입니다.</p>
 
     <hr style="border:none;border-top:1px solid #e5e5e7;margin:24px 0;">
@@ -247,7 +278,7 @@ def _render_shipment_overdue_html(overdue_items: list, target_date) -> str:
         </tbody>
       </table>
     </div>
-
+{completed_section}
     <p style="margin-top:18px;">OPS 앱에서 출하 처리 부탁드립니다.</p>
     <p style="margin-top:12px;"><a href="https://gaxis-ops.netlify.app" style="display:inline-block;padding:10px 18px;background:#007aff;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">앱 열기</a></p>
 
@@ -267,8 +298,8 @@ def _render_shipment_overdue_html(overdue_items: list, target_date) -> str:
 """
 
 
-def send_shipment_overdue_alert(recipients: list, overdue_items: list, target_date) -> bool:
-    """출하 미처리 알림 메일 발송 (Sprint 79).
+def send_shipment_overdue_alert(recipients: list, overdue_items: list, target_date, completed_items: list = None) -> bool:
+    """출하 미처리 알림 메일 발송 (Sprint 79 + Sprint 95 출하 완료 리스트).
 
     Args:
         recipients: 수신자 email list
@@ -287,11 +318,13 @@ def send_shipment_overdue_alert(recipients: list, overdue_items: list, target_da
 
     target_str = target_date.strftime('%Y-%m-%d') if hasattr(target_date, 'strftime') else str(target_date)
     overdue_count = len(overdue_items)
+    completed_count = len(completed_items or [])
+    # Sprint 95: 기존 prefix(⚠️/✅) 유지(메일 필터 호환) + 완료 정보 부가
     if overdue_count > 0:
-        subject = f"⚠️ [G-AXIS] 출하 미처리 {overdue_count}건 ({target_str})"
+        subject = f"⚠️ [G-AXIS] 출하 미처리 {overdue_count}건 (완료 {completed_count}건) ({target_str})"
     else:
-        subject = f"✅ [G-AXIS] 출하 완료 ({target_str})"
-    html_body = _render_shipment_overdue_html(overdue_items, target_date)
+        subject = f"✅ [G-AXIS] 출하 완료 {completed_count}건 ({target_str})"
+    html_body = _render_shipment_overdue_html(overdue_items, target_date, completed_items)
 
     success_count = 0
     fail_count = 0

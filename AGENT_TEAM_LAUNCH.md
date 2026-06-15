@@ -49925,3 +49925,59 @@ COUNT(*) FILTER (WHERE t.active_time_minutes <= 1 AND t.close_reason IS NULL) AS
 - #92(v2.42.0): useTaggingCoverage period/partner 필터.
 - #93/#93b(v2.43.0/v2.44.0): usePartnerReliability(period/reference_date/partner/process/model) → PartnerReliabilityCard 히트맵·매트릭스 월별·trend 시계열.
 - #94(v2.45.0): instant_pct/instant_n/closed_n 사용, zero_* silent fallback 금지(분모 다름), 자동마감은 0초탭 카드서 제외.
+
+---
+
+# § Sprint 95 / FEAT-SHIPMENT-DAILY-COMPLETED-LIST (20260615) — 출하 일일 알림에 어제 출하 완료 리스트 추가
+
+> 사용자 제안: 매일 07:30 출하 미처리 알림 메일(Sprint 79)이 "못 나간 것"만 보냄. "어제 실제 출하 완료된 것"도 같이 보내면 관리자가 출하 현황(완료+미처리)을 한 메일로 종합 파악. 출하 담당(박승록·이성민)+admin 일일 출하 리포트.
+
+## 현 구조
+- `scheduler._alert_shipment_overdue` (07:30 KST) → `get_overdue_shipments(yesterday)`(ship_plan_date=어제 AND actual_date NULL, non-TEST) → `send_shipment_overdue_alert(recipients, overdue_items, target_date)` → `_render_shipment_overdue_html`.
+- `_get_actual_date_subquery('p')` = COALESCE(app SI_SHIPMENT.completed_at, ETL actual_ship_date) = 출하 완료일.
+- 토글 `shipment_alert_enabled`, 수신 = is_admin + `shipment_alert_recipients`(name). 0건도 발송(health check).
+
+## 변경 (additive)
+1. **신규 `get_completed_shipments(yesterday)`** (shipment_flow_service) — `(actual_date_expr) = yesterday`(어제 실제 출하 완료, ship_plan_date 무관), non-TEST. get_overdue_shipments 미러(WHERE 조건만 다름, `_get_actual_date_subquery` 재사용). 반환 = 동일 dict(serial/sales_order/model/customer/partners/+actual_date).
+2. **`send_shipment_overdue_alert(recipients, overdue_items, target_date, completed_items=None)`** — completed_items 인자 추가(default None=[], 하위호환). subject = 완료 N·미처리 M 종합.
+3. **`_render_shipment_overdue_html`** — ✅ 어제 출하 완료 N건 섹션(참고) + ⚠️ 미처리 M건 섹션(액션) 분리. O/N 그룹·모델·S/N 표시.
+4. **`scheduler._alert_shipment_overdue`** — `completed_items = get_completed_shipments(yesterday)` 조회 + send 전달. result에 completed_count.
+
+## 메일 양식
+```
+제목: 📦 [G-AXIS] 출하 현황 (어제) — 완료 N · 미처리 M
+본문:
+✅ 어제 출하 완료 — N건
+   O/N xxxx | 모델 | S/N (그룹)
+⚠️ 어제 출하 미처리 — M건 (확인 필요)
+   O/N xxxx | 모델 | S/N | 예정일
+```
+
+## 회귀/영향
+- additive(completed_items default None → 기존 호출 무변경). 토글/수신/cron 시각 불변. read-only 조회(메일 발송만).
+- 메일 길이↑(완료 섹션) — 완료 0건이어도 "완료 0건" 표시(health check 정합).
+
+## Codex 질의
+1. get_completed_shipments(actual_date=yesterday) 정의 — 어제 실제 출하(app ship-complete completed_at OR ETL actual_ship_date) 기준, ship_plan_date 무관이 맞는지. 미처리(ship_plan_date=어제)와 모집단 다름 정합.
+2. send_shipment_overdue_alert completed_items default None 하위호환 + subject 종합.
+3. _render html 완료/미처리 분리 + 완료 0건 표시(health check).
+4. _get_actual_date_subquery 재사용(DRY) + non-TEST 필터 정합.
+5. 메일 발송(외부) 회귀 0 (additive, 기존 미처리 흐름 불변).
+
+## v2 보정 (Codex 라운드 1 M-Q4 반영 — TEST 제외 보강 + 기존 미처리 버그 동반 수정)
+
+> Codex M-Q4: `customer<>'TEST CUSTOMER'`만으론 TEST S/N 누락(v2.20.13 _TEST_EXCLUDE_SQL 기준 TEST 17건 중 12건 customer≠TEST). **현재 get_overdue_shipments(미처리 메일)도 TEST S/N 섞여 발송 중**(실측 TEST-2221~2226 등) → 동반 수정.
+
+### v1 → v2 변경
+1. **TEST 제외 표준 보강** (M-Q4): get_completed_shipments + **기존 get_overdue_shipments** 둘 다 `COALESCE(p.customer,'')<>'TEST CUSTOMER' AND p.serial_number NOT LIKE 'TEST%%'` (v2.20.13 _TEST_EXCLUDE_SQL 정합). → 현재 미처리 메일 TEST 섞임 버그 동반 fix.
+2. **actual_date KST cast 명시** (Q6-A): `(td.completed_at AT TIME ZONE 'Asia/Seoul')::date` (= yesterday). _get_actual_date_subquery 내부 cast 확인.
+3. **subject 기존 prefix 유지** (Q5-A): 메일 필터 호환 위해 기존 패턴 유지 + 완료 정보 추가.
+   - 미처리>0: `⚠️ [G-AXIS] 출하 미처리 M건 (완료 N건) — {date}`
+   - 미처리=0: `✅ [G-AXIS] 출하 완료 N건 — {date}`
+4. **메일 row 상한** (Q3-A → BACKLOG): 섹션별 100건 + "외 N건" — 별 sprint(`BACKLOG SHIPMENT-MAIL-ROW-CAP`).
+
+### v2 Codex 질의 (라운드 2)
+1. get_completed_shipments + get_overdue_shipments 둘 다 `customer<>'TEST CUSTOMER' AND serial NOT LIKE 'TEST%%'` 보강 → 미처리 메일 TEST 섞임 fix 정합.
+2. actual_date KST ::date cast 명시 정합.
+3. subject 기존 prefix(⚠️/✅) 유지 + 완료 정보 → 메일 필터 호환.
+4. 잔여 M=0 → GO.

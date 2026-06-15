@@ -6,6 +6,18 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.46.0] - 2026-06-15 — 출하 일일 알림에 어제 출하 완료 리스트 추가 (Sprint 95 / FEAT-SHIPMENT-DAILY-COMPLETED-LIST)
+
+> **BE only minor — additive, migration 0**. 매일 07:30 KST 출하 미처리 알림 메일(Sprint 79)이 "못 나간 것"만 발송 → 사용자 제안으로 "어제 실제 출하 완료된 것"도 추가, 출하 현황(완료+미처리) 종합 일일 리포트.
+
+- **신규 `get_completed_shipments(yesterday)`** (shipment_flow_service): `actual_date == yesterday`(어제 실제 출하 = app SI_SHIPMENT.completed_at OR ETL actual_ship_date, `_get_actual_date_subquery` 재사용, ship_plan_date 무관). 미처리와 별 모집단.
+- **⚠️ Codex M-Q4 동반 버그 fix**: 기존 `get_overdue_shipments`(미처리 메일)가 `customer<>'TEST CUSTOMER'`만 필터해 **TEST S/N이 메일에 섞여 발송 중**(실측 TEST-2221~6 등) → 두 함수 모두 `serial_number NOT LIKE 'TEST%'` 보강(v2.20.13 `_TEST_EXCLUDE_SQL` 정합).
+- **메일**: `send_shipment_overdue_alert(..., completed_items=None)` 하위호환 + `_render_completed_section`(✅ 어제 출하 완료 N건 섹션, 0건도 health check 표시). subject 기존 prefix 유지(`⚠️ 출하 미처리 M건 (완료 N건)` / `✅ 출하 완료 N건` — 메일 필터 호환). scheduler 완료 조회+전달.
+- **Codex 2R**: R1 NO-GO(M-Q4 TEST 제외 보강)→R2 **GO/DEPLOY_SAFE M=0**. pytest test_sprint95 6/6(단위) + 회귀 test_ship_complete 21 passed. 실데이터: 2026-04-02 미처리 TEST 제외 확인, 6-11 완료 11건 섹션 렌더.
+- read-only 조회(메일 발송만), cron 시각/토글/수신 불변. 다음 07:30 KST부터 완료 리스트 포함 발송. 후속: 메일 row 상한(BACKLOG SHIPMENT-MAIL-ROW-CAP). 설계: `AGENT_TEAM_LAUNCH.md` § Sprint 95.
+
+---
+
 ## [2.45.0] - 2026-06-15 — 0초탭/자동마감 분리 4개 지표 통일 (FIX-ZEROTAP-AUTOCLOSE-SEPARATION)
 
 > **BE only minor — read-only, additive, migration 0**. "0초탭(zerotap)"이 자동마감(close_reason)을 섞어 부풀려짐(사용자 catch). 전수 확인: 4개 지표 중 3개가 `active≤1 OR close_reason` 라 자동마감 76% 섞임(623건 중 진짜 149). 진짜 0초탭 = `close NULL AND active≤1` 로 통일.

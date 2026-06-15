@@ -1196,6 +1196,10 @@ def _alert_shipment_overdue():
         result['yesterday'] = yesterday.isoformat()
         overdue_items = get_overdue_shipments(yesterday)
         result['overdue_count'] = len(overdue_items)
+        # Sprint 95: 어제 출하 완료 리스트 (출하 현황 종합)
+        from app.services.shipment_flow_service import get_completed_shipments
+        completed_items = get_completed_shipments(yesterday)
+        result['completed_count'] = len(completed_items)
         # v2.20.5: 0건 시에도 발송 (daily health check — cron 정상 작동 확인 용도)
 
         recipients_setting = get_setting('shipment_alert_recipients', [])
@@ -1216,6 +1220,7 @@ def _alert_shipment_overdue():
             recipients=result['recipients_emails'],
             overdue_items=overdue_items,
             target_date=yesterday,
+            completed_items=completed_items,
         )
         result['send_success'] = success
 

@@ -358,6 +358,7 @@ def get_overdue_shipments(yesterday: Optional[date] = None) -> List[Dict[str, An
                    p.ship_plan_date
             FROM plan.product_info p
             WHERE COALESCE(p.customer, '') <> 'TEST CUSTOMER'
+              AND p.serial_number NOT LIKE 'TEST%%'
               AND p.ship_plan_date = %s
               AND ({actual_date_expr}) IS NULL
             ORDER BY p.sales_order ASC, p.serial_number ASC
@@ -374,6 +375,57 @@ def get_overdue_shipments(yesterday: Optional[date] = None) -> List[Dict[str, An
                 'mech_partner': r['mech_partner'],
                 'elec_partner': r['elec_partner'],
                 'ship_plan_date': r['ship_plan_date'].isoformat() if r['ship_plan_date'] else None,
+            })
+        return items
+    finally:
+        put_conn(conn)
+
+
+def get_completed_shipments(yesterday: Optional[date] = None) -> List[Dict[str, Any]]:
+    """어제 출하 완료 list catch (Sprint 95 — 07:30 KST cron 일일 리포트).
+
+    조건: actual_date = yesterday (어제 실제 출하 — app SI_SHIPMENT.completed_at 또는 ETL actual_ship_date,
+    ship_plan_date 무관). 미처리(get_overdue_shipments)와 별 모집단 = 출하 현황 종합용.
+    TEST 제외 = customer + serial_number NOT LIKE 'TEST%%' (v2.20.13 _TEST_EXCLUDE_SQL 정합, Codex M-Q4).
+
+    Args:
+        yesterday: 기준 날짜 (기본 = 오늘 KST -1일)
+
+    Returns:
+        [{serial_number, sales_order, model, customer, mech_partner, elec_partner, actual_date}, ...]
+    """
+    if yesterday is None:
+        today_kst = datetime.now(KST).date()
+        yesterday = today_kst - timedelta(days=1)
+
+    actual_date_expr = _get_actual_date_subquery('p')
+
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            SELECT p.serial_number, p.sales_order, p.model, p.customer,
+                   p.mech_partner, p.elec_partner,
+                   ({actual_date_expr}) AS actual_date
+            FROM plan.product_info p
+            WHERE COALESCE(p.customer, '') <> 'TEST CUSTOMER'
+              AND p.serial_number NOT LIKE 'TEST%%'
+              AND ({actual_date_expr}) = %s
+            ORDER BY p.sales_order ASC, p.serial_number ASC
+            """,
+            (yesterday,),
+        )
+        items = []
+        for r in cur.fetchall():
+            items.append({
+                'serial_number': r['serial_number'],
+                'sales_order': r['sales_order'],
+                'model': r['model'],
+                'customer': r['customer'],
+                'mech_partner': r['mech_partner'],
+                'elec_partner': r['elec_partner'],
+                'actual_date': r['actual_date'].isoformat() if r['actual_date'] else None,
             })
         return items
     finally:
