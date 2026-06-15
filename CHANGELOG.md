@@ -6,6 +6,21 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.43.0] - 2026-06-15 — 협력사×모델×공정 추적률 분해 (FEAT-PARTNER-RELIABILITY, #93)
+
+> **BE only minor — read-only, 신규 endpoint, migration 0**. AXIS-VIEW #93. reliability-summary(v2.41.0)는 추적률을 모델 단위(협력사 합산)로만 줌 → 협력사로 분해해 "표준 가능 입력=FNI / 교육 타겟=BAT" 행동 가능 결론. v2.42.1(whitelist 자주검사 제거) 추적률 base 정정 위에 구현.
+
+- **신규 `GET /api/ct/partner-reliability?process=MECH|ELEC&model=&from=&to=`** (`partner_reliability_service.py` 신규 + ct_analysis route, jwt+gst_or_admin). 추적률 = `_TRACKED_SQL`/`_COVERAGE_BASE`(reliability-summary 동일 basis) — A-2(분모 one-click 제외)는 TANK_DOCKING/SI_SHIPMENT active NULL 자동 제외로 정합.
+- **응답**(flat, VIEW 피벗): `by_cell`(협력사×모델×공정) + `by_model_process`(모델×공정 합산=invariant anchor + batch_n) + `by_partner`(협력사 종합) + `trend`(협력사×월×공정, batch omit·결측 omit) + meta(gate=70, n_min=30, whitelist echo). 각 row `confidence`(n≥30 trusted).
+- **스코프**: MECH/ELEC only(PI/QI/SI=GST 제외), **GST·SH·(미지정) 명시 제외**(M-Q4, close-type-trend 패턴). 협력사 정규화 `_COV_PARTNER_SQL`(TMS→TMS(M)/(E)). model_prefix `_norm_model_prefix`(Python raw Σ 합산, pct 평균 금지). **batch(TMS(M))=일괄 garbage**: 합산 포함(invariant 보존)+batch_n 노출, trend omit. TMS(E)=정상.
+- **invariant(M-1)**: by_cell 협력사 셀 n 가중합 = by_model_process 합산. 실측 GAIA·MECH = BAT 157+FNI 256+TMS(M) 1 = 414 일치, pct 47.1%=raw Σ(195/414).
+- **실데이터**: BAT·GAIA·MECH **17.2%**(교육 타겟) vs FNI·GAIA·MECH **65.2%**(표준 근접) — 협력사 분해로 "누가 garbage / 교육 타겟" 행동 가능.
+- **Codex 2R**: R1 CONDITIONAL_GO(M-Q4 GST·SH / A-Q2 batch_n / A-Q5 confidence) → R2 **DEPLOY_SAFE M=0**. pytest test_partner_reliability 8/8(invariant·GST·SH 제외·batch·raw 합산·confidence·process 검증) + 회귀.
+- ⚠️ VIEW 비교 주석(Codex A-Q3): by_model_process pct ↔ reliability-summary 비교 시 **GST·SH 제외 scope 차이** 있음(meta.scope echo).
+- **VIEW 후속**(별 repo): `usePartnerReliability({process,model,from,to})` → PartnerReliabilityCard mock→실데이터(히트맵·종합 막대·추이). 설계: `AGENT_TEAM_LAUNCH.md` § FEAT-PARTNER-RELIABILITY.
+
+---
+
 ## [2.42.1] - 2026-06-15 — one-click whitelist 자주검사 2개 제거 (FIX-INSTANT-WHITELIST-SELF-INSPECTION-REMOVE)
 
 > **BE only patch — read-only, 상수 정정, migration 0**. 사용자 catch: "one-click은 2개야 — tank docking, si_shipment". 실측 검증 결과 `_INSTANT_WHITELIST` 4개 중 자주검사(SELF_INSPECTION/INSPECTION)가 **실작업인데 one-click 오분류** → 추적률 부당 과소.

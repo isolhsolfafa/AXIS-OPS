@@ -49619,3 +49619,67 @@ _INSTANT_WHITELIST = frozenset({"TANK_DOCKING", "SI_SHIPMENT"})   # 자주검사
 2. TANK_DOCKING/SI_SHIPMENT active NULL → 분모 미포함이라 whitelist 잔류가 영향 0 + 안전망(active 값 있는 예외 케이스 대비) 맞는지.
 3. 기존 테스트 whitelist 4개 가정 회귀 — 갱신 필요 항목.
 4. instant_completion(#83) 의미 변화 — 자주검사가 instant 대상 되면 협력사 즉시완료율 해석 영향.
+
+---
+
+# § FEAT-PARTNER-RELIABILITY (#93, 20260615) — 협력사×모델×공정 추적률 분해 + 월별 추이
+
+> AXIS-VIEW OPS_API_REQUESTS.md #93. reliability-summary(v2.41.0)는 추적률을 모델 단위(협력사 합산)로만 줌 → "GAIA 기구 안 좋네"에서 끝남. 협력사로 분해해 "표준 가능 입력=FNI / 교육 타겟=BAT" 행동 가능 결론. v2.42.1(whitelist 자주검사 제거)로 추적률 base 정정 후 진행.
+
+## 요청 — 신규 `GET /api/ct/partner-reliability?process=&model=&from=&to=`
+파라미터 전부 optional: process=MECH|ELEC / model / from,to(YYYY-MM, 미지정=[2026-05,현재월] 트러스트 윈도우). 권한 jwt+gst_or_admin. read-only, migration 0.
+
+## 추적률 정의 (CT/reliability-summary 동일 basis — v2.42.1 정정 반영)
+- 분자(tracked) = `_TRACKED_SQL`(NOT oneClick AND active>1 AND close_reason NULL). oneClick = 정정된 `_INSTANT_WHITELIST`(TANK_DOCKING/SI_SHIPMENT 2개, 자주검사 포함).
+- 분모 = `_COVERAGE_WHERE`(완료+active NOT NULL+applicable+force_closed=FALSE+TEST/TMS모듈 제외).
+- **A-2 분모 one-click 제외 = 자동 정합**: TANK_DOCKING/SI_SHIPMENT 는 active NULL → 분모(active NOT NULL)에서 이미 자동 제외. 별도 처리 불필요(v2.42.1 후).
+- tracking_pct(셀) = tracked / 분모. tagging-coverage/reliability-summary 와 동일 → invariant 성립.
+
+## 응답 계약 (flat 배열 — VIEW 가 피벗)
+```jsonc
+{
+  "by_cell": [          // 협력사×모델×공정 (히트맵)
+    { "partner": "FNI", "model": "GAIA", "process": "MECH", "tracking_pct": 73.0, "n": 150 },
+    { "partner": "TMS(M)", "model": "GAIA", "process": "MECH", "tracking_pct": 22.0, "n": 63, "batch": true }
+  ],
+  "by_model_process": [ // 모델×공정 합산(협력사 가중) = invariant anchor + reliability-summary 모델공정추적 일치
+    { "model": "GAIA", "process": "MECH", "tracking_pct": 49.0, "n": 429 }
+  ],
+  "by_partner": [       // 협력사 종합(전 모델 가중) — 막대 + 70% 기준선
+    { "partner": "FNI", "process": "MECH", "tracking_pct": 72.0, "n": 340 }
+  ],
+  "trend": [            // 협력사×월×공정 — 학습곡선. batch 협력사(TMS(M)) omit, 결측 월 omit(zero-fill X)
+    { "month": "2026-05", "partner": "FNI", "process": "MECH", "tracking_pct": 70.0, "n": 120 }
+  ],
+  "meta": { "from": "2026-05", "to": "2026-06", "gate": 70, "n_min": 30, "trust_start": "2026-05",
+            "whitelist": ["TANK_DOCKING","SI_SHIPMENT"], "generated_at": "..." }
+}
+```
+
+## 스코프·정규화 (CT/대시보드 정합)
+- **MECH/ELEC만**. PI/QI/SI=GST 자체 → 제외(협력사 책임 아님). **GST·SH 제외**(close-type-trend 정합).
+- **협력사 정규화** = `_COV_PARTNER_SQL`(tagging_coverage) 재사용: MECH→mech_partner(TMS→TMS(M)), ELEC→elec_partner(TMS→TMS(E)).
+- **model_prefix 정규화** = `_norm_model_prefix`(reliability-summary, model_config ORDER BY LENGTH DESC). SQL은 model_full GROUP BY → Python prefix 합산.
+- **batch 플래그**: partner_display=='TMS(M)' → `batch: true`(일괄 태깅 garbage). by_cell/by_partner/by_model_process 합산엔 **포함**(invariant 보존), trend 에서만 omit. VIEW가 셀 판정·종합 막대·추이에서 회색 "일괄" 표기로 제외(M-2). **TMS(E)=정상**(batch 아님).
+- trust_start=2026-05: 이전(03·04)은 미성숙 참고. meta echo.
+
+## invariant (M-1)
+by_cell 협력사 셀 n 가중합 = by_model_process 합산 (같은 분모/분자 정의 + 같은 모집단). batch(TMS(M)) 셀도 합산 모집단 포함 → grand_total 일치. by_model_process = reliability-summary 모델공정추적률과 동일값(검증 join).
+
+## 구현 (신규 partner_reliability_service.py + ct_analysis route)
+- 단일 SQL: (partner=_COV_PARTNER_SQL, model_full, process=task_category, month) 단위 COUNT(분모) + COUNT FILTER(_TRACKED_SQL) 집계 (_COVERAGE_WHERE + 윈도우 + MECH/ELEC + GST/SH 제외).
+- Python: model_prefix 정규화 + 협력사 batch 플래그 + 4 rollup(by_cell/by_model_process/by_partner/trend). n<1 셀 omit. trend batch omit.
+- 캐시 1h.
+
+## 회귀/영향
+- read-only, 신규 endpoint, migration 0. 기존 endpoint touch 0. reliability-summary 무변경.
+- by_model_process = reliability-summary 모델공정추적률 검증(같은 값 나와야).
+
+## Codex 질의
+1. 추적률 정의(_COVERAGE_WHERE 분모 + _TRACKED_SQL 분자, 정정 whitelist)가 reliability-summary/tagging-coverage 와 동일 basis → by_model_process invariant(셀 가중합=합산) 성립하는지.
+2. batch(TMS(M)) 합산 포함 + trend omit 이 invariant(grand_total 일치) 와 정합하는지.
+3. _COV_PARTNER_SQL(협력사 정규화) + _norm_model_prefix(Python) 혼용 — SQL model_full GROUP BY 후 Python prefix 합산이 정합한지(중복/누락).
+4. GST·SH 제외 + MECH/ELEC only 가 close-type-trend/대시보드 스코프와 정합.
+5. trend 결측 월 omit(zero-fill X) + batch omit 정합.
+6. by_model_process 값이 reliability-summary 모델공정추적률과 실제 일치하는지(검증 방법).
+7. 회귀 0 + 신규 endpoint 격리.

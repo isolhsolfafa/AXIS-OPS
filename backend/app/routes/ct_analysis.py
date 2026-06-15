@@ -23,6 +23,7 @@ from app.services.statistics_service import (
 )
 from app.services.tagging_coverage_service import get_tagging_coverage
 from app.services.close_type_trend_service import get_close_type_trend
+from app.services.partner_reliability_service import get_partner_reliability
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +132,33 @@ def partner_breakdown():
     except Exception:
         logger.exception("[ct] partner-breakdown 산출 실패")
         return jsonify({"error": "INTERNAL_ERROR", "message": "협력사 분해 집계 실패"}), 500
+
+
+@ct_analysis_bp.route("/partner-reliability", methods=["GET"])
+@jwt_required
+@gst_or_admin_required
+def partner_reliability():
+    """#93 — 협력사×모델×공정 추적률 분해 + 월별 추이 (read-only).
+
+    by_cell(협력사×모델×공정) + by_model_process(합산 invariant anchor) + by_partner(협력사 종합)
+    + trend(협력사×월×공정, batch omit). MECH/ELEC only, GST·SH 제외. batch(TMS(M))=일괄.
+    process=MECH|ELEC / model / from,to(YYYY-MM). 설계: AGENT_TEAM_LAUNCH.md § FEAT-PARTNER-RELIABILITY.
+    """
+    process = request.args.get("process")
+    model = request.args.get("model")
+    from_month = request.args.get("from")
+    to_month = request.args.get("to")
+    if process:
+        process = process.strip().upper()
+    try:
+        return jsonify(get_partner_reliability(
+            process=process, model=model, from_month=from_month, to_month=to_month,
+        )), 200
+    except CtParamError as e:
+        return jsonify({"error": e.code, "message": e.message}), 400
+    except Exception:
+        logger.exception("[ct] partner-reliability 산출 실패")
+        return jsonify({"error": "INTERNAL_ERROR", "message": "협력사 추적률 분해 실패"}), 500
 
 
 @ct_analysis_bp.route("/tagging-coverage", methods=["GET"])
