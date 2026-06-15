@@ -49891,3 +49891,37 @@ COUNT(*) FILTER (WHERE t.active_time_minutes <= 1 AND t.close_reason IS NULL) AS
 2. 나머지 3개(tagging #94/close-type-trend/data-quality) 분자 instant 통일 + close-type-trend auto/zerotap 배타화 + unclassified(ADMIN/SHIP) 처리.
 3. 4개 동시 BE 구현 + zero_* deprecated additive + 테스트 갱신 → 회귀 0.
 4. 잔여 M=0 → GO.
+
+---
+
+# § 2026-06-13~15 배포 결과 종합 (as-built) — 데이터 신뢰도/종료 누락 분석 9 release
+
+> 위 7개 설계서(§ FIX-FORCE-CLOSE-DURATION-SOURCE ~ § FIX-ZEROTAP-AUTOCLOSE-SEPARATION)의 **배포 결과(as-built)** 종합. 설계서는 설계 시점 내용이라 최종 버전·Codex 최종 판정·실데이터·pytest를 본 섹션에 일괄 기록. 상세 trail = CHANGELOG.md / CLAUDE.md 버전이력.
+
+## 배포 매트릭스
+| 버전 | 작업 (설계서 §) | Codex 라운드 | 최종 | pytest | 핵심 실데이터 |
+|---|---|---|---|---|---|
+| **v2.40.0** | FIX-FORCE-CLOSE-DURATION-SOURCE (A) | R1 NO-GO(M-Q1 migration)→R2 | DEPLOY_SAFE M=0 | 5/5 + 회귀 69 | force_closed=TRUE 253건→251 FORCE_CLOSED+2 FALLBACK, 입력정합 80.7%→72.7% |
+| **v2.41.0** | FEAT-CT-RELIABILITY-SUMMARY (B) | R1 NO-GO(M-Q1 tracked)→R2 CONDITIONAL(Q2/Q4/Q5)→R3 | DEPLOY_SAFE M=0 (+Fable 2차) | 9/9+1skip + 회귀 44 | 가중평균 80.6%→standard_ready 17.6%(생산량가중), 헤드라인 추적 53%, n_met 51.7% vs tracking_met 22.5% |
+| **v2.42.0** | FEAT-TAGGING-COVERAGE-FILTERS (#92) | R1 | GO M=0 | 7 + 회귀 32 | byte 동일(_COVERAGE_WHERE) reliability-summary 회귀 0, partner=FNI MECH만 |
+| **v2.42.1** | FIX-INSTANT-WHITELIST-SELF-INSPECTION-REMOVE | R1 NO-GO(Q5 하드코딩/Q3 test/Q6 주석)→R2 | DEPLOY_SAFE M=0 | 6지표 회귀 93 | whitelist 4→2(자주검사 제거), tagging MECH 34→49%·ELEC 47→58%, reliability 헤드라인 53→63% |
+| **v2.43.0** | FEAT-PARTNER-RELIABILITY (#93) | R1 CONDITIONAL(M-Q4 GST·SH/A-Q2 batch_n/A-Q5 conf)→R2 | DEPLOY_SAFE M=0 | 8/8 + 회귀 24 | BAT·GAIA·MECH 17.2%(교육 타겟) vs FNI 65.2%, invariant 414 |
+| **v2.44.0** | FEAT-PARTNER-RELIABILITY-MONTHLY (#93b) | 기획 독립판정 GO → 구현 R1 NO-GO(M-1 day)→R2 trend정책→R3/R4 | DEPLOY_SAFE M=0 | 13/13 + 회귀 24 | period=month BAT·GAIA·MECH 13.0%(단월), today n2/month n125/quarter n456 |
+| **v2.45.0** | FIX-ZEROTAP-AUTOCLOSE-SEPARATION (전수) | 컨셉 R1 NO-GO(M-1 분모)→R2 GO / 구현 R3 NO-GO(meta.note)→GO | DEPLOY_SAFE M=0 | test_ct12/ctt01 2→1 + 영향 77 + 회귀 29 | 0초탭 623(76% 자동마감)→진짜 149, data-quality 206→67, close-type 35 |
+
+## 누적 효과 (데이터 신뢰도 정합 체인)
+1. **강제종료 정합**(v2.40.0): force_close→duration_source='FORCE_CLOSED' → 입력정합/CT 표본 자동 정합.
+2. **CT 신뢰도 게이트**(v2.41.0): 가중평균(과대) 폐기 → count 게이트(모델×task×dual, 생산량 가중) + 2조건 분리.
+3. **추적률 base 정정**(v2.42.1): one-click=TANK_DOCKING/SI_SHIPMENT 2개(자주검사 제거) → 추적률 정직화.
+4. **협력사 분해**(v2.43.0/v2.44.0): 모델 합산 → 협력사×모델×공정 추적률 + period/협력사 필터 → "교육 타겟=BAT" 행동 가능.
+5. **0초탭/자동마감 분리**(v2.45.0): 4개 지표 zerotap=close NULL AND active≤1 통일 → 자동마감 76% 섞임 제거.
+
+## 영향 격리 (전 release 공통)
+- `_TRACKED_SQL`/`_COVERAGE_BASE`/`_COVERAGE_WHERE` 문자열 불변 → reliability-summary·partner-reliability·CT 표준 회귀 0 (#92 byte 동일 pytest 검증).
+- 전 release read-only(v2.40.0 migration 062 제외) → 운영 mutation 영향 0.
+
+## VIEW 후속 (별 repo — VIEW_FE_Request.md / OPS_API_REQUESTS.md 인계)
+- B(v2.41.0): CtAnalysisPage FE 파생 가중평균 제거 → reliability-summary 소비, 가중평균 카드 완전 제거(Fable Q4).
+- #92(v2.42.0): useTaggingCoverage period/partner 필터.
+- #93/#93b(v2.43.0/v2.44.0): usePartnerReliability(period/reference_date/partner/process/model) → PartnerReliabilityCard 히트맵·매트릭스 월별·trend 시계열.
+- #94(v2.45.0): instant_pct/instant_n/closed_n 사용, zero_* silent fallback 금지(분모 다름), 자동마감은 0초탭 카드서 제외.
