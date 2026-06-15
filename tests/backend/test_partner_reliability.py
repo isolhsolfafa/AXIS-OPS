@@ -105,3 +105,63 @@ def test_pr08_confidence(rel):
         for x in rel[arr]:
             assert x["confidence"] in ("trusted", "provisional")
             assert x["confidence"] == ("trusted" if x["n"] >= 30 else "provisional")
+
+
+# ── MONTHLY v4: period/partner 필터 + 매트릭스/trend 분리 ──
+
+def test_pr09_invalid_period():
+    """TC-PR-09: period 화이트리스트."""
+    with pytest.raises(CtParamError) as e:
+        get_partner_reliability(period="yearly")
+    assert e.value.code == "INVALID_PERIOD"
+
+
+def test_pr10_period_matrix_single(db_conn):
+    """TC-PR-10: period 지정 → 매트릭스 단월(day 윈도우) / trend 누적 분리."""
+    if db_conn is None:
+        pytest.skip("sqlite")
+    from datetime import date
+    r = get_partner_reliability(period="month", reference_date=date(2026, 6, 1))
+    # 매트릭스 윈도우 = 단월 (YYYY-MM-DD)
+    assert r["meta"]["period"] == "month"
+    assert r["meta"]["matrix_window"]["from"] == "2026-06-01"
+    # trend 윈도우 = trust_start~현재 (누적, period 무관)
+    assert r["meta"]["trend_window"]["from"] == "2026-05"
+
+
+def test_pr11_partner_filter_matrix_only(db_conn):
+    """TC-PR-11 (A-1): partner 필터는 매트릭스만, trend 전체 유지."""
+    if db_conn is None:
+        pytest.skip("sqlite")
+    from datetime import date
+    r = get_partner_reliability(period="month", reference_date=date(2026, 6, 1), partner="FNI")
+    # 매트릭스 = FNI만 (partner 필터 적용)
+    cell_partners = {c["partner"] for c in r["by_cell"]}
+    assert cell_partners <= {"FNI"}, f"매트릭스 partner 필터 위반: {cell_partners}"
+    # trend = partner 필터 미적용 → 매트릭스 협력사 ⊆ trend (운영 DB 는 trend 더 넓음). test DB 데이터 부족 시 둘 다 ∅.
+    trend_partners = {t["partner"] for t in r["trend"]}
+    assert cell_partners <= trend_partners
+
+
+def test_pr12_invariant_single_month(db_conn):
+    """TC-PR-12: 단월 매트릭스에서도 invariant (by_cell 가중합 = by_model_process)."""
+    if db_conn is None:
+        pytest.skip("sqlite")
+    from collections import defaultdict
+    from datetime import date
+    r = get_partner_reliability(period="month", reference_date=date(2026, 6, 1))
+    cn = defaultdict(int)
+    for c in r["by_cell"]:
+        cn[(c["model"], c["process"])] += c["n"]
+    for m in r["by_model_process"]:
+        assert cn[(m["model"], m["process"])] == m["n"]
+
+
+def test_pr13_backcompat_no_period(db_conn):
+    """TC-PR-13: period 미지정 = from/to 누적 (back-compat)."""
+    if db_conn is None:
+        pytest.skip("sqlite")
+    r = get_partner_reliability(process="MECH")
+    assert r["meta"]["period"] is None
+    # 누적 윈도우 = YYYY-MM
+    assert len(r["meta"]["matrix_window"]["from"]) == 7

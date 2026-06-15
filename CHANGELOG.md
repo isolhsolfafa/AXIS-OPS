@@ -6,6 +6,21 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.44.0] - 2026-06-15 — partner-reliability 매트릭스 월별/필터 + 추이 분리 (FEAT-PARTNER-RELIABILITY-MONTHLY)
+
+> **BE only minor — read-only, additive, migration 0**. v2.43.0 partner-reliability 매트릭스가 기본 누적(2026-05~06)인데 **교육/개선 타겟은 "이번달 누가 garbage" 월별로 봐야** 함(사용자 catch). 종료 누락 분석 페이지 공통 필터(오늘/주간/월간/분기+협력사)를 매트릭스도 받게 + 추이(trend)는 시계열 유지로 분리.
+
+- **`GET /api/ct/partner-reliability?period=today|week|month|quarter&reference_date=&partner=&process=&model=&from=&to=`** (전부 optional, 미지정=현행 from/to 누적 back-compat).
+- **매트릭스**(by_cell/by_model_process/by_partner) = period 윈도우(`_resolve_period_range` 재사용, tagging-coverage #92 정합) + **partner/process/model 필터** → "이번달 선택 조건의 문제 셀".
+- **trend**(협력사×월) = trust_start~현재월 월별, **process/model 적용 / period·partner 제외**(시계열, 사용자 결정 — 페이지 MECH 선택 시 추이도 MECH, 시간·협력사는 추이 자체라 무관).
+- **Codex M-1 해소**: 현 SQL month 집계라 day period(today/week/부분quarter) 못 자름 → **매트릭스 day SQL(partner/model/process GROUP BY) + trend 월별 SQL(+month) 분리**(옵션 A). 2 쿼리.
+- 추적률 = `_TRACKED_SQL`/`_COVERAGE_BASE`(reliability-summary 동일 basis, whitelist 2개). GST·SH 제외, batch(TMS(M)) 매트릭스 합산포함+batch_n·trend omit, confidence(n≥30). cache_key 월별/필터 분리. meta period/partner/matrix_window/trend_window echo. route period 화이트리스트 400 INVALID_PERIOD / reference_date 400 INVALID_DATE.
+- **Codex 4R**: 기획 타당성(누적 vs 월별) **독립 판정=월별 타당**(교육 타겟=최신 단면, 추이 분리=정석) → 구현 R1 NO-GO(M-1 day) → R2 trend 필터 정책(사용자: process/model 적용) → R3/R4 **DEPLOY_SAFE M=0**.
+- **실데이터**: period=month(6월) 매트릭스 단월(BAT·GAIA·MECH **13.0%** — 교육 후에도 낮음) / trend 누적(5~6월) / partner=FNI 매트릭스 FNI만·trend 전체 / invariant 단월 성립. pytest test_partner_reliability 13/13(기존 8 + period/partner/단월invariant/back-compat 5).
+- **VIEW 후속**(별 repo): `usePartnerReliability({period,reference_date,partner,process,model})` → 페이지 공통 필터 연동. 설계: `AGENT_TEAM_LAUNCH.md` § FEAT-PARTNER-RELIABILITY-MONTHLY.
+
+---
+
 ## [2.43.0] - 2026-06-15 — 협력사×모델×공정 추적률 분해 (FEAT-PARTNER-RELIABILITY, #93)
 
 > **BE only minor — read-only, 신규 endpoint, migration 0**. AXIS-VIEW #93. reliability-summary(v2.41.0)는 추적률을 모델 단위(협력사 합산)로만 줌 → 협력사로 분해해 "표준 가능 입력=FNI / 교육 타겟=BAT" 행동 가능 결론. v2.42.1(whitelist 자주검사 제거) 추적률 base 정정 위에 구현.

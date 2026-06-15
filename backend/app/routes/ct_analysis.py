@@ -140,19 +140,36 @@ def partner_breakdown():
 def partner_reliability():
     """#93 — 협력사×모델×공정 추적률 분해 + 월별 추이 (read-only).
 
-    by_cell(협력사×모델×공정) + by_model_process(합산 invariant anchor) + by_partner(협력사 종합)
-    + trend(협력사×월×공정, batch omit). MECH/ELEC only, GST·SH 제외. batch(TMS(M))=일괄.
-    process=MECH|ELEC / model / from,to(YYYY-MM). 설계: AGENT_TEAM_LAUNCH.md § FEAT-PARTNER-RELIABILITY.
+    매트릭스(by_cell/by_model_process/by_partner) = period/협력사/공정/모델 필터.
+    trend(협력사×월) = 공정/모델 적용·시간/협력사 제외(시계열). MECH/ELEC only, GST·SH 제외, batch(TMS(M))=일괄.
+    period=today|week|month|quarter / reference_date(YYYY-MM-DD) / partner / process / model / from,to(YYYY-MM).
+    설계: AGENT_TEAM_LAUNCH.md § FEAT-PARTNER-RELIABILITY (+ MONTHLY).
     """
+    from datetime import date as _date
+
     process = request.args.get("process")
     model = request.args.get("model")
     from_month = request.args.get("from")
     to_month = request.args.get("to")
+    period = request.args.get("period")
+    reference_date_str = request.args.get("reference_date")
+    partner = request.args.get("partner")
     if process:
         process = process.strip().upper()
+    if period:
+        period = period.strip().lower()
+    partner = partner.strip() if partner else None
+    ref_date = None
+    if reference_date_str:
+        try:
+            ref_date = _date.fromisoformat(reference_date_str.strip())
+        except ValueError:
+            return jsonify({"error": "INVALID_DATE",
+                            "message": "reference_date 는 YYYY-MM-DD 형식이어야 합니다."}), 400
     try:
         return jsonify(get_partner_reliability(
             process=process, model=model, from_month=from_month, to_month=to_month,
+            period=period, reference_date=ref_date, partner=partner,
         )), 200
     except CtParamError as e:
         return jsonify({"error": e.code, "message": e.message}), 400
