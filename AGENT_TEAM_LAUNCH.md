@@ -49819,3 +49819,75 @@ v2.43.0: 매트릭스(by_cell/by_model_process/by_partner) + trend 모두 단일
 ### v4 Codex 질의 (라운드 3)
 1. trend process/model 적용 + period/partner 제외 명시가 사용자 결정 정합 — matrix(period+partner+proc+model) / trend(proc+model only) 분기 명확.
 2. 잔여 결함 0 (M-1 옵션A 해소 + trend 필터 정책 확정) → DEPLOY_SAFE/GO 가능한지.
+
+---
+
+# § FIX-ZEROTAP-AUTOCLOSE-SEPARATION (전수, 20260615) — 0초탭/자동마감 분리 4개 지표 통일
+
+> 사용자 catch: 0초탭(zerotap)에 자동마감(close_reason)이 섞여 부풀려짐. 전수 확인 결과 4개 지표 중 3개(tagging-coverage·close-type-trend·data-quality)가 `active≤1 OR close_reason` 라 자동마감 76% 섞임. 협력사 대시보드(partner_discipline)만 `active≤1` 로 거의 분리(9%). 사용자 결정: **4개 전부 통일**. VIEW #94(tagging-coverage)의 전수 확장.
+
+## 실측 (2026-05~, MECH/ELEC) — 진짜 0초탭 149건 기준
+| 지표 | 현 정의 | 카운트 | 자동마감 섞임 |
+|---|---|---|---|
+| 협력사 대시보드 (partner_discipline zeroTap) | active≤1 | 164 | 15건(9%) |
+| 0초탭 카드 (tagging-coverage) | active≤1 OR close_reason | 623 | 474건(76%) |
+| 마감유형 추이 (close-type-trend #90) | active≤1 OR close_reason | 623 | 474건(76%) |
+| data-quality trend zerotap | active≤1 OR close_reason | 623 | 474건(76%) |
+- 자동마감 active = 시작~자동마감(퇴근/컷오프) 통째 = 평균 8시간 = 0초탭 판정 불가 (방치시간).
+
+## 컨셉 — 진짜 0초탭 = close NULL AND active≤1
+```
+instant(진짜 0초탭) = NOT oneClick AND close_reason IS NULL AND active_time_minutes <= 1
+autoclose(자동마감) = close_reason IS NOT NULL  (별 분류 — reserved 보존, 0초탭서 제외)
+tracked            = NOT oneClick AND close_reason IS NULL AND active_time_minutes > 1  (불변)
+```
+- 4개 지표 분자(zerotap→instant) 통일. 분모는 각 맥락:
+  - tagging-coverage: instant_pct 분모 = close NULL 완료 (#94, 이미 VIEW request 라운드1~2)
+  - close-type-trend(#90): zerotap series 건수 = instant 정의 (auto/force 와 배타)
+  - data-quality: auto_close_trend zerotap 건수 = instant 정의
+  - partner_discipline: zeroTap = instant / substantive (close NULL 추가, 15건 제외)
+
+## 변경 (지표별 additive)
+- 신규 공통 조각 `_INSTANT_SQL`(close NULL AND active≤1 AND NOT whitelist) / `_AUTOCLOSE_SQL`(close NOT NULL).
+- **tagging-coverage**: #94 그대로 (instant_pct/instant_n/closed_n + zero_* deprecated 유지).
+- **close-type-trend**: zerotap FILTER 를 `_INSTANT_SQL` 로 (close_reason 빠지면 auto와 배타). 응답 키 zerotap 유지(값만 정확).
+- **data-quality**: trend_sql zerotap FILTER → `_INSTANT_SQL`.
+- **partner_discipline**: `_query_zerotap` zero_n FILTER `active≤1` → `active≤1 AND close_reason IS NULL`. 협력사 평가 영향(15건/9% 감소).
+
+## 영향 격리 (Codex 검증 대상)
+- `tracked`(close NULL AND active>1)·`_COVERAGE_WHERE`/`_COVERAGE_BASE` 문자열 불변 → reliability-summary·partner-reliability(#93)·CT 표준 **영향 0**.
+- close-type-trend auto/force series 불변 (zerotap만 정정 → auto와 배타화).
+
+## Codex 질의 (컨셉 검증)
+1. 4개 지표 0초탭 분자 통일(close NULL AND active≤1)이 일관 + 각 분모 맥락 정합한지.
+2. close-type-trend zerotap=instant 로 바꾸면 auto(close_reason AUTO)/zerotap(close NULL active≤1)/force 배타성 — 기존 auto⊆zerotap 겹침(474건) 해소 맞는지.
+3. partner_discipline zeroTap 에 close NULL 추가(15건 제외)가 협력사 규율 평가에 미치는 영향 — 정정인지(자동마감은 미추적 아닌 별 실패모드) 회귀인지.
+4. additive(_INSTANT_SQL + zero_* deprecated) 가 6 consumer(tagging/data-quality/close-type-trend/discipline + FE) 안 깨지는지.
+5. tracked/_COVERAGE_BASE 불변 → reliability-summary/partner-reliability 영향 0 재확인.
+6. data-quality zerotap 변경이 auto_close_trend(CloseTrendChart) 의미 정합.
+7. 4개 동시 vs 단계(tagging #94 먼저 → 나머지) 권고.
+
+## v2 보정 (Codex 라운드 1 M-1 반영 — partner_discipline 분모도 close NULL)
+
+> Codex M-1: partner_discipline `_query_zerotap` 분자만 close NULL 로 바꾸고 분모(substantive)에 자동마감 남기면 → 자동마감 많은 협력사 zeroTap 비율 **희석(왜곡)**. 분모도 close NULL 제한 필요.
+
+### partner_discipline zeroTap 정정 (분모+분자 둘 다 close NULL)
+```sql
+-- 분모(substantive): NOT oneClick(Python) AND close_reason IS NULL AND active NOT NULL
+COUNT(*) FILTER (WHERE t.close_reason IS NULL) AS substantive_total
+-- 분자(zero): NOT oneClick(Python) AND close_reason IS NULL AND active≤1
+COUNT(*) FILTER (WHERE t.active_time_minutes <= 1 AND t.close_reason IS NULL) AS zero_n
+```
+- zeroTap = "작업자 정상 종료(close NULL) 모집단 내 즉시탭" 평가. 자동마감(autoClose)은 별 count 평가.
+- whitelist 는 Python 후처리(is_instant_whitelisted) 유지 — substantive/zero 양쪽 Python 차감.
+
+### Codex 라운드 1 A 반영
+- A(partition): close-type-trend/data-quality auto/zerotap/force 는 **exhaustive partition 아님**(ADMIN_COMPLETE/SHIP_COMPLETE = unclassified). VIEW stacked-total 금지 → "마감 유형별 신호 series" 라벨(릴리즈 노트 의미변경 명시).
+- A(additive): zero_* deprecated 유지, 신규 consumer 는 instant_* 만 사용.
+- A(test): test_sprint90c_close_type_trend.py / test_sprint85_ct_stats.py 의 auto⊆zerotap 기대 assert 갱신.
+
+### v2 Codex 질의 (라운드 2)
+1. partner_discipline 분모+분자 둘 다 close NULL → 자동마감 희석 해소 + zeroTap="정상종료 내 즉시탭" 평가 정합.
+2. 나머지 3개(tagging #94/close-type-trend/data-quality) 분자 instant 통일 + close-type-trend auto/zerotap 배타화 + unclassified(ADMIN/SHIP) 처리.
+3. 4개 동시 BE 구현 + zero_* deprecated additive + 테스트 갱신 → 회귀 0.
+4. 잔여 M=0 → GO.

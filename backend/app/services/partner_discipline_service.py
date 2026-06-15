@@ -258,14 +258,16 @@ def _query_tagging(cur, start, end, company_filter: Optional[str]) -> Dict[Tuple
 def _query_zerotap(cur, start, end, company_filter: Optional[str]) -> Dict[Tuple[str, str], Tuple[int, int]]:
     """0초탭(미추적) — partner×group → (substantive_n, zerotap_n).
 
-    (C) active_time_minutes<=1 = 미추적. one-click 화이트리스트(is_instant_whitelisted)는
-    substantive 모집단에서 제외 (Python 후처리, SQL private whitelist 금지 — Codex A3).
-    active_time_minutes IS NULL(미측정, 예: one-action) 은 모집단 제외.
+    (C) 0초탭 = close_reason IS NULL(작업자 정상 종료) AND active_time_minutes<=1(즉시탭).
+    ⚠️ FIX-ZEROTAP-AUTOCLOSE-SEPARATION(2026-06-15): 분모+분자 둘 다 close_reason IS NULL 제한 —
+       자동마감(close_reason NOT NULL, 평균 8h 방치)은 active 신뢰 불가라 0초탭 아님(autoClose 별 지표).
+       분자만 close NULL 시 자동마감 많은 협력사 비율 희석 → 분모도 close NULL (Codex M-1).
+    one-click 화이트리스트(is_instant_whitelisted) Python 후처리 제외. active IS NULL 모집단 제외.
     """
     sql = f"""
         SELECT {_PARTNER_SQL} AS partner, t.task_category AS grp, t.task_id,
-               COUNT(*) AS n,
-               COUNT(*) FILTER (WHERE t.active_time_minutes <= 1) AS zero_n
+               COUNT(*) FILTER (WHERE t.close_reason IS NULL) AS n,
+               COUNT(*) FILTER (WHERE t.active_time_minutes <= 1 AND t.close_reason IS NULL) AS zero_n
         FROM app_task_details t
         JOIN plan.product_info pi ON pi.serial_number = t.serial_number
         WHERE t.task_category IN ('MECH','ELEC')

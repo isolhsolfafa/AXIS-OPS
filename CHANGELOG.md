@@ -6,6 +6,22 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
+## [2.45.0] - 2026-06-15 — 0초탭/자동마감 분리 4개 지표 통일 (FIX-ZEROTAP-AUTOCLOSE-SEPARATION)
+
+> **BE only minor — read-only, additive, migration 0**. "0초탭(zerotap)"이 자동마감(close_reason)을 섞어 부풀려짐(사용자 catch). 전수 확인: 4개 지표 중 3개가 `active≤1 OR close_reason` 라 자동마감 76% 섞임(623건 중 진짜 149). 진짜 0초탭 = `close NULL AND active≤1` 로 통일.
+
+- **실측(2026-05~ MECH/ELEC)**: 자동마감 active = 시작~자동마감(퇴근/컷오프) 통째 = 평균 8시간(방치시간) = 0초탭 판정 불가. 진짜 0초탭 149건인데 3개 지표가 623으로 4배 부풀림.
+- **컨셉**: `instant`(진짜 0초탭) = `NOT oneClick AND close_reason IS NULL AND active≤1` / `autoclose` = `close_reason IS NOT NULL`(별 분류, reserved 보존). 4개 지표 통일.
+- **tagging-coverage(#94, additive)**: 신규 `_INSTANT_SQL`/`_CLOSED_SQL`/`_AUTOCLOSE_SQL`. 응답 coverage[]·zero_tap_tasks[] 에 `instant_pct`(분모=closed_n 작업자 종료, closed_n=0→null) + `instant_n`/`closed_n`/`autoclose_n` 추가. partners=instant 기준(M-4, instant_n=0→[]). 기존 `zero_tap_pct`/`zero_n` **DEPRECATED 병기**(FE 전환 후 제거). meta.coverage_partition.
+- **close-type-trend(#90)·data-quality**: zerotap FILTER `(active≤1 OR close_reason)` → `close_reason IS NULL AND active≤1`. **auto/zerotap 배타화**(474건 겹침 제거, ADMIN/SHIP=unclassified·합≠total).
+- **partner_discipline(협력사 규율)**: `_query_zerotap` **분모+분자 둘 다 close NULL**(Codex M-1 — 분자만 바꾸면 자동마감 많은 협력사 비율 희석). zeroTap="작업자 정상 종료 중 즉시탭", autoClose는 별 지표.
+- **영향 격리**: `_TRACKED_SQL`/`_COVERAGE_BASE`/`_COVERAGE_WHERE` 불변 → reliability-summary·partner-reliability(#93) 영향 0.
+- **Codex 3R**: 컨셉 R1 NO-GO(M-1 분모 close NULL)→R2 GO / 구현 R3 NO-GO(meta.note old 정의)→반영 후 GO. pytest: test_ct12·test_ctt01 zerotap 2→1 갱신 + 영향 77 GREEN + 공유상수 회귀 29 passed 1 skip.
+- **실데이터**: tagging instant MECH 34%(106/closed316)·ELEC 7%(43/581) vs zero_tap(dep) 51%·43%, ELEC autoclose 358 / data-quality zerotap 206→67 / close-type-trend 35(auto 141 배타).
+- **VIEW 후속**(별 repo, #94): `instant_pct ?? zero_tap_pct` silent fallback 금지(분모 다름), instant_* 만 사용. 설계: `AGENT_TEAM_LAUNCH.md` § FIX-ZEROTAP-AUTOCLOSE-SEPARATION.
+
+---
+
 ## [2.44.0] - 2026-06-15 — partner-reliability 매트릭스 월별/필터 + 추이 분리 (FEAT-PARTNER-RELIABILITY-MONTHLY)
 
 > **BE only minor — read-only, additive, migration 0**. v2.43.0 partner-reliability 매트릭스가 기본 누적(2026-05~06)인데 **교육/개선 타겟은 "이번달 누가 garbage" 월별로 봐야** 함(사용자 catch). 종료 누락 분석 페이지 공통 필터(오늘/주간/월간/분기+협력사)를 매트릭스도 받게 + 추이(trend)는 시계열 유지로 분리.

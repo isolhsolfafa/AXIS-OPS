@@ -562,7 +562,7 @@ def get_data_quality(from_month: Optional[str] = None, to_month: Optional[str] =
     # [2] 월별 마감유형 추이 — KST 월 경계 (Codex M-Q8). 추이는 lookback 무관 고정 6개월 윈도우(의도).
     #     close_reason LIKE 'AUTO_CLOSED_BY_%%' = dashboard_service._AUTO_LIKE 와 동치 (분류 규칙 변경 시 동기화).
     #     Sprint 90-BE-B: zerotap 추가 (CloseTrendChart) — NOT IN whitelist = _INSTANT_WHITELIST 미러,
-    #       zerotap = active≤1 OR close_reason 존재 (Sprint 90-BE tagging-coverage 정의 동일).
+    #       zerotap = close_reason NULL AND active≤1 (FIX-ZEROTAP 20260615 — 자동마감 제외, auto와 배타).
     #       auto/force/zerotap 3 series 동일 base. auto⊆zerotap 일반(단 whitelist task 자동마감 시 역전 가능).
     # zerotap whitelist = _INSTANT_WHITELIST 동적 미러 (하드코딩 금지 — Codex Q5, 상수 변경 자동 전파)
     _wl_sql = "(" + ",".join("'%s'" % t for t in sorted(_INSTANT_WHITELIST)) + ")"
@@ -576,7 +576,8 @@ def get_data_quality(from_month: Optional[str] = None, to_month: Optional[str] =
                COUNT(*) FILTER (
                    WHERE td.task_id NOT IN {_wl_sql}
                      AND COALESCE(td.force_closed, FALSE) = FALSE
-                     AND (td.active_time_minutes <= 1 OR td.close_reason IS NOT NULL)
+                     AND td.close_reason IS NULL
+                     AND td.active_time_minutes <= 1
                ) AS zerotap
         FROM app_task_details td
         JOIN plan.product_info p ON p.serial_number = td.serial_number

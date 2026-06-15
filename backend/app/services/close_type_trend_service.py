@@ -8,8 +8,8 @@ Sprint 90-BE-C (#90, FEAT-CLOSE-TYPE-TREND-PARTNER-20260612)
 
 핵심:
   - partner×group×month × {auto, zerotap, force} (단위=건). flat series → VIEW 가 피벗.
-  - zerotap 정의 = 90-BE-B(statistics_service trend) 동일: NOT whitelist AND force=FALSE
-    AND (active_time_minutes<=1 OR close_reason IS NOT NULL).
+  - zerotap 정의 = FIX-ZEROTAP(20260615): NOT whitelist AND force=FALSE AND close_reason IS NULL
+    AND active_time_minutes<=1 (진짜 0초탭, 자동마감 제외 — auto와 배타).
   - partner = MECH→mech_partner(TMS→TMS(M)) / ELEC→elec_partner(TMS→TMS(E)), GST+SH+NULL 제외.
   - group = task_category (MECH/ELEC only — 협력사 작업, PI/QI/SI=GST 제외).
   - 빈 달 zero-fill (라인 끊김 방지). ?partner/?group = 표시 필터(서버).
@@ -120,7 +120,8 @@ def get_close_type_trend(
                COUNT(*) FILTER (
                    WHERE task_id NOT IN {_WHITELIST_SQL}
                      AND COALESCE(force_closed, FALSE) = FALSE
-                     AND (active_time_minutes <= 1 OR close_reason IS NOT NULL)
+                     AND close_reason IS NULL
+                     AND active_time_minutes <= 1
                ) AS zerotap
         FROM base
         WHERE partner IS NOT NULL
@@ -168,6 +169,7 @@ def get_close_type_trend(
             "generated_at": datetime.now(_KST).isoformat(),
             "window": "trust",
             "note": "단위=건. auto=AUTO_CLOSED_BY_*(force_closed=FALSE) / force=force_closed=TRUE / "
-                    "zerotap=NOT one-click·force=FALSE·(active≤1 또는 close_reason). GST+SH 제외. 빈 달 zero-fill.",
+                    "zerotap=NOT one-click·force=FALSE·close_reason NULL·active≤1 (FIX-ZEROTAP 20260615). "
+                    "auto/force/zerotap 배타 series — ADMIN/SHIP 등은 unclassified(합≠total). GST+SH 제외. 빈 달 zero-fill.",
         },
     }

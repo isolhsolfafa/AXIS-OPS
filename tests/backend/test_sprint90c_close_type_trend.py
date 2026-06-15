@@ -79,15 +79,15 @@ def _cell(res, partner, group, month):
 
 # ── TC-CTT-01 auto/zerotap/force 분류 (BAT MECH 2026-06) ──
 def test_ctt01_close_type_counts(db_conn, worker):
-    _seed(db_conn, worker, "a", "MECH", "WASTE_GAS_LINE_1", active=0)                    # zerotap(active≤1)
+    _seed(db_conn, worker, "a", "MECH", "WASTE_GAS_LINE_1", active=0)                    # zerotap(close NULL AND active≤1)
     _seed(db_conn, worker, "b", "MECH", "UTIL_LINE_1", active=120,
-          close_reason="AUTO_CLOSED_BY_SECOND_FINAL_TRIGGER:X")                          # auto + zerotap(close_reason)
+          close_reason="AUTO_CLOSED_BY_SECOND_FINAL_TRIGGER:X")                          # auto only — FIX-ZEROTAP: zerotap 아님(close NOT NULL)
     _seed(db_conn, worker, "c", "MECH", "WASTE_GAS_LINE_2", active=120, force_closed=True)  # force
     _seed(db_conn, worker, "d", "MECH", "HEATING_JACKET", active=120)                    # none(tracked)
     res = cts.get_close_type_trend(from_month="2026-06", to_month="2026-06")
     c = _cell(res, "BAT", "MECH", "2026-06")
     assert c is not None
-    assert c["auto"] == 1 and c["force"] == 1 and c["zerotap"] == 2  # auto⊆zerotap (a+b)
+    assert c["auto"] == 1 and c["force"] == 1 and c["zerotap"] == 1  # FIX-ZEROTAP: zerotap=a만(close NULL active≤1), b=auto only(배타)
 
 
 # ── TC-CTT-02 GST/SH 제외 ──
