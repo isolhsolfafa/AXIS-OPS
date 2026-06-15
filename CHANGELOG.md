@@ -22,7 +22,7 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
-## [2.44.0] - 2026-06-15 — partner-reliability 매트릭스 월별/필터 + 추이 분리 (FEAT-PARTNER-RELIABILITY-MONTHLY)
+## [2.44.0] - 2026-06-15 — partner-reliability 매트릭스 월별/필터 + 추이 분리 (Sprint 94-b / FEAT-PARTNER-RELIABILITY-MONTHLY, #93b)
 
 > **BE only minor — read-only, additive, migration 0**. v2.43.0 partner-reliability 매트릭스가 기본 누적(2026-05~06)인데 **교육/개선 타겟은 "이번달 누가 garbage" 월별로 봐야** 함(사용자 catch). 종료 누락 분석 페이지 공통 필터(오늘/주간/월간/분기+협력사)를 매트릭스도 받게 + 추이(trend)는 시계열 유지로 분리.
 
@@ -37,7 +37,7 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
-## [2.43.0] - 2026-06-15 — 협력사×모델×공정 추적률 분해 (FEAT-PARTNER-RELIABILITY, #93)
+## [2.43.0] - 2026-06-15 — 협력사×모델×공정 추적률 분해 (Sprint 94 / FEAT-PARTNER-RELIABILITY, #93)
 
 > **BE only minor — read-only, 신규 endpoint, migration 0**. AXIS-VIEW #93. reliability-summary(v2.41.0)는 추적률을 모델 단위(협력사 합산)로만 줌 → 협력사로 분해해 "표준 가능 입력=FNI / 교육 타겟=BAT" 행동 가능 결론. v2.42.1(whitelist 자주검사 제거) 추적률 base 정정 위에 구현.
 
@@ -65,7 +65,7 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
-## [2.42.0] - 2026-06-15 — tagging-coverage period/reference_date/partner 필터 (FEAT-TAGGING-COVERAGE-FILTERS, #92)
+## [2.42.0] - 2026-06-15 — tagging-coverage period/reference_date/partner 필터 (Sprint 93 / FEAT-TAGGING-COVERAGE-FILTERS, #92)
 
 > **BE only minor — read-only, additive, migration 0**. AXIS-VIEW #92 — 종료 누락 분석 페이지 상단 필터(오늘/주간/월간/분기 + 협력사)가 auto-close-summary 카드는 다 받는데 0초탭 카드(`tagging-coverage`)만 월 단위 from/to라 불일치. 사용자 catch.
 
@@ -78,7 +78,7 @@ Format: [Semantic Versioning](https://semver.org/) — MAJOR.MINOR.PATCH
 
 ---
 
-## [2.41.0] - 2026-06-14 — CT 데이터 신뢰도 게이트 재설계 (FEAT-CT-RELIABILITY-SUMMARY, B)
+## [2.41.0] - 2026-06-14 — CT 데이터 신뢰도 게이트 재설계 (Sprint 92 / FEAT-CT-RELIABILITY-SUMMARY, B)
 
 > **BE only minor — read-only, 신규 endpoint, migration 0**. CT 분석 "데이터 신뢰도" summary 가 FE 파생 **가중평균**(`Σweight(n)·n/Σn`, 풀링 부풀림 80.6%)이라 과대평가되던 문제를 **count 게이트 + 생산량 가중**으로 재설계. 3모델(Claude+Codex+Fable) 합의 + 사용자 catch 누적.
 
